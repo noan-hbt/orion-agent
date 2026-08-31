@@ -1,0 +1,7 @@
+id = "orion.terminal"
+name = "Terminal"
+version = "1.0.0"
+description = "Exécute une commande shell contrôlée et retourne sa sortie."
+entrypoint = "tool:register"
+api_version = 1
+permissions = ["process", "filesystem"]

@@ -1,0 +1,141 @@
+# Configuration principale d'Orion.
+# Les chemins relatifs sont resolus depuis ce fichier.
+# Les secrets restent dans .env
+
+[orion]
+name = "Orion"
+
+[llm]
+api_key_env = "OPENROUTER_API_KEY"
+model = "openai/gpt-5.6-luna"
+base_url = "https://openrouter.ai/api/v1"
+timeout = 60.0
+max_retries = 3
+retry_backoff = 0.5
+site_name = "Orion"
+# site_url = "https://example.com"
+
+[llm.default_params]
+temperature = 0.2
+
+[events]
+workers = 1
+queue_size = 0
+default_max_attempts = 3
+retry_delay = 1.0
+retry_backoff = 2.0
+
+[runtime]
+max_turns = 12
+wake_queue_size = 0
+dedupe_window = 86400.0
+parallel_tool_calls = false
+
+[tasks]
+path = "data/tasks.json"
+
+[ledger]
+path = "data/action_ledger.sqlite3"
+
+[scheduler]
+enabled = true
+poll_interval = 1.0
+schedules_path = "data/schedules.json"
+
+[channels]
+# Les adaptateurs concrets sont enregistres par l'application ou ses plugins.
+enabled = ["cli"]
+default = "cli"
+
+[channels.cli]
+enabled = true
+style = true
+banner = true
+
+# Exemples de configuration channel ; les secrets doivent rester dans .env.
+# [channels.telegram]
+# enabled = true
+# token_env = "TELEGRAM_BOT_TOKEN"
+# allowed_chat_ids = []
+# poll_timeout = 25
+# parse_mode = "HTML"
+# max_message_chars = 3500
+#
+# [channels.email]
+# enabled = true
+# imap_host = "imap.example.com"
+# smtp_host = "smtp.example.com"
+# username = "orion@example.com"
+# password_env = "EMAIL_PASSWORD"
+# mailbox = "INBOX"
+# poll_interval = 60.0
+#
+# [channels.discord]
+# enabled = true
+# webhook_url_env = "DISCORD_WEBHOOK_URL"
+#
+# [channels.web]
+# enabled = true
+# host = "127.0.0.1"
+# port = 8080
+# path = "/webhook"
+# auth_token_env = "ORION_WEBHOOK_TOKEN"
+# outbound_url_env = "ORION_WEBHOOK_REPLY_URL"
+
+[prompt]
+core_path = "ORION_CORE.md"
+context_path = "data/prompt_context.json"
+journal_path = "data/conversations.jsonl"
+history_enabled = true
+history_limit = 20
+history_max_chars = 100000
+# Ces champs sont optionnels. La personnalite et la methodologie peuvent aussi
+# etre conservees dans data/prompt_context.json.
+# personality = "Tu es Orion : fiable, calme, pragmatique et direct."
+# methodology = "Comprendre, charger l'etat utile, decider, agir ou attendre, puis mettre a jour l'etat."
+additional = ""
+
+[context]
+compaction_enabled = true
+compactor_model = "deepseek/deepseek-v4-flash-0731"
+total_max_chars = 60000
+compactor_input_chars = 30000
+cache_size = 64
+task_max_chars = 12000
+event_max_chars = 10000
+
+[memory]
+# La maintenance est volontairement configurable et peut etre desactivee.
+enabled = false
+model = "deepseek/deepseek-v4-flash-0731"
+run_at = "23:00"
+batch_size = 20
+poll_interval = 30.0
+max_input_chars = 30000
+
+[tools]
+# Les paquets sont installes dans ce dossier et charges au demarrage.
+directory = "tools"
+state_path = "data/installed_tools.json"
+# Liste vide = charger tous les tools installes.
+enabled = []
+disabled = []
+
+[tools.terminal]
+# Le terminal travaille dans le projet par défaut.
+max_timeout = 120
+max_output_chars = 12000
+allow_outside_root = false
+
+[tools.web]
+timeout = 15
+max_results = 8
+max_chars = 20000
+max_bytes = 2000000
+allow_private = false
+
+[tools.github]
+# Dépôt utilisé par python orion_toolbox.py si --repo n'est pas fourni.
+repo = "noan-hbt/orion-tools"
+ref = "main"
+timeout = 20
