@@ -171,6 +171,19 @@ false`). Cela permet au modèle de recevoir chaque observation, de produire une
 progression contextualisée et de décider du tool suivant. Le mode parallèle
 reste activable si la progression intermédiaire n'est pas nécessaire.
 
+Le style de réponse est concis par défaut :
+
+```toml
+[response]
+concise = true
+max_chars = 3000
+max_sentences = 8
+```
+
+Orion privilégie quelques phrases ou puces naturelles, sans répéter la
+demande. La limite de caractères est un filet de sécurité appliqué avant
+l'envoi au channel ; elle n'a pas vocation à couper les réponses normales.
+
 ```python
 from event_handler import EventHandler, EventType
 from openrouter_client import OpenRouterClient

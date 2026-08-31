@@ -417,6 +417,7 @@ class OrionConfig:
             parallel_tool_calls=self.runtime.parallel_tool_calls,
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
+            response_concise=self.response.concise,
             prompt_store=prompt_store,
             conversation_journal=journal,
             history_enabled=self.prompt.history_enabled,

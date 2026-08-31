@@ -189,6 +189,9 @@ class AgentRuntime:
         action_ledger_path: str | None = "data/action_ledger.sqlite3",
         dedupe_window: float = 86400.0,
         parallel_tool_calls: bool = False,
+        response_max_chars: int = 3000,
+        response_max_sentences: int = 8,
+        response_concise: bool = True,
         prompt_composer: PromptComposer | None = None,
         prompt_store: PromptContextStore | None = None,
         conversation_journal: ConversationJournal | None = None,
@@ -211,6 +214,8 @@ class AgentRuntime:
             raise ValueError("history_limit et history_max_chars doivent être positifs.")
         if task_context_max_chars < 1 or event_context_max_chars < 1:
             raise ValueError("Les limites de contexte doivent être positives.")
+        if response_max_chars < 500 or response_max_sentences < 1:
+            raise ValueError("Les limites de réponse sont invalides.")
         self.llm_client = llm_client
         self.state_store = state_store or InMemoryStateStore()
         self.task_store = task_store or InMemoryTaskStore()
@@ -218,6 +223,9 @@ class AgentRuntime:
         self.system_prompt = system_prompt
         self.max_turns = max_turns
         self.parallel_tool_calls = bool(parallel_tool_calls)
+        self.response_max_chars = int(response_max_chars)
+        self.response_max_sentences = int(response_max_sentences)
+        self.response_concise = bool(response_concise)
         self.wake_queue = EventQueue(maxsize=wake_queue_size)
         self.action_ledger = action_ledger or ActionLedger(action_ledger_path or ":memory:")
         self.dedupe_window = float(dedupe_window)
@@ -795,6 +803,11 @@ class AgentRuntime:
             "- Si plusieurs tools sont nécessaires, après chaque observation explique brièvement et naturellement ce que tu as appris et ce que tu fais ensuite ; évite les formules répétitives.\n"
             "- Ne révèle pas tes raisonnements internes détaillés ; donne seulement les sorties utiles."
         )
+        if self.response_concise:
+            runtime_instructions += (
+                f"\n- Réponds comme un humain concis : va droit au but, généralement en quelques phrases ou quelques puces, sans répéter la demande ni ajouter de préambule. La réponse finale doit rester sous environ {self.response_max_chars} caractères et {self.response_max_sentences} phrases, sauf nécessité réelle."
+                "\n- Pour une recherche web, donne d'abord une synthèse courte et quelques sources pertinentes ; ne transforme pas automatiquement les résultats en rapport exhaustif."
+            )
         runtime_instructions += (
             "\n- Le router de channel envoie automatiquement ta réponse finale vers le channel et le destinataire de l'événement ; ne cherche pas un tool send_telegram.\n"
             "- Pour un rappel futur, utilise schedule_wakeup. Le runtime conserve automatiquement le channel et le destinataire courants ; au réveil, produis le message à délivrer.\n"
@@ -938,6 +951,8 @@ class AgentRuntime:
         """Envoie immédiatement une sortie vers le channel de l'événement."""
         if self.on_output is None or not content.strip():
             return
+        output_limit = min(self.response_max_chars, 700) if intermediate else self.response_max_chars
+        content = self._limit_output(content.strip(), output_limit)
         event = context.event
         output_channel = event.metadata.get("channel") or event.payload.get("_orion_channel")
         output_recipient = event.metadata.get("reply_to") or event.payload.get("_orion_reply_to")
@@ -956,6 +971,22 @@ class AgentRuntime:
                 metadata=output_metadata,
             )
         )
+
+    @staticmethod
+    def _limit_output(content: str, max_chars: int) -> str:
+        """Évite qu'une sortie exceptionnelle ne déborde les channels."""
+        if len(content) <= max_chars:
+            return content
+        candidate = content[:max_chars - 1]
+        boundary = max(
+            candidate.rfind("\n"),
+            candidate.rfind(". "),
+            candidate.rfind("! "),
+            candidate.rfind("? "),
+        )
+        if boundary >= max_chars // 2:
+            candidate = candidate[:boundary + 1]
+        return candidate.rstrip() + "…"
 
     def _finalize_after_control(self, context: RunContext) -> None:
         """Demande une réponse finale après un tool qui contrôle le cycle.

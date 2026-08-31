@@ -31,6 +31,11 @@ wake_queue_size = 0
 dedupe_window = 86400.0
 parallel_tool_calls = false
 
+[response]
+concise = true
+max_chars = 3000
+max_sentences = 8
+
 [tasks]
 path = "data/tasks.json"
 
