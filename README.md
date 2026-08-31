@@ -156,13 +156,14 @@ events.stop()
 ```
 
 Le runtime possède sa propre file de réveil afin de ne pas coupler la file des
-événements entrants à la future boucle d'exécution. Pour l'instant, `RUN`
-crée uniquement un `RunContext` en phase `REFLECTION`, puis repasse en `SLEEP`.
+événements entrants à la boucle d'exécution. `RUN` commence par une
+`PRE_REFLECTION` interne réduite, puis initialise la phase `REFLECTION` du
+modèle principal.
 Un `StateStore` personnalisé peut être fourni pour charger et sauvegarder
 l'état depuis une base de données.
 
 Avec un client OpenRouter, le runtime exécute la boucle complète :
-`REFLECTION -> DECISION -> ACTION/TOOL -> OBSERVATION -> NEW_TURN`, puis
+`PRE_REFLECTION -> REFLECTION -> DECISION -> ACTION/TOOL -> OBSERVATION -> NEW_TURN`, puis
 `ANSWER`, `WAIT` ou `COMPLETE`. Les tools de gestion de tâche sont ajoutés
 automatiquement aux tools envoyés au modèle.
 
@@ -178,6 +179,22 @@ Le style de réponse est concis par défaut :
 concise = true
 max_chars = 3000
 max_sentences = 8
+```
+
+`PRE_REFLECTION` est une pré-étape interne optionnelle. Elle utilise un
+contexte réduit et le prompt distinct de [REFLECTION_CORE.md](REFLECTION_CORE.md),
+sans tools. Sa sortie est injectée comme hypothèse dans le premier appel du
+modèle principal, mais n'est jamais envoyée ni enregistrée comme message.
+Le modèle et les limites sont configurables :
+
+```toml
+[reflection]
+enabled = true
+model = "openai/gpt-4o-mini"
+prompt_path = "REFLECTION_CORE.md"
+max_input_chars = 12000
+max_output_chars = 5000
+temperature = 0.7
 ```
 
 Orion privilégie quelques phrases ou puces naturelles, sans répéter la
@@ -386,6 +403,26 @@ Pour une installation multi-utilisateur, un adaptateur peut fournir
 `conversation_id` ou `user_id` dans les métadonnées de l'événement afin de
 séparer les historiques. Sans cette métadonnée, la valeur `default` fusionne
 les channels, ce qui correspond au mode assistant personnel.
+
+## Déploiement VPS
+
+Pour un serveur sans interface graphique ni terminal interactif, utiliser
+[orion_vps_install.py](orion_vps_install.py). Il génère une configuration
+headless, conserve les secrets dans `.env` et peut produire une unité systemd
+pour maintenir Orion actif :
+
+```bash
+python3 orion_vps_install.py \
+  --channels telegram,discord \
+  --set-secret OPENROUTER_API_KEY=... \
+  --set-secret TELEGRAM_BOT_TOKEN=... \
+  --set-secret DISCORD_WEBHOOK_URL=... \
+  --systemd --force
+```
+
+Les détails et commandes de supervision sont dans
+[DEPLOYMENT_VPS.md](DEPLOYMENT_VPS.md). Le VPS peut activer uniquement des
+channels distants ; le CLI est désactivé par défaut par cet installateur.
 
 ## V0.10 : Interruptions et préemption
 

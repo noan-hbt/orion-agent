@@ -65,6 +65,7 @@ def _config_text(
     email_settings: dict[str, str] | None = None,
     compactor_model: str = "openai/gpt-4o-mini",
     memory_model: str = "openai/gpt-4o-mini",
+    reflection_model: str = "openai/gpt-4o-mini",
 ) -> str:
     enabled = ", ".join(_toml_string(channel) for channel in channels)
     default_line = f"default = {_toml_string(default_channel)}" if default_channel else "# default = \"cli\""
@@ -127,6 +128,14 @@ parallel_tool_calls = false
 concise = true
 max_chars = 3000
 max_sentences = 8
+
+[reflection]
+enabled = true
+model = {_toml_string(reflection_model)}
+prompt_path = "REFLECTION_CORE.md"
+max_input_chars = 12000
+max_output_chars = 5000
+temperature = 0.7
 
 [tasks]
 path = "data/tasks.json"
@@ -217,6 +226,7 @@ def install(
     model: str | None,
     compactor_model: str | None = None,
     memory_model: str | None = None,
+    reflection_model: str | None = None,
     api_key: str | None,
     channels: list[str] | None,
     memory: bool | None,
@@ -226,18 +236,22 @@ def install(
     if config_path.exists() and not force:
         raise FileExistsError(f"{config_path} existe deja ; utilisez --force pour le remplacer.")
     backup_path = _backup_config(config_path) if config_path.exists() and force else None
-    selected_model = model or _ask("Modele OpenRouter", "~openai/gpt-latest")
+    selected_model = model or _ask("Modele OpenRouter", "openai/gpt-5.6-luna")
     selected_compactor_model = compactor_model or _ask(
         "Modele de compaction du contexte",
-        "openai/gpt-4o-mini",
+        "deepseek/deepseek-v4-flash-0731",
+    )
+    selected_reflection_model = reflection_model or _ask(
+        "Modele de pre-reflexion",
+        "deepseek/deepseek-v4-flash-0731",
     )
     selected_key = api_key if api_key is not None else _ask_secret("Cle OPENROUTER_API_KEY")
     selected_channels = channels if channels is not None else [item.strip() for item in _ask("Channels actives (separes par des virgules)", "cli").split(",") if item.strip()]
     selected_memory = memory if memory is not None else _ask("Activer la memoire automatique ? oui/non", "non").lower() in {"oui", "o", "yes", "y"}
     selected_memory_model = memory_model or (
-        _ask("Modele d'extraction de memoire", "openai/gpt-4o-mini")
+        _ask("Modele d'extraction de memoire", "deepseek/deepseek-v4-flash-0731")
         if selected_memory
-        else "openai/gpt-4o-mini"
+        else "deepseek/deepseek-v4-flash-0731"
     )
     collected_secrets = dict(secrets or {})
     secret_envs: dict[str, str] = {}
@@ -268,6 +282,7 @@ def install(
             email_settings,
             selected_compactor_model,
             selected_memory_model,
+            selected_reflection_model,
         ),
         encoding="utf-8",
     )
@@ -285,6 +300,7 @@ def main() -> None:
     parser.add_argument("--model")
     parser.add_argument("--compactor-model", help="Modele utilise pour compacter le contexte")
     parser.add_argument("--memory-model", help="Modele utilise pour extraire la memoire")
+    parser.add_argument("--reflection-model", help="Modele utilise pour la pre-reflexion")
     parser.add_argument("--api-key")
     parser.add_argument("--channels", help="Liste separee par des virgules")
     parser.add_argument("--secret-env", action="append", default=[], metavar="NAME", help="Demande interactivement un secret de channel")
@@ -307,6 +323,7 @@ def main() -> None:
         model=args.model,
         compactor_model=args.compactor_model,
         memory_model=args.memory_model,
+        reflection_model=args.reflection_model,
         api_key=args.api_key,
         channels=channels,
         memory=args.memory,

@@ -76,6 +76,18 @@ class ResponseConfig:
 
 
 @dataclass
+class ReflectionConfig:
+    """Pre-etape interne avant le premier appel decisionnel du run."""
+
+    enabled: bool = True
+    model: str | None = "openai/gpt-4o-mini"
+    prompt_path: str = "REFLECTION_CORE.md"
+    max_input_chars: int = 12000
+    max_output_chars: int = 5000
+    temperature: float = 0.7
+
+
+@dataclass
 class SchedulerConfig:
     enabled: bool = True
     poll_interval: float = 1.0
@@ -154,6 +166,7 @@ class OrionConfig:
     events: EventConfig = field(default_factory=EventConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     response: ResponseConfig = field(default_factory=ResponseConfig)
+    reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
@@ -181,6 +194,7 @@ class OrionConfig:
         events = _section(data, "events")
         runtime = _section(data, "runtime")
         response = _section(data, "response")
+        reflection = _section(data, "reflection")
         scheduler = _section(data, "scheduler")
         prompt = _section(data, "prompt")
         context = _section(data, "context")
@@ -215,6 +229,7 @@ class OrionConfig:
             events=EventConfig(**{key: value for key, value in events.items() if key in EventConfig.__dataclass_fields__}),
             runtime=RuntimeConfig(**{key: value for key, value in runtime.items() if key in RuntimeConfig.__dataclass_fields__}),
             response=ResponseConfig(**{key: value for key, value in response.items() if key in ResponseConfig.__dataclass_fields__}),
+            reflection=ReflectionConfig(**{key: value for key, value in reflection.items() if key in ReflectionConfig.__dataclass_fields__}),
             scheduler=SchedulerConfig(**{key: value for key, value in scheduler.items() if key in SchedulerConfig.__dataclass_fields__}),
             prompt=PromptConfig(**{key: value for key, value in prompt.items() if key in PromptConfig.__dataclass_fields__}),
             context=ContextConfig(**{key: value for key, value in context.items() if key in ContextConfig.__dataclass_fields__}),
@@ -331,6 +346,7 @@ class OrionConfig:
         from openrouter_client import OpenRouterClient
         from context_assembler import ContextAssembler
         from prompt_context import ConversationJournal, MemoryExtractor, MemoryMaintenance, PromptContextStore
+        from reflection_engine import ReflectionEngine
         from runtime import AgentRuntime
         from scheduler import JsonScheduleStore, Scheduler
         from tasks import JsonTaskStore
@@ -397,6 +413,16 @@ class OrionConfig:
                 run_at=self._run_time(),
                 poll_interval=self.memory.poll_interval,
             )
+        reflection_engine = None
+        if self.reflection.enabled:
+            reflection_engine = ReflectionEngine(
+                llm,
+                prompt_path=self.path(self.reflection.prompt_path),
+                model=self.reflection.model,
+                max_input_chars=self.reflection.max_input_chars,
+                max_output_chars=self.reflection.max_output_chars,
+                temperature=self.reflection.temperature,
+            )
         scheduler = None
         if self.scheduler.enabled:
             scheduler = Scheduler(
@@ -418,6 +444,7 @@ class OrionConfig:
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
             response_concise=self.response.concise,
+            reflection_engine=reflection_engine,
             prompt_store=prompt_store,
             conversation_journal=journal,
             history_enabled=self.prompt.history_enabled,
@@ -492,6 +519,7 @@ __all__ = [
     "OrionApplication",
     "OrionConfig",
     "PromptConfig",
+    "ReflectionConfig",
     "RuntimeConfig",
     "SchedulerConfig",
     "TaskConfig",

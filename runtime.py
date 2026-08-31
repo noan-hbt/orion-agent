@@ -29,6 +29,7 @@ from prompt_context import (
     PromptComposer,
     PromptContextStore,
 )
+from reflection_engine import ReflectionEngine
 from tasks import (
     ActionStatus,
     InMemoryTaskStore,
@@ -70,6 +71,7 @@ class RuntimeState(str, Enum):
 class RunPhase(str, Enum):
     """Sous-phases prévues à l'intérieur d'un ``RUN``."""
 
+    PRE_REFLECTION = "pre_reflection"
     REFLECTION = "reflection"
     TOOL = "tool"
     SMALL_OUTPUT = "small_output"
@@ -134,6 +136,8 @@ class RunContext:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     small_outputs: list[str] = field(default_factory=list)
     answer: str | None = None
+    reflection: str | None = None
+    reflection_error: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     control: str | None = None
     interrupted: bool = False
@@ -192,6 +196,7 @@ class AgentRuntime:
         response_max_chars: int = 3000,
         response_max_sentences: int = 8,
         response_concise: bool = True,
+        reflection_engine: ReflectionEngine | None = None,
         prompt_composer: PromptComposer | None = None,
         prompt_store: PromptContextStore | None = None,
         conversation_journal: ConversationJournal | None = None,
@@ -226,6 +231,7 @@ class AgentRuntime:
         self.response_max_chars = int(response_max_chars)
         self.response_max_sentences = int(response_max_sentences)
         self.response_concise = bool(response_concise)
+        self.reflection_engine = reflection_engine
         self.wake_queue = EventQueue(maxsize=wake_queue_size)
         self.action_ledger = action_ledger or ActionLedger(action_ledger_path or ":memory:")
         self.dedupe_window = float(dedupe_window)
@@ -816,7 +822,12 @@ class AgentRuntime:
         )
         return self.prompt_composer.compose(runtime_instructions=runtime_instructions)
 
-    def _initial_run_messages(self, context: RunContext) -> list[dict[str, Any]]:
+    def _initial_run_messages(
+        self,
+        context: RunContext,
+        *,
+        reflection: str | None = None,
+    ) -> list[dict[str, Any]]:
         task_payload = context.task.to_dict() if context.task is not None else None
         event_payload = {
             "id": context.event.id,
@@ -866,6 +877,18 @@ class AgentRuntime:
                 + assembled["task"],
             },
         ]
+        if reflection:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Réflexion préparatoire interne. Elle contient des hypothèses, "
+                        "pas des faits certains. Utilise-la comme aide pour la décision, "
+                        "ne la révèle pas et vérifie-la avec le contexte disponible :\n"
+                        + reflection
+                    ),
+                }
+            )
         if has_history:
             messages.append(
                 {
@@ -882,6 +905,28 @@ class AgentRuntime:
             }
         )
         return messages
+
+    def _run_pre_reflection(self, context: RunContext) -> str | None:
+        """Produit la réflexion interne avant d'initialiser le contexte principal."""
+        if self.reflection_engine is None:
+            return None
+        context.phase = RunPhase.PRE_REFLECTION
+        try:
+            history = ()
+            if self.history_enabled:
+                history = self.conversation_journal.recent_messages(
+                    conversation_id=self._conversation_id(context.event),
+                    limit=min(self.history_limit, 6),
+                )
+            reflection = self.reflection_engine.reflect(context, history=history)
+            context.reflection = reflection or None
+            return context.reflection
+        except Exception as exc:
+            # Une panne du modèle de réflexion ne doit pas empêcher le run
+            # principal de répondre ou d'exécuter une action.
+            context.reflection_error = f"{type(exc).__name__}: {exc}"
+            context.reflection = None
+            return None
 
     @staticmethod
     def _conversation_id(event: Event) -> str:
@@ -1253,7 +1298,8 @@ class AgentRuntime:
             self._run_cycle_stub(context)
             return
 
-        context.messages = self._initial_run_messages(context)
+        reflection = self._run_pre_reflection(context)
+        context.messages = self._initial_run_messages(context, reflection=reflection)
         tools = self._tool_definitions()
         for turn in range(self.max_turns):
             if context.interrupted:
