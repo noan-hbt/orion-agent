@@ -81,6 +81,7 @@ class SubAgentConfig:
     max_context_chars: int = 16000
     max_result_chars: int = 24000
     max_tool_output_chars: int = 12000
+    max_session_messages: int = 100
     history_limit: int = 200
     emit_progress_events: bool = True
 
@@ -440,6 +441,7 @@ class OrionConfig:
                 max_context_chars=self.subagents.max_context_chars,
                 max_result_chars=self.subagents.max_result_chars,
                 max_tool_output_chars=self.subagents.max_tool_output_chars,
+                max_session_messages=self.subagents.max_session_messages,
                 history_limit=self.subagents.history_limit,
                 emit_progress_events=self.subagents.emit_progress_events,
             )

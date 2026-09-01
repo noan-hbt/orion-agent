@@ -38,6 +38,7 @@ class SubAgentStatus(str, Enum):
 class SubAgentJobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING = "waiting"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -84,6 +85,7 @@ class SubAgentJob:
     id: str
     agent_id: str
     objective: str
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     context: str = ""
     priority: int = int(EventPriority.NORMAL)
     status: SubAgentJobStatus = SubAgentJobStatus.QUEUED
@@ -92,9 +94,11 @@ class SubAgentJob:
     route_metadata: dict[str, Any] = field(default_factory=dict)
     result: str | None = None
     error: str | None = None
+    waiting_for: str | None = None
     progress: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     cancel_requested: bool = False
+    pause_requested: bool = False
     created_at: str = field(default_factory=_now)
     started_at: str | None = None
     completed_at: str | None = None
@@ -106,6 +110,7 @@ class SubAgentJob:
             id=str(value["id"]),
             agent_id=str(value["agent_id"]),
             objective=str(value["objective"]),
+            session_id=str(value.get("session_id", uuid.uuid4().hex[:12])),
             context=str(value.get("context", "")),
             priority=int(value.get("priority", int(EventPriority.NORMAL))),
             status=SubAgentJobStatus(value.get("status", SubAgentJobStatus.QUEUED.value)),
@@ -114,9 +119,11 @@ class SubAgentJob:
             route_metadata=dict(value.get("route_metadata", {})),
             result=value.get("result"),
             error=value.get("error"),
+            waiting_for=value.get("waiting_for"),
             progress=[str(item) for item in value.get("progress", [])],
             tool_calls=[dict(item) for item in value.get("tool_calls", [])],
             cancel_requested=bool(value.get("cancel_requested", False)),
+            pause_requested=bool(value.get("pause_requested", False)),
             created_at=str(value.get("created_at", _now())),
             started_at=value.get("started_at"),
             completed_at=value.get("completed_at"),
@@ -127,6 +134,37 @@ class SubAgentJob:
         value = asdict(self)
         value["status"] = self.status.value
         return value
+
+
+@dataclass
+class SubAgentSession:
+    """Historique LLM isolé d'un job, conservé entre deux reprises."""
+
+    id: str
+    job_id: str
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    status: str = "active"
+    created_at: str = field(default_factory=_now)
+    updated_at: str = field(default_factory=_now)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "SubAgentSession":
+        return cls(
+            id=str(value["id"]),
+            job_id=str(value["job_id"]),
+            messages=[dict(item) for item in value.get("messages", []) if isinstance(item, Mapping)],
+            status=str(value.get("status", "active")),
+            created_at=str(value.get("created_at", _now())),
+            updated_at=str(value.get("updated_at", _now())),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class _WaitingResult:
+    message: str
 
 
 class SubAgentManager:
@@ -151,6 +189,7 @@ class SubAgentManager:
         max_context_chars: int = 16000,
         max_result_chars: int = 24000,
         max_tool_output_chars: int = 12000,
+        max_session_messages: int = 100,
         history_limit: int = 200,
         emit_progress_events: bool = True,
     ) -> None:
@@ -166,12 +205,14 @@ class SubAgentManager:
         self.max_context_chars = int(max_context_chars)
         self.max_result_chars = int(max_result_chars)
         self.max_tool_output_chars = int(max_tool_output_chars)
+        self.max_session_messages = max(20, int(max_session_messages))
         self.history_limit = max(10, int(history_limit))
         self.emit_progress_events = bool(emit_progress_events)
 
         self._lock = threading.RLock()
         self._agents: dict[str, SubAgent] = {}
         self._jobs: dict[str, SubAgentJob] = {}
+        self._sessions: dict[str, SubAgentSession] = {}
         self._queue: PriorityQueue[tuple[int, int, str]] = PriorityQueue()
         self._sequence = count()
         self._threads: list[threading.Thread] = []
@@ -199,7 +240,16 @@ class SubAgentManager:
                 item.id: item
                 for item in (SubAgentJob.from_dict(raw) for raw in value.get("jobs", []))
             }
+            self._sessions = {
+                item.id: item
+                for item in (SubAgentSession.from_dict(raw) for raw in value.get("sessions", []))
+            }
             for job in self._jobs.values():
+                if job.session_id not in self._sessions:
+                    self._sessions[job.session_id] = SubAgentSession(
+                        id=job.session_id,
+                        job_id=job.id,
+                    )
                 if job.status == SubAgentJobStatus.RUNNING:
                     job.status = SubAgentJobStatus.QUEUED
                     job.started_at = None
@@ -219,10 +269,17 @@ class SubAgentManager:
             for job_id, job in self._jobs.items()
             if job.status not in self.TERMINAL_JOB_STATUSES or job_id in retained_terminal_ids
         }
+        retained_session_ids = {job.session_id for job in self._jobs.values()}
+        self._sessions = {
+            session_id: session
+            for session_id, session in self._sessions.items()
+            if session_id in retained_session_ids
+        }
         payload = {
             "version": 1,
             "agents": [item.to_dict() for item in self._agents.values()],
             "jobs": [item.to_dict() for item in self._jobs.values()],
+            "sessions": [item.to_dict() for item in self._sessions.values()],
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_name(f".{self.state_path.name}.{uuid.uuid4().hex}.tmp")
@@ -299,7 +356,8 @@ class SubAgentManager:
             f"Tu es {name}, un sous-agent spécialisé d'Orion. {description.strip()}\n"
             "Accomplis uniquement l'objectif délégué avec les outils autorisés. "
             "Travaille de façon autonome, vérifie tes observations et termine par un résultat "
-            "directement exploitable par Orion. N'invente pas de capacités indisponibles."
+            "directement exploitable par Orion. N'invente pas de capacités indisponibles. "
+            "Si une information d'Orion est nécessaire, utilise wait_for_input au lieu de terminer la session."
         )
 
     def update_agent(self, agent_id: str, **changes: Any) -> SubAgent:
@@ -395,6 +453,10 @@ class SubAgentManager:
                 route_metadata=dict(route_metadata or {}),
             )
             self._jobs[job.id] = job
+            self._sessions[job.session_id] = SubAgentSession(
+                id=job.session_id,
+                job_id=job.id,
+            )
             self._enqueue_locked(job)
             self._save_locked()
             return SubAgentJob.from_dict(job.to_dict())
@@ -403,6 +465,82 @@ class SubAgentManager:
         with self._lock:
             job = self._jobs.get(job_id)
             return SubAgentJob.from_dict(job.to_dict()) if job else None
+
+    def get_session(self, session_id: str) -> SubAgentSession | None:
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return SubAgentSession.from_dict(session.to_dict()) if session else None
+
+    def send_message(self, job_id: str, message: str) -> SubAgentJob:
+        """Ajoute un message à une session en attente et la remet en file."""
+        if not message.strip():
+            raise ValueError("Le message destiné au sous-agent ne peut pas être vide.")
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            if job.status != SubAgentJobStatus.WAITING:
+                raise RuntimeError("Un message ne peut être envoyé qu'à un job en attente.")
+            session = self._sessions.get(job.session_id)
+            if session is None:
+                raise RuntimeError("Session du sous-agent introuvable.")
+            session.messages.append({"role": "user", "content": _clip(message, self.max_context_chars)})
+            if len(session.messages) > self.max_session_messages:
+                session.messages = session.messages[:2] + session.messages[-(self.max_session_messages - 2):]
+            session.status = "active"
+            session.updated_at = _now()
+            job.status = SubAgentJobStatus.QUEUED
+            job.waiting_for = None
+            job.pause_requested = False
+            job.cancel_requested = False
+            job.updated_at = _now()
+            self._enqueue_locked(job)
+            self._save_locked()
+            snapshot = SubAgentJob.from_dict(job.to_dict())
+        self._publish(snapshot, "subagent.resumed", message, EventPriority.NORMAL)
+        return snapshot
+
+    def pause_job(self, job_id: str) -> SubAgentJob:
+        """Suspend un job après son appel courant, ou immédiatement s'il est en file."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            if job.status in self.TERMINAL_JOB_STATUSES:
+                return SubAgentJob.from_dict(job.to_dict())
+            job.pause_requested = True
+            if job.status == SubAgentJobStatus.QUEUED:
+                job.status = SubAgentJobStatus.WAITING
+                job.waiting_for = "pause demandée par Orion"
+                session = self._sessions.get(job.session_id)
+                if session is not None:
+                    session.status = "waiting"
+                    session.updated_at = _now()
+            job.updated_at = _now()
+            self._save_locked()
+            return SubAgentJob.from_dict(job.to_dict())
+
+    def resume_job(self, job_id: str) -> SubAgentJob:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            if job.status != SubAgentJobStatus.WAITING:
+                raise RuntimeError("Seul un job en attente peut être repris.")
+            job.status = SubAgentJobStatus.QUEUED
+            job.waiting_for = None
+            job.pause_requested = False
+            job.cancel_requested = False
+            session = self._sessions.get(job.session_id)
+            if session is not None:
+                session.status = "active"
+                session.updated_at = _now()
+            job.updated_at = _now()
+            self._enqueue_locked(job)
+            self._save_locked()
+            snapshot = SubAgentJob.from_dict(job.to_dict())
+        self._publish(snapshot, "subagent.resumed", "Reprise demandée par Orion.", EventPriority.NORMAL)
+        return snapshot
 
     def list_jobs(self, *, status: str | None = None, limit: int = 20) -> list[SubAgentJob]:
         requested = SubAgentJobStatus(status) if status else None
@@ -418,9 +556,13 @@ class SubAgentManager:
                 raise KeyError(f"Job de sous-agent inconnu : {job_id}")
             if job.status not in self.TERMINAL_JOB_STATUSES:
                 job.cancel_requested = True
-                if job.status == SubAgentJobStatus.QUEUED:
+                if job.status in {SubAgentJobStatus.QUEUED, SubAgentJobStatus.WAITING}:
                     job.status = SubAgentJobStatus.CANCELLED
                     job.completed_at = _now()
+                    session = self._sessions.get(job.session_id)
+                    if session is not None:
+                        session.status = "cancelled"
+                        session.updated_at = _now()
                 job.updated_at = _now()
                 self._save_locked()
             return SubAgentJob.from_dict(job.to_dict())
@@ -462,15 +604,30 @@ class SubAgentManager:
                 job = self._jobs.get(job_id)
                 if job is None:
                     return
+                session = self._sessions.get(job.session_id)
                 if job.cancel_requested:
                     job.status = SubAgentJobStatus.CANCELLED
                     event_type = "subagent.cancelled"
                     message = "Travail annulé."
+                    if session is not None:
+                        session.status = "cancelled"
+                elif isinstance(result, _WaitingResult):
+                    job.status = SubAgentJobStatus.WAITING
+                    job.waiting_for = result.message
+                    job.pause_requested = False
+                    event_type = "subagent.waiting"
+                    message = result.message
+                    if session is not None:
+                        session.status = "waiting"
                 else:
                     job.status = SubAgentJobStatus.COMPLETED
                     job.result = _clip(result, self.max_result_chars)
                     event_type = "subagent.completed"
                     message = job.result
+                    if session is not None:
+                        session.status = "completed"
+                if session is not None:
+                    session.updated_at = _now()
                 job.completed_at = _now()
                 job.updated_at = _now()
                 self._save_locked()
@@ -489,27 +646,50 @@ class SubAgentManager:
 
     def _allowed_tool_definitions(self, agent: SubAgent) -> list[dict[str, Any]]:
         allowed = set(agent.allowed_tools)
-        return [
+        definitions = [
             definition
             for definition in self.llm_client.tool_definitions()
             if definition.get("function", {}).get("name") in allowed
         ]
+        definitions.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "wait_for_input",
+                    "description": "Met ce job en attente lorsqu'une information d'Orion est nécessaire. Le worker libère alors son exécution.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"question": {"type": "string"}},
+                        "required": ["question"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        )
+        return definitions
 
-    def _run_agent(self, agent: SubAgent, job_id: str) -> str:
+    def _run_agent(self, agent: SubAgent, job_id: str) -> str | _WaitingResult:
         with self._lock:
             job = self._jobs[job_id]
             objective = job.objective
             delegated_context = job.context
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": agent.system_prompt},
-            {
-                "role": "user",
-                "content": (
-                    f"Objectif délégué par Orion :\n{objective}\n\n"
-                    f"Contexte utile, potentiellement incomplet :\n{delegated_context or '(aucun)'}"
-                ),
-            },
-        ]
+            session = self._sessions.get(job.session_id)
+            if session is None:
+                session = SubAgentSession(id=job.session_id, job_id=job.id)
+                self._sessions[job.session_id] = session
+            messages = [dict(message) for message in session.messages]
+            if not messages:
+                messages = [
+                    {"role": "system", "content": agent.system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Objectif délégué par Orion :\n{objective}\n\n"
+                            f"Contexte utile, potentiellement incomplet :\n{delegated_context or '(aucun)'}"
+                        ),
+                    },
+                ]
+                self._save_session_locked(session, messages)
         tools = self._allowed_tool_definitions(agent)
         for turn in range(agent.max_turns):
             if self._is_cancel_requested(job_id):
@@ -522,23 +702,38 @@ class SubAgentManager:
             )
             assistant = OpenRouterClient._assistant_message(response)
             messages.append(assistant)
+            self._save_session(job_id, messages)
             calls = OpenRouterClient._tool_calls(assistant)
             text = OpenRouterClient.text_from_message(assistant).strip()
             if not calls:
+                if self._is_pause_requested(job_id):
+                    return _WaitingResult("Pause demandée par Orion.")
                 return text or "Le sous-agent a terminé sans produire de résultat exploitable."
             if text:
                 self._record_progress(job_id, text)
             for call in calls:
                 if self._is_cancel_requested(job_id):
                     return "Travail interrompu à la demande d'Orion."
+                if self._is_pause_requested(job_id):
+                    return _WaitingResult("Pause demandée par Orion.")
                 name = str(call.get("function", {}).get("name", ""))
+                arguments = self._call_arguments(call)
+                if name == "wait_for_input":
+                    question = str(arguments.get("question", "J'ai besoin d'une information d'Orion."))
+                    result = self._tool_message(call, {"waiting": True, "question": question})
+                    messages.append(result)
+                    self._save_session(job_id, messages)
+                    return _WaitingResult(question)
                 if name not in agent.allowed_tools:
                     result = self._tool_message(call, {"error": f"Tool non autorisé pour ce sous-agent : {name}"})
                 else:
                     result = self.llm_client.execute_tool_call(call, raise_tool_errors=False)
                     result["content"] = _clip(result.get("content", ""), self.max_tool_output_chars)
                 messages.append(result)
+                self._save_session(job_id, messages)
                 self._record_tool_call(job_id, call)
+            if self._is_pause_requested(job_id):
+                return _WaitingResult("Pause demandée par Orion.")
 
         final_instruction = {
             "role": "system",
@@ -546,7 +741,49 @@ class SubAgentManager:
         }
         response = self.llm_client.complete([*messages, final_instruction], model=agent.model, tools=None)
         assistant = OpenRouterClient._assistant_message(response)
+        self._save_session(job_id, [*messages, assistant], status="completed")
         return OpenRouterClient.text_from_message(assistant).strip() or "Travail partiellement terminé."
+
+    @staticmethod
+    def _call_arguments(call: Mapping[str, Any]) -> dict[str, Any]:
+        function = call.get("function", {})
+        raw = function.get("arguments", {}) if isinstance(function, Mapping) else {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw or "{}")
+            except ValueError:
+                raw = {}
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
+    def _save_session_locked(
+        self,
+        session: SubAgentSession,
+        messages: list[dict[str, Any]],
+        *,
+        status: str | None = None,
+    ) -> None:
+        if len(messages) > self.max_session_messages:
+            messages = messages[:2] + messages[-(self.max_session_messages - 2):]
+        session.messages = messages
+        if status is not None:
+            session.status = status
+        session.updated_at = _now()
+        self._save_locked()
+
+    def _save_session(
+        self,
+        job_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        status: str | None = None,
+    ) -> None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            session = self._sessions.get(job.session_id)
+            if session is not None:
+                self._save_session_locked(session, messages, status=status)
 
     @staticmethod
     def _tool_message(call: Mapping[str, Any], value: Any) -> dict[str, Any]:
@@ -561,6 +798,11 @@ class SubAgentManager:
         with self._lock:
             job = self._jobs.get(job_id)
             return job is None or job.cancel_requested
+
+    def _is_pause_requested(self, job_id: str) -> bool:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return job is None or job.pause_requested
 
     def _record_progress(self, job_id: str, message: str) -> None:
         compact = _clip(message, 1200)
@@ -597,6 +839,7 @@ class SubAgentManager:
         agent = self.get_agent(job.agent_id)
         payload = {
             "job_id": job.id,
+            "session_id": job.session_id,
             "agent_id": job.agent_id,
             "agent_name": agent.name if agent else job.agent_id,
             "status": job.status.value,
@@ -604,6 +847,7 @@ class SubAgentManager:
             "message": message,
             "result": job.result if event_type == "subagent.completed" else None,
             "error": job.error if event_type == "subagent.failed" else None,
+            "waiting_for": job.waiting_for if event_type == "subagent.waiting" else None,
             "parent_task_id": job.parent_task_id,
         }
         metadata = {
@@ -627,5 +871,6 @@ __all__ = [
     "SubAgentJob",
     "SubAgentJobStatus",
     "SubAgentManager",
+    "SubAgentSession",
     "SubAgentStatus",
 ]

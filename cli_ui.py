@@ -13,6 +13,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+import random
 
 try:
     from rich.console import Console, Group
@@ -165,9 +166,25 @@ class CLIConsole:
             self._print_plain(f"\n{self.name} · prêt")
             self._print_plain("Événements · tools · tâches durables\n")
             return
-
+        accroches_orion = [
+            "Ne m'appelle pas, je t'appellerai.",
+            "Je ne dors pas, je veille.",
+            "Un signal, une action. Comme Zimmer sur du silence.",
+            "HAL aurait ouvert la porte, moi j'ouvre un event.",
+            "Dans l'espace, personne ne t'entend... sauf Orion.",
+            "Suis le lapin blanc. Ou l'event, au choix.",
+            "Ce n'est pas un bug, c'est un déclencheur.",
+            "Houston, on a un event.",
+            "Je vois des events.",
+            "Rien ne se perd, tout se déclenche.",
+            "Third star to the right, straight on till event.",
+            "Some people call it loop, I call it home.",
+            "Pas besoin d'appuyer sur pause, j'attends déjà.",
+            "May the event be with you.",
+            "Un pas pour toi, un webhook pour l'humanité.",
+        ]
         title = Text(self.name, style=f"bold {self._ACCENT}")
-        subtitle = Text("Agent événementiel personnel", style="bold")
+        subtitle = Text(random.choice(accroches_orion), style="bold")
         details = Text()
         if self.model:
             details.append("modèle  ", style=self._MUTED)

@@ -51,6 +51,9 @@ def main() -> None:
                 "Modèle": application.llm.model,
                 "Événements traités": runtime.wake_count,
                 "Événements en file": runtime.pending_events,
+                "Pré-réflexion": (
+                    "active" if runtime.reflection_engine is not None else "désactivée"
+                ),
                 "Phase RUN": (
                     run_context.phase.value.upper()
                     if run_context is not None

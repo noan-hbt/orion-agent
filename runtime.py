@@ -74,6 +74,7 @@ class RunPhase(str, Enum):
     """Sous-phases prévues à l'intérieur d'un ``RUN``."""
 
     PRE_REFLECTION = "pre_reflection"
+    DECISION = "decision"
     REFLECTION = "reflection"
     TOOL = "tool"
     SMALL_OUTPUT = "small_output"
@@ -133,7 +134,7 @@ class RunContext:
     task: Task | None
     run_id: str | None
     loaded_state: dict[str, Any]
-    phase: RunPhase = RunPhase.REFLECTION
+    phase: RunPhase = RunPhase.DECISION
     turn: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     small_outputs: list[str] = field(default_factory=list)
@@ -165,7 +166,7 @@ class AgentRuntime:
 
     Le runtime peut être attaché à un ``EventHandler`` avec :meth:`attach`.
     Le cycle principal est ``SLEEP -> EVENT -> WAKE -> RUN -> SLEEP``.
-    ``RUN`` expose les sous-phases ``REFLECTION -> TOOL -> SMALL_OUTPUT ->
+    ``RUN`` expose les sous-phases ``PRE_REFLECTION -> DECISION -> TOOL -> SMALL_OUTPUT ->
     ANSWER`` ou ``NEW_TURN`` pour la future boucle d'exécution.
     """
 
@@ -183,6 +184,9 @@ class AgentRuntime:
             "delete_subagent",
             "delegate_to_subagent",
             "cancel_subagent_job",
+            "send_to_subagent",
+            "pause_subagent_job",
+            "resume_subagent_job",
         }
     )
 
@@ -900,12 +904,25 @@ class AgentRuntime:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_subagent_session",
+                    "description": "Consulte les derniers messages de la session persistante d'un job.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"job_id": {"type": "string"}},
+                        "required": ["job_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "list_subagent_jobs",
                     "description": "Liste les délégations récentes, éventuellement filtrées par état.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "status": {"type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled"]},
+                            "status": {"type": "string", "enum": ["queued", "running", "waiting", "completed", "failed", "cancelled"]},
                             "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                         },
                         "additionalProperties": False,
@@ -917,6 +934,48 @@ class AgentRuntime:
                 "function": {
                     "name": "cancel_subagent_job",
                     "description": "Annule un job en attente ou demande l'arrêt coopératif d'un job en cours.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"job_id": {"type": "string"}},
+                        "required": ["job_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_to_subagent",
+                    "description": "Envoie un message à une session de sous-agent en attente et la relance avec son historique.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "job_id": {"type": "string"},
+                            "message": {"type": "string"},
+                        },
+                        "required": ["job_id", "message"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "pause_subagent_job",
+                    "description": "Demande la pause coopérative d'un job actif ou met immédiatement en attente un job en file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"job_id": {"type": "string"}},
+                        "required": ["job_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "resume_subagent_job",
+                    "description": "Reprend un job en attente avec sa session persistante.",
                     "parameters": {
                         "type": "object",
                         "properties": {"job_id": {"type": "string"}},
@@ -953,6 +1012,7 @@ class AgentRuntime:
             "- Les tools de tâche sont tes capacités de pilotage ; utilise-les explicitement quand nécessaire.\n"
             "- Délègue aux sous-agents les recherches, explorations et travaux moyens ou longs qui peuvent avancer indépendamment. Garde Orion pour le dialogue, la coordination et les décisions importantes.\n"
             "- Un job de sous-agent est asynchrone : confirme sa délégation puis reste disponible. Son progrès et son résultat reviendront comme événements. Transmets seulement le contexte minimal nécessaire.\n"
+            "- Un sous-agent peut appeler wait_for_input lorsqu'il lui manque une information. Il passe alors WAITING et libère son worker ; utilise send_to_subagent pour lui répondre et reprendre sa session.\n"
             "- Crée ou modifie un sous-agent lorsqu'aucun worker existant n'a la spécialité, le modèle ou les tools appropriés.\n"
             "- Si une tâche durable dépend du résultat délégué, appelle wait_for_event sur subagent.completed avec payload_equals.job_id, puis dors au lieu de consulter le job en boucle.\n"
             "- Ne révèle pas tes raisonnements internes détaillés ; donne seulement les sorties utiles."
@@ -968,6 +1028,10 @@ class AgentRuntime:
             "- Les tools de tâche sont tes capacités de pilotage ; utilise-les explicitement quand nécessaire.\n"
             "- Pour une action à effet de bord, respecte les résultats duplicate et potential_duplicate.\n"
             "- Si plusieurs tools sont nécessaires, après chaque observation explique brièvement et naturellement ce que tu as appris et ce que tu fais ensuite ; évite les formules répétitives.\n"
+            "- Délègue aux sous-agents les recherches, explorations et travaux moyens ou longs qui peuvent avancer indépendamment. Garde Orion pour le dialogue, la coordination et les décisions importantes.\n"
+            "- Une délégation est asynchrone : confirme-la puis reste disponible. Le job_id, les progrès et le résultat reviendront comme événements.\n"
+            "- Si un sous-agent est en WAITING, utilise send_to_subagent pour lui transmettre une information et reprendre sa session ; n'interroge pas son état en boucle.\n"
+            "- Si une tâche durable dépend d'un job, attends son événement subagent.completed avec wait_for_event.\n"
             "- Ne révèle pas tes raisonnements internes détaillés ; donne seulement les sorties utiles."
         )
         if self.response_concise:
@@ -1365,6 +1429,20 @@ class AgentRuntime:
             if name == "get_subagent_job":
                 job = self.subagent_manager.get_job(arguments["job_id"])
                 return self._compact_subagent_job(job) if job else {"job": None}
+            if name == "get_subagent_session":
+                job = self.subagent_manager.get_job(arguments["job_id"])
+                if job is None:
+                    return {"session": None}
+                session = self.subagent_manager.get_session(job.session_id)
+                if session is None:
+                    return {"session": None}
+                return {
+                    "session_id": session.id,
+                    "job_id": session.job_id,
+                    "status": session.status,
+                    "messages": ContextAssembler.compact_value(session.messages[-10:], max_chars=10000),
+                    "updated_at": session.updated_at,
+                }
             if name == "list_subagent_jobs":
                 jobs = self.subagent_manager.list_jobs(
                     status=arguments.get("status"),
@@ -1374,6 +1452,20 @@ class AgentRuntime:
             if name == "cancel_subagent_job":
                 return self._compact_subagent_job(
                     self.subagent_manager.cancel_job(arguments["job_id"])
+                )
+            if name == "send_to_subagent":
+                return self._compact_subagent_job(
+                    self.subagent_manager.send_message(
+                        arguments["job_id"], arguments["message"]
+                    )
+                )
+            if name == "pause_subagent_job":
+                return self._compact_subagent_job(
+                    self.subagent_manager.pause_job(arguments["job_id"])
+                )
+            if name == "resume_subagent_job":
+                return self._compact_subagent_job(
+                    self.subagent_manager.resume_job(arguments["job_id"])
                 )
         raise KeyError(name)
 
@@ -1398,10 +1490,12 @@ class AgentRuntime:
             "kind": "subagent_job",
             "id": job.id,
             "agent_id": job.agent_id,
+            "session_id": job.session_id,
             "objective": job.objective,
             "status": job.status.value,
             "priority": job.priority,
             "parent_task_id": job.parent_task_id,
+            "waiting_for": job.waiting_for,
             "progress": list(job.progress[-5:]),
             "result": ContextAssembler.compact_value(job.result, max_chars=6000),
             "error": job.error,
@@ -1633,7 +1727,7 @@ class AgentRuntime:
         self._transition(RuntimeState.ANSWER, context.event)
 
     def _run_agent_loop(self, context: RunContext) -> None:
-        """Boucle REFLECTION -> TOOL -> OBSERVATION -> ANSWER/NEW_TURN."""
+        """Boucle PRE_REFLECTION optionnelle -> DECISION -> TOOL -> OBSERVATION -> ANSWER/NEW_TURN."""
         if self.llm_client is None:
             self._run_cycle_stub(context)
             return
@@ -1645,7 +1739,9 @@ class AgentRuntime:
             if context.interrupted:
                 return
             context.turn = turn + 1
-            context.phase = RunPhase.REFLECTION if turn == 0 else RunPhase.NEW_TURN
+            # La pré-réflexion éventuelle est déjà terminée ici. Le premier
+            # appel principal est une décision, pas une réflexion interne.
+            context.phase = RunPhase.DECISION if turn == 0 else RunPhase.NEW_TURN
             response = self.llm_client.complete(
                 context.messages,
                 tools=tools or None,
@@ -1867,7 +1963,7 @@ class AgentRuntime:
     @staticmethod
     def _run_cycle_stub(context: RunContext) -> None:
         """Point d'entrée réservé à la future boucle de RUN."""
-        context.phase = RunPhase.REFLECTION
+        context.phase = RunPhase.DECISION
 
     def __enter__(self) -> AgentRuntime:
         return self.start()

@@ -134,6 +134,7 @@ default_max_turns = 10
 max_context_chars = 16000
 max_result_chars = 24000
 max_tool_output_chars = 12000
+max_session_messages = 100
 history_limit = 200
 emit_progress_events = true
 

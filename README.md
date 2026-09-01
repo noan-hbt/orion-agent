@@ -296,8 +296,12 @@ résultat reviennent ensuite comme événements `subagent.progress`,
 `subagent.completed`, `subagent.failed` ou `subagent.cancelled`, avec le channel
 et la conversation d’origine.
 
-Les définitions et les jobs sont persistés dans `data/subagents.json`. Un job
-en cours lors d’un redémarrage est replacé en file. Chaque sous-agent possède
+Les définitions, les jobs et les sessions sont persistés dans
+`data/subagents.json`. Un job en cours lors d’un redémarrage est replacé en
+file avec son historique de session. Un sous-agent peut appeler
+`wait_for_input` lorsqu’il lui manque une information : sa session passe en
+attente et son worker est libéré ; Orion peut ensuite utiliser
+`send_to_subagent` pour le reprendre. Chaque sous-agent possède
 son modèle, son prompt, ses capacités, sa limite de tours et une liste explicite
 de tools autorisés. Le terminal n’est pas autorisé par défaut : Orion doit le
 donner explicitement à un worker d’exploration de fichiers.
@@ -310,6 +314,7 @@ workers = 3
 default_model = "deepseek/deepseek-v4-flash-0731"
 default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
 default_max_turns = 8
+max_session_messages = 100
 emit_progress_events = true
 ```
 
