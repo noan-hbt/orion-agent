@@ -123,6 +123,7 @@ max_turns = 12
 wake_queue_size = 0
 dedupe_window = 86400.0
 parallel_tool_calls = true
+queue_events_during_run = true
 
 [subagents]
 enabled = true
@@ -140,8 +141,8 @@ emit_progress_events = true
 
 [response]
 concise = true
-max_chars = 3000
-max_sentences = 8
+max_chars = 1800
+max_sentences = 5
 
 [reflection]
 enabled = false

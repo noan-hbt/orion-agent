@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from queue import Empty
+from queue import Empty, Full
 from typing import TYPE_CHECKING, Any, Protocol
 
 from action_ledger import ActionLedger, normalize_action_value
@@ -145,6 +145,7 @@ class RunContext:
     control: str | None = None
     interrupted: bool = False
     interrupting_event_id: str | None = None
+    notified_event_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -187,6 +188,7 @@ class AgentRuntime:
             "send_to_subagent",
             "pause_subagent_job",
             "resume_subagent_job",
+            "acknowledge_pending_event",
         }
     )
 
@@ -205,6 +207,7 @@ class AgentRuntime:
         action_ledger_path: str | None = "data/action_ledger.sqlite3",
         dedupe_window: float = 86400.0,
         parallel_tool_calls: bool = False,
+        queue_events_during_run: bool = True,
         response_max_chars: int = 3000,
         response_max_sentences: int = 8,
         response_concise: bool = True,
@@ -241,11 +244,19 @@ class AgentRuntime:
         self.system_prompt = system_prompt
         self.max_turns = max_turns
         self.parallel_tool_calls = bool(parallel_tool_calls)
+        self.queue_events_during_run = bool(queue_events_during_run)
         self.response_max_chars = int(response_max_chars)
         self.response_max_sentences = int(response_max_sentences)
         self.response_concise = bool(response_concise)
         self.reflection_engine = reflection_engine
         self.wake_queue = EventQueue(maxsize=wake_queue_size)
+        # Les événements reçus pendant un RUN sont isolés du contexte actif.
+        # Ils seront remis dans la file normale à la fin du RUN.
+        # Cette inbox reste illimitée : une limite de la file de réveil ne
+        # doit jamais empêcher la réception d'un événement pendant un RUN.
+        self._deferred_events = EventQueue(maxsize=0)
+        self._deferred_event_index: dict[str, Event] = {}
+        self._acknowledged_deferred_events: set[str] = set()
         self.action_ledger = action_ledger or ActionLedger(action_ledger_path or ":memory:")
         self.dedupe_window = float(dedupe_window)
         self.prompt_store = prompt_store or PromptContextStore()
@@ -284,6 +295,7 @@ class AgentRuntime:
         self._preempted_runs: list[PreemptedRun] = []
         self._last_error: Exception | None = None
         self._wake_count = 0
+        self._run_in_progress = False
 
     @property
     def state(self) -> RuntimeState:
@@ -304,7 +316,14 @@ class AgentRuntime:
 
     @property
     def pending_events(self) -> int:
-        return self.wake_queue.qsize()
+        with self._execution_lock:
+            return self.wake_queue.qsize() + len(self._deferred_event_index)
+
+    @property
+    def pending_events_during_run(self) -> int:
+        """Nombre d'événements reçus pendant le RUN courant."""
+        with self._execution_lock:
+            return len(self._deferred_event_index)
 
     @property
     def last_event(self) -> Event | None:
@@ -370,6 +389,12 @@ class AgentRuntime:
         if not isinstance(event, Event):
             raise TypeError("Le runtime attend une instance de Event.")
         with self._execution_lock:
+            if self._run_in_progress and self.queue_events_during_run:
+                # Ne pas toucher à l'état ni au contexte du RUN courant : le
+                # message sera traité comme un réveil distinct ensuite.
+                self._deferred_events.put(event)
+                self._deferred_event_index[event.id] = event
+                return
             self.wake_queue.put(event)
             if self._should_preempt(event):
                 self._transition(RuntimeState.PREEMPT, event)
@@ -605,6 +630,22 @@ class AgentRuntime:
 
     def _runtime_tool_definitions(self) -> list[dict[str, Any]]:
         definitions = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "acknowledge_pending_event",
+                    "description": "Marque comme pris en charge un evenement recu pendant le RUN courant. Appelle ce tool uniquement si tu decides de traiter cette notification maintenant ; sinon laisse l'evenement en attente pour un RUN separe.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "event_id": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["event_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
             {
                 "type": "function",
                 "function": {
@@ -1032,9 +1073,13 @@ class AgentRuntime:
             "- Une délégation est asynchrone : confirme-la puis reste disponible. Le job_id, les progrès et le résultat reviendront comme événements.\n"
             "- Si un sous-agent est en WAITING, utilise send_to_subagent pour lui transmettre une information et reprendre sa session ; n'interroge pas son état en boucle.\n"
             "- Si une tâche durable dépend d'un job, attends son événement subagent.completed avec wait_for_event.\n"
+            "- Les événements reçus pendant un RUN peuvent apparaître sous forme de notifications compactes entre deux tools. Décide au cas par cas si tu les traites maintenant ; si oui, acquitte-les avec acknowledge_pending_event, sinon laisse-les pour un RUN séparé.\n"
             "- Ne révèle pas tes raisonnements internes détaillés ; donne seulement les sorties utiles."
         )
         if self.response_concise:
+            runtime_instructions += (
+                "\n- Par defaut, ecris comme dans une vraie conversation par message : 1 a 3 phrases courtes, naturelles et directes. N'utilise des puces, un titre, du markdown ou une longue explication que si c'est vraiment utile."
+            )
             runtime_instructions += (
                 f"\n- Réponds comme un humain concis : va droit au but, généralement en quelques phrases ou quelques puces, sans répéter la demande ni ajouter de préambule. La réponse finale doit rester sous environ {self.response_max_chars} caractères et {self.response_max_sentences} phrases, sauf nécessité réelle."
                 "\n- Pour une recherche web, donne d'abord une synthèse courte et quelques sources pertinentes ; ne transforme pas automatiquement les résultats en rapport exhaustif."
@@ -1242,6 +1287,58 @@ class AgentRuntime:
             )
         )
 
+    def _emit_error(
+        self,
+        event: Event,
+        content: str,
+        *,
+        task: Task | None = None,
+        intermediate: bool = False,
+        phase: RunPhase | None = None,
+    ) -> None:
+        """Informe l'utilisateur d'une erreur sans exposer les details internes."""
+        if self.on_output is None:
+            return
+        output_channel = event.metadata.get("channel") or event.payload.get("_orion_channel")
+        output_recipient = event.metadata.get("reply_to") or event.payload.get("_orion_reply_to")
+        metadata = dict(event.metadata)
+        metadata.update(
+            {
+                "timestamp": datetime.now().astimezone().isoformat(),
+                "error": True,
+                "intermediate": intermediate,
+            }
+        )
+        if phase is not None:
+            metadata["phase"] = phase.value
+        try:
+            self.on_output(
+                AgentOutput(
+                    content=self._limit_output(content.strip(), 700),
+                    channel=output_channel,
+                    recipient=output_recipient,
+                    event_id=event.id,
+                    task_id=task.id if task is not None else None,
+                    metadata=metadata,
+                )
+            )
+        except Exception:
+            # Une erreur d'envoi ne doit pas masquer l'erreur originale.
+            return
+
+    @staticmethod
+    def _error_message(error: Exception, *, tool_name: str | None = None) -> str:
+        """Transforme une exception technique en message utilisateur court."""
+        if tool_name:
+            return f"⚠️ L'outil « {tool_name} » a rencontré un problème. Je poursuis si possible."
+        error_name = type(error).__name__.lower()
+        error_text = str(error).lower()
+        if "timeout" in error_name or "timeout" in error_text or "timed out" in error_text:
+            return "⚠️ La requête a pris trop de temps et n'a pas pu aboutir. Tu peux me demander de réessayer."
+        if "openrouter" in error_name or "openrouter" in error_text:
+            return "⚠️ Le service de modèle a rencontré un problème. Tu peux me demander de réessayer."
+        return "⚠️ Orion n'a pas pu terminer cette demande. Tu peux me demander de réessayer."
+
     @staticmethod
     def _limit_output(content: str, max_chars: int) -> str:
         """Évite qu'une sortie exceptionnelle ne déborde les channels."""
@@ -1285,6 +1382,24 @@ class AgentRuntime:
         context = self._run_context
         if context is None:
             raise RuntimeError("Aucun RUN actif.")
+
+        if name == "acknowledge_pending_event":
+            event_id = str(arguments["event_id"])
+            with self._execution_lock:
+                event = self._deferred_event_index.pop(event_id, None)
+                if event is None:
+                    return {
+                        "acknowledged": False,
+                        "event_id": event_id,
+                        "reason": "Evenement inconnu, deja acquitte ou deja transfere.",
+                    }
+                self._acknowledged_deferred_events.add(event_id)
+            return {
+                "acknowledged": True,
+                "event_id": event_id,
+                "type": event.type,
+                "reason": arguments.get("reason", ""),
+            }
 
         if name == "create_task":
             self._transition(RuntimeState.FIND_CREATE_TASK, context.event)
@@ -1636,6 +1751,14 @@ class AgentRuntime:
             action_status = ActionStatus.FAILED
             if action_key is not None:
                 self.action_ledger.fail(action_key, action_result)
+            if context is not None:
+                self._emit_error(
+                    context.event,
+                    self._error_message(exc, tool_name=name),
+                    task=context.task,
+                    intermediate=True,
+                    phase=RunPhase.TOOL,
+                )
             return self._tool_message(call, {"error": str(exc)})
         finally:
             if action_id is not None and context is not None and context.task is not None:
@@ -1738,6 +1861,7 @@ class AgentRuntime:
         for turn in range(self.max_turns):
             if context.interrupted:
                 return
+            self._append_pending_event_notifications(context)
             context.turn = turn + 1
             # La pré-réflexion éventuelle est déjà terminée ici. Le premier
             # appel principal est une décision, pas une réflexion interne.
@@ -1791,6 +1915,35 @@ class AgentRuntime:
 
         self._finalize_after_max_turns(context)
 
+    def _append_pending_event_notifications(self, context: RunContext) -> None:
+        """Expose les nouveaux événements sans remplacer le contexte courant."""
+        with self._execution_lock:
+            pending = [
+                event
+                for event_id, event in self._deferred_event_index.items()
+                if event_id not in context.notified_event_ids
+            ]
+            for event in pending:
+                context.notified_event_ids.add(event.id)
+        if not pending:
+            return
+
+        lines = [
+            "Notification(s) reçue(s) pendant ce RUN — elles ne sont pas encore traitées :"
+        ]
+        for event in pending:
+            payload = ContextAssembler.compact_value(event.payload, max_chars=1200)
+            lines.append(
+                f"- event_id={event.id} type={event.type} source={event.source or 'unknown'} "
+                f"reçu={event.created_at.astimezone().isoformat()} payload={payload}"
+            )
+        lines.append(
+            "Si tu traites une notification maintenant, appelle "
+            "acknowledge_pending_event avec son event_id. Sinon, n'acquitte rien : "
+            "elle sera traitée lors d'un RUN séparé."
+        )
+        context.messages.append({"role": "system", "content": "\n".join(lines)})
+
     def process_one(self, *, timeout: float | None = None) -> Event | None:
         """Traite synchroniquement un réveil, utile sans worker en arrière-plan."""
         try:
@@ -1810,15 +1963,29 @@ class AgentRuntime:
             return True
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.wake_queue.empty() and self.wake_queue.unfinished_tasks == 0:
+            if (
+                self.wake_queue.empty()
+                and self._deferred_events.empty()
+                and self.wake_queue.unfinished_tasks == 0
+                and self._deferred_events.unfinished_tasks == 0
+            ):
                 return True
             time.sleep(0.01)
-        return self.wake_queue.empty() and self.wake_queue.unfinished_tasks == 0
+        return (
+            self.wake_queue.empty()
+            and self._deferred_events.empty()
+            and self.wake_queue.unfinished_tasks == 0
+            and self._deferred_events.unfinished_tasks == 0
+        )
 
     def _run(self) -> None:
         while True:
+            with self._execution_lock:
+                if not self._run_in_progress and not self._deferred_events.empty():
+                    self._promote_deferred_events()
             if self._stop_requested.is_set() and (
-                not self._drain_on_stop or self.wake_queue.empty()
+                not self._drain_on_stop
+                or (self.wake_queue.empty() and self._deferred_events.empty())
             ):
                 return
             try:
@@ -1869,6 +2036,8 @@ class AgentRuntime:
                 run_id=run_id,
                 loaded_state=dict(task.current_state) if task else loaded_state,
             )
+            with self._execution_lock:
+                self._run_in_progress = True
             self._transition(RuntimeState.RUN, event)
 
             context = self._run_context
@@ -1895,6 +2064,9 @@ class AgentRuntime:
                         conversation_id=self._conversation_id(event),
                         timestamp=event.created_at.isoformat(),
                     )
+            with self._execution_lock:
+                self._run_in_progress = False
+                self._promote_deferred_events()
             if context.interrupted:
                 self.sleep()
                 return
@@ -1916,6 +2088,9 @@ class AgentRuntime:
                     self.resume_preempted_task()
             self.sleep()
         except Exception as exc:
+            with self._execution_lock:
+                self._run_in_progress = False
+                self._promote_deferred_events()
             self._last_error = exc
             if self._current_task is not None and self._run_context is not None:
                 try:
@@ -1930,7 +2105,46 @@ class AgentRuntime:
                     pass
             if self.on_error is not None:
                 self.on_error(event, exc)
+            self._emit_error(
+                event,
+                self._error_message(exc),
+                task=self._current_task,
+                intermediate=False,
+                phase=(self._run_context.phase if self._run_context is not None else None),
+            )
             self._transition(RuntimeState.SLEEP, event)
+
+    def _promote_deferred_events(self) -> None:
+        """Transfère les événements reçus pendant le RUN vers la file normale.
+
+        L'appelant détient ``_execution_lock``. Les deux files conservent leur
+        priorité ; les événements sont ensuite sélectionnés par la file de
+        réveil habituelle.
+        """
+        while True:
+            try:
+                event = self._deferred_events.get_nowait()
+            except Empty:
+                return
+            if event.id in self._acknowledged_deferred_events:
+                self._acknowledged_deferred_events.discard(event.id)
+                self._deferred_event_index.pop(event.id, None)
+                self._deferred_events.task_done()
+                continue
+            try:
+                self.wake_queue.put_nowait(event)
+            except Full:
+                # Le get ne décrémente pas unfinished_tasks. On remet donc
+                # l'événement en attente et on clôt le ticket correspondant
+                # au premier get avant de retenter au prochain passage.
+                self._deferred_events.put(event)
+                if event.id not in self._acknowledged_deferred_events:
+                    self._deferred_event_index[event.id] = event
+                self._deferred_events.task_done()
+                return
+            self._deferred_event_index.pop(event.id, None)
+            self._acknowledged_deferred_events.discard(event.id)
+            self._deferred_events.task_done()
 
     def _finish_context_run(self, context: RunContext) -> None:
         """Termine le run sans marquer automatiquement la tâche complète."""

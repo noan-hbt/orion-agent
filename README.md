@@ -107,11 +107,24 @@ Pour autoriser plusieurs tools indépendants dans un même tour :
 ```toml
 [runtime]
 parallel_tool_calls = true
+queue_events_during_run = true
 ```
+
+Le mode de réponse est volontairement conversationnel : Orion répond par défaut
+en quelques phrases courtes. Les limites restent réglables dans `[response]` avec
+`max_chars` et `max_sentences`.
 
 Les tools sans effet de bord peuvent alors s'exécuter en parallèle. Les tools
 de tâche, du scheduler ou marqués comme ayant un effet de bord restent
 séquentiels afin de préserver l'état.
+
+Avec `queue_events_during_run = true`, Orion continue de recevoir les messages
+et autres événements pendant un RUN long. Entre deux tools, il reçoit une
+notification compacte et décide s'il doit la traiter immédiatement. Un événement
+traité doit être acquitté avec `acknowledge_pending_event` afin de ne pas être
+rejoué ; sans acquittement, il reste disponible pour un RUN séparé. Le contexte
+principal et l'objectif courant restent ainsi protégés. Mettre la valeur à
+`false` conserve le comportement classique.
 
 Ne commitez jamais `.env`. Un modèle différent peut être choisi pour la
 réflexion, la compaction et la mémoire :

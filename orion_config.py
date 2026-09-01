@@ -64,6 +64,7 @@ class RuntimeConfig:
     wake_queue_size: int = 0
     dedupe_window: float = 86400.0
     parallel_tool_calls: bool = False
+    queue_events_during_run: bool = True
 
 
 @dataclass
@@ -91,8 +92,8 @@ class ResponseConfig:
     """Style et garde-fous des réponses envoyées aux utilisateurs."""
 
     concise: bool = True
-    max_chars: int = 3000
-    max_sentences: int = 8
+    max_chars: int = 1800
+    max_sentences: int = 5
 
 
 @dataclass
@@ -489,6 +490,7 @@ class OrionConfig:
             wake_queue_size=self.runtime.wake_queue_size,
             dedupe_window=self.runtime.dedupe_window,
             parallel_tool_calls=self.runtime.parallel_tool_calls,
+            queue_events_during_run=self.runtime.queue_events_during_run,
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
             response_concise=self.response.concise,
