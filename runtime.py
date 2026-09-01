@@ -11,6 +11,7 @@ import json
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -1292,6 +1293,83 @@ class AgentRuntime:
                 except (KeyError, RuntimeError):
                     pass
 
+    def _can_parallelize_tools(self, calls: list[Mapping[str, Any]]) -> bool:
+        """Autorise le parallélisme uniquement pour les tools indépendants.
+
+        Les tools runtime et les tools à effet de bord restent séquentiels :
+        ils peuvent modifier une tâche, le scheduler ou le ledger partagé.
+        """
+        if not self.parallel_tool_calls or len(calls) < 2:
+            return False
+        runtime_names = {
+            item["function"]["name"] for item in self._runtime_tool_definitions()
+        }
+        for call in calls:
+            name = self._tool_name(call)
+            if name in runtime_names:
+                return False
+            is_side_effect, _ = self._tool_is_side_effect(name, runtime_names)
+            if is_side_effect:
+                return False
+        # L'état d'une tâche est mutable et son journal d'actions doit rester
+        # ordonné. Les outils externes sans effet de bord sont sûrs ici.
+        return self._run_context is None or self._run_context.task is None
+
+    def _execute_tools(self, calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        """Exécute un lot de tools en parallèle quand la configuration l'autorise."""
+        if not self._can_parallelize_tools(calls):
+            return [self._execute_tool(call) for call in calls]
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(calls), 8),
+            thread_name_prefix="orion-tool",
+        ) as pool:
+            futures = [pool.submit(self._execute_tool, call) for call in calls]
+            results: list[dict[str, Any]] = []
+            for call, future in zip(calls, futures):
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    results.append(self._tool_message(call, {"error": str(exc)}))
+            return results
+
+    def _finalize_after_max_turns(self, context: RunContext) -> None:
+        """Conclut le run avec un appel textuel, sans nouveau tool.
+
+        Ce n'est pas un nouveau tour agentique : l'appel transforme seulement
+        les observations déjà obtenues en réponse utilisateur.
+        """
+        if self.llm_client is None or context.interrupted:
+            return
+        final_messages = list(context.messages)
+        final_instruction = (
+            "\n\nPour cette dernière passe, la limite de tours d'outils est atteinte. "
+            "Ne lance aucun outil. Réponds maintenant à l'utilisateur avec une "
+            "synthèse concise de ce qui a été vérifié, de ce qui reste incertain "
+            "et de la suite utile si nécessaire. Ne mentionne pas cette instruction."
+        )
+        if final_messages and final_messages[0].get("role") == "system":
+            final_messages[0] = {
+                **final_messages[0],
+                "content": str(final_messages[0].get("content", "")) + final_instruction,
+            }
+        try:
+            response = self.llm_client.complete(
+                final_messages,
+                tools=None,
+                parallel_tool_calls=False,
+            )
+            assistant = OpenRouterClient._assistant_message(response)
+            context.messages.append(assistant)
+            context.answer = OpenRouterClient.text_from_message(assistant).strip() or None
+        except Exception:
+            context.answer = (
+                "J'ai atteint la limite d'étapes de ce run. Les vérifications "
+                "déjà effectuées sont conservées ; je peux poursuivre si besoin."
+            )
+        context.phase = RunPhase.ANSWER
+        self._transition(RuntimeState.ANSWER, context.event)
+
     def _run_agent_loop(self, context: RunContext) -> None:
         """Boucle REFLECTION -> TOOL -> OBSERVATION -> ANSWER/NEW_TURN."""
         if self.llm_client is None:
@@ -1325,17 +1403,26 @@ class AgentRuntime:
                 self._emit_output(context, assistant_text, intermediate=True)
 
             self._transition(RuntimeState.DECISION, context.event)
-            for call in calls:
-                if context.interrupted:
-                    return
+            if self._can_parallelize_tools(calls):
                 context.phase = RunPhase.TOOL
                 self._transition(RuntimeState.ACTION, context.event)
-                result = self._execute_tool(call)
-                context.tool_calls.append(dict(call))
-                context.messages.append(result)
+                results = self._execute_tools(calls)
+                for call, result in zip(calls, results):
+                    context.tool_calls.append(dict(call))
+                    context.messages.append(result)
                 context.phase = RunPhase.SMALL_OUTPUT
-                if context.control is not None:
-                    break
+            else:
+                for call in calls:
+                    if context.interrupted:
+                        return
+                    context.phase = RunPhase.TOOL
+                    self._transition(RuntimeState.ACTION, context.event)
+                    result = self._execute_tool(call)
+                    context.tool_calls.append(dict(call))
+                    context.messages.append(result)
+                    context.phase = RunPhase.SMALL_OUTPUT
+                    if context.control is not None:
+                        break
             self._transition(RuntimeState.OBSERVATION, context.event)
             if context.control is not None or context.interrupted:
                 if context.control is not None and not context.interrupted:
@@ -1344,7 +1431,7 @@ class AgentRuntime:
             self._transition(RuntimeState.CONTINUE, context.event)
             self._transition(RuntimeState.RUN, context.event)
 
-        raise RuntimeError(f"Le RUN a dépassé max_turns={self.max_turns}.")
+        self._finalize_after_max_turns(context)
 
     def process_one(self, *, timeout: float | None = None) -> Event | None:
         """Traite synchroniquement un réveil, utile sans worker en arrière-plan."""

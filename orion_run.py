@@ -37,14 +37,65 @@ def main() -> None:
             signal.signal(signal_value, lambda *_: shutdown.set())
 
     application = load_orion(args.config)
+    cli_adapter = application.channels.adapters.get("cli")
+    if cli_adapter is not None:
+        if callable(getattr(cli_adapter, "set_exit_handler", None)):
+            cli_adapter.set_exit_handler(shutdown.set)
+
+        def cli_status() -> dict[str, object]:
+            runtime = application.runtime
+            task = runtime.current_task
+            values: dict[str, object] = {
+                "Runtime": runtime.state.value.upper(),
+                "Modèle": application.llm.model,
+                "Événements traités": runtime.wake_count,
+                "Tâche active": (
+                    f"#{task.id} · {task.objective}" if task is not None else "aucune"
+                ),
+            }
+            if runtime.last_error is not None:
+                values["Dernière erreur"] = type(runtime.last_error).__name__
+            return values
+
+        def cli_tools() -> list[dict[str, str]]:
+            rows: list[dict[str, str]] = []
+            for definition in application.runtime._tool_definitions():
+                function = definition.get("function", {})
+                name = str(function.get("name", "tool"))
+                description = str(function.get("description", ""))
+                rows.append({"id": name, "label": description})
+            return sorted(rows, key=lambda item: item["id"])
+
+        def cli_tasks() -> list[dict[str, object]]:
+            tasks = application.runtime.task_store.list()
+            return [
+                {
+                    "id": f"#{task.id}",
+                    "objective": task.objective,
+                    "status": task.status.value,
+                }
+                for task in reversed(tasks[-10:])
+            ]
+
+        cli_adapter.set_status_provider(cli_status)
+        cli_adapter.set_tools_provider(cli_tools)
+        cli_adapter.set_tasks_provider(cli_tasks)
+
+        def report_error(event: object, error: Exception) -> None:
+            cli_adapter.report_error(event, error)
+
+    else:
+        report_error = _report_error
+
     # Les workers sont asynchrones : sans callbacks, une erreur OpenRouter ou
     # de channel peut sinon laisser uniquement le prompt CLI visible.
-    application.events.on_error = _report_error
-    application.runtime.on_error = _report_error
-    print(
-        f"Orion demarre (channels: {', '.join(application.channels.adapters) or 'aucun'})",
-        flush=True,
-    )
+    application.events.on_error = report_error
+    application.runtime.on_error = report_error
+    if cli_adapter is None:
+        print(
+            f"Orion demarre (channels: {', '.join(application.channels.adapters) or 'aucun'})",
+            flush=True,
+        )
     application.run_forever(shutdown)
 
 

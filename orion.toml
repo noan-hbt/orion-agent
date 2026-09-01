@@ -29,7 +29,7 @@ retry_backoff = 2.0
 max_turns = 12
 wake_queue_size = 0
 dedupe_window = 86400.0
-parallel_tool_calls = false
+parallel_tool_calls = true
 
 [response]
 concise = true
@@ -65,6 +65,9 @@ default = "cli"
 enabled = true
 style = true
 banner = true
+markdown = true
+timestamps = true
+history_path = "data/cli_history.txt"
 
 # Exemples de configuration channel ; les secrets doivent rester dans .env.
 # [channels.telegram]

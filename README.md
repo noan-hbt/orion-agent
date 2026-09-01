@@ -63,6 +63,22 @@ python orion_run.py
 La CLI est active par défaut. Orion reste en fonctionnement continu jusqu'à
 `Ctrl+C`.
 
+### Interface CLI
+
+La CLI conserve le prompt pendant les sorties asynchrones, rend le Markdown,
+garde un historique local et accepte les messages multilignes.
+
+- `Entrée` envoie le message ;
+- `Alt+Entrée` ajoute une ligne ;
+- `↑` et `↓` parcourent l'historique ;
+- `/status` affiche l'état du runtime ;
+- `/tools` liste les tools disponibles ;
+- `/tasks` affiche les tâches récentes ;
+- `/clear`, `/help` et `/exit` gèrent la session.
+
+Les couleurs peuvent être désactivées avec `NO_COLOR=1` ou avec
+`channels.cli.style = false`.
+
 ## Configuration
 
 `orion.toml` centralise les paramètres de l'agent. Les chemins relatifs sont
@@ -82,6 +98,17 @@ Les principales sections sont :
 | `[tools]` | emplacement et activation des tools installés |
 | `[scheduler]` | réveils planifiés |
 | `[tasks]` | stockage des tâches durables |
+
+Pour autoriser plusieurs tools indépendants dans un même tour :
+
+```toml
+[runtime]
+parallel_tool_calls = true
+```
+
+Les tools sans effet de bord peuvent alors s'exécuter en parallèle. Les tools
+de tâche, du scheduler ou marqués comme ayant un effet de bord restent
+séquentiels afin de préserver l'état.
 
 Ne commitez jamais `.env`. Un modèle différent peut être choisi pour la
 réflexion, la compaction et la mémoire :

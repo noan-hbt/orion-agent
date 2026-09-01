@@ -281,11 +281,17 @@ class OrionConfig:
             if settings.get("enabled", True) is False:
                 continue
             if name == "cli":
+                history_value = settings.get("history_path", "data/cli_history.txt")
                 router.register(
                     CLIAdapter(
-                        prompt=str(settings.get("prompt", "› ")),
+                        prompt=str(settings.get("prompt", "❯ ")),
                         style=settings.get("style"),
                         banner=bool(settings.get("banner", True)),
+                        name=self.name,
+                        model=self.llm.model,
+                        history_path=self.path(str(history_value)) if history_value else None,
+                        markdown=bool(settings.get("markdown", True)),
+                        timestamps=bool(settings.get("timestamps", True)),
                     )
                 )
             elif name == "telegram":

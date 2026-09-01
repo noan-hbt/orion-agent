@@ -29,6 +29,7 @@ from cli_ui import CLIConsole
 
 
 MessageCallback = Callable[[InboundMessage], None]
+CLIProvider = Callable[[], Any]
 
 
 def markdown_to_telegram_html(text: str) -> str:
@@ -104,17 +105,49 @@ class CLIAdapter:
     def __init__(
         self,
         *,
-        prompt: str = "› ",
+        prompt: str = "❯ ",
         output: Any = None,
         style: bool | None = None,
         banner: bool = True,
+        name: str = "Orion",
+        model: str | None = None,
+        history_path: str | None = "data/cli_history.txt",
+        markdown: bool = True,
+        timestamps: bool = True,
     ) -> None:
         self.prompt = prompt
         self.output = output or sys.stdout
-        self.console = CLIConsole(output=self.output, use_color=style, show_banner=banner)
+        self.console = CLIConsole(
+            output=self.output,
+            use_color=style,
+            show_banner=banner,
+            name=name,
+            model=model,
+            history_path=history_path,
+            render_markdown=markdown,
+            show_timestamps=timestamps,
+        )
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._on_message: MessageCallback | None = None
+        self._exit_handler: Callable[[], Any] | None = None
+        self._status_provider: CLIProvider | None = None
+        self._tools_provider: CLIProvider | None = None
+        self._tasks_provider: CLIProvider | None = None
+        self._pending = 0
+        self._pending_lock = threading.Lock()
+
+    def set_exit_handler(self, handler: Callable[[], Any]) -> None:
+        self._exit_handler = handler
+
+    def set_status_provider(self, provider: CLIProvider) -> None:
+        self._status_provider = provider
+
+    def set_tools_provider(self, provider: CLIProvider) -> None:
+        self._tools_provider = provider
+
+    def set_tasks_provider(self, provider: CLIProvider) -> None:
+        self._tasks_provider = provider
 
     def start(self, on_message: MessageCallback) -> None:
         self._on_message = on_message
@@ -127,9 +160,21 @@ class CLIAdapter:
         while not self._stop_requested.is_set():
             try:
                 line = self.console.read(self.prompt)
-            except (EOFError, KeyboardInterrupt):
+            except KeyboardInterrupt:
+                self.console.system("Saisie annulée.")
+                continue
+            except EOFError:
+                self._request_exit()
                 return
-            if line.strip() and self._on_message is not None:
+            line = line.strip()
+            if not line:
+                continue
+            if self._handle_command(line):
+                continue
+            if self._on_message is not None:
+                with self._pending_lock:
+                    self._pending += 1
+                    self.console.set_busy(True)
                 self._on_message(
                     InboundMessage(
                         channel=self.name,
@@ -138,11 +183,65 @@ class CLIAdapter:
                     )
                 )
 
+    def _request_exit(self) -> None:
+        self._stop_requested.set()
+        self.console.system("Arrêt d'Orion…")
+        if self._exit_handler is not None:
+            self._exit_handler()
+
+    def _provider_value(self, provider: CLIProvider | None, fallback: Any) -> Any:
+        if provider is None:
+            return fallback
+        try:
+            return provider()
+        except Exception as exc:
+            self.console.error(f"Impossible de charger ces informations : {exc}")
+            return fallback
+
+    def _handle_command(self, line: str) -> bool:
+        if not line.startswith("/"):
+            return False
+        command = line.split(maxsplit=1)[0].lower()
+        if command == "/help":
+            self.console.help()
+        elif command == "/clear":
+            self.console.clear()
+        elif command in {"/exit", "/quit"}:
+            self._request_exit()
+        elif command == "/status":
+            values = self._provider_value(
+                self._status_provider,
+                {"CLI": "active", "Requêtes en attente": self._pending},
+            )
+            self.console.status(values)
+        elif command == "/tools":
+            tools = self._provider_value(self._tools_provider, [])
+            self.console.items("Tools disponibles", tools, empty="Aucun tool chargé.")
+        elif command == "/tasks":
+            tasks = self._provider_value(self._tasks_provider, [])
+            self.console.items("Tâches récentes", tasks, empty="Aucune tâche durable.")
+        else:
+            self.console.warning(f"Commande inconnue : {command}. Utilisez /help.")
+        return True
+
     def send(self, output: AgentOutput) -> None:
+        intermediate = bool(output.metadata.get("intermediate", False))
+        if not intermediate:
+            with self._pending_lock:
+                self._pending = max(0, self._pending - 1)
+                self.console.set_busy(self._pending > 0)
         self.console.assistant(
             output.content,
-            intermediate=bool(output.metadata.get("intermediate", False)),
+            intermediate=intermediate,
+            timestamp=output.metadata.get("timestamp"),
         )
+
+    def report_error(self, event: object, error: Exception) -> None:
+        with self._pending_lock:
+            self._pending = max(0, self._pending - 1)
+            self.console.set_busy(self._pending > 0)
+        event_type = getattr(event, "type", "unknown")
+        self.console.error(f"{type(error).__name__} · événement {event_type}\n{error}")
 
     def stop(self) -> None:
         self._stop_requested.set()

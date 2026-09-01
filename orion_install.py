@@ -122,7 +122,7 @@ retry_backoff = 2.0
 max_turns = 12
 wake_queue_size = 0
 dedupe_window = 86400.0
-parallel_tool_calls = false
+parallel_tool_calls = true
 
 [response]
 concise = true
@@ -130,7 +130,7 @@ max_chars = 3000
 max_sentences = 8
 
 [reflection]
-enabled = true
+enabled = false
 model = {_toml_string(reflection_model)}
 prompt_path = "REFLECTION_CORE.md"
 max_input_chars = 12000
@@ -180,6 +180,9 @@ enabled = [{enabled}]
 enabled = true
 style = true
 banner = true
+markdown = true
+timestamps = true
+history_path = "data/cli_history.txt"
 
 [prompt]
 core_path = "ORION_CORE.md"
