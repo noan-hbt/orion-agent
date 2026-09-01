@@ -124,6 +124,7 @@ wake_queue_size = 0
 dedupe_window = 86400.0
 parallel_tool_calls = true
 queue_events_during_run = true
+wake_on_subagent_progress = false
 
 [subagents]
 enabled = true
@@ -137,7 +138,7 @@ max_result_chars = 24000
 max_tool_output_chars = 12000
 max_session_messages = 100
 history_limit = 200
-emit_progress_events = true
+emit_progress_events = false
 
 [response]
 concise = true

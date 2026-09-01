@@ -336,11 +336,12 @@ class SubAgentManager:
         with self._lock:
             if any(agent.name.lower() == name.lower() for agent in self._agents.values()):
                 raise ValueError(f"Un sous-agent nommé {name} existe déjà.")
+            selected_model = self._validate_model_id(model or self.default_model)
             agent = SubAgent(
                 id=uuid.uuid4().hex[:12],
                 name=name,
                 description=description.strip(),
-                model=(model or self.default_model).strip(),
+                model=selected_model,
                 system_prompt=(system_prompt or self._default_system_prompt(name, description)).strip(),
                 allowed_tools=list(self.default_tools if allowed_tools is None else allowed_tools),
                 capabilities=list(capabilities or []),
@@ -360,6 +361,27 @@ class SubAgentManager:
             "Si une information d'Orion est nécessaire, utilise wait_for_input au lieu de terminer la session."
         )
 
+    @staticmethod
+    def _validate_model_id(value: Any) -> str:
+        """Valide un identifiant de modele OpenRouter sans appeler le reseau."""
+        model = str(value or "").strip()
+        if (
+            not model
+            or model.startswith(("http://", "https://"))
+            or any(char.isspace() for char in model)
+            or model.count("/") != 1
+        ):
+            raise ValueError(
+                "Le modele du sous-agent doit utiliser le format OpenRouter "
+                "provider/model-name, par exemple deepseek/deepseek-v4-flash-0731."
+            )
+        provider, model_name = model.split("/", 1)
+        if not provider or not model_name:
+            raise ValueError(
+                "Le modele du sous-agent doit utiliser le format OpenRouter provider/model-name."
+            )
+        return model
+
     def update_agent(self, agent_id: str, **changes: Any) -> SubAgent:
         allowed = {"name", "description", "model", "system_prompt", "allowed_tools", "capabilities", "max_turns", "status"}
         unknown = set(changes) - allowed
@@ -374,6 +396,8 @@ class SubAgentManager:
                     continue
                 if key in {"allowed_tools", "capabilities"}:
                     value = [str(item) for item in value]
+                elif key == "model":
+                    value = self._validate_model_id(value)
                 elif key == "max_turns":
                     value = max(1, min(int(value), 30))
                 elif key == "status":
@@ -838,6 +862,8 @@ class SubAgentManager:
     def _publish(self, job: SubAgentJob, event_type: str, message: str | None, priority: EventPriority) -> None:
         agent = self.get_agent(job.agent_id)
         payload = {
+            "internal_event": True,
+            "event_type": event_type,
             "job_id": job.id,
             "session_id": job.session_id,
             "agent_id": job.agent_id,
@@ -852,6 +878,7 @@ class SubAgentManager:
         }
         metadata = {
             **job.route_metadata,
+            "internal_event": True,
             "subagent_job_id": job.id,
             "subagent_id": job.agent_id,
             "parent_event_id": job.parent_event_id,

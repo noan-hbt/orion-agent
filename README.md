@@ -108,6 +108,7 @@ Pour autoriser plusieurs tools indépendants dans un même tour :
 [runtime]
 parallel_tool_calls = true
 queue_events_during_run = true
+wake_on_subagent_progress = false
 ```
 
 Le mode de réponse est volontairement conversationnel : Orion répond par défaut
@@ -328,8 +329,14 @@ default_model = "deepseek/deepseek-v4-flash-0731"
 default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
 default_max_turns = 8
 max_session_messages = 100
-emit_progress_events = true
+emit_progress_events = false
 ```
+
+Les progressions fréquentes sont conservées dans l'état du job mais ne
+réveillent pas Orion par défaut. Les événements `subagent.waiting`, notamment
+les questions posées par un worker via `wait_for_input`, réveillent toujours
+Orion. Pour activer aussi les progressions, activez `emit_progress_events` et
+`wake_on_subagent_progress`.
 
 Une tâche durable déléguée peut utiliser `wait_for_event` avec
 `event_type = "subagent.completed"` et le `job_id` attendu. Cela permet à Orion

@@ -33,6 +33,7 @@ parallel_tool_calls = true
 # Reçoit les nouveaux événements pendant un RUN et les traite ensuite,
 # sans les injecter dans le contexte du RUN courant.
 queue_events_during_run = true
+wake_on_subagent_progress = false
 
 [subagents]
 enabled = true
@@ -46,7 +47,7 @@ max_result_chars = 24000
 max_tool_output_chars = 12000
 max_session_messages = 100
 history_limit = 200
-emit_progress_events = true
+emit_progress_events = false
 
 [response]
 concise = true

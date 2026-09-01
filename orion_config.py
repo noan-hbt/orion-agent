@@ -65,6 +65,7 @@ class RuntimeConfig:
     dedupe_window: float = 86400.0
     parallel_tool_calls: bool = False
     queue_events_during_run: bool = True
+    wake_on_subagent_progress: bool = False
 
 
 @dataclass
@@ -84,7 +85,7 @@ class SubAgentConfig:
     max_tool_output_chars: int = 12000
     max_session_messages: int = 100
     history_limit: int = 200
-    emit_progress_events: bool = True
+    emit_progress_events: bool = False
 
 
 @dataclass
@@ -491,6 +492,7 @@ class OrionConfig:
             dedupe_window=self.runtime.dedupe_window,
             parallel_tool_calls=self.runtime.parallel_tool_calls,
             queue_events_during_run=self.runtime.queue_events_during_run,
+            wake_on_subagent_progress=self.runtime.wake_on_subagent_progress,
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
             response_concise=self.response.concise,

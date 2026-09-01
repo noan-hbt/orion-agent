@@ -266,6 +266,7 @@ class ConversationJournal:
         for message in messages:
             item: dict[str, Any] = {
                 "role": str(message.get("role", "")),
+                "sender": self._sender_label(message.get("role")),
                 "source": source or channel or "unknown",
                 "at": str(message.get("at") or message_timestamp),
             }
@@ -298,6 +299,17 @@ class ConversationJournal:
                 handle.write(json.dumps(entry.__dict__, ensure_ascii=False, default=str) + "\n")
             self._next_id += 1
             return entry
+
+    @staticmethod
+    def _sender_label(role: Any) -> str:
+        """Expose un expéditeur explicite dans le journal envoyé au modèle."""
+        labels = {
+            "user": "user",
+            "assistant": "orion",
+            "tool": "tool",
+            "system": "system",
+        }
+        return labels.get(str(role or "").lower(), str(role or "unknown"))
 
     def after(self, cursor: int, *, limit: int = 20) -> list[JournalEntry]:
         if not self.path.exists():
@@ -348,10 +360,18 @@ class ConversationJournal:
                         continue
                     entry_source = raw.get("source")
                     entry_channel = raw.get("channel")
+                    if str(entry_source or "").startswith("subagent:"):
+                        # Les échanges internes restent consultables via les
+                        # jobs, pas comme une conversation utilisateur.
+                        continue
                     for message in raw.get("messages", []):
                         if not isinstance(message, Mapping):
                             continue
                         item = dict(message)
+                        item.setdefault(
+                            "sender",
+                            self._sender_label(item.get("role")),
+                        )
                         item.setdefault("source", entry_source or entry_channel or "unknown")
                         if entry_channel:
                             item.setdefault("channel", entry_channel)
