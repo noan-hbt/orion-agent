@@ -67,6 +67,25 @@ class RuntimeConfig:
 
 
 @dataclass
+class SubAgentConfig:
+    """Workers IA persistants, indépendants du runtime principal."""
+
+    enabled: bool = True
+    state_path: str = "data/subagents.json"
+    workers: int = 3
+    default_model: str | None = "deepseek/deepseek-v4-flash-0731"
+    default_tools: list[str] = field(
+        default_factory=lambda: ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
+    )
+    default_max_turns: int = 8
+    max_context_chars: int = 16000
+    max_result_chars: int = 24000
+    max_tool_output_chars: int = 12000
+    history_limit: int = 200
+    emit_progress_events: bool = True
+
+
+@dataclass
 class ResponseConfig:
     """Style et garde-fous des réponses envoyées aux utilisateurs."""
 
@@ -165,6 +184,7 @@ class OrionConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     events: EventConfig = field(default_factory=EventConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    subagents: SubAgentConfig = field(default_factory=SubAgentConfig)
     response: ResponseConfig = field(default_factory=ResponseConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
@@ -193,6 +213,7 @@ class OrionConfig:
         llm = _section(data, "llm")
         events = _section(data, "events")
         runtime = _section(data, "runtime")
+        subagents = _section(data, "subagents")
         response = _section(data, "response")
         reflection = _section(data, "reflection")
         scheduler = _section(data, "scheduler")
@@ -228,6 +249,7 @@ class OrionConfig:
             llm=LLMConfig(**{key: value for key, value in llm.items() if key in LLMConfig.__dataclass_fields__}),
             events=EventConfig(**{key: value for key, value in events.items() if key in EventConfig.__dataclass_fields__}),
             runtime=RuntimeConfig(**{key: value for key, value in runtime.items() if key in RuntimeConfig.__dataclass_fields__}),
+            subagents=SubAgentConfig(**{key: value for key, value in subagents.items() if key in SubAgentConfig.__dataclass_fields__}),
             response=ResponseConfig(**{key: value for key, value in response.items() if key in ResponseConfig.__dataclass_fields__}),
             reflection=ReflectionConfig(**{key: value for key, value in reflection.items() if key in ReflectionConfig.__dataclass_fields__}),
             scheduler=SchedulerConfig(**{key: value for key, value in scheduler.items() if key in SchedulerConfig.__dataclass_fields__}),
@@ -355,6 +377,7 @@ class OrionConfig:
         from reflection_engine import ReflectionEngine
         from runtime import AgentRuntime
         from scheduler import JsonScheduleStore, Scheduler
+        from subagents import SubAgentManager
         from tasks import JsonTaskStore
         from tool_manager import ToolManager
 
@@ -404,6 +427,22 @@ class OrionConfig:
             },
         )
         tool_manager.load_all(llm)
+        subagent_manager = None
+        if self.subagents.enabled:
+            subagent_manager = SubAgentManager(
+                llm,
+                events,
+                state_path=self.path(self.subagents.state_path),
+                workers=self.subagents.workers,
+                default_model=self.subagents.default_model or self.llm.model,
+                default_tools=self.subagents.default_tools,
+                default_max_turns=self.subagents.default_max_turns,
+                max_context_chars=self.subagents.max_context_chars,
+                max_result_chars=self.subagents.max_result_chars,
+                max_tool_output_chars=self.subagents.max_tool_output_chars,
+                history_limit=self.subagents.history_limit,
+                emit_progress_events=self.subagents.emit_progress_events,
+            )
         maintenance = None
         if self.memory.enabled:
             extractor = MemoryExtractor(
@@ -442,6 +481,7 @@ class OrionConfig:
             llm_client=llm,
             task_store=JsonTaskStore(self.path(self.tasks.path)),
             scheduler=scheduler,
+            subagent_manager=subagent_manager,
             action_ledger=ActionLedger(self.path(self.ledger.path)),
             max_turns=self.runtime.max_turns,
             wake_queue_size=self.runtime.wake_queue_size,
@@ -467,6 +507,7 @@ class OrionConfig:
             llm=llm,
             runtime=runtime,
             scheduler=scheduler,
+            subagents=subagent_manager,
             channels=channel_router,
         )
 
@@ -479,18 +520,23 @@ class OrionApplication:
     llm: Any
     runtime: Any
     scheduler: Any = None
+    subagents: Any = None
     channels: Any = None
 
     def start(self) -> OrionApplication:
         self.events.start()
         if self.scheduler is not None:
             self.scheduler.start()
+        if self.subagents is not None:
+            self.subagents.start()
         if self.channels is not None:
             self.channels.start()
         self.runtime.start()
         return self
 
     def stop(self) -> None:
+        if self.subagents is not None:
+            self.subagents.stop()
         self.runtime.stop()
         if self.channels is not None:
             self.channels.stop()
@@ -527,6 +573,7 @@ __all__ = [
     "PromptConfig",
     "ReflectionConfig",
     "RuntimeConfig",
+    "SubAgentConfig",
     "SchedulerConfig",
     "TaskConfig",
     "load_orion",

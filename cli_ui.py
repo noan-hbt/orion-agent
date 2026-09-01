@@ -41,7 +41,7 @@ except ImportError:  # pragma: no cover - repli pour installation incomplète
     _PROMPT_AVAILABLE = False
 
 
-_COMMANDS = ("/help", "/status", "/tools", "/tasks", "/clear", "/exit")
+_COMMANDS = ("/help", "/status", "/tools", "/tasks", "/agents", "/jobs", "/clear", "/exit")
 
 
 class CLIConsole:
@@ -305,6 +305,8 @@ class CLIConsole:
             ("/status", "État du runtime et tâche active"),
             ("/tools", "Tools disponibles pour Orion"),
             ("/tasks", "Dernières tâches durables"),
+            ("/agents", "Sous-agents disponibles"),
+            ("/jobs", "Travaux délégués récents"),
             ("/clear", "Nettoyer l'écran"),
             ("/exit", "Arrêter Orion proprement"),
         ]

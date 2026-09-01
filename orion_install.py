@@ -124,6 +124,19 @@ wake_queue_size = 0
 dedupe_window = 86400.0
 parallel_tool_calls = true
 
+[subagents]
+enabled = true
+state_path = "data/subagents.json"
+workers = 3
+default_model = "deepseek/deepseek-v4-flash-0731"
+default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
+default_max_turns = 8
+max_context_chars = 16000
+max_result_chars = 24000
+max_tool_output_chars = 12000
+history_limit = 200
+emit_progress_events = true
+
 [response]
 concise = true
 max_chars = 3000

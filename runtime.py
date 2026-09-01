@@ -43,6 +43,7 @@ from tasks import (
 
 if TYPE_CHECKING:
     from scheduler import Schedule, Scheduler
+    from subagents import SubAgentManager
 
 
 class RuntimeState(str, Enum):
@@ -177,6 +178,11 @@ class AgentRuntime:
             "wait_for_event",
             "complete_task",
             "schedule_wakeup",
+            "create_subagent",
+            "update_subagent",
+            "delete_subagent",
+            "delegate_to_subagent",
+            "cancel_subagent_job",
         }
     )
 
@@ -187,6 +193,7 @@ class AgentRuntime:
         state_store: StateStore | None = None,
         task_store: TaskStore | None = None,
         scheduler: Scheduler | None = None,
+        subagent_manager: SubAgentManager | None = None,
         system_prompt: str | None = None,
         max_turns: int = 12,
         wake_queue_size: int = 0,
@@ -226,6 +233,7 @@ class AgentRuntime:
         self.state_store = state_store or InMemoryStateStore()
         self.task_store = task_store or InMemoryTaskStore()
         self.scheduler = scheduler
+        self.subagent_manager = subagent_manager
         self.system_prompt = system_prompt
         self.max_turns = max_turns
         self.parallel_tool_calls = bool(parallel_tool_calls)
@@ -769,7 +777,155 @@ class AgentRuntime:
                     },
                 }
             )
+        if self.subagent_manager is not None:
+            definitions.extend(self._subagent_tool_definitions())
         return definitions
+
+    @staticmethod
+    def _subagent_tool_definitions() -> list[dict[str, Any]]:
+        string_array = {"type": "array", "items": {"type": "string"}}
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_subagent",
+                    "description": "Crée un worker IA persistant et spécialisé, indépendant d'Orion.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                            "model": {"type": "string"},
+                            "system_prompt": {"type": "string"},
+                            "allowed_tools": string_array,
+                            "capabilities": string_array,
+                            "max_turns": {"type": "integer", "minimum": 1, "maximum": 30},
+                        },
+                        "required": ["name", "description"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "update_subagent",
+                    "description": "Modifie la spécialité, le modèle, les tools ou l'état d'un sous-agent.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent_id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "description": {"type": "string"},
+                            "model": {"type": "string"},
+                            "system_prompt": {"type": "string"},
+                            "allowed_tools": string_array,
+                            "capabilities": string_array,
+                            "max_turns": {"type": "integer", "minimum": 1, "maximum": 30},
+                            "status": {"type": "string", "enum": ["active", "disabled"]},
+                        },
+                        "required": ["agent_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "delete_subagent",
+                    "description": "Supprime un sous-agent et annule par défaut ses jobs non terminés.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent_id": {"type": "string"},
+                            "cancel_jobs": {"type": "boolean"},
+                        },
+                        "required": ["agent_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_subagent",
+                    "description": "Consulte la configuration d'un sous-agent.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"agent_id": {"type": "string"}},
+                        "required": ["agent_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_subagents",
+                    "description": "Liste les workers disponibles avant de choisir où déléguer.",
+                    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "delegate_to_subagent",
+                    "description": "Délègue un travail asynchrone. Retourne immédiatement un job_id ; Orion reste disponible et recevra le résultat comme événement.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "objective": {"type": "string"},
+                            "agent_id": {"type": "string", "description": "Optionnel : sélection automatique si absent."},
+                            "context": {"type": "string", "description": "Contexte minimal strictement nécessaire au worker."},
+                            "priority": {"type": "integer", "minimum": 0, "maximum": 40},
+                        },
+                        "required": ["objective"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_subagent_job",
+                    "description": "Consulte l'état, les progrès et le résultat d'un job délégué.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"job_id": {"type": "string"}},
+                        "required": ["job_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_subagent_jobs",
+                    "description": "Liste les délégations récentes, éventuellement filtrées par état.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled"]},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cancel_subagent_job",
+                    "description": "Annule un job en attente ou demande l'arrêt coopératif d'un job en cours.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"job_id": {"type": "string"}},
+                        "required": ["job_id"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ]
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Combine les tools du runtime et ceux enregistrés sur le client."""
@@ -795,6 +951,10 @@ class AgentRuntime:
             "- Utilise wait_for_event ou schedule_wakeup au lieu de faire du polling.\n"
             "- Utilise complete_task uniquement lorsque l'objectif est réellement atteint.\n"
             "- Les tools de tâche sont tes capacités de pilotage ; utilise-les explicitement quand nécessaire.\n"
+            "- Délègue aux sous-agents les recherches, explorations et travaux moyens ou longs qui peuvent avancer indépendamment. Garde Orion pour le dialogue, la coordination et les décisions importantes.\n"
+            "- Un job de sous-agent est asynchrone : confirme sa délégation puis reste disponible. Son progrès et son résultat reviendront comme événements. Transmets seulement le contexte minimal nécessaire.\n"
+            "- Crée ou modifie un sous-agent lorsqu'aucun worker existant n'a la spécialité, le modèle ou les tools appropriés.\n"
+            "- Si une tâche durable dépend du résultat délégué, appelle wait_for_event sur subagent.completed avec payload_equals.job_id, puis dors au lieu de consulter le job en boucle.\n"
             "- Ne révèle pas tes raisonnements internes détaillés ; donne seulement les sorties utiles."
         )
 
@@ -1148,7 +1308,94 @@ class AgentRuntime:
                 description=arguments.get("description", ""),
             )
             return {"scheduled": True, "schedule": schedule.to_dict()}
+        if self.subagent_manager is not None:
+            if name == "create_subagent":
+                agent = self.subagent_manager.create_agent(
+                    arguments["name"],
+                    arguments["description"],
+                    model=arguments.get("model"),
+                    system_prompt=arguments.get("system_prompt"),
+                    allowed_tools=arguments.get("allowed_tools"),
+                    capabilities=arguments.get("capabilities"),
+                    max_turns=arguments.get("max_turns"),
+                )
+                return self._compact_subagent(agent)
+            if name == "update_subagent":
+                changes = {key: value for key, value in arguments.items() if key != "agent_id"}
+                return self._compact_subagent(
+                    self.subagent_manager.update_agent(arguments["agent_id"], **changes)
+                )
+            if name == "delete_subagent":
+                return self.subagent_manager.delete_agent(
+                    arguments["agent_id"],
+                    cancel_jobs=bool(arguments.get("cancel_jobs", True)),
+                )
+            if name == "get_subagent":
+                agent = self.subagent_manager.get_agent(arguments["agent_id"])
+                return self._compact_subagent(agent) if agent else {"subagent": None}
+            if name == "list_subagents":
+                return {"subagents": [self._compact_subagent(item) for item in self.subagent_manager.list_agents()]}
+            if name == "delegate_to_subagent":
+                route_keys = {"channel", "reply_to", "conversation_id", "user_id"}
+                route_metadata = {
+                    key: value for key, value in context.event.metadata.items() if key in route_keys
+                }
+                job = self.subagent_manager.submit(
+                    arguments["objective"],
+                    agent_id=arguments.get("agent_id"),
+                    context=arguments.get("context", ""),
+                    priority=int(arguments.get("priority", context.event.priority)),
+                    parent_task_id=context.task.id if context.task else None,
+                    parent_event_id=context.event.id,
+                    route_metadata=route_metadata,
+                )
+                return self._compact_subagent_job(job)
+            if name == "get_subagent_job":
+                job = self.subagent_manager.get_job(arguments["job_id"])
+                return self._compact_subagent_job(job) if job else {"job": None}
+            if name == "list_subagent_jobs":
+                jobs = self.subagent_manager.list_jobs(
+                    status=arguments.get("status"),
+                    limit=int(arguments.get("limit", 20)),
+                )
+                return {"jobs": [self._compact_subagent_job(item) for item in jobs]}
+            if name == "cancel_subagent_job":
+                return self._compact_subagent_job(
+                    self.subagent_manager.cancel_job(arguments["job_id"])
+                )
         raise KeyError(name)
+
+    @staticmethod
+    def _compact_subagent(agent: Any) -> dict[str, Any]:
+        return {
+            "kind": "subagent",
+            "id": agent.id,
+            "name": agent.name,
+            "description": agent.description,
+            "model": agent.model,
+            "allowed_tools": list(agent.allowed_tools),
+            "capabilities": list(agent.capabilities),
+            "max_turns": agent.max_turns,
+            "status": agent.status.value,
+            "updated_at": agent.updated_at,
+        }
+
+    @staticmethod
+    def _compact_subagent_job(job: Any) -> dict[str, Any]:
+        return {
+            "kind": "subagent_job",
+            "id": job.id,
+            "agent_id": job.agent_id,
+            "objective": job.objective,
+            "status": job.status.value,
+            "priority": job.priority,
+            "parent_task_id": job.parent_task_id,
+            "progress": list(job.progress[-5:]),
+            "result": ContextAssembler.compact_value(job.result, max_chars=6000),
+            "error": job.error,
+            "created_at": job.created_at,
+            "updated_at": job.updated_at,
+        }
 
     @staticmethod
     def _compact_task(task: Task) -> dict[str, Any]:
@@ -1185,7 +1432,10 @@ class AgentRuntime:
     @staticmethod
     def _action_target(arguments: Mapping[str, Any]) -> str | None:
         """Construit une cible compacte pour comparer les effets de bord."""
-        for key in ("to", "recipient", "recipients", "target", "task_id", "schedule_id", "url"):
+        for key in (
+            "to", "recipient", "recipients", "target", "task_id", "schedule_id",
+            "agent_id", "job_id", "url",
+        ):
             if key not in arguments:
                 continue
             value = normalize_action_value(arguments[key])

@@ -62,6 +62,12 @@ def main() -> None:
             }
             if runtime.last_error is not None:
                 values["Dernière erreur"] = type(runtime.last_error).__name__
+            if application.subagents is not None:
+                jobs = application.subagents.list_jobs(limit=100)
+                values["Sous-agents"] = len(application.subagents.list_agents())
+                values["Jobs actifs"] = sum(
+                    1 for job in jobs if job.status.value in {"queued", "running"}
+                )
             return values
 
         def cli_tools() -> list[dict[str, str]]:
@@ -84,9 +90,35 @@ def main() -> None:
                 for task in reversed(tasks[-10:])
             ]
 
+        def cli_agents() -> list[dict[str, object]]:
+            if application.subagents is None:
+                return []
+            return [
+                {
+                    "id": agent.id,
+                    "name": f"{agent.name} · {agent.model}",
+                    "status": agent.status.value,
+                }
+                for agent in application.subagents.list_agents()
+            ]
+
+        def cli_jobs() -> list[dict[str, object]]:
+            if application.subagents is None:
+                return []
+            return [
+                {
+                    "id": job.id,
+                    "objective": job.objective,
+                    "status": job.status.value,
+                }
+                for job in application.subagents.list_jobs(limit=20)
+            ]
+
         cli_adapter.set_status_provider(cli_status)
         cli_adapter.set_tools_provider(cli_tools)
         cli_adapter.set_tasks_provider(cli_tasks)
+        cli_adapter.set_agents_provider(cli_agents)
+        cli_adapter.set_jobs_provider(cli_jobs)
 
         def report_error(event: object, error: Exception) -> None:
             cli_adapter.report_error(event, error)

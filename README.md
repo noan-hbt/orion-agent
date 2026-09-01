@@ -1,8 +1,8 @@
 # Orion
 
 Orion est un agent IA piloté par des événements. Il peut converser sur
-plusieurs channels, utiliser des tools, suivre des tâches durables, attendre un
-événement et se réveiller automatiquement.
+plusieurs channels, utiliser des tools, suivre des tâches durables, déléguer à
+des sous-agents indépendants, attendre un événement et se réveiller automatiquement.
 
 ```text
 EVENT → TASK → RUN → ACTION / OBSERVATION → ANSWER ou WAIT → SLEEP
@@ -74,6 +74,8 @@ garde un historique local et accepte les messages multilignes.
 - `/status` affiche l'état du runtime ;
 - `/tools` liste les tools disponibles ;
 - `/tasks` affiche les tâches récentes ;
+- `/agents` affiche les sous-agents disponibles ;
+- `/jobs` affiche les travaux délégués et leur état ;
 - `/clear`, `/help` et `/exit` gèrent la session.
 
 Les couleurs peuvent être désactivées avec `NO_COLOR=1` ou avec
@@ -91,6 +93,7 @@ Les principales sections sont :
 | `[llm]` | modèle et paramètres OpenRouter |
 | `[channels]` | channels activés et channel par défaut |
 | `[runtime]` | tours maximum, priorités et préemption |
+| `[subagents]` | workers parallèles, modèle économique et limites de délégation |
 | `[response]` | réponses courtes et limite de longueur |
 | `[reflection]` | pré-réflexion interne avant chaque run |
 | `[context]` | limites et compaction du contexte |
@@ -284,6 +287,36 @@ L'historique unifié est conservé dans `data/conversations.jsonl`. Les messages
 de différents channels peuvent partager une même conversation grâce à leur
 `conversation_id`.
 
+## Sous-agents
+
+Orion peut créer, modifier, désactiver et supprimer des workers spécialisés.
+Une délégation retourne immédiatement un `job_id` : le sous-agent continue dans
+un worker séparé, tandis qu’Orion reste disponible. Les progrès utiles et le
+résultat reviennent ensuite comme événements `subagent.progress`,
+`subagent.completed`, `subagent.failed` ou `subagent.cancelled`, avec le channel
+et la conversation d’origine.
+
+Les définitions et les jobs sont persistés dans `data/subagents.json`. Un job
+en cours lors d’un redémarrage est replacé en file. Chaque sous-agent possède
+son modèle, son prompt, ses capacités, sa limite de tours et une liste explicite
+de tools autorisés. Le terminal n’est pas autorisé par défaut : Orion doit le
+donner explicitement à un worker d’exploration de fichiers.
+
+```toml
+[subagents]
+enabled = true
+state_path = "data/subagents.json"
+workers = 3
+default_model = "deepseek/deepseek-v4-flash-0731"
+default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
+default_max_turns = 8
+emit_progress_events = true
+```
+
+Une tâche durable déléguée peut utiliser `wait_for_event` avec
+`event_type = "subagent.completed"` et le `job_id` attendu. Cela permet à Orion
+de dormir jusqu’au résultat au lieu de surveiller le worker.
+
 ## Déploiement VPS
 
 Sur un VPS, utilisez l'installateur headless :
@@ -346,6 +379,7 @@ découpe automatiquement ; la limite peut être ajustée avec
 ```text
 orion_config.py       configuration et bootstrap
 runtime.py            cycle événementiel et boucle agentique
+subagents.py          workers IA parallèles, jobs persistants et événements
 openrouter_client.py  client OpenRouter et tool calling
 event_handler.py      file d'événements priorisée
 tasks.py              tâches, plans, runs et actions

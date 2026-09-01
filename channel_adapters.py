@@ -134,6 +134,8 @@ class CLIAdapter:
         self._status_provider: CLIProvider | None = None
         self._tools_provider: CLIProvider | None = None
         self._tasks_provider: CLIProvider | None = None
+        self._agents_provider: CLIProvider | None = None
+        self._jobs_provider: CLIProvider | None = None
         self._pending = 0
         self._pending_lock = threading.Lock()
 
@@ -148,6 +150,12 @@ class CLIAdapter:
 
     def set_tasks_provider(self, provider: CLIProvider) -> None:
         self._tasks_provider = provider
+
+    def set_agents_provider(self, provider: CLIProvider) -> None:
+        self._agents_provider = provider
+
+    def set_jobs_provider(self, provider: CLIProvider) -> None:
+        self._jobs_provider = provider
 
     def start(self, on_message: MessageCallback) -> None:
         self._on_message = on_message
@@ -220,6 +228,12 @@ class CLIAdapter:
         elif command == "/tasks":
             tasks = self._provider_value(self._tasks_provider, [])
             self.console.items("Tâches récentes", tasks, empty="Aucune tâche durable.")
+        elif command == "/agents":
+            agents = self._provider_value(self._agents_provider, [])
+            self.console.items("Sous-agents", agents, empty="Aucun sous-agent configuré.")
+        elif command == "/jobs":
+            jobs = self._provider_value(self._jobs_provider, [])
+            self.console.items("Travaux délégués", jobs, empty="Aucun travail délégué.")
         else:
             self.console.warning(f"Commande inconnue : {command}. Utilisez /help.")
         return True
