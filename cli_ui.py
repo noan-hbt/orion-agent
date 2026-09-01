@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - repli pour installation incomplète
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+    from prompt_toolkit.application.current import get_app
     from prompt_toolkit.completion import WordCompleter
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.history import FileHistory, InMemoryHistory
@@ -225,6 +226,14 @@ class CLIConsole:
 
     def set_busy(self, busy: bool) -> None:
         self._busy = bool(busy)
+        # La réponse arrive souvent depuis un worker. Sans invalidation,
+        # prompt_toolkit peut conserver l'ancien texte de la toolbar à l'écran.
+        if self._session is not None:
+            try:
+                get_app().invalidate()
+            except Exception:
+                # Le prompt n'est pas forcément actif (arrêt ou sortie non-TTY).
+                pass
 
     def _time_label(self, timestamp: str | None) -> str:
         if not self.show_timestamps:
@@ -289,7 +298,6 @@ class CLIConsole:
             console.print(Text.assemble(("  !  ", "bold yellow"), (content, "yellow")))
 
     def error(self, content: str) -> None:
-        self.set_busy(False)
         console = self._console()
         if console is None:
             self._print_plain(f"Erreur : {content}")

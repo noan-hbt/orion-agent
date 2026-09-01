@@ -317,6 +317,7 @@ class OrionConfig:
                         history_path=self.path(str(history_value)) if history_value else None,
                         markdown=bool(settings.get("markdown", True)),
                         timestamps=bool(settings.get("timestamps", True)),
+                        slow_request_seconds=float(settings.get("slow_request_seconds", 15.0)),
                     )
                 )
             elif name == "telegram":

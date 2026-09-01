@@ -15,6 +15,7 @@ import re
 import smtplib
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping
 from email.message import EmailMessage
 from email.policy import default as email_policy
@@ -114,6 +115,7 @@ class CLIAdapter:
         history_path: str | None = "data/cli_history.txt",
         markdown: bool = True,
         timestamps: bool = True,
+        slow_request_seconds: float = 15.0,
     ) -> None:
         self.prompt = prompt
         self.output = output or sys.stdout
@@ -138,6 +140,11 @@ class CLIAdapter:
         self._jobs_provider: CLIProvider | None = None
         self._pending = 0
         self._pending_lock = threading.Lock()
+        self._pending_requests: list[dict[str, Any]] = []
+        self._request_sequence = 0
+        self.slow_request_seconds = max(0.0, float(slow_request_seconds))
+        self._slow_alert_stop = threading.Event()
+        self._slow_alert_thread: threading.Thread | None = None
 
     def set_exit_handler(self, handler: Callable[[], Any]) -> None:
         self._exit_handler = handler
@@ -160,8 +167,82 @@ class CLIAdapter:
     def start(self, on_message: MessageCallback) -> None:
         self._on_message = on_message
         self._stop_requested.clear()
+        self._slow_alert_stop.clear()
         self._thread = threading.Thread(target=self._run, name="orion-cli", daemon=True)
         self._thread.start()
+        if self.slow_request_seconds > 0:
+            self._slow_alert_thread = threading.Thread(
+                target=self._slow_request_loop,
+                name="orion-cli-slow-alert",
+                daemon=True,
+            )
+            self._slow_alert_thread.start()
+
+    def _begin_pending(self) -> int:
+        with self._pending_lock:
+            self._request_sequence += 1
+            sequence = self._request_sequence
+            self._pending_requests.append(
+                {
+                    "sequence": sequence,
+                    "event_id": None,
+                    "started_at": time.monotonic(),
+                    "alerted": False,
+                }
+            )
+            self._pending = len(self._pending_requests)
+            self.console.set_busy(True)
+            return sequence
+
+    def _bind_pending_event(self, sequence: int, event: Any) -> None:
+        event_id = getattr(event, "id", None)
+        if not event_id:
+            return
+        with self._pending_lock:
+            for request in self._pending_requests:
+                if request["sequence"] == sequence:
+                    request["event_id"] = str(event_id)
+                    return
+
+    def _finish_pending(self, event_id: str | None = None) -> None:
+        with self._pending_lock:
+            index = None
+            if event_id:
+                for position, request in enumerate(self._pending_requests):
+                    if request.get("event_id") == str(event_id):
+                        index = position
+                        break
+                if index is None:
+                    # Une sortie asynchrone (scheduler, sous-agent, etc.) ne
+                    # doit pas terminer arbitrairement une requête CLI.
+                    return
+            elif self._pending_requests:
+                # Repli pour les callbacks qui ne renvoient pas d'Event.
+                index = 0
+            if index is not None:
+                self._pending_requests.pop(index)
+            self._pending = len(self._pending_requests)
+            self.console.set_busy(bool(self._pending_requests))
+
+    def _slow_request_loop(self) -> None:
+        """Alerte une fois lorsqu'une requête semble anormalement lente."""
+        interval = min(0.5, max(0.1, self.slow_request_seconds / 4))
+        while not self._slow_alert_stop.wait(interval):
+            now = time.monotonic()
+            should_alert = False
+            with self._pending_lock:
+                for request in self._pending_requests:
+                    if (
+                        not request["alerted"]
+                        and now - request["started_at"] >= self.slow_request_seconds
+                    ):
+                        request["alerted"] = True
+                        should_alert = True
+            if should_alert:
+                self.console.warning(
+                    "Orion travaille toujours… OpenRouter met plus de temps que prévu. "
+                    "Patiente encore un peu avant de renvoyer la demande."
+                )
 
     def _run(self) -> None:
         self.console.banner()
@@ -180,16 +261,19 @@ class CLIAdapter:
             if self._handle_command(line):
                 continue
             if self._on_message is not None:
-                with self._pending_lock:
-                    self._pending += 1
-                    self.console.set_busy(True)
-                self._on_message(
-                    InboundMessage(
-                        channel=self.name,
-                        payload={"text": line},
-                        reply_to="stdout",
+                sequence = self._begin_pending()
+                try:
+                    event = self._on_message(
+                        InboundMessage(
+                            channel=self.name,
+                            payload={"text": line},
+                            reply_to="stdout",
+                        )
                     )
-                )
+                    self._bind_pending_event(sequence, event)
+                except Exception:
+                    self._finish_pending()
+                    raise
 
     def _request_exit(self) -> None:
         self._stop_requested.set()
@@ -241,9 +325,7 @@ class CLIAdapter:
     def send(self, output: AgentOutput) -> None:
         intermediate = bool(output.metadata.get("intermediate", False))
         if not intermediate:
-            with self._pending_lock:
-                self._pending = max(0, self._pending - 1)
-                self.console.set_busy(self._pending > 0)
+            self._finish_pending(output.event_id)
         self.console.assistant(
             output.content,
             intermediate=intermediate,
@@ -251,14 +333,13 @@ class CLIAdapter:
         )
 
     def report_error(self, event: object, error: Exception) -> None:
-        with self._pending_lock:
-            self._pending = max(0, self._pending - 1)
-            self.console.set_busy(self._pending > 0)
+        self._finish_pending(getattr(event, "id", None))
         event_type = getattr(event, "type", "unknown")
         self.console.error(f"{type(error).__name__} · événement {event_type}\n{error}")
 
     def stop(self) -> None:
         self._stop_requested.set()
+        self._slow_alert_stop.set()
 
 
 class HttpWebhookAdapter:

@@ -81,6 +81,10 @@ garde un historique local et accepte les messages multilignes.
 Les couleurs peuvent être désactivées avec `NO_COLOR=1` ou avec
 `channels.cli.style = false`.
 
+La CLI affiche une alerte discrète lorsqu'une requête dépasse 15 secondes,
+afin de distinguer une réponse lente d'une absence de réponse. Ce délai est
+réglable avec `channels.cli.slow_request_seconds` ; `0` désactive l'alerte.
+
 ## Configuration
 
 `orion.toml` centralise les paramètres de l'agent. Les chemins relatifs sont

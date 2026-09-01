@@ -86,6 +86,8 @@ banner = true
 markdown = true
 timestamps = true
 history_path = "data/cli_history.txt"
+# Alerte visuelle si une requête dépasse ce délai ; 0 désactive l'alerte.
+slow_request_seconds = 15.0
 
 # Exemples de configuration channel ; les secrets doivent rester dans .env.
 # [channels.telegram]
