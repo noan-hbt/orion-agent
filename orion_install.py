@@ -211,7 +211,7 @@ markdown = true
 timestamps = true
 history_path = "data/cli_history.txt"
 # Alerte visuelle si une requête dépasse ce délai ; 0 désactive l'alerte.
-slow_request_seconds = 45
+slow_request_seconds = 0
 
 [prompt]
 core_path = "ORION_CORE.md"
