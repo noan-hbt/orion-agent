@@ -127,10 +127,10 @@ parallel_tool_calls = true
 [subagents]
 enabled = true
 state_path = "data/subagents.json"
-workers = 3
-default_model = "deepseek/deepseek-v4-flash-0731"
+workers = 5
+default_model = "z-ai/glm-5.3-flash"
 default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
-default_max_turns = 8
+default_max_turns = 10
 max_context_chars = 16000
 max_result_chars = 24000
 max_tool_output_chars = 12000

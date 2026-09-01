@@ -1340,6 +1340,18 @@ class AgentRuntime:
                 route_metadata = {
                     key: value for key, value in context.event.metadata.items() if key in route_keys
                 }
+                # Les événements issus du scheduler peuvent conserver le
+                # routage dans le payload plutôt que dans les métadonnées.
+                # Dans les deux cas, le résultat doit revenir au channel et
+                # au destinataire qui ont lancé la délégation.
+                if "channel" not in route_metadata:
+                    channel = context.event.payload.get("_orion_channel")
+                    if channel:
+                        route_metadata["channel"] = channel
+                if "reply_to" not in route_metadata:
+                    recipient = context.event.payload.get("_orion_reply_to")
+                    if recipient:
+                        route_metadata["reply_to"] = recipient
                 job = self.subagent_manager.submit(
                     arguments["objective"],
                     agent_id=arguments.get("agent_id"),
