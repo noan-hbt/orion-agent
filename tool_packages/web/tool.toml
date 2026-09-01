@@ -1,7 +1,43 @@
 id = "orion.web"
 name = "Web"
-version = "1.1.0"
-description = "Recherche et lecture de pages web sans clé API."
+version = "1.2.0"
+description = "Recherche web fiable avec Tavily optionnel et fallback public, plus lecture de pages."
 entrypoint = "tool:register"
 api_version = 1
 permissions = ["network"]
+
+[configuration]
+section = "web"
+
+[[configuration.fields]]
+key = "provider"
+label = "Fournisseur web (auto/tavily/public)"
+type = "choice"
+choices = ["auto", "tavily", "public"]
+default = "auto"
+
+[[configuration.fields]]
+key = "api_key"
+label = "Clé API Tavily"
+type = "secret"
+env = "TAVILY_API_KEY"
+
+[[configuration.fields]]
+key = "search_depth"
+label = "Profondeur Tavily (basic/advanced)"
+type = "choice"
+choices = ["basic", "advanced"]
+default = "basic"
+
+[[configuration.fields]]
+key = "topic"
+label = "Type de recherche Tavily (general/news/finance)"
+type = "choice"
+choices = ["general", "news", "finance"]
+default = "general"
+
+[[configuration.fields]]
+key = "timeout"
+label = "Délai maximal par requête (secondes)"
+type = "integer"
+default = 20

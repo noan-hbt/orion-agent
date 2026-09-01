@@ -52,6 +52,7 @@ class ToolboxUI:
         print("  n       installer le tool numéro n")
         print("  /texte  filtrer les tools par texte")
         print("  r       recharger le dépôt")
+        print("  c       reconfigurer un tool installé")
         print("  q       quitter")
 
 
@@ -79,7 +80,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ref", help="Branche ou tag GitHub")
     parser.add_argument("--search", help="Filtre non interactif")
     parser.add_argument("--install", metavar="ID", help="Installer directement un identifiant")
+    parser.add_argument("--no-config", action="store_true", help="Ne pas demander les paramètres du tool")
     return parser
+
+
+def _configure(
+    manager: ToolManager,
+    config: OrionConfig,
+    manifest: Any,
+    ui: ToolboxUI,
+    *,
+    enabled: bool = True,
+) -> None:
+    fields = manifest.configuration.get("fields", [])
+    if not enabled or not fields:
+        return
+    ui.info(f"Configuration de {manifest.name} (Entrée conserve la valeur actuelle)")
+    changed = manager.configure(
+        manifest,
+        config_path=config.config_path or Path("orion.toml"),
+        env_path=config.base_dir / ".env",
+    )
+    if changed:
+        ui.success("Paramètres enregistrés dans orion.toml et/ou .env")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             existing = {manifest.id for manifest, _ in manager.installed()}
             force = selected.manifest.id in existing
             manifest = catalog.install(selected, manager, force=force)
+            _configure(manager, config, manifest, ui, enabled=not args.no_config)
             ui.success(f"{manifest.id} {manifest.version} installé.")
             return 0
     except ToolPackageError as exc:
@@ -136,6 +160,30 @@ def main(argv: list[str] | None = None) -> int:
             except ToolPackageError as exc:
                 ui.error(str(exc))
             continue
+        if command.lower() == "c":
+            installed = manager.installed()
+            if not installed:
+                ui.info("Aucun tool installé à configurer.")
+                continue
+            print("  Tools installés")
+            for index, (installed_manifest, _) in enumerate(installed, 1):
+                print(f"  {index:>2}. {installed_manifest.id} · {installed_manifest.name}")
+            choice = input("  Tool à configurer (numéro ou identifiant) : ").strip()
+            try:
+                manifest = installed[int(choice) - 1][0]
+            except (ValueError, IndexError):
+                manifest = next((item for item, _ in installed if item.id == choice), None)
+            if manifest is None:
+                ui.info("Tool introuvable.")
+                continue
+            if not manifest.configuration.get("fields", []):
+                ui.info(f"{manifest.name} ne déclare aucun paramètre configurable.")
+                continue
+            try:
+                _configure(manager, config, manifest, ui)
+            except (ToolPackageError, ValueError) as exc:
+                ui.error(str(exc))
+            continue
         if command.startswith("/"):
             try:
                 values = catalog.search(command[1:])
@@ -156,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         try:
             manifest = catalog.install(selected, manager, force=force)
+            _configure(manager, config, manifest, ui)
             ui.success(f"{manifest.id} {manifest.version} installé.")
         except ToolPackageError as exc:
             ui.error(str(exc))

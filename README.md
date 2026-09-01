@@ -174,11 +174,77 @@ python orion_tools.py list
 Tools fournis :
 
 - `terminal` : exécute des commandes locales, avec timeout et limites de sortie ;
-- `web` : recherche et lecture de pages Web sans clé API.
+- `web` : recherche publique avec extraits, puis lecture de pages Web ; Tavily
+  peut être activé avec une clé gratuite pour améliorer la qualité.
 
 Le terminal est limité au dossier du projet par défaut. Cette restriction peut
 être modifiée dans `[tools.terminal]` ; activez-le uniquement si vous acceptez
 les effets de bord possibles.
+
+Le tool web utilise Tavily en priorité lorsqu’une clé est configurée, puis Bing
+RSS et DuckDuckGo comme repli. Il retourne des titres, URL et extraits ; Orion doit lire les sources importantes avec
+`web_fetch` avant de présenter un fait comme établi. Les recherches et lectures
+identiques sont mises en cache cinq minutes par défaut :
+
+```toml
+[tools.web]
+# auto utilise Tavily si TAVILY_API_KEY existe, sinon la recherche publique.
+provider = "auto"
+api_provider = "tavily"
+api_key_env = "TAVILY_API_KEY"
+api_url = "https://api.tavily.com/search"
+search_depth = "basic"
+topic = "general"
+timeout = 20
+max_results = 8
+max_chars = 16000
+max_bytes = 2000000
+max_search_bytes = 1500000
+search_engines = ["bing_rss", "duckduckgo_html", "duckduckgo_lite"]
+cache_ttl = 300
+cache_size = 128
+allow_private = false
+```
+
+Après une mise à jour locale du paquet, réinstalle-le :
+
+```bash
+python orion_tools.py install --force ./tool_packages/web
+```
+
+Le toolbox configure automatiquement les paramètres déclarés par le manifeste
+du tool après une installation ou une mise à jour. Les valeurs ordinaires sont
+placées dans `[tools.web]` ; les champs secrets restent dans `.env` :
+
+```bash
+python orion_toolbox.py
+```
+
+Pour le gestionnaire non interactif, ajoute `--configure` à `install` ou
+`update`.
+
+Un tool peut déclarer son assistant dans son `tool.toml` :
+
+```toml
+[configuration]
+section = "mon_tool"
+
+[[configuration.fields]]
+key = "api_key"
+label = "Clé API"
+type = "secret"
+env = "MON_TOOL_API_KEY"
+
+[[configuration.fields]]
+key = "timeout"
+label = "Délai (secondes)"
+type = "integer"
+default = 30
+```
+
+Les types disponibles sont `string`, `secret`, `choice`, `integer`, `number`
+et `boolean`. Un champ secret est toujours écrit dans `.env`, jamais dans
+`orion.toml`.
 
 ### Tools depuis GitHub
 

@@ -9,6 +9,7 @@ connaître son implémentation.
 from __future__ import annotations
 
 import inspect
+import getpass
 import json
 import os
 import re
@@ -32,6 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10
 MANIFEST_NAME = "tool.toml"
 TOOL_API_VERSION = 1
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+_SAFE_CONFIG_SECTION = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 class ToolPackageError(RuntimeError):
@@ -49,6 +51,7 @@ class ToolManifest:
     description: str = ""
     api_version: int = TOOL_API_VERSION
     permissions: tuple[str, ...] = ()
+    configuration: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_file(cls, path: str | Path) -> ToolManifest:
@@ -61,6 +64,9 @@ class ToolManifest:
         if not isinstance(data, Mapping):
             raise ToolPackageError("Le manifeste doit être un objet TOML.")
         try:
+            configuration = data.get("configuration", {})
+            if not isinstance(configuration, Mapping):
+                raise TypeError("configuration doit être un objet TOML")
             manifest = cls(
                 id=str(data["id"]),
                 name=str(data.get("name", data["id"])),
@@ -69,6 +75,7 @@ class ToolManifest:
                 description=str(data.get("description", "")),
                 api_version=int(data.get("api_version", TOOL_API_VERSION)),
                 permissions=tuple(str(item) for item in data.get("permissions", [])),
+                configuration=dict(configuration),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ToolPackageError(
@@ -92,6 +99,30 @@ class ToolManifest:
             )
         if ":" not in self.entrypoint:
             raise ToolPackageError("entrypoint doit avoir le format module:fonction.")
+        section = str(self.configuration.get("section", self.id.rsplit(".", 1)[-1]))
+        if not _SAFE_CONFIG_SECTION.fullmatch(section):
+            raise ToolPackageError("configuration.section contient des caractères invalides.")
+        fields = self.configuration.get("fields", [])
+        if not isinstance(fields, list):
+            raise ToolPackageError("configuration.fields doit être une liste.")
+        seen: set[str] = set()
+        allowed_types = {"string", "secret", "choice", "integer", "number", "boolean"}
+        for item in fields:
+            if not isinstance(item, Mapping) or not str(item.get("key", "")).strip():
+                raise ToolPackageError("Chaque champ de configuration doit avoir une clé.")
+            key = str(item["key"])
+            if not _SAFE_CONFIG_SECTION.fullmatch(key) or key in seen:
+                raise ToolPackageError(f"Clé de configuration invalide ou dupliquée : {key}")
+            seen.add(key)
+            kind = str(item.get("type", "string")).lower()
+            if kind not in allowed_types:
+                raise ToolPackageError(f"Type de configuration inconnu : {kind}")
+            if kind == "choice" and not isinstance(item.get("choices", []), list):
+                raise ToolPackageError(f"Les choix de configuration sont invalides : {key}")
+            if kind == "secret" and item.get("env") is not None:
+                env_name = str(item["env"])
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", env_name):
+                    raise ToolPackageError(f"Nom de variable secret invalide : {env_name}")
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -244,6 +275,159 @@ class ToolManager:
             }
             self._write_state(state)
             return manifest
+
+    @staticmethod
+    def _toml_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(value, list):
+            return json.dumps(value, ensure_ascii=False)
+        return json.dumps(str(value), ensure_ascii=False)
+
+    @staticmethod
+    def _read_env(path: Path) -> dict[str, str]:
+        if not path.is_file():
+            return {}
+        values: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line)
+            if match:
+                values[match.group(1)] = match.group(2)
+        return values
+
+    @staticmethod
+    def _write_env_values(path: Path, values: Mapping[str, str]) -> None:
+        if not values:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        for key, value in values.items():
+            for index, line in enumerate(lines):
+                if line.startswith(f"{key}="):
+                    lines[index] = f"{key}={value}"
+                    break
+            else:
+                if lines and lines[-1].strip():
+                    lines.append("")
+                lines.append(f"{key}={value}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _update_toml_section(path: Path, section: str, values: Mapping[str, Any]) -> None:
+        """Met à jour une section sans réécrire ni trier toute la configuration."""
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        newline = "\r\n" if "\r\n" in text else "\n"
+        lines = text.splitlines()
+        header = f"[tools.{section}]"
+        start = next((index for index, line in enumerate(lines) if line.strip() == header), None)
+        if start is None:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(header)
+            start = len(lines) - 1
+        end = next(
+            (index for index in range(start + 1, len(lines)) if lines[index].lstrip().startswith("[")),
+            len(lines),
+        )
+        for key, value in values.items():
+            pattern = re.compile(rf"^(\s*){re.escape(key)}\s*=")
+            existing = next(
+                (index for index in range(start + 1, end) if pattern.match(lines[index])),
+                None,
+            )
+            replacement = f"{key} = {ToolManager._toml_value(value)}"
+            if existing is not None:
+                lines[existing] = replacement
+            else:
+                lines.insert(end, replacement)
+                end += 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(newline.join(lines) + newline, encoding="utf-8")
+
+    def configure(
+        self,
+        manifest: ToolManifest,
+        *,
+        config_path: str | Path | None = None,
+        env_path: str | Path | None = None,
+        input_fn: Any = input,
+        secret_fn: Any = getpass.getpass,
+    ) -> bool:
+        """Demande les réglages déclarés par un tool et les persiste.
+
+        Les valeurs normales vont dans ``[tools.<section>]``. Les champs
+        ``secret`` sont écrits uniquement dans ``.env`` ; seule leur variable
+        d'environnement éventuelle est conservée dans TOML.
+        """
+        configuration = manifest.configuration
+        fields = configuration.get("fields", [])
+        if not fields:
+            return False
+        section = str(configuration.get("section", manifest.id.rsplit(".", 1)[-1]))
+        target_config = Path(config_path or self.root_dir / "orion.toml").resolve()
+        target_env = Path(env_path or self.root_dir / ".env").resolve()
+        current = self.config.get(section, {})
+        current = dict(current) if isinstance(current, Mapping) else {}
+        env_values = self._read_env(target_env)
+        normal_values: dict[str, Any] = {}
+        secret_values: dict[str, str] = {}
+
+        for raw_field in fields:
+            field_config = dict(raw_field)
+            key = str(field_config["key"])
+            kind = str(field_config.get("type", "string")).lower()
+            label = str(field_config.get("label", key))
+            config_key = str(field_config.get("config_key", key))
+            default = field_config.get("default")
+            existing = current.get(config_key, default)
+            if kind == "secret":
+                env_name = str(field_config.get("env", config_key)).strip()
+                existing_secret = env_values.get(env_name) or os.getenv(env_name, "")
+                hint = "[déjà définie]" if existing_secret else "[optionnelle]"
+                value = str(secret_fn(f"  {label} {hint} (laisser vide pour conserver) : ")).strip()
+                if not value and field_config.get("required") and not existing_secret:
+                    raise ToolPackageError(f"Le secret {label} est obligatoire.")
+                if value:
+                    secret_values[env_name] = value
+                if field_config.get("config_key"):
+                    normal_values[config_key] = env_name
+                continue
+
+            prompt_default = "" if existing is None else f" [{existing}]"
+            while True:
+                value = str(input_fn(f"  {label}{prompt_default} : ")).strip()
+                if not value:
+                    value = existing
+                try:
+                    if value is None or value == "":
+                        if field_config.get("required"):
+                            raise ValueError("ce champ est obligatoire")
+                        break
+                    if kind == "choice":
+                        choices = [str(item) for item in field_config.get("choices", [])]
+                        if value not in choices:
+                            raise ValueError(f"choisir parmi : {', '.join(choices)}")
+                    elif kind == "integer":
+                        value = int(value)
+                    elif kind == "number":
+                        value = float(value)
+                    elif kind == "boolean":
+                        lowered = str(value).lower()
+                        if lowered not in {"true", "false", "oui", "non", "o", "n", "yes", "no", "1", "0"}:
+                            raise ValueError("répondre oui/non")
+                        value = lowered in {"true", "oui", "o", "yes", "1"}
+                    normal_values[config_key] = value
+                    break
+                except (TypeError, ValueError) as exc:
+                    print(f"    Valeur invalide : {exc}")
+
+        if normal_values:
+            self._update_toml_section(target_config, section, normal_values)
+            self.config.setdefault(section, {}).update(normal_values)
+        self._write_env_values(target_env, secret_values)
+        return bool(normal_values or secret_values)
 
     def remove(self, tool_id: str) -> None:
         """Désinstalle un tool installé."""

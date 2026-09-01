@@ -1,7 +1,0 @@
-id = "orion.echo"
-name = "Echo"
-version = "1.0.0"
-description = "Tool de démonstration qui renvoie un texte."
-entrypoint = "tool:register"
-api_version = 1
-permissions = []

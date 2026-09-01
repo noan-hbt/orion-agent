@@ -25,7 +25,11 @@ def _manager(config_path: Path) -> ToolManager:
         config.path(config.tools.directory),
         state_path=config.path(config.tools.state_path),
         root_dir=config.base_dir,
-        config={"enabled": config.tools.enabled, "disabled": config.tools.disabled},
+        config={
+            "enabled": config.tools.enabled,
+            "disabled": config.tools.disabled,
+            **config.tools.settings,
+        },
     )
 
 
@@ -48,10 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     install = commands.add_parser("install", help="Installer un dossier, zip ou URL.")
     install.add_argument("source", help="Chemin local ou URL d'une archive .zip.")
     install.add_argument("--force", action="store_true", help="Remplacer la version existante.")
+    install.add_argument("--configure", action="store_true", help="Demander les paramètres déclarés par le tool.")
 
     update = commands.add_parser("update", help="Mettre à jour un ou tous les tools.")
     update.add_argument("tool_id", nargs="?", help="Identifiant du tool à mettre à jour.")
     update.add_argument("--all", action="store_true", help="Mettre à jour tous les tools ayant une source.")
+    update.add_argument("--configure", action="store_true", help="Demander les paramètres déclarés par le tool.")
 
     remove = commands.add_parser("remove", help="Désinstaller un tool.")
     remove.add_argument("tool_id", help="Identifiant du tool.")
@@ -61,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    config = OrionConfig.from_file(args.config)
     manager = _manager(args.config)
 
     if args.command == "list":
@@ -74,6 +81,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "install":
         manifest = manager.install(args.source, force=args.force)
+        if args.configure:
+            manager.configure(
+                manifest,
+                config_path=config.config_path or args.config,
+                env_path=config.base_dir / ".env",
+            )
         print(f"Tool installé : {manifest.id} {manifest.version}")
         return 0
 
@@ -97,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
                 manifest = install_github_source(str(source), manager, force=True)
             else:
                 manifest = manager.install(source, force=True)
+            if args.configure:
+                manager.configure(
+                    manifest,
+                    config_path=config.config_path or args.config,
+                    env_path=config.base_dir / ".env",
+                )
             print(f"Tool mis à jour : {manifest.id} {manifest.version}")
             updated += 1
         if updated == 0:

@@ -152,10 +152,21 @@ max_output_chars = 12000
 allow_outside_root = false
 
 [tools.web]
-timeout = 15
+# auto utilise Tavily si TAVILY_API_KEY existe, sinon la recherche publique.
+provider = "auto"
+api_provider = "tavily"
+api_key_env = "TAVILY_API_KEY"
+api_url = "https://api.tavily.com/search"
+search_depth = "basic"
+topic = "general"
+timeout = 20
 max_results = 8
-max_chars = 20000
+max_chars = 16000
 max_bytes = 2000000
+max_search_bytes = 1500000
+search_engines = ["bing_rss", "duckduckgo_html", "duckduckgo_lite"]
+cache_ttl = 300
+cache_size = 128
 allow_private = false
 
 [tools.github]
@@ -257,6 +268,10 @@ def install(
         else "deepseek/deepseek-v4-flash-0731"
     )
     collected_secrets = dict(secrets or {})
+    if "TAVILY_API_KEY" not in collected_secrets:
+        collected_secrets["TAVILY_API_KEY"] = _ask_secret(
+            "Cle Tavily (optionnelle ; laisser vide pour garder la recherche publique)"
+        )
     secret_envs: dict[str, str] = {}
     for channel in selected_channels:
         default_env = CHANNEL_SECRET_DEFAULTS.get(channel)

@@ -45,10 +45,17 @@ def main() -> None:
         def cli_status() -> dict[str, object]:
             runtime = application.runtime
             task = runtime.current_task
+            run_context = runtime.run_context
             values: dict[str, object] = {
                 "Runtime": runtime.state.value.upper(),
                 "Modèle": application.llm.model,
                 "Événements traités": runtime.wake_count,
+                "Événements en file": runtime.pending_events,
+                "Phase RUN": (
+                    run_context.phase.value.upper()
+                    if run_context is not None
+                    else "aucune"
+                ),
                 "Tâche active": (
                     f"#{task.id} · {task.objective}" if task is not None else "aucune"
                 ),
