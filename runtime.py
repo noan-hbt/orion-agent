@@ -228,6 +228,7 @@ class AgentRuntime:
         context_assembler: ContextAssembler | None = None,
         task_context_max_chars: int = 12000,
         event_context_max_chars: int = 10000,
+        context_mode: str | None = None,
         memory_maintenance: MemoryMaintenance | None = None,
         on_state_change: StateChangeHandler | None = None,
         on_error: RuntimeErrorHandler | None = None,
@@ -286,6 +287,14 @@ class AgentRuntime:
         self.context_assembler = context_assembler or ContextAssembler(compactor=llm_client)
         self.task_context_max_chars = int(task_context_max_chars)
         self.event_context_max_chars = int(event_context_max_chars)
+        self.context_mode = str(
+            context_mode
+            or getattr(self.context_assembler, "context_mode", None)
+            or getattr(self.context_assembler, "mode", None)
+            or "contract"
+        )
+        if self.context_mode not in {"contract", "legacy"}:
+            raise ValueError("context_mode doit etre 'contract' ou 'legacy'.")
         self.on_state_change = on_state_change
         self.on_error = on_error
         self.on_output = on_output
@@ -384,10 +393,15 @@ class AgentRuntime:
     @staticmethod
     def _usage_scope(context: RunContext, stage: str, *, parent_call_id: str | None = None):
         event = context.event
-        correlation_id = event.correlation_id or event.metadata.get("correlation_id")
+        correlation_id = (
+            event.correlation_id
+            or event.metadata.get("correlation_id")
+            or event.payload.get("correlation_id")
+            or event.id
+        )
         return usage_context(
-            request_id=str(event.id),
-            correlation_id=str(correlation_id) if correlation_id is not None else None,
+            request_id=str(event.metadata.get("handoff_id") or event.id),
+            correlation_id=str(correlation_id),
             stage=stage,
             parent_call_id=parent_call_id or event.metadata.get("parent_call_id"),
         )
@@ -1186,7 +1200,118 @@ class AgentRuntime:
             "- Pour vérifier une action ou un rappel antérieur, consulte list_tasks avant de répondre ; n'affirme jamais qu'une action a été faite sans trace persistante.\n"
             "- Les événements et l'historique contiennent leur date et leur heure ; utilise ces horodatages pour interpréter les délais et répondre précisément."
         )
-        return self.prompt_composer.compose(runtime_instructions=runtime_instructions)
+        if self.context_mode == "legacy":
+            return self.prompt_composer.compose(runtime_instructions=runtime_instructions)
+        # Contract mode keeps external and persisted values out of system
+        # content. They are rendered as evidence by _initial_run_messages.
+        snapshot = self.prompt_store.snapshot()
+        policy = self.system_prompt or snapshot.core
+        policy_text = self.context_assembler.render(
+            ContextComponent(
+                "policy",
+                policy + "\n\n## RUNTIME CONTROLS\n\n" + runtime_instructions,
+                max_chars=self._context_limit("policy_max_chars", 12000),
+                max_tokens=self._context_limit("policy_max_tokens", 3000),
+                priority=100,
+            )
+        )
+        return "ORION_POLICY_V1\n\n" + policy_text
+
+    @staticmethod
+    def _decode_component(value: str, default: Any = None) -> Any:
+        """Decode an assembler rendering without locally clipping JSON."""
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return default if default is not None else value
+
+    def _context_limit(self, name: str, fallback: int) -> int:
+        policy = getattr(self.context_assembler, "policy", None)
+        return int(getattr(policy, name, fallback))
+
+    @staticmethod
+    def _request_value(event: Event) -> dict[str, Any]:
+        payload = event.payload if isinstance(event.payload, Mapping) else {}
+        for key in ("text", "message", "content", "request"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                return {"text": value}
+        return {"text": ""}
+
+    def _evidence_message(self, data: Mapping[str, Any], *, max_chars: int | None = None) -> str:
+        envelope = getattr(self.context_assembler, "evidence_envelope", None)
+        if callable(envelope):
+            rendered = envelope(data, source="runtime", max_chars=max_chars)
+            return "BEGIN_ORION_EVIDENCE\n" + rendered + "\nEND_ORION_EVIDENCE"
+        bundle = {
+            "schema": "orion.evidence.v1",
+            "source": "runtime",
+            "trust": "untrusted",
+            "redacted": True,
+            "data": dict(data),
+        }
+        limit = max_chars or getattr(self.context_assembler, "total_max_chars", 60000)
+        rendered = self.context_assembler.render(
+            ContextComponent("evidence", bundle, max_chars=max(1, int(limit)), priority=100)
+        )
+        return "BEGIN_ORION_EVIDENCE\n" + rendered + "\nEND_ORION_EVIDENCE"
+
+    def _request_message(self, event: Event) -> dict[str, str]:
+        if event.type.startswith(("subagent.", "team.")):
+            return {
+                "role": "user",
+                "content": self._evidence_message(
+                    {"request": {"kind": "internal", "event_type": event.type}},
+                    max_chars=self._context_limit("request_max_chars", 8000),
+                ),
+            }
+        request = {"schema": "orion.request.v1", "data": self._request_value(event)}
+        rendered = self.context_assembler.render(
+            ContextComponent(
+                "request",
+                request,
+                max_chars=self._context_limit("request_max_chars", 8000),
+                max_tokens=self._context_limit("request_max_tokens", 2000),
+                priority=110,
+            )
+        )
+        return {
+            "role": "user",
+            "content": "ORION_REQUEST_V1\nBEGIN_ORION_REQUEST\n"
+            + rendered
+            + "\nEND_ORION_REQUEST",
+        }
+
+    def _guard_context(
+        self,
+        context: RunContext,
+        messages: list[dict[str, Any]],
+        *,
+        stage: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+        final: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Apply the assembler-owned guard before every provider call."""
+        guard = getattr(self.context_assembler, "guard_messages", None)
+        if callable(guard):
+            guarded = guard(messages, tools=tools, stage=stage, final=final)
+            return [dict(item) for item in guarded]
+        bound = getattr(self.context_assembler, "bound_history", None)
+        if callable(bound):
+            # Keep immutable policy messages anchored, and let the shared
+            # history reducer retain/drop complete user/assistant/tool blocks.
+            prefix: list[dict[str, Any]] = []
+            remainder = list(messages)
+            while remainder and remainder[0].get("role") == "system":
+                prefix.append(remainder.pop(0))
+            policy = getattr(self.context_assembler, "policy", None)
+            max_chars = int(getattr(policy, "total_max_chars", getattr(self.context_assembler, "total_max_chars", 48000)))
+            max_tokens = int(getattr(policy, "total_max_tokens", getattr(self.context_assembler, "total_max_tokens", 12000)))
+            bounded = bound(remainder, max_chars=max_chars, max_tokens=max_tokens)
+            return prefix + [dict(item) for item in bounded]
+        # Older assemblers have no shared message reducer. Preserve message
+        # boundaries and leave their compatibility behavior untouched.
+        return messages
 
     def _initial_run_messages(
         self,
@@ -1194,6 +1319,8 @@ class AgentRuntime:
         *,
         reflection: str | None = None,
     ) -> list[dict[str, Any]]:
+        if self.context_mode == "contract":
+            return self._contract_initial_run_messages(context, reflection=reflection)
         task_payload = context.task.to_dict() if context.task is not None else None
         event_payload = {
             "id": context.event.id,
@@ -1312,6 +1439,79 @@ class AgentRuntime:
             }
         )
         return messages
+
+    def _contract_initial_run_messages(
+        self,
+        context: RunContext,
+        *,
+        reflection: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build the canonical policy/request/evidence role sequence."""
+        task_payload = context.task.to_dict() if context.task is not None else None
+        event_payload = {
+            "id": context.event.id,
+            "type": context.event.type,
+            "source": context.event.source,
+            "priority": context.event.priority,
+            "created_at": context.event.created_at.isoformat(),
+            "local_time": context.event.created_at.astimezone().isoformat(),
+            "payload": context.event.payload,
+            "metadata": context.event.metadata,
+        }
+        waiting_subagent_jobs: list[dict[str, Any]] = []
+        if self.subagent_manager is not None:
+            waiting_subagent_jobs = [
+                self._compact_subagent_job(job)
+                for job in self.subagent_manager.list_jobs(status="waiting", limit=10)
+            ]
+        snapshot = self.prompt_store.snapshot()
+        history: list[dict[str, Any]] = []
+        if self.history_enabled:
+            history = self.conversation_journal.recent_messages(
+                conversation_id=self._conversation_id(context.event),
+                limit=self.history_limit,
+            )
+            bound_history = getattr(self.context_assembler, "bound_history", None)
+            if callable(bound_history):
+                history = bound_history(
+                    history,
+                    max_chars=self._context_limit("history_max_chars", self.history_max_chars),
+                    max_tokens=self._context_limit("history_max_tokens", 2500),
+                    turn_limit=self._context_limit("history_turn_limit", self.history_limit),
+                )
+        components = [
+            ContextComponent("request", self._request_value(context.event), max_chars=self._context_limit("request_max_chars", 8000), max_tokens=self._context_limit("request_max_tokens", 2000), priority=110),
+            ContextComponent("event", event_payload, max_chars=self.event_context_max_chars, max_tokens=self._context_limit("event_max_tokens", 3000), priority=100),
+            ContextComponent("task", task_payload, max_chars=self.task_context_max_chars, max_tokens=self._context_limit("event_max_tokens", 3000), priority=90),
+            ContextComponent("loaded_state", context.loaded_state or {}, max_chars=self.task_context_max_chars, max_tokens=self._context_limit("event_max_tokens", 3000), priority=95),
+            ContextComponent("profile", snapshot.user_profile, max_chars=self._context_limit("profile_max_chars", 4000), max_tokens=self._context_limit("profile_max_tokens", 1000), priority=40),
+            ContextComponent("preferences", snapshot.preferences, max_chars=1000, priority=35),
+            ContextComponent("memories", snapshot.memories, max_chars=2000, priority=35),
+            ContextComponent("history", history, max_chars=self._context_limit("history_max_chars", self.history_max_chars), max_tokens=self._context_limit("history_max_tokens", 2500), priority=60),
+            ContextComponent("waiting_subagents", waiting_subagent_jobs, max_chars=self._context_limit("observations_max_chars", 8000), max_tokens=self._context_limit("observations_max_tokens", 2000), priority=80),
+            ContextComponent("tool_observations", [], max_chars=self._context_limit("observations_max_chars", 8000), max_tokens=self._context_limit("observations_max_tokens", 2000), priority=45),
+            ContextComponent("reflection", reflection, max_chars=self._context_limit("reflection_max_chars", 2000), max_tokens=self._context_limit("reflection_max_tokens", 500), priority=50),
+        ]
+        assembled = self.context_assembler.assemble(components)
+        data = {
+            "request": self._decode_component(assembled.get("request", "{}"), {}),
+            "event": self._decode_component(assembled.get("event", "{}"), {}),
+            "task": self._decode_component(assembled.get("task", "null"), None),
+            "loaded_state": self._decode_component(assembled.get("loaded_state", "{}"), {}),
+            "profile": self._decode_component(assembled.get("profile", "{}"), {}),
+            "preferences": self._decode_component(assembled.get("preferences", "[]"), []),
+            "memories": self._decode_component(assembled.get("memories", "[]"), []),
+            "history": self._decode_component(assembled.get("history", "[]"), []),
+            "waiting_subagents": self._decode_component(assembled.get("waiting_subagents", "[]"), []),
+            "tool_observations": self._decode_component(assembled.get("tool_observations", "[]"), []),
+            "reflection": self._decode_component(assembled.get("reflection", "null"), None),
+        }
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": self._system_instructions()},
+            self._request_message(context.event),
+            {"role": "user", "content": self._evidence_message(data)},
+        ]
+        return self._guard_context(context, messages, stage="initial")
 
     def _run_pre_reflection(self, context: RunContext) -> str | None:
         """Produit la réflexion interne avant d'initialiser le contexte principal."""
@@ -1504,7 +1704,11 @@ class AgentRuntime:
         if self.llm_client is None or context.interrupted:
             return
         try:
-            response = self.llm_client.complete(context.messages, tools=None)
+            context.messages = self._guard_context(
+                context, list(context.messages), stage="control", tools=None, final=True
+            )
+            with self._usage_scope(context, "control"):
+                response = self.llm_client.complete(context.messages, tools=None)
         except Exception:
             # Le contrôle du runtime a déjà été exécuté. Une erreur sur la
             # reformulation finale ne doit ni annuler l'action ni faire passer
@@ -1995,6 +2199,9 @@ class AgentRuntime:
                 "content": str(final_messages[0].get("content", "")) + final_instruction,
             }
         try:
+            final_messages = self._guard_context(
+                context, final_messages, stage="final", tools=None, final=True
+            )
             with self._usage_scope(context, "final"):
                 response = self.llm_client.complete(
                     final_messages,
@@ -2031,6 +2238,12 @@ class AgentRuntime:
             # appel principal est une décision, pas une réflexion interne.
             context.phase = RunPhase.DECISION if turn == 0 else RunPhase.NEW_TURN
             stage = "decision" if turn == 0 else "new_turn"
+            context.messages = self._guard_context(
+                context,
+                list(context.messages),
+                stage=stage,
+                tools=tools or None,
+            )
             with self._usage_scope(context, stage):
                 response = self.llm_client.complete(
                     context.messages,
@@ -2108,7 +2321,18 @@ class AgentRuntime:
             "acknowledge_pending_event avec son event_id. Sinon, n'acquitte rien : "
             "elle sera traitée lors d'un RUN séparé."
         )
-        context.messages.append({"role": "system", "content": "\n".join(lines)})
+        notification_text = "\n".join(lines)
+        if self.context_mode == "contract":
+            context.messages.append(
+                {
+                    "role": "user",
+                    "content": self._evidence_message(
+                        {"notifications": [notification_text]}, max_chars=8000
+                    ),
+                }
+            )
+        else:
+            context.messages.append({"role": "system", "content": notification_text})
 
     def process_one(self, *, timeout: float | None = None) -> Event | None:
         """Traite synchroniquement un réveil, utile sans worker en arrière-plan."""

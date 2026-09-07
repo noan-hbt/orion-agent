@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 
 try:
     from rich.console import Console, Group
+    from rich.cells import cell_len as _rich_cell_len
     from rich.markdown import Markdown
     from rich.padding import Padding
     from rich.panel import Panel
@@ -32,6 +33,9 @@ try:
     _RICH_AVAILABLE = True
 except ImportError:  # pragma: no cover - repli pour installation incomplète
     _RICH_AVAILABLE = False
+
+    def _rich_cell_len(value: str) -> int:
+        return len(value)
 
 try:
     from prompt_toolkit import PromptSession
@@ -250,6 +254,12 @@ class CLIEventRenderer:
             text = payload.get("text")
             if text:
                 fields.append(str(text))
+            # Error payloads are often intentionally kept out of ``text``.
+            # Plain output must retain that diagnostic just like JSONL does;
+            # otherwise a redirected failure becomes an unhelpful state line.
+            error = payload.get("error")
+            if error and not text:
+                fields.append(f"error={error}")
             # Les mises à jour de jobs restent utiles en mode pipe sans
             # exposer le payload interne complet ni des secrets éventuels.
             if kind.startswith("job.") and isinstance(payload.get("meta"), Mapping):
@@ -493,6 +503,23 @@ class CLIConsole:
         "failed": "ERROR",
         "canceled": "STOP",
     }
+    _STATE_ALIASES = {
+        "pending": "queued",
+        "waiting": "queued",
+        "wait": "queued",
+        "in_progress": "running",
+        "in-progress": "running",
+        "processing": "running",
+        "success": "succeeded",
+        "complete": "succeeded",
+        "completed": "succeeded",
+        "done": "succeeded",
+        "error": "failed",
+        "failure": "failed",
+        "cancelled": "canceled",
+        "stopped": "canceled",
+        "stop": "canceled",
+    }
     _STATE_STYLES = {
         "queued": "#56CCF2",
         "running": _RUN,
@@ -545,9 +572,11 @@ class CLIConsole:
         # the visible transcript calm without changing the event contract.
         self._conversation_requests: set[str] = set()
         self._stream_open: set[str] = set()
+        self._active_stream: str | None = None
         self._stream_text: dict[str, str] = {}
         self._last_activity: dict[str, str] = {}
         self._ascii = os.environ.get("ORION_ASCII") == "1"
+        self._screen_reader = os.environ.get("ORION_SCREEN_READER") == "1"
         # Usage is deliberately duck-typed.  The UI can therefore be used
         # with the OpenRouter UsageLedger, a callable returning a snapshot,
         # or no ledger at all (the latter is the normal pipe/test case).
@@ -559,9 +588,12 @@ class CLIConsole:
         self._usage_last_invalidation = 0.0
         self._usage_refresh_interval = 0.35
 
-        if use_color is None:
+        # NO_COLOR is an explicit user contract and therefore wins over an
+        # integration's optimistic ``use_color=True`` preference.
+        if os.environ.get("NO_COLOR") is not None:
+            use_color = False
+        elif use_color is None:
             use_color = bool(getattr(self.output, "isatty", lambda: False)())
-            use_color = use_color and os.environ.get("NO_COLOR") is None
         self.use_color = bool(use_color)
         self._interactive = bool(
             _PROMPT_AVAILABLE
@@ -821,11 +853,54 @@ class CLIConsole:
         text = " ".join(str(value or "").split())
         if width <= 0:
             return ""
-        if len(text) <= width:
+        if _rich_cell_len(text) <= width:
             return text
-        if width <= len(marker):
-            return text[:width]
-        return text[: width - len(marker)].rstrip() + marker
+        marker_width = _rich_cell_len(marker)
+        if width <= marker_width:
+            result = ""
+            visible = 0
+            for char in marker:
+                char_width = _rich_cell_len(char)
+                if visible + char_width > width:
+                    break
+                result += char
+                visible += char_width
+            return result
+        available = width - marker_width
+        result = ""
+        visible = 0
+        for char in text:
+            char_width = _rich_cell_len(char)
+            if visible + char_width > available:
+                break
+            result += char
+            visible += char_width
+        return result.rstrip() + marker
+
+    @staticmethod
+    def _canonical_state(state: Any) -> str:
+        value = str(state or "queued").strip().lower()
+        return CLIConsole._STATE_ALIASES.get(value, value)
+
+    @staticmethod
+    def _take_cells(value: str, width: int) -> str:
+        """Return the leading text that fits in ``width`` terminal cells."""
+        if width <= 0:
+            return ""
+        result: list[str] = []
+        used = 0
+        for char in str(value):
+            char_width = _rich_cell_len(char)
+            if used + char_width > width:
+                break
+            result.append(char)
+            used += char_width
+        return "".join(result)
+
+    @classmethod
+    def _pad_cells(cls, value: Any, width: int) -> str:
+        text = cls._take_cells(str(value), width)
+        return text + (" " * max(0, width - _rich_cell_len(text)))
 
     def _short_id(self, request_id: str | None) -> str:
         """Return a stable readable request id, extending collisions."""
@@ -835,6 +910,10 @@ class CLIConsole:
         existing = self._request_short_ids.get(identifier)
         if existing:
             return existing
+        if len(identifier) <= 6:
+            self._request_short_ids[identifier] = identifier
+            self._short_id_owners[identifier] = identifier
+            return identifier
         for size in (4, 6, 8, 10, 12, len(identifier)):
             candidate = identifier[:size]
             owner = self._short_id_owners.get(candidate)
@@ -850,14 +929,15 @@ class CLIConsole:
     def _state_label(self, state: str | None, *, waiting: bool = False) -> str:
         if waiting:
             return "WAIT"
-        return self._STATE_LABELS.get(str(state or "queued"), str(state or "QUEUE").upper())
+        canonical = self._canonical_state(state)
+        return self._STATE_LABELS.get(canonical, canonical.upper() or "QUEUE")
 
     def _state_style(self, state: str | None) -> str:
-        return self._STATE_STYLES.get(str(state or "queued"), self._MUTED)
+        return self._STATE_STYLES.get(self._canonical_state(state), self._MUTED)
 
     def _print_tty_line(self, console: Any, value: str, *, style: str | None = None) -> None:
         width = self._width(console)
-        clipped = self._clip(value, width)
+        clipped = self._clip(value, width, marker="..." if self._ascii else "…")
         console.print(Text(clipped, style=style) if _RICH_AVAILABLE else clipped)
 
     def _print_tty_wrapped(
@@ -870,7 +950,7 @@ class CLIConsole:
     ) -> None:
         """Print conversation text without silently dropping its tail."""
         width = self._width(console)
-        available = max(1, width - len(indent))
+        available = max(1, width - _rich_cell_len(indent))
         for source in str(value).splitlines() or [""]:
             chunks = textwrap.wrap(
                 source,
@@ -881,12 +961,22 @@ class CLIConsole:
                 break_on_hyphens=False,
             ) or [""]
             for chunk in chunks:
+                # ``textwrap`` counts code points. Split any resulting chunk
+                # again by terminal cells so CJK and emoji cannot overflow a
+                # narrow Rich surface.
+                while _rich_cell_len(chunk) > available:
+                    visible = self._take_cells(chunk, available)
+                    if not visible:  # one wide glyph on a one-cell surface
+                        visible = chunk[0]
+                    line = indent + visible
+                    console.print(Text(line, style=style) if _RICH_AVAILABLE else line)
+                    chunk = chunk[len(visible) :]
                 line = indent + chunk
                 # ``textwrap`` counts characters and Rich may add no visible
                 # ANSI when NO_COLOR is active.  Keep the hard invariant for
                 # test terminals and terminals with unusual Unicode widths.
-                if len(line) > width:
-                    line = line[:width]
+                if _rich_cell_len(line) > width:
+                    line = self._take_cells(line, width)
                 console.print(Text(line, style=style) if _RICH_AVAILABLE else line)
 
     def _glyph(self, utf8: str, ascii_value: str) -> str:
@@ -916,8 +1006,14 @@ class CLIConsole:
 
     def _open_stream(self, console: Any, request_id: str) -> None:
         if request_id in self._stream_open:
+            self._active_stream = request_id
             return
+        # A terminal has one cursor.  Close a previous inline block before a
+        # concurrent request starts so fragments can never share a line.
+        for previous in tuple(self._stream_open):
+            self._close_stream(console, previous)
         self._stream_open.add(request_id)
+        self._active_stream = request_id
         self._stream_text.setdefault(request_id, "")
         header = Text(self.name, style=f"bold {self._ACCENT}")
         console.print(header)
@@ -929,10 +1025,21 @@ class CLIConsole:
         cannot turn the transcript into one line per token.  Newlines from the
         provider are preserved and the final call closes the block.
         """
-        self._open_stream(console, request_id)
         fragment = str(text or "")
         if not fragment:
             return
+        if self._screen_reader:
+            # Inline token output is difficult to follow when a terminal is
+            # being spoken. Emit a complete, stable record per update.
+            self._print_tty_wrapped(
+                console,
+                f"{self.name} {self._glyph('·', '-')} STREAM req {self._short_id(request_id)}",
+                style=self._PROGRESS,
+            )
+            self._print_tty_wrapped(console, fragment, indent="  ")
+            self._close_stream(console, request_id)
+            return
+        self._open_stream(console, request_id)
         self._stream_text[request_id] = self._stream_text.get(request_id, "") + fragment
         # Rich's ``end`` is deliberately used here: all fragments stay in the
         # same visual block, while explicit provider newlines still work.
@@ -956,8 +1063,17 @@ class CLIConsole:
         else:  # pragma: no cover
             print(file=self.output, flush=True)
         self._stream_open.discard(request_id)
+        if self._active_stream == request_id:
+            self._active_stream = None
+
+    def _close_active_stream(self, console: Any, *, except_request: str | None = None) -> None:
+        """Close the inline stream before writing another terminal block."""
+        active = self._active_stream
+        if active and active != except_request and active in self._stream_open:
+            self._close_stream(console, active)
 
     def _response_block(self, console: Any, content: str, *, request_id: str | None = None, style: str | None = None) -> None:
+        self._close_active_stream(console, except_request=request_id)
         stream_id = request_id if request_id and request_id in self._stream_open else "stream"
         had_stream = stream_id in self._stream_open
         if had_stream:
@@ -995,17 +1111,33 @@ class CLIConsole:
     def _job_line(self, console: Any, item: Any, index: int, total: int) -> None:
         if isinstance(item, Mapping):
             identifier = item.get("id") or item.get("job_id") or item.get("request_id") or "job"
-            state = str(item.get("status") or item.get("state") or "WAIT").upper()
+            state = self._state_label(item.get("status") or item.get("state") or "queued")
             owner = item.get("owner") or item.get("instance") or item.get("team") or "worker"
             objective = item.get("objective") or item.get("label") or item.get("name") or ""
         else:
             identifier, state, owner, objective = "job", "WAIT", "worker", str(item)
         width = self._width(console)
-        short_identifier = self._clip(identifier, 6)
+        marker = "..." if self._ascii else "…"
+        # The identifier column is semantic: keep its prefix intact even on
+        # ASCII terminals instead of spending half the six-cell budget on an
+        # ellipsis (``job-1`` is more useful than ``job...``).
+        short_identifier = self._clip(identifier, 6, marker="")
         # Jobs are an operator view, not a tree attached to every response.
         # Keep one compact row per job and let the objective wrap naturally.
-        prefix = f"  {short_identifier:<6} {self._clip(state, 4):<4} {self._clip(owner, 16)}  "
-        self._print_tty_line(console, prefix + self._clip(objective, max(1, width - len(prefix))), style=self._MUTED)
+        prefix = (
+            "  "
+            + self._pad_cells(short_identifier, 6)
+            + " "
+            + self._pad_cells(self._clip(state, 6), 6)
+            + " "
+            + self._pad_cells(self._clip(owner, 16, marker=marker), 16)
+            + "  "
+        )
+        self._print_tty_line(
+            console,
+            prefix + self._clip(objective, max(1, width - _rich_cell_len(prefix)), marker=marker),
+            style=self._MUTED,
+        )
 
     def _build_session(self, history_path: str | Path | None) -> Any:
         # PromptSession attend les abstractions Input/Output de prompt_toolkit,
@@ -1053,6 +1185,8 @@ class CLIConsole:
         )
 
     def _toolbar(self) -> FormattedText:
+        if self._screen_reader:
+            return FormattedText([])
         usage = self.usage_summary()
         usage_text = f"  {self._glyph('·', '-')} {usage}  " if usage else ""
         if self._busy:
@@ -1080,11 +1214,18 @@ class CLIConsole:
         self._banner_shown = True
         console = self._console()
         if console is None:
-            self._print_plain(f"\n{self.name} · prêt")
-            self._print_plain("Événements · tools · tâches durables\n")
+            separator = self._glyph("·", "-")
+            ready = "pret" if self._ascii else "prêt"
+            details = "Evenements - tools - taches durables" if self._ascii else f"Événements {separator} tools {separator} tâches durables"
+            self._print_plain(f"\n{self.name} {separator} {ready}")
+            self._print_plain(details + "\n")
             return
         width = self._width(console)
-        model = self._clip(self.model or "modèle inconnu", max(8, width - len(self.name) - 5))
+        model = self._clip(
+            self.model or ("modele inconnu" if self._ascii else "modèle inconnu"),
+            max(8, width - len(self.name) - 5),
+            marker="..." if self._ascii else "…",
+        )
         separator = self._glyph("·", "-")
         line = f"{self.name} {separator} {model}"
         usage = self.usage_summary()
@@ -1098,6 +1239,8 @@ class CLIConsole:
     def read(self, prompt: str = "❯ ") -> str:
         if self._stop_requested.is_set():
             raise EOFError
+        if self._ascii:
+            prompt = prompt.replace("❯", ">")
         if self._session is None:
             stream = self.input_stream
             self._print_plain(prompt, end="")
@@ -1142,7 +1285,7 @@ class CLIConsole:
             return self._session.prompt(
                 FormattedText([("class:prompt", display_prompt)]),
                 prompt_continuation=lambda *_: FormattedText(
-                    [("class:continuation", "│ ")]
+                    [("class:continuation", self._glyph("│", "|" ) + " ")]
                 ),
                 bottom_toolbar=self._toolbar,
                 reserve_space_for_menu=4,
@@ -1241,7 +1384,7 @@ class CLIConsole:
                 self.banner()
                 return kind
             if kind.startswith("request.") and request_id:
-                state = str(payload.get("state") or kind.split(".", 1)[1])
+                state = self._canonical_state(payload.get("state") or kind.split(".", 1)[1])
                 text = str(payload.get("text") or payload.get("error") or "")
                 if request_id not in self._conversation_requests:
                     self._conversation_requests.add(request_id)
@@ -1250,13 +1393,35 @@ class CLIConsole:
                 meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else {}
                 if state in {"queued", "running"}:
                     activity = meta.get("activity") or meta.get("summary")
-                    if activity:
+                    if self._screen_reader:
+                        detail = str(activity or ("en attente" if state == "queued" else "travail en cours"))
+                        self._activity_line(
+                            console,
+                            f"{self._state_label(state)} req {self._short_id(request_id)} - {detail}",
+                            key=f"request:{request_id}:{state}",
+                            style=self._RUN if state == "running" else self._PROGRESS,
+                        )
+                    elif activity:
                         self._activity_line(console, str(activity), key=f"request:{request_id}:activity")
                 elif state == "streaming":
-                    self._append_stream(console, request_id, text)
+                    if self._screen_reader:
+                        self._print_tty_wrapped(
+                            console,
+                            f"{self.name} {self._glyph('·', '-')} STREAM req {self._short_id(request_id)}",
+                            style=self._PROGRESS,
+                        )
+                        self._print_tty_wrapped(console, text, indent="  ")
+                    else:
+                        self._append_stream(console, request_id, text)
                 elif state == "succeeded":
                     had_stream = request_id in self._stream_open
                     self._close_stream(console, request_id)
+                    if self._screen_reader:
+                        self._print_tty_wrapped(
+                            console,
+                            f"{self.name} {self._glyph('·', '-')} {self._state_label(state)} req {self._short_id(request_id)}",
+                            style=self._SUCCESS,
+                        )
                     if text:
                         if had_stream:
                             self._print_tty_wrapped(console, text, indent="  ")
@@ -1264,18 +1429,26 @@ class CLIConsole:
                             self._response_block(console, text, request_id=request_id)
                     self._emit_usage_note(console, request_id, payload, terminal=True)
                 elif state == "failed":
+                    self._close_active_stream(console, except_request=request_id)
                     self._close_stream(console, request_id)
-                    self._print_tty_wrapped(console, f"{self.name} {self._glyph('·', '-')} erreur", style=f"bold {self._ERROR}")
+                    failure_heading = (
+                        f"{self.name} {self._glyph('·', '-')} {self._state_label(state)} req {self._short_id(request_id)}"
+                        if self._screen_reader
+                        else f"{self.name} {self._glyph('·', '-')} erreur"
+                    )
+                    self._print_tty_wrapped(console, failure_heading, style=f"bold {self._ERROR}")
                     self._print_tty_wrapped(console, text or "La demande a échoué.", indent="  ", style=self._ERROR)
                     details = f"demande req {self._short_id(request_id)} {self._glyph('·', '-')} /retry {self._short_id(request_id)} {self._glyph('·', '-')} /debug"
                     self._print_tty_wrapped(console, details, indent="  ", style=self._MUTED)
                 elif state == "canceled":
+                    self._close_active_stream(console, except_request=request_id)
                     self._close_stream(console, request_id)
-                    self._activity_line(
-                        console,
-                        f"annulation demandée pour req {self._short_id(request_id)}",
-                        key=f"request:{request_id}:canceled",
+                    canceled_text = (
+                        f"{self._state_label(state)} req {self._short_id(request_id)} - annulation demandée"
+                        if self._screen_reader
+                        else f"annulation demandée pour req {self._short_id(request_id)}"
                     )
+                    self._activity_line(console, canceled_text, key=f"request:{request_id}:canceled")
                 return f"{kind} req {self._short_id(request_id)}"
             if kind.startswith("job."):
                 meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else payload

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import math
+import inspect
 import threading
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
@@ -145,13 +146,39 @@ class PromptConfig:
 
 @dataclass
 class ContextConfig:
+    # Versioned context contract.  The legacy fields below remain accepted so
+    # existing configurations can be rolled back without a schema migration.
+    context_contract_version: str = "v1"
+    context_mode: str = "contract"
     compaction_enabled: bool = True
+    llm_compaction_enabled: bool = False
     compactor_model: str = "openai/gpt-4o-mini"
     total_max_chars: int = 60000
+    total_max_tokens: int = 12000
+    output_reserve_tokens: int = 3000
     compactor_input_chars: int = 30000
     cache_size: int = 64
     task_max_chars: int = 12000
+    task_max_tokens: int = 3000
     event_max_chars: int = 10000
+    event_max_tokens: int = 3000
+    history_max_chars: int = 10000
+    policy_max_chars: int = 12000
+    policy_max_tokens: int = 3000
+    request_max_chars: int = 8000
+    request_max_tokens: int = 2000
+    profile_memory_max_chars: int = 4000
+    profile_memory_max_tokens: int = 1000
+    history_max_tokens: int = 2500
+    notifications_tools_max_chars: int = 8000
+    notifications_tools_max_tokens: int = 2000
+    reflection_max_chars: int = 2000
+    reflection_max_tokens: int = 500
+    history_turn_limit: int = 20
+    reflection_enabled: bool = True
+    reflection_format: str = "advisory_json"
+    redaction_enabled: bool = True
+    token_counter: str = "fallback"
 
 
 @dataclass
@@ -424,12 +451,59 @@ class OrionConfig:
         integer(self.prompt.history_max_chars, "prompt.history_max_chars", 1)
         for label, value in (
             ("context.total_max_chars", self.context.total_max_chars),
+            ("context.total_max_tokens", self.context.total_max_tokens),
+            ("context.output_reserve_tokens", self.context.output_reserve_tokens),
             ("context.compactor_input_chars", self.context.compactor_input_chars),
             ("context.cache_size", self.context.cache_size),
             ("context.task_max_chars", self.context.task_max_chars),
             ("context.event_max_chars", self.context.event_max_chars),
+            ("context.policy_max_chars", self.context.policy_max_chars),
+            ("context.policy_max_tokens", self.context.policy_max_tokens),
+            ("context.request_max_chars", self.context.request_max_chars),
+            ("context.request_max_tokens", self.context.request_max_tokens),
+            ("context.profile_memory_max_chars", self.context.profile_memory_max_chars),
+            ("context.profile_memory_max_tokens", self.context.profile_memory_max_tokens),
+            ("context.task_max_tokens", self.context.task_max_tokens),
+            ("context.event_max_tokens", self.context.event_max_tokens),
+            ("context.history_max_tokens", self.context.history_max_tokens),
+            ("context.notifications_tools_max_chars", self.context.notifications_tools_max_chars),
+            ("context.notifications_tools_max_tokens", self.context.notifications_tools_max_tokens),
+            ("context.reflection_max_chars", self.context.reflection_max_chars),
+            ("context.reflection_max_tokens", self.context.reflection_max_tokens),
+            ("context.history_turn_limit", self.context.history_turn_limit),
         ):
             integer(value, label, 1)
+        if self.context.context_contract_version != "v1":
+            raise ValueError("context.context_contract_version doit etre 'v1'.")
+        if self.context.context_mode not in {"contract", "legacy"}:
+            raise ValueError("context.context_mode doit etre 'contract' ou 'legacy'.")
+        if self.context.reflection_format not in {"advisory_json", "legacy_text"}:
+            raise ValueError("context.reflection_format est invalide.")
+        text(self.context.token_counter, "context.token_counter")
+        for label, value in (
+            ("policy_max_chars", self.context.policy_max_chars),
+            ("request_max_chars", self.context.request_max_chars),
+            ("profile_memory_max_chars", self.context.profile_memory_max_chars),
+            ("task_max_chars", self.context.task_max_chars),
+            ("event_max_chars", self.context.event_max_chars),
+            ("history_max_chars", self.context.history_max_chars),
+            ("notifications_tools_max_chars", self.context.notifications_tools_max_chars),
+            ("reflection_max_chars", self.context.reflection_max_chars),
+        ):
+            if value > self.context.total_max_chars:
+                raise ValueError(f"context.{label} ne peut pas depasser context.total_max_chars.")
+        for label, value in (
+            ("policy_max_tokens", self.context.policy_max_tokens),
+            ("request_max_tokens", self.context.request_max_tokens),
+            ("profile_memory_max_tokens", self.context.profile_memory_max_tokens),
+            ("task_max_tokens", self.context.task_max_tokens),
+            ("event_max_tokens", self.context.event_max_tokens),
+            ("history_max_tokens", self.context.history_max_tokens),
+            ("notifications_tools_max_tokens", self.context.notifications_tools_max_tokens),
+            ("reflection_max_tokens", self.context.reflection_max_tokens),
+        ):
+            if value > self.context.total_max_tokens:
+                raise ValueError(f"context.{label} ne peut pas depasser context.total_max_tokens.")
         number(self.memory.poll_interval, "memory.poll_interval", strict=True)
         integer(self.memory.batch_size, "memory.batch_size", 1)
         integer(self.memory.min_entries, "memory.min_entries", 1)
@@ -661,7 +735,7 @@ class OrionConfig:
         from channels import ChannelRouter
         from event_handler import EventHandler
         from openrouter_client import OpenRouterClient
-        from context_assembler import ContextAssembler
+        from context_assembler import ContextAssembler, ContextPolicy
         from prompt_context import ConversationJournal, MemoryExtractor, MemoryMaintenance, PromptContextStore
         from reflection_engine import ReflectionEngine
         from runtime import AgentRuntime
@@ -699,12 +773,67 @@ class OrionConfig:
             }.items() if value is not None},
         )
         journal = ConversationJournal(self.path(self.prompt.journal_path))
-        context_assembler = ContextAssembler(
-            compactor=llm if self.context.compaction_enabled else None,
-            compactor_model=self.context.compactor_model,
+        assembler_options = {
+            "compactor": llm if (self.context.compaction_enabled and (self.context.context_mode == "legacy" or self.context.llm_compaction_enabled)) else None,
+            "compactor_model": self.context.compactor_model,
+            "total_max_chars": self.context.total_max_chars,
+            "total_max_tokens": self.context.total_max_tokens,
+            "output_reserve_tokens": self.context.output_reserve_tokens,
+            "compactor_input_chars": self.context.compactor_input_chars,
+            "cache_size": self.context.cache_size,
+            "context_contract_version": self.context.context_contract_version,
+            "context_mode": self.context.context_mode,
+            "policy_max_chars": self.context.policy_max_chars,
+            "policy_max_tokens": self.context.policy_max_tokens,
+            "request_max_chars": self.context.request_max_chars,
+            "request_max_tokens": self.context.request_max_tokens,
+            "profile_memory_max_chars": self.context.profile_memory_max_chars,
+            "profile_memory_max_tokens": self.context.profile_memory_max_tokens,
+            "task_max_chars": self.context.task_max_chars,
+            "task_max_tokens": self.context.task_max_tokens,
+            "event_max_chars": self.context.event_max_chars,
+            "event_max_tokens": self.context.event_max_tokens,
+            "history_max_chars": self.context.history_max_chars,
+            "history_max_tokens": self.context.history_max_tokens,
+            "notifications_tools_max_chars": self.context.notifications_tools_max_chars,
+            "notifications_tools_max_tokens": self.context.notifications_tools_max_tokens,
+            "reflection_max_chars": self.context.reflection_max_chars,
+            "reflection_max_tokens": self.context.reflection_max_tokens,
+            "history_turn_limit": self.context.history_turn_limit,
+            "redaction_enabled": self.context.redaction_enabled,
+            "llm_compaction_enabled": self.context.llm_compaction_enabled,
+            "token_counter": self.context.token_counter,
+        }
+        # ContextAssembler owns reduction, redaction, and token accounting;
+        # this object only translates the validated TOML knobs into its policy.
+        policy = ContextPolicy(
+            version=self.context.context_contract_version,
+            context_mode=self.context.context_mode,
+            policy_max_chars=self.context.policy_max_chars,
+            policy_max_tokens=self.context.policy_max_tokens,
+            request_max_chars=self.context.request_max_chars,
+            request_max_tokens=self.context.request_max_tokens,
+            profile_max_chars=self.context.profile_memory_max_chars,
+            profile_max_tokens=self.context.profile_memory_max_tokens,
+            event_max_chars=self.context.event_max_chars,
+            event_max_tokens=self.context.event_max_tokens,
+            history_max_chars=self.context.history_max_chars,
+            history_max_tokens=self.context.history_max_tokens,
+            observations_max_chars=self.context.notifications_tools_max_chars,
+            observations_max_tokens=self.context.notifications_tools_max_tokens,
+            reflection_max_chars=self.context.reflection_max_chars,
+            reflection_max_tokens=self.context.reflection_max_tokens,
             total_max_chars=self.context.total_max_chars,
-            compactor_input_chars=self.context.compactor_input_chars,
-            cache_size=self.context.cache_size,
+            total_max_tokens=self.context.total_max_tokens,
+            output_reserve_tokens=self.context.output_reserve_tokens,
+            history_turn_limit=self.context.history_turn_limit,
+            redaction_enabled=self.context.redaction_enabled,
+            llm_compaction_enabled=self.context.llm_compaction_enabled,
+        )
+        assembler_options["policy"] = policy
+        supported = inspect.signature(ContextAssembler).parameters
+        context_assembler = ContextAssembler(
+            **{key: value for key, value in assembler_options.items() if key in supported}
         )
         tool_manager = ToolManager(
             self.path(self.tools.directory),
@@ -799,7 +928,7 @@ class OrionConfig:
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
             response_concise=self.response.concise,
-            reflection_engine=reflection_engine,
+            reflection_engine=reflection_engine if self.context.reflection_enabled else None,
             prompt_store=prompt_store,
             conversation_journal=journal,
             history_enabled=self.prompt.history_enabled,
@@ -808,6 +937,7 @@ class OrionConfig:
             context_assembler=context_assembler,
             task_context_max_chars=self.context.task_max_chars,
             event_context_max_chars=self.context.event_max_chars,
+            context_mode=self.context.context_mode,
             memory_maintenance=maintenance,
             on_output=channel_router.route,
         ).attach(events)

@@ -159,13 +159,37 @@ history_max_chars = 100000
 additional = ""
 
 [context]
+context_contract_version = "v1"
+context_mode = "contract"
 compaction_enabled = true
+llm_compaction_enabled = false
 compactor_model = "deepseek/deepseek-v4-flash-0731"
 total_max_chars = 60000
+total_max_tokens = 12000
+output_reserve_tokens = 3000
 compactor_input_chars = 30000
 cache_size = 64
 task_max_chars = 12000
+task_max_tokens = 3000
 event_max_chars = 10000
+event_max_tokens = 3000
+history_max_chars = 10000
+history_max_tokens = 2500
+policy_max_chars = 12000
+policy_max_tokens = 3000
+request_max_chars = 8000
+request_max_tokens = 2000
+profile_memory_max_chars = 4000
+profile_memory_max_tokens = 1000
+notifications_tools_max_chars = 8000
+notifications_tools_max_tokens = 2000
+reflection_max_chars = 2000
+reflection_max_tokens = 500
+history_turn_limit = 20
+reflection_enabled = true
+reflection_format = "advisory_json"
+redaction_enabled = true
+token_counter = "fallback"
 
 [memory]
 # La maintenance est volontairement configurable et peut etre desactivee.

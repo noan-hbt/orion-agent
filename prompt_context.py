@@ -20,6 +20,8 @@ from datetime import datetime, time as day_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from context_assembler import ContextAssembler, redact_value
+
 if TYPE_CHECKING:
     from openrouter_client import OpenRouterClient
 
@@ -40,7 +42,10 @@ DEFAULT_METHODOLOGY = """Pour chaque demande : comprendre le contexte, charger l
 decider s'il faut repondre, agir, poursuivre une tache ou attendre, puis
 mettre a jour l'etat durable. Un plan reste mutable et doit suivre les observations."""
 
-_SECRET_KEY = re.compile(r"(?:password|passwd|secret|token|api[_ -]?key|private[_ -]?key)", re.I)
+_SECRET_KEY = re.compile(
+    r"(?:password|passwd|secret|token|credential|authorization|cookie|"
+    r"api[_ -]?key|private[_ -]?key|access[_ -]?key|bearer)", re.I,
+)
 
 
 def _now() -> datetime:
@@ -48,14 +53,11 @@ def _now() -> datetime:
 
 
 def _safe(value: Any, *, max_chars: int = 1200) -> Any:
+    value = redact_value(value)
     if isinstance(value, str):
         return value.strip()[:max_chars]
     if isinstance(value, Mapping):
-        return {
-            str(key): _safe(item, max_chars=max_chars)
-            for key, item in value.items()
-            if not _SECRET_KEY.search(str(key))
-        }
+        return {str(key): _safe(item, max_chars=max_chars) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_safe(item, max_chars=max_chars) for item in list(value)[:50]]
     return value
@@ -185,9 +187,10 @@ class PromptContextStore:
 
             forget = extraction.get("forget", [])
             if isinstance(forget, list):
-                terms = [str(item).casefold().strip() for item in forget]
-                self._state["memories"] = [item for item in self._state["memories"] if not any(term in item.casefold() for term in terms)]
-                self._state["preferences"] = [item for item in self._state["preferences"] if not any(term in item.casefold() for term in terms)]
+                terms = [str(item).casefold().strip() for item in forget if str(item).casefold().strip()]
+                if terms:
+                    self._state["memories"] = [item for item in self._state["memories"] if not any(term in item.casefold() for term in terms)]
+                    self._state["preferences"] = [item for item in self._state["preferences"] if not any(term in item.casefold() for term in terms)]
             if journal_cursor is not None:
                 self._state["journal_cursor"] = int(journal_cursor)
             self._state["updated_at"] = _now().isoformat()
@@ -197,13 +200,26 @@ class PromptContextStore:
 class PromptComposer:
     """Compose le prompt systeme dans un ordre stable et lisible."""
 
-    def __init__(self, store: PromptContextStore | None = None, *, personality_override: str | None = None) -> None:
+    def __init__(self, store: PromptContextStore | None = None, *, personality_override: str | None = None, context_mode: str = "contract", max_chars: int = 12000, max_tokens: int = 3000) -> None:
+        if context_mode not in {"contract", "legacy"}:
+            raise ValueError("context_mode must be contract or legacy")
+        if max_chars < 1 or max_tokens < 1:
+            raise ValueError("prompt policy limits must be positive")
         self.store = store or PromptContextStore()
         self.personality_override = personality_override
+        self.context_mode = context_mode
+        self.max_chars = int(max_chars)
+        self.max_tokens = int(max_tokens)
 
     def compose(self, *, runtime_instructions: str = "") -> str:
         snapshot = self.store.snapshot()
         personality = self.personality_override or snapshot.personality
+        if self.context_mode == "contract":
+            sections = [("CORE POLICY", snapshot.core), ("PERSONALITY", personality), ("METHODOLOGY", snapshot.methodology)]
+            if runtime_instructions.strip():
+                sections.append(("RUNTIME POLICY", runtime_instructions))
+            text = "\n\n".join(f"## {title}\n\n{content}" for title, content in sections)
+            return ContextAssembler._clip_text(text, self.max_chars)
         sections = [
             ("CORE — IMMUTABLE", snapshot.core),
             ("PERSONALITY", personality),
@@ -217,6 +233,22 @@ class PromptComposer:
         if runtime_instructions.strip():
             sections.append(("RUNTIME INSTRUCTIONS", runtime_instructions))
         return "\n\n".join(f"## {title}\n\n{content}" for title, content in sections)
+
+
+    def evidence(self, *, request: Any = None, event: Any = None, task: Any = None, loaded_state: Mapping[str, Any] | None = None, history: Sequence[Any] = (), notifications: Sequence[Any] = (), tool_observations: Sequence[Any] = (), reflection: Any = None, source: str = "runtime", max_chars: int = 48000) -> str:
+        """Return one bounded ORION_EVIDENCE_V1 JSON bundle."""
+        snapshot = self.store.snapshot()
+        event_value = event.to_dict() if hasattr(event, "to_dict") else event
+        task_value = task.to_dict() if hasattr(task, "to_dict") else task
+        data = {
+            "request": request or {}, "event": event_value or {}, "task": task_value or {},
+            "loaded_state": dict(loaded_state or {}), "profile": snapshot.user_profile,
+            "preferences": snapshot.preferences, "memories": snapshot.memories,
+            "history": list(history), "waiting_subagents": list(notifications),
+            "tool_observations": list(tool_observations), "reflection": reflection,
+        }
+        assembler = ContextAssembler(total_max_chars=max_chars, total_max_tokens=max(100, max_chars // 4), output_reserve_tokens=1)
+        return "BEGIN_ORION_EVIDENCE\n" + assembler.evidence_envelope(data, source=source, max_chars=max_chars) + "\nEND_ORION_EVIDENCE"
 
 
 @dataclass(frozen=True)
@@ -395,8 +427,11 @@ class MemoryExtractor:
         self.max_input_chars = max_input_chars
 
     def extract(self, entries: Sequence[JournalEntry]) -> dict[str, Any]:
-        payload = json.dumps([entry.__dict__ for entry in entries], ensure_ascii=False, default=str)
-        payload = payload[: self.max_input_chars]
+        payload = json.dumps(
+            ContextAssembler.compact_value([entry.__dict__ for entry in entries], max_chars=self.max_input_chars),
+            ensure_ascii=False,
+            default=str,
+        )
         response = self.client.complete(
             [
                 {

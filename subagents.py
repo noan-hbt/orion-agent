@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,6 +18,7 @@ from typing import Any, Mapping
 
 from event_handler import EventHandler, EventPriority
 from openrouter_client import OpenRouterClient
+from handoff_context import HandoffContext, derive_correlation_id
 
 
 def _now() -> str:
@@ -103,6 +105,8 @@ class SubAgentJob:
     started_at: str | None = None
     completed_at: str | None = None
     updated_at: str = field(default_factory=_now)
+    handoff_context: HandoffContext | None = None
+    state_version: int = 0
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "SubAgentJob":
@@ -128,12 +132,23 @@ class SubAgentJob:
             started_at=value.get("started_at"),
             completed_at=value.get("completed_at"),
             updated_at=str(value.get("updated_at", _now())),
+            handoff_context=(
+                HandoffContext.from_dict(value.get("handoff_context"))
+                if value.get("handoff_context") else None
+            ),
+            state_version=max(0, int(value.get("state_version", 0))),
         )
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["status"] = self.status.value
+        if self.handoff_context is not None:
+            value["handoff_context"] = self.handoff_context.to_dict()
         return value
+
+    @property
+    def handoff(self) -> HandoffContext | None:
+        return self.handoff_context
 
 
 @dataclass
@@ -192,6 +207,8 @@ class SubAgentManager:
         max_session_messages: int = 100,
         history_limit: int = 200,
         emit_progress_events: bool = True,
+        scope: str = "default",
+        instance_id: str = "orion",
     ) -> None:
         if workers < 1 or default_max_turns < 1:
             raise ValueError("workers et default_max_turns doivent être positifs.")
@@ -208,6 +225,8 @@ class SubAgentManager:
         self.max_session_messages = max(20, int(max_session_messages))
         self.history_limit = max(10, int(history_limit))
         self.emit_progress_events = bool(emit_progress_events)
+        self.scope = str(scope).strip() or "default"
+        self.instance_id = str(instance_id).strip() or "orion"
 
         self._lock = threading.RLock()
         self._agents: dict[str, SubAgent] = {}
@@ -218,6 +237,8 @@ class SubAgentManager:
         self._threads: list[threading.Thread] = []
         self._stop_requested = threading.Event()
         self._running = False
+        self._outbox: dict[str, dict[str, Any]] = {}
+        self._published_outbox: set[str] = set()
         self._load()
 
     @property
@@ -244,6 +265,11 @@ class SubAgentManager:
                 item.id: item
                 for item in (SubAgentSession.from_dict(raw) for raw in value.get("sessions", []))
             }
+            self._outbox = {
+                str(item.get("key")): dict(item)
+                for item in value.get("outbox", [])
+                if isinstance(item, Mapping) and item.get("key")
+            }
             for job in self._jobs.values():
                 if job.session_id not in self._sessions:
                     self._sessions[job.session_id] = SubAgentSession(
@@ -254,8 +280,12 @@ class SubAgentManager:
                     job.status = SubAgentJobStatus.QUEUED
                     job.started_at = None
                     job.error = "Job repris après redémarrage d'Orion."
+                    job.state_version += 1
                 if job.status == SubAgentJobStatus.QUEUED:
                     self._enqueue_locked(job)
+        # A manager restart is also a delivery retry point.  Publishing is
+        # outside the load lock so a handler may safely call back into us.
+        self._drain_outbox()
 
     def _save_locked(self) -> None:
         terminal = sorted(
@@ -280,6 +310,7 @@ class SubAgentManager:
             "agents": [item.to_dict() for item in self._agents.values()],
             "jobs": [item.to_dict() for item in self._jobs.values()],
             "sessions": [item.to_dict() for item in self._sessions.values()],
+            "outbox": list(self._outbox.values()),
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.state_path.with_name(f".{self.state_path.name}.{uuid.uuid4().hex}.tmp")
@@ -292,6 +323,67 @@ class SubAgentManager:
 
     def _enqueue_locked(self, job: SubAgentJob) -> None:
         self._queue.put((-job.priority, next(self._sequence), job.id))
+
+    def _job_visible_locked(self, job: SubAgentJob, scope: str, parent_task_id: int | None, correlation_id: str | None) -> bool:
+        if scope == "*":
+            return False
+        handoff_scope = job.handoff_context.source.get("scope") if job.handoff_context else self.scope
+        if handoff_scope != scope and (job.handoff_context.target.get("scope") if job.handoff_context else None) != scope:
+            return False
+        if parent_task_id is not None and job.parent_task_id != parent_task_id:
+            return False
+        if correlation_id is not None and (not job.handoff_context or job.handoff_context.correlation_id != str(correlation_id)):
+            return False
+        return True
+
+    def _authorize_job_locked(self, job: SubAgentJob, caller_scope: str | None) -> None:
+        scope = caller_scope or self.scope
+        if not self._job_visible_locked(job, scope, None, None):
+            raise PermissionError("Job de sous-agent hors du scope du caller")
+
+    def _event_payload(self, job: SubAgentJob, event_type: str, message: str | None) -> dict[str, Any]:
+        agent = self._agents.get(job.agent_id)
+        return {
+            "internal_event": True, "event_type": event_type, "job_id": job.id,
+            "session_id": job.session_id, "agent_id": job.agent_id,
+            "agent_name": agent.name if agent else job.agent_id, "status": job.status.value,
+            "objective": job.objective, "message": message,
+            "result": job.result if event_type == "subagent.completed" else None,
+            "error": job.error if event_type == "subagent.failed" else None,
+            "waiting_for": job.waiting_for if event_type == "subagent.waiting" else None,
+            "parent_task_id": job.parent_task_id,
+            "handoff_id": job.handoff_context.handoff_id if job.handoff_context else None,
+            "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None,
+            "parent_event_id": job.parent_event_id,
+            "state_version": job.state_version,
+            "handoff_context": job.handoff_context.to_dict() if job.handoff_context else None,
+        }
+
+    def _queue_outbox_locked(self, job: SubAgentJob, event_type: str, message: str | None, priority: EventPriority) -> None:
+        handoff_id = job.handoff_context.handoff_id if job.handoff_context else job.id
+        key = f"{handoff_id}:{job.state_version}"
+        self._outbox.setdefault(key, {
+            "key": key, "event_type": event_type,
+            "payload": self._event_payload(job, event_type, message),
+            "metadata": {"handoff_id": handoff_id, "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None, "parent_event_id": job.parent_event_id, "state_version": job.state_version, "internal_event": True},
+            "priority": int(priority), "published": False,
+        })
+
+    def _drain_outbox(self) -> None:
+        pending = []
+        with self._lock:
+            pending = [dict(item) for item in self._outbox.values() if not item.get("published")]
+        for item in pending:
+            try:
+                self.event_handler.publish(item["event_type"], item["payload"], priority=EventPriority(item.get("priority", int(EventPriority.NORMAL))), source="subagent:outbox", metadata=item["metadata"], max_attempts=1)
+            except Exception:
+                continue
+            with self._lock:
+                current = self._outbox.get(item["key"])
+                if current is not None:
+                    current["published"] = True
+                    self._published_outbox.add(item["key"])
+                    self._save_locked()
 
     def start(self) -> "SubAgentManager":
         with self._lock:
@@ -312,6 +404,27 @@ class SubAgentManager:
 
     def stop(self, *, wait: bool = True) -> None:
         self._stop_requested.set()
+        # Closing a manager while a worker is active is a durable failure, so
+        # recovery never presents a stale running session as live work.
+        with self._lock:
+            changed = False
+            for job in self._jobs.values():
+                if job.status != SubAgentJobStatus.RUNNING:
+                    continue
+                job.status = SubAgentJobStatus.FAILED
+                job.error = "Sous-agent interrompu lors de l'arrêt du manager."
+                job.completed_at = _now()
+                job.updated_at = _now()
+                job.state_version += 1
+                session = self._sessions.get(job.session_id)
+                if session is not None:
+                    session.status = "failed"
+                    session.updated_at = _now()
+                self._queue_outbox_locked(job, "subagent.failed", job.error, EventPriority.NORMAL)
+                changed = True
+            if changed:
+                self._save_locked()
+        self._drain_outbox()
         threads = list(self._threads)
         if wait:
             for thread in threads:
@@ -424,8 +537,13 @@ class SubAgentManager:
                     if job.status == SubAgentJobStatus.QUEUED:
                         job.status = SubAgentJobStatus.CANCELLED
                         job.completed_at = _now()
+                        job.state_version += 1
+                        if job.handoff_context is not None:
+                            job.handoff_context = job.handoff_context.with_state("cancelled", error="Sous-agent supprimé.")
+                        self._queue_outbox_locked(job, "subagent.cancelled", "Sous-agent supprimé.", EventPriority.NORMAL)
                     job.updated_at = _now()
             self._save_locked()
+            self._drain_outbox()
             return {"deleted": True, "agent_id": agent_id, "jobs_cancelled_or_stopping": affected}
 
     def get_agent(self, agent_id: str) -> SubAgent | None:
@@ -457,6 +575,10 @@ class SubAgentManager:
         parent_task_id: int | None = None,
         parent_event_id: str | None = None,
         route_metadata: Mapping[str, Any] | None = None,
+        handoff_context: HandoffContext | Mapping[str, Any] | None = None,
+        correlation_id: str | None = None,
+        source_scope: str | None = None,
+        target_scope: str | None = None,
     ) -> SubAgentJob:
         if not objective.strip():
             raise ValueError("L'objectif délégué ne peut pas être vide.")
@@ -466,6 +588,35 @@ class SubAgentManager:
                 raise KeyError(f"Sous-agent inconnu : {agent_id}")
             if agent.status != SubAgentStatus.ACTIVE:
                 raise RuntimeError(f"Le sous-agent {agent.name} est désactivé.")
+            if handoff_context is None:
+                source_scope_value = source_scope or self.scope
+                handoff_context = HandoffContext.create(
+                    kind="subagent",
+                    objective=objective,
+                    correlation_id=correlation_id or parent_event_id or uuid.uuid4().hex,
+                    source_scope=source_scope_value,
+                    source_instance_id=self.instance_id,
+                    target_scope=target_scope or source_scope_value,
+                    target_instance_id=self.instance_id,
+                    target_agent_id=agent.id,
+                    parent_event_id=parent_event_id,
+                    parent_task_id=str(parent_task_id) if parent_task_id is not None else None,
+                    memory={"facts": [context]} if context else None,
+                    routing=route_metadata,
+                )
+            elif not isinstance(handoff_context, HandoffContext):
+                raw_target = handoff_context.get("target", {}) if isinstance(handoff_context, Mapping) else {}
+                if isinstance(raw_target, Mapping) and raw_target.get("agent_id") not in {None, agent.id}:
+                    raise PermissionError("Handoff target agent mismatch")
+                handoff_context = HandoffContext.from_dict(handoff_context)
+            # Enforce tenant scope after normalization for both mappings and
+            # pre-built envelopes; typed objects must not bypass this guard.
+            source_scope_value = handoff_context.source.get("scope")
+            target_scope_value = handoff_context.target.get("scope")
+            if source_scope_value not in {None, self.scope} or target_scope_value not in {None, self.scope}:
+                raise PermissionError("Handoff scope mismatch")
+            if handoff_context.target.get("agent_id") not in {None, agent.id}:
+                raise PermissionError("Handoff target agent mismatch")
             job = SubAgentJob(
                 id=uuid.uuid4().hex[:12],
                 agent_id=agent.id,
@@ -475,6 +626,7 @@ class SubAgentManager:
                 parent_task_id=parent_task_id,
                 parent_event_id=parent_event_id,
                 route_metadata=dict(route_metadata or {}),
+                handoff_context=handoff_context,
             )
             self._jobs[job.id] = job
             self._sessions[job.session_id] = SubAgentSession(
@@ -485,9 +637,11 @@ class SubAgentManager:
             self._save_locked()
             return SubAgentJob.from_dict(job.to_dict())
 
-    def get_job(self, job_id: str) -> SubAgentJob | None:
+    def get_job(self, job_id: str, *, caller_scope: str | None = None) -> SubAgentJob | None:
         with self._lock:
             job = self._jobs.get(job_id)
+            if job is not None:
+                self._authorize_job_locked(job, caller_scope)
             return SubAgentJob.from_dict(job.to_dict()) if job else None
 
     def get_session(self, session_id: str) -> SubAgentSession | None:
@@ -495,7 +649,7 @@ class SubAgentManager:
             session = self._sessions.get(session_id)
             return SubAgentSession.from_dict(session.to_dict()) if session else None
 
-    def send_message(self, job_id: str, message: str) -> SubAgentJob:
+    def send_message(self, job_id: str, message: str, *, caller_scope: str | None = None) -> SubAgentJob:
         """Ajoute un message à une session en attente et la remet en file."""
         if not message.strip():
             raise ValueError("Le message destiné au sous-agent ne peut pas être vide.")
@@ -503,6 +657,7 @@ class SubAgentManager:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            self._authorize_job_locked(job, caller_scope)
             if job.status != SubAgentJobStatus.WAITING:
                 raise RuntimeError("Un message ne peut être envoyé qu'à un job en attente.")
             session = self._sessions.get(job.session_id)
@@ -517,18 +672,22 @@ class SubAgentManager:
             job.pause_requested = False
             job.cancel_requested = False
             job.updated_at = _now()
+            job.state_version += 1
+            if job.handoff_context is not None:
+                job.handoff_context = job.handoff_context.with_state("queued")
             self._enqueue_locked(job)
             self._save_locked()
             snapshot = SubAgentJob.from_dict(job.to_dict())
         self._publish(snapshot, "subagent.resumed", message, EventPriority.NORMAL)
         return snapshot
 
-    def pause_job(self, job_id: str) -> SubAgentJob:
+    def pause_job(self, job_id: str, *, caller_scope: str | None = None) -> SubAgentJob:
         """Suspend un job après son appel courant, ou immédiatement s'il est en file."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            self._authorize_job_locked(job, caller_scope)
             if job.status in self.TERMINAL_JOB_STATUSES:
                 return SubAgentJob.from_dict(job.to_dict())
             job.pause_requested = True
@@ -539,15 +698,19 @@ class SubAgentManager:
                 if session is not None:
                     session.status = "waiting"
                     session.updated_at = _now()
+                job.state_version += 1
+                if job.handoff_context is not None:
+                    job.handoff_context = job.handoff_context.with_state("waiting", waiting_for=job.waiting_for)
             job.updated_at = _now()
             self._save_locked()
             return SubAgentJob.from_dict(job.to_dict())
 
-    def resume_job(self, job_id: str) -> SubAgentJob:
+    def resume_job(self, job_id: str, *, caller_scope: str | None = None) -> SubAgentJob:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            self._authorize_job_locked(job, caller_scope)
             if job.status != SubAgentJobStatus.WAITING:
                 raise RuntimeError("Seul un job en attente peut être repris.")
             job.status = SubAgentJobStatus.QUEUED
@@ -559,24 +722,29 @@ class SubAgentManager:
                 session.status = "active"
                 session.updated_at = _now()
             job.updated_at = _now()
+            job.state_version += 1
+            if job.handoff_context is not None:
+                job.handoff_context = job.handoff_context.with_state("queued")
             self._enqueue_locked(job)
             self._save_locked()
             snapshot = SubAgentJob.from_dict(job.to_dict())
         self._publish(snapshot, "subagent.resumed", "Reprise demandée par Orion.", EventPriority.NORMAL)
         return snapshot
 
-    def list_jobs(self, *, status: str | None = None, limit: int = 20) -> list[SubAgentJob]:
+    def list_jobs(self, *, status: str | None = None, limit: int = 20, caller_scope: str | None = None, parent_task_id: int | None = None, correlation_id: str | None = None) -> list[SubAgentJob]:
         requested = SubAgentJobStatus(status) if status else None
         with self._lock:
-            values = [job for job in self._jobs.values() if requested is None or job.status == requested]
+            scope = caller_scope or self.scope
+            values = [job for job in self._jobs.values() if (requested is None or job.status == requested) and self._job_visible_locked(job, scope, parent_task_id, correlation_id)]
             values.sort(key=lambda item: item.created_at, reverse=True)
             return [SubAgentJob.from_dict(item.to_dict()) for item in values[: max(1, min(limit, 100))]]
 
-    def cancel_job(self, job_id: str) -> SubAgentJob:
+    def cancel_job(self, job_id: str, *, caller_scope: str | None = None) -> SubAgentJob:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise KeyError(f"Job de sous-agent inconnu : {job_id}")
+            self._authorize_job_locked(job, caller_scope)
             if job.status not in self.TERMINAL_JOB_STATUSES:
                 job.cancel_requested = True
                 if job.status in {SubAgentJobStatus.QUEUED, SubAgentJobStatus.WAITING}:
@@ -586,9 +754,13 @@ class SubAgentManager:
                     if session is not None:
                         session.status = "cancelled"
                         session.updated_at = _now()
+                    job.state_version += 1
+                    self._queue_outbox_locked(job, "subagent.cancelled", "Travail annulé.", EventPriority.NORMAL)
                 job.updated_at = _now()
                 self._save_locked()
-            return SubAgentJob.from_dict(job.to_dict())
+            snapshot = SubAgentJob.from_dict(job.to_dict())
+        self._drain_outbox()
+        return snapshot
 
     def _worker(self) -> None:
         while not self._stop_requested.is_set():
@@ -612,20 +784,30 @@ class SubAgentManager:
                 job.error = "Sous-agent absent ou désactivé."
                 job.completed_at = _now()
                 job.updated_at = _now()
+                job.state_version += 1
+                session = self._sessions.get(job.session_id)
+                if session is not None:
+                    session.status = "failed"
+                    session.updated_at = _now()
+                self._queue_outbox_locked(job, "subagent.failed", job.error, EventPriority.NORMAL)
                 self._save_locked()
-                self._publish(job, "subagent.failed", job.error, EventPriority.NORMAL)
+                snapshot = SubAgentJob.from_dict(job.to_dict())
+                self._drain_outbox()
                 return
             agent_copy = SubAgent.from_dict(agent.to_dict())
             job.status = SubAgentJobStatus.RUNNING
             job.started_at = _now()
             job.updated_at = _now()
+            job.state_version += 1
+            if job.handoff_context is not None:
+                job.handoff_context = job.handoff_context.with_state("running", attempt=int(job.handoff_context.state.get("attempt", 0)) + 1)
             self._save_locked()
 
         try:
             result = self._run_agent(agent_copy, job_id)
             with self._lock:
                 job = self._jobs.get(job_id)
-                if job is None:
+                if job is None or job.status in self.TERMINAL_JOB_STATUSES:
                     return
                 session = self._sessions.get(job.session_id)
                 if job.cancel_requested:
@@ -634,6 +816,7 @@ class SubAgentManager:
                     message = "Travail annulé."
                     if session is not None:
                         session.status = "cancelled"
+                    job.completed_at = _now()
                 elif isinstance(result, _WaitingResult):
                     job.status = SubAgentJobStatus.WAITING
                     job.waiting_for = result.message
@@ -642,6 +825,7 @@ class SubAgentManager:
                     message = result.message
                     if session is not None:
                         session.status = "waiting"
+                    job.completed_at = None
                 else:
                     job.status = SubAgentJobStatus.COMPLETED
                     job.result = _clip(result, self.max_result_chars)
@@ -649,23 +833,40 @@ class SubAgentManager:
                     message = job.result
                     if session is not None:
                         session.status = "completed"
+                    job.completed_at = _now()
                 if session is not None:
                     session.updated_at = _now()
-                job.completed_at = _now()
                 job.updated_at = _now()
+                job.state_version += 1
+                if job.status in self.TERMINAL_JOB_STATUSES:
+                    if job.handoff_context is not None:
+                        job.handoff_context = job.handoff_context.with_state(job.status.value, result=job.result, error=job.error)
+                    self._queue_outbox_locked(job, event_type, message, EventPriority.NORMAL)
                 self._save_locked()
-            self._publish(job, event_type, message, EventPriority.NORMAL)
+            self._drain_outbox()
+            if job.status == SubAgentJobStatus.WAITING:
+                self._publish(job, event_type, message, EventPriority.NORMAL)
         except Exception as exc:
             with self._lock:
                 job = self._jobs.get(job_id)
                 if job is None:
                     return
+                if job.status in self.TERMINAL_JOB_STATUSES:
+                    return
                 job.status = SubAgentJobStatus.FAILED
                 job.error = f"{type(exc).__name__}: {exc}"
                 job.completed_at = _now()
                 job.updated_at = _now()
+                job.state_version += 1
+                session = self._sessions.get(job.session_id)
+                if session is not None:
+                    session.status = "failed"
+                    session.updated_at = _now()
+                if job.handoff_context is not None:
+                    job.handoff_context = job.handoff_context.with_state("failed", error=job.error)
+                self._queue_outbox_locked(job, "subagent.failed", job.error, EventPriority.NORMAL)
                 self._save_locked()
-            self._publish(job, "subagent.failed", job.error, EventPriority.NORMAL)
+            self._drain_outbox()
 
     def _allowed_tool_definitions(self, agent: SubAgent) -> list[dict[str, Any]]:
         allowed = set(agent.allowed_tools)
@@ -696,6 +897,14 @@ class SubAgentManager:
             job = self._jobs[job_id]
             objective = job.objective
             delegated_context = job.context
+            handoff = job.handoff_context
+            if handoff is not None:
+                objective = handoff.task.get("objective", objective)
+                delegated_context = "\n".join(
+                    f"{category}: {entry}"
+                    for category, entries in handoff.memory.items()
+                    for entry in entries
+                )
             session = self._sessions.get(job.session_id)
             if session is None:
                 session = SubAgentSession(id=job.session_id, job_id=job.id)
@@ -721,12 +930,18 @@ class SubAgentManager:
             # turns; compact before every model call so the actual request is
             # bounded as well as the restart state.
             messages = self._bounded_messages(messages)
-            response = self.llm_client.complete(
-                messages,
-                model=agent.model,
-                tools=tools or None,
-                parallel_tool_calls=True if tools else None,
-            )
+            usage = getattr(self.llm_client, "usage_context", None)
+            handoff_id = handoff.handoff_id if handoff is not None else job.id
+            correlation_id = handoff.correlation_id if handoff is not None else None
+            stage = handoff.task.get("phase", "delegation") if handoff is not None else "delegation"
+            scope = usage(request_id=handoff_id, correlation_id=correlation_id, stage=stage, parent_call_id=job.parent_event_id) if callable(usage) else nullcontext()
+            with scope:
+                response = self.llm_client.complete(
+                    messages,
+                    model=agent.model,
+                    tools=tools or None,
+                    parallel_tool_calls=True if tools else None,
+                )
             assistant = OpenRouterClient._assistant_message(response)
             messages.append(assistant)
             calls = OpenRouterClient._tool_calls(assistant)
@@ -775,7 +990,10 @@ class SubAgentManager:
         # Apply the same bound to the final request.  This instruction is only
         # transient and is deliberately not retained in the session history.
         final_messages = self._bounded_messages([*messages, final_instruction])
-        response = self.llm_client.complete(final_messages, model=agent.model, tools=None)
+        usage = getattr(self.llm_client, "usage_context", None)
+        scope = usage(request_id=handoff_id, correlation_id=correlation_id, stage=stage, parent_call_id=job.parent_event_id) if callable(usage) else nullcontext()
+        with scope:
+            response = self.llm_client.complete(final_messages, model=agent.model, tools=None)
         assistant = OpenRouterClient._assistant_message(response)
         self._save_session(job_id, [*messages, assistant], status="completed")
         return OpenRouterClient.text_from_message(assistant).strip() or "Travail partiellement terminé."
@@ -952,28 +1170,16 @@ class SubAgentManager:
             # assistant/tool exchange, avoiding one state rewrite per call.
 
     def _publish(self, job: SubAgentJob, event_type: str, message: str | None, priority: EventPriority) -> None:
-        agent = self.get_agent(job.agent_id)
-        payload = {
-            "internal_event": True,
-            "event_type": event_type,
-            "job_id": job.id,
-            "session_id": job.session_id,
-            "agent_id": job.agent_id,
-            "agent_name": agent.name if agent else job.agent_id,
-            "status": job.status.value,
-            "objective": job.objective,
-            "message": message,
-            "result": job.result if event_type == "subagent.completed" else None,
-            "error": job.error if event_type == "subagent.failed" else None,
-            "waiting_for": job.waiting_for if event_type == "subagent.waiting" else None,
-            "parent_task_id": job.parent_task_id,
-        }
+        payload = self._event_payload(job, event_type, message)
         metadata = {
             **job.route_metadata,
             "internal_event": True,
             "subagent_job_id": job.id,
             "subagent_id": job.agent_id,
             "parent_event_id": job.parent_event_id,
+            "handoff_id": job.handoff_context.handoff_id if job.handoff_context else None,
+            "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None,
+            "state_version": job.state_version,
         }
         self.event_handler.publish(
             event_type,
