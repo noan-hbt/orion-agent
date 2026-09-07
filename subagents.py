@@ -365,7 +365,18 @@ class SubAgentManager:
         self._outbox.setdefault(key, {
             "key": key, "event_type": event_type,
             "payload": self._event_payload(job, event_type, message),
-            "metadata": {"handoff_id": handoff_id, "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None, "parent_event_id": job.parent_event_id, "state_version": job.state_version, "internal_event": True},
+            # Preserve the originating channel and recipient through the
+            # durable outbox.  Without this, a completed Telegram delegation
+            # is replayed as an unaddressed event and falls back to the CLI
+            # default channel after a worker/restart race.
+            "metadata": {
+                **job.route_metadata,
+                "handoff_id": handoff_id,
+                "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None,
+                "parent_event_id": job.parent_event_id,
+                "state_version": job.state_version,
+                "internal_event": True,
+            },
             "priority": int(priority), "published": False,
         })
 

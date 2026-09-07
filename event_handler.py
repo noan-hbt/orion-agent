@@ -346,6 +346,10 @@ class EventHandler:
         with self._lifecycle_lock:
             self._threads = []
 
+    def cancel(self) -> None:
+        """Demande un arrêt immédiat sans drainer la file."""
+        self.stop(wait=False, drain=False)
+
     def dispatch_one(self, *, timeout: float | None = None) -> Event | None:
         """Traite un événement manuellement et retourne celui traité."""
         try:

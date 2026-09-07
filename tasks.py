@@ -379,6 +379,10 @@ class Task:
         )
 
     def start_run(self, event_id: str | None = None) -> TaskRun:
+        if event_id is not None:
+            for existing in self.runs:
+                if existing.event_id == event_id:
+                    return existing
         self.status = TaskStatus.RUNNING
         run = TaskRun(event_id=event_id)
         self.runs.append(run)
@@ -392,6 +396,8 @@ class Task:
         reason: str = "",
         interrupted_by: str | None = None,
     ) -> None:
+        if run_id is not None and any(r.id == run_id and r.status == RunStatus.PAUSED for r in self.runs):
+            return
         """Met la tâche et son run courant en pause par préemption."""
         self.status = TaskStatus.PAUSED
         if run_id is not None:
@@ -409,6 +415,8 @@ class Task:
     def resume(self, *, run_id: str | None = None, event_id: str | None = None) -> None:
         """Reprend un run précédemment préempté."""
         self.status = TaskStatus.RUNNING
+        if run_id is not None and any(r.id == run_id and r.status == RunStatus.RUNNING for r in self.runs):
+            return
         if run_id is not None:
             for run in self.runs:
                 if run.id == run_id:
@@ -425,6 +433,8 @@ class Task:
     ) -> None:
         for run in self.runs:
             if run.id == run_id:
+                if run.status == status and run.error == error:
+                    return
                 run.status = status
                 run.error = error
                 run.finished_at = _now()
@@ -440,6 +450,10 @@ class Task:
         result: Any = None,
         action_key: str | None = None,
     ) -> TaskAction:
+        if action_key is not None:
+            for existing in self.actions:
+                if existing.action_key == action_key:
+                    return existing
         action = TaskAction(
             name=name,
             description=description,

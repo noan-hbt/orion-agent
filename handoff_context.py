@@ -39,7 +39,7 @@ _TASK_KEYS = {"objective", "phase"}
 _STATE_KEYS = {"status", "attempt", "waiting_for"}
 _MEMORY_KEYS = {"facts", "decisions", "open_questions", "artifacts"}
 _OUTPUT_KEYS = {"contract", "result", "error"}
-_ROUTING_KEYS = {"channel", "reply_to", "conversation_id"}
+_ROUTING_KEYS = {"channel", "reply_to", "conversation_id", "message_thread_id", "thread_id", "user_id", "parent_message_id", "principal_id", "canonical_conversation_id", "intent"}
 _STATUSES = {"queued", "running", "waiting", "completed", "failed", "cancelled"}
 
 # Values are redacted even when their key is innocuous.  This is intentionally
@@ -209,8 +209,32 @@ class HandoffContext:
             task_id = event.get("task_id", task_id)
         route = {
             key: (metadata or {}).get(key) if isinstance(metadata, Mapping) else None
-            for key in ("channel", "reply_to", "conversation_id")
+            for key in ("channel", "reply_to", "conversation_id", "message_thread_id", "thread_id", "user_id", "parent_message_id")
         }
+        # Typed channel context is deliberately consumed structurally so this
+        # module remains independent of channels.py (and older event objects).
+        principal = getattr(event, "principal", None)
+        conversation = getattr(event, "conversation", None)
+        intent = getattr(event, "intent", None)
+        if isinstance(event, Mapping):
+            principal = event.get("principal", principal)
+            conversation = event.get("conversation", conversation)
+            intent = event.get("intent", intent)
+        if isinstance(principal, Mapping):
+            route["principal_id"] = principal.get("id") or principal.get("canonical_id")
+        elif principal is not None:
+            route["principal_id"] = getattr(principal, "id", None)
+        if isinstance(conversation, Mapping):
+            route["canonical_conversation_id"] = conversation.get("id") or conversation.get("canonical_id")
+        elif conversation is not None:
+            route["canonical_conversation_id"] = getattr(conversation, "id", None)
+        if intent is not None:
+            route["intent"] = intent if isinstance(intent, str) else getattr(intent, "name", None)
+        if isinstance(metadata, Mapping):
+            route["message_thread_id"] = route["message_thread_id"] or metadata.get("message_thread_id")
+            route["thread_id"] = route["thread_id"] or metadata.get("thread_id")
+            route["user_id"] = route["user_id"] or metadata.get("user_id")
+            route["parent_message_id"] = route["parent_message_id"] or metadata.get("message_id")
         return cls.create(
             kind=kind, objective=objective, correlation_id=derive_correlation_id(event),
             source_scope=source_scope, source_instance_id=source_instance_id,
@@ -313,12 +337,14 @@ class HandoffContext:
         return HandoffContext(**{**self.__dict__, "state": state, "output": output, "updated_at": _now()})
 
     def child(self, *, kind: str, objective: str, target_scope: str | None = None, target_instance_id: str = "orion", target_agent_id: str | None = None, phase: str = "delegation", contract: str | None = None) -> "HandoffContext":
-        return HandoffContext.create(kind=kind, objective=objective, correlation_id=self.correlation_id, source_scope=self.target.get("scope") or "default", source_instance_id=self.target.get("instance_id") or "orion", target_scope=target_scope or self.target.get("scope") or "default", target_instance_id=target_instance_id, target_agent_id=target_agent_id, parent_event_id=self.parent.get("event_id"), parent_task_id=self.parent.get("task_id"), parent_run_id=self.parent.get("run_id"), parent_handoff_id=self.handoff_id, phase=phase, contract=contract or self.output.get("contract") or "Return a bounded result to the delegating parent.")
+        return HandoffContext.create(kind=kind, objective=objective, correlation_id=self.correlation_id, source_scope=self.target.get("scope") or "default", source_instance_id=self.target.get("instance_id") or "orion", target_scope=target_scope or self.target.get("scope") or "default", target_instance_id=target_instance_id, target_agent_id=target_agent_id, parent_event_id=self.parent.get("event_id"), parent_task_id=self.parent.get("task_id"), parent_run_id=self.parent.get("run_id"), parent_handoff_id=self.handoff_id, phase=phase, memory=self.memory, contract=contract or self.output.get("contract") or "Return a bounded result to the delegating parent.", routing=self.routing)
 
     def validate_scope(self, *, scope: str, instance_id: str | None = None, recipient: str | None = None) -> None:
         if not scope or scope == "*" or self.source.get("scope") != scope and self.target.get("scope") != scope:
             raise PermissionError("Handoff scope mismatch")
-        if instance_id is not None and (instance_id == "*" or (recipient is not None and self.target.get("instance_id") != recipient)):
+        if instance_id is not None and instance_id != "*" and self.target.get("instance_id") != instance_id:
+            raise PermissionError("Handoff recipient mismatch")
+        if recipient is not None and recipient != "*" and self.target.get("agent_id") not in {None, recipient}:
             raise PermissionError("Handoff recipient mismatch")
 
     def to_dict(self) -> dict[str, Any]:

@@ -230,9 +230,16 @@ class AgentRuntime:
         event_context_max_chars: int = 10000,
         context_mode: str | None = None,
         memory_maintenance: MemoryMaintenance | None = None,
+        # Opt-in context wiring.  These are duck-typed for compatibility with
+        # existing deployments and third-party stores.
+        thread_state_store: Any | None = None,
+        intent_state: Any | None = None,
+        context_registry: Any | None = None,
+        retrieval_store: Any | None = None,
         on_state_change: StateChangeHandler | None = None,
         on_error: RuntimeErrorHandler | None = None,
         on_output: OutputHandler | None = None,
+        max_deferred_events: int = 10000,
     ) -> None:
         if max_turns < 1:
             raise ValueError("max_turns doit être supérieur ou égal à un.")
@@ -244,6 +251,8 @@ class AgentRuntime:
             raise ValueError("Les limites de contexte doivent être positives.")
         if response_max_chars < 500 or response_max_sentences < 1:
             raise ValueError("Les limites de réponse sont invalides.")
+        if max_deferred_events < 1:
+            raise ValueError("max_deferred_events doit être positif.")
         self.llm_client = llm_client
         self.state_store = state_store or InMemoryStateStore()
         self.task_store = task_store or InMemoryTaskStore()
@@ -264,7 +273,8 @@ class AgentRuntime:
         # Ils seront remis dans la file normale à la fin du RUN.
         # Cette inbox reste illimitée : une limite de la file de réveil ne
         # doit jamais empêcher la réception d'un événement pendant un RUN.
-        self._deferred_events = EventQueue(maxsize=0)
+        self._deferred_events = EventQueue(maxsize=max_deferred_events)
+        self.max_deferred_events = int(max_deferred_events)
         self._deferred_event_index: dict[str, Event] = {}
         self._queued_event_ids: set[str] = set()
         self._acknowledged_deferred_events: set[str] = set()
@@ -276,6 +286,10 @@ class AgentRuntime:
             personality_override=system_prompt,
         )
         self.memory_maintenance = memory_maintenance
+        self.thread_state_store = thread_state_store
+        self.intent_state = intent_state
+        self.context_registry = context_registry
+        self.retrieval_store = retrieval_store
         self.conversation_journal = conversation_journal or (
             self.memory_maintenance.journal
             if self.memory_maintenance is not None
@@ -284,7 +298,10 @@ class AgentRuntime:
         self.history_enabled = bool(history_enabled)
         self.history_limit = int(history_limit)
         self.history_max_chars = int(history_max_chars)
-        self.context_assembler = context_assembler or ContextAssembler(compactor=llm_client)
+        self.context_assembler = context_assembler or ContextAssembler(
+            compactor=llm_client, memory_store=retrieval_store,
+            context_registry=context_registry,
+        )
         self.task_context_max_chars = int(task_context_max_chars)
         self.event_context_max_chars = int(event_context_max_chars)
         self.context_mode = str(
@@ -452,7 +469,10 @@ class AgentRuntime:
             if self._run_in_progress and self.queue_events_during_run:
                 # Ne pas toucher à l'état ni au contexte du RUN courant : le
                 # message sera traité comme un réveil distinct ensuite.
-                self._deferred_events.put(event)
+                try:
+                    self._deferred_events.put_nowait(event)
+                except Full as exc:
+                    raise RuntimeError("La file différée du runtime est pleine.") from exc
                 self._deferred_event_index[event.id] = event
                 return
             try:
@@ -462,7 +482,10 @@ class AgentRuntime:
                 # Une file bornée ne doit pas bloquer un worker de channel ou
                 # le shutdown. La file différée sera promue quand une place
                 # se libérera.
-                self._deferred_events.put(event)
+                try:
+                    self._deferred_events.put_nowait(event)
+                except Full as exc:
+                    raise RuntimeError("La file différée du runtime est pleine.") from exc
                 self._deferred_event_index[event.id] = event
             self._transition(RuntimeState.EVENT, event)
 
@@ -507,6 +530,10 @@ class AgentRuntime:
                 self._thread = None
         if self.memory_maintenance is not None:
             self.memory_maintenance.stop(wait=wait)
+
+    def cancel(self) -> None:
+        """Interrompt le run courant et arrête le worker sans drainer la file."""
+        self.stop(wait=False, drain=False)
 
     def sleep(self) -> None:
         """Replace l'agent en sommeil, ou en attente d'un événement suivant."""
@@ -1352,6 +1379,7 @@ class AgentRuntime:
                 priority=100,
             ),
         ]
+        components.extend(self._optional_context_components(context))
         if waiting_subagent_jobs:
             components.append(
                 ContextComponent(
@@ -1438,6 +1466,9 @@ class AgentRuntime:
                 + assembled["event"],
             }
         )
+        for name in ("thread_state", "intent_state", "context_registry", "memories"):
+            if name in assembled:
+                messages.append({"role": "system", "content": f"Contexte {name} (provenance non vérifiée) :\n{assembled[name]}"})
         return messages
 
     def _contract_initial_run_messages(
@@ -1492,6 +1523,7 @@ class AgentRuntime:
             ContextComponent("tool_observations", [], max_chars=self._context_limit("observations_max_chars", 8000), max_tokens=self._context_limit("observations_max_tokens", 2000), priority=45),
             ContextComponent("reflection", reflection, max_chars=self._context_limit("reflection_max_chars", 2000), max_tokens=self._context_limit("reflection_max_tokens", 500), priority=50),
         ]
+        components.extend(self._optional_context_components(context))
         assembled = self.context_assembler.assemble(components)
         data = {
             "request": self._decode_component(assembled.get("request", "{}"), {}),
@@ -1506,12 +1538,46 @@ class AgentRuntime:
             "tool_observations": self._decode_component(assembled.get("tool_observations", "[]"), []),
             "reflection": self._decode_component(assembled.get("reflection", "null"), None),
         }
+        for name in ("thread_state", "intent_state", "context_registry", "memories", "memory_query"):
+            if name in assembled:
+                data[name] = self._decode_component(assembled[name], [] if name == "memories" else {})
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_instructions()},
             self._request_message(context.event),
             {"role": "user", "content": self._evidence_message(data)},
         ]
         return self._guard_context(context, messages, stage="initial")
+
+    def _optional_context_components(self, context: RunContext) -> list[ContextComponent]:
+        """Return opt-in state/retrieval components without changing old paths."""
+        result: list[ContextComponent] = []
+        store = self.thread_state_store
+        if store is not None:
+            try:
+                state = store.get() if callable(getattr(store, "get", None)) else getattr(store, "state", store)
+                state = state.to_dict() if callable(getattr(state, "to_dict", None)) else state
+                result.append(ContextComponent("thread_state", state, max_chars=self.task_context_max_chars, priority=96))
+            except Exception:
+                pass
+        intent = self.intent_state
+        if intent is not None:
+            try:
+                value = intent(context.event) if callable(intent) else intent
+                result.append(ContextComponent("intent_state", value, max_chars=4000, priority=94))
+            except Exception:
+                pass
+        registry = self.context_registry
+        if registry is not None:
+            try:
+                value = registry.snapshot() if callable(getattr(registry, "snapshot", None)) else registry
+                result.append(ContextComponent("context_registry", value, max_chars=6000, priority=88))
+            except Exception:
+                pass
+        retrieval = self.retrieval_store or getattr(self.context_assembler, "memory_store", None)
+        if retrieval is not None:
+            query = str(context.event.payload.get("text") or context.event.payload.get("message") or context.event.type)
+            result.append(ContextComponent("memory_query", query, max_chars=8000, priority=75))
+        return result
 
     def _run_pre_reflection(self, context: RunContext) -> str | None:
         """Produit la réflexion interne avant d'initialiser le contexte principal."""
@@ -1538,12 +1604,16 @@ class AgentRuntime:
 
     @staticmethod
     def _conversation_id(event: Event) -> str:
-        """Identifiant de contexte ; ``default`` fusionne les channels."""
-        return str(
-            event.metadata.get("conversation_id")
-            or event.metadata.get("user_id")
-            or "default"
-        )
+        """Identifiant stable, sans fusion implicite des identités."""
+        metadata = event.metadata
+        explicit = metadata.get("conversation_id") or event.payload.get("conversation_id")
+        if explicit:
+            return str(explicit)
+        channel = metadata.get("channel") or event.payload.get("_orion_channel")
+        identity = metadata.get("user_id") or event.payload.get("user_id")
+        thread = metadata.get("message_thread_id") or metadata.get("thread_id")
+        parts = [str(x) for x in (channel, identity, thread) if x]
+        return ":".join(parts) if parts else str(event.id)
 
     @staticmethod
     def _tool_arguments(call: Mapping[str, Any]) -> dict[str, Any]:
@@ -1610,6 +1680,9 @@ class AgentRuntime:
         output_channel = event.metadata.get("channel") or event.payload.get("_orion_channel")
         output_recipient = event.metadata.get("reply_to") or event.payload.get("_orion_reply_to")
         output_metadata = dict(event.metadata)
+        for key in ("conversation_id", "user_id", "message_thread_id", "thread_id", "parent_message_id", "handoff_id", "parent_call_id", "correlation_id"):
+            if key not in output_metadata and key in event.payload:
+                output_metadata[key] = event.payload[key]
         output_metadata.setdefault("timestamp", datetime.now().astimezone().isoformat())
         if intermediate:
             output_metadata["intermediate"] = True
@@ -1622,6 +1695,12 @@ class AgentRuntime:
                 event_id=event.id,
                 task_id=context.task.id if context.task is not None else None,
                 metadata=output_metadata,
+                correlation_id=event.correlation_id or output_metadata.get("correlation_id"),
+                conversation_id=output_metadata.get("conversation_id"),
+                user_id=output_metadata.get("user_id"),
+                message_thread_id=output_metadata.get("message_thread_id"),
+                thread_id=output_metadata.get("thread_id"),
+                parent_message_id=output_metadata.get("parent_message_id") or output_metadata.get("message_id"),
             )
         )
 
@@ -1640,6 +1719,9 @@ class AgentRuntime:
         output_channel = event.metadata.get("channel") or event.payload.get("_orion_channel")
         output_recipient = event.metadata.get("reply_to") or event.payload.get("_orion_reply_to")
         metadata = dict(event.metadata)
+        for key in ("conversation_id", "user_id", "message_thread_id", "thread_id", "parent_message_id", "handoff_id", "correlation_id"):
+            if key not in metadata and key in event.payload:
+                metadata[key] = event.payload[key]
         metadata.update(
             {
                 "timestamp": datetime.now().astimezone().isoformat(),
@@ -1658,6 +1740,12 @@ class AgentRuntime:
                     event_id=event.id,
                     task_id=task.id if task is not None else None,
                     metadata=metadata,
+                    correlation_id=event.correlation_id or metadata.get("correlation_id"),
+                    conversation_id=metadata.get("conversation_id"),
+                    user_id=metadata.get("user_id"),
+                    message_thread_id=metadata.get("message_thread_id"),
+                    thread_id=metadata.get("thread_id"),
+                    parent_message_id=metadata.get("parent_message_id") or metadata.get("message_id"),
                 )
             )
         except Exception:
@@ -2225,12 +2313,32 @@ class AgentRuntime:
             self._run_cycle_stub(context)
             return
 
+        # A completed sub-agent event already carries the verified result.
+        # Re-submitting that notification to the main provider only to ask for
+        # a second synthesis is both wasteful and provider-sensitive (some
+        # routes reject the internal/tool-shaped context with HTTP 400).  The
+        # result is delivered verbatim through the originating channel; the
+        # durable event metadata still controls Telegram/CLI/web routing.
+        if context.event.type == "subagent.completed":
+            result = context.event.payload.get("result")
+            if not isinstance(result, str) or not result.strip():
+                result = context.event.payload.get("message")
+            if isinstance(result, str) and result.strip():
+                context.answer = result.strip()
+                context.phase = RunPhase.ANSWER
+                self._transition(RuntimeState.ANSWER, context.event)
+                return
+
+        if self._stop_requested.is_set():
+            context.interrupted = True
+            return
         reflection = self._run_pre_reflection(context)
         with self._usage_scope(context, "compaction"):
             context.messages = self._initial_run_messages(context, reflection=reflection)
         tools = self._tool_definitions()
         for turn in range(self.max_turns):
-            if context.interrupted:
+            if context.interrupted or self._stop_requested.is_set():
+                context.interrupted = True
                 return
             self._append_pending_event_notifications(context)
             context.turn = turn + 1
@@ -2274,7 +2382,8 @@ class AgentRuntime:
                 context.phase = RunPhase.SMALL_OUTPUT
             else:
                 for call in calls:
-                    if context.interrupted:
+                    if context.interrupted or self._stop_requested.is_set():
+                        context.interrupted = True
                         return
                     context.phase = RunPhase.TOOL
                     self._transition(RuntimeState.ACTION, context.event)

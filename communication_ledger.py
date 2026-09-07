@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 import uuid
+import random
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -77,8 +78,46 @@ class CommunicationLedger:
                     name TEXT PRIMARY KEY,
                     value INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS communication_cursors (
+                    name TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL DEFAULT 0,
+                    updated_at REAL NOT NULL
+                );
                 """
             )
+            # Additive compatibility migration for ledgers created by older
+            # releases. SQLite cannot add a column inside CREATE IF NOT EXISTS.
+            columns = {row["name"] for row in self._connection.execute(
+                "PRAGMA table_info(communication_events)"
+            ).fetchall()}
+            migrations = {
+                "max_attempts": "ALTER TABLE communication_events ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3",
+                "lease_owner": "ALTER TABLE communication_events ADD COLUMN lease_owner TEXT",
+                "lease_until": "ALTER TABLE communication_events ADD COLUMN lease_until REAL",
+                "next_attempt_at": "ALTER TABLE communication_events ADD COLUMN next_attempt_at REAL NOT NULL DEFAULT 0",
+                "last_error": "ALTER TABLE communication_events ADD COLUMN last_error TEXT",
+            }
+            for name, statement in migrations.items():
+                if name not in columns:
+                    self._connection.execute(statement)
+            # Versioned, additive migrations.  ``user_version`` is SQLite's
+            # durable migration marker and keeps old databases compatible.
+            version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
+            if version < 1:
+                self._connection.execute("PRAGMA user_version = 1")
+
+    def _write(self, sql: str, args: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+        """Execute a write with a short SQLITE_BUSY retry window."""
+        for attempt in range(6):
+            try:
+                return self._connection.execute(sql, args)
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                if attempt == 5:
+                    raise
+                time.sleep(min(0.5, 0.02 * (2 ** attempt) + random.random() * 0.02))
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _json(value: Any) -> str:
@@ -227,7 +266,8 @@ class CommunicationLedger:
     enqueue_output = record_outbound
 
     def claim(
-        self, *, worker_id: str, kind: str | None = None, lease_seconds: float = 30.0,
+        self, *, worker_id: str, kind: str | None = None, channel: str | None = None,
+        lease_seconds: float = 30.0,
     ) -> dict[str, Any] | None:
         if not worker_id:
             raise ValueError("worker_id is required")
@@ -240,12 +280,16 @@ class CommunicationLedger:
                 query = (
                     "SELECT * FROM communication_events WHERE next_attempt_at<=? "
                     "AND (status IN ('queued','failed') OR "
-                    "(status IN ('claimed','processing') AND lease_until<=?))"
+                    "(status IN ('claimed','processing') AND lease_until<=?)) "
+                    "AND attempts < max_attempts"
                 )
                 args: list[Any] = [now, now]
                 if kind is not None:
                     query += " AND kind=?"
                     args.append(kind)
+                if channel is not None:
+                    query += " AND channel=?"
+                    args.append(channel)
                 query += " ORDER BY created_at, id LIMIT 1"
                 row = self._connection.execute(query, args).fetchone()
                 if row is None:
@@ -270,6 +314,52 @@ class CommunicationLedger:
                 self._connection.execute("ROLLBACK")
                 raise
 
+    def claim_by_id(
+        self, row_id: str, *, worker_id: str, lease_seconds: float = 30.0
+    ) -> dict[str, Any] | None:
+        """Claim one known row, primarily for channel workers.
+
+        This is intentionally additive to :meth:`claim`: adapters that first
+        persist an inbound event can bind its in-memory queue item to the
+        exact ledger row without racing another worker.
+        """
+        if not row_id or not worker_id:
+            raise ValueError("row_id and worker_id are required")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now = time.time()
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._connection.execute(
+                    "SELECT * FROM communication_events WHERE id=? AND "
+                    "(status IN ('queued','failed') OR "
+                    "(status IN ('claimed','processing') AND lease_until<=?)) "
+                    "AND attempts < max_attempts",
+                    (row_id, now),
+                ).fetchone()
+                if row is None:
+                    self._connection.execute("COMMIT")
+                    return None
+                until = now + lease_seconds
+                self._connection.execute(
+                    "UPDATE communication_events SET status='claimed', attempts=attempts+1, "
+                    "lease_owner=?, lease_until=?, updated_at=? WHERE id=?",
+                    (worker_id, until, now, row_id),
+                )
+                self._metric("claimed")
+                self._connection.execute("COMMIT")
+                result = dict(row)
+                result.update({
+                    "status": "claimed", "attempts": int(row["attempts"]) + 1,
+                    "lease_owner": worker_id, "lease_until": until,
+                    "payload": json.loads(row["payload"]),
+                })
+                return result
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
     def mark_processing(self, row_id: str, *, worker_id: str) -> bool:
         with self._lock:
             changed = self._connection.execute(
@@ -279,10 +369,27 @@ class CommunicationLedger:
             ).rowcount
             return bool(changed)
 
+    def renew_lease(self, row_id: str, *, worker_id: str, lease_seconds: float = 30.0) -> bool:
+        """Extend a lease only while its owner still holds it (fencing)."""
+        if not worker_id or lease_seconds <= 0:
+            raise ValueError("worker_id and positive lease_seconds are required")
+        now = time.time()
+        with self._lock:
+            changed = self._write(
+                "UPDATE communication_events SET lease_until=?,updated_at=? "
+                "WHERE id=? AND lease_owner=? AND status IN ('claimed','processing') "
+                "AND lease_until>?", (now + lease_seconds, now, row_id, worker_id, now)
+            ).rowcount
+            return bool(changed)
+
     def ack(self, row_id: str, *, worker_id: str | None = None) -> bool:
         with self._lock:
-            query = "UPDATE communication_events SET status='delivered',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('claimed','processing')"
-            args: list[Any] = [time.time(), row_id]
+            now = time.time()
+            query = "UPDATE communication_events SET status='delivered',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE id=? AND status IN ('claimed','processing') AND lease_until>?"
+            args: list[Any] = [now, row_id, now]
+            # Legacy callers did not pass a worker id.  Keep that API usable
+            # while still fencing explicitly identified workers.  The lease
+            # must remain live in both cases; an expired claim is never acked.
             if worker_id is not None:
                 query += " AND lease_owner=?"
                 args.append(worker_id)
@@ -301,10 +408,12 @@ class CommunicationLedger:
         now = time.time()
         with self._lock:
             row = self._connection.execute(
-                "SELECT attempts,max_attempts,lease_owner,status FROM communication_events WHERE id=?",
+                "SELECT attempts,max_attempts,lease_owner,lease_until,status FROM communication_events WHERE id=?",
                 (row_id,),
             ).fetchone()
             if row is None or row["status"] not in {"claimed", "processing"}:
+                return None
+            if row["lease_until"] is None or row["lease_until"] <= now:
                 return None
             if worker_id is not None and row["lease_owner"] != worker_id:
                 return None
@@ -325,7 +434,7 @@ class CommunicationLedger:
         now = time.time()
         with self._lock:
             changed = self._connection.execute(
-                "UPDATE communication_events SET status='queued',lease_owner=NULL,lease_until=NULL,updated_at=? "
+                "UPDATE communication_events SET status=CASE WHEN attempts >= max_attempts THEN 'dead_letter' ELSE 'queued' END,lease_owner=NULL,lease_until=NULL,updated_at=? "
                 "WHERE status IN ('claimed','processing') AND lease_until<=?",
                 (now, now),
             ).rowcount
@@ -371,31 +480,69 @@ class CommunicationLedger:
         result["payload"] = json.loads(result["payload"])
         return result
 
-    def dead_letters(self, *, kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def dead_letters(
+        self, *, kind: str | None = None, channel: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
         with self._lock:
-            if kind is None:
-                rows = self._connection.execute(
-                    "SELECT * FROM communication_events WHERE status='dead_letter' ORDER BY updated_at LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            else:
-                rows = self._connection.execute(
-                    "SELECT * FROM communication_events WHERE status='dead_letter' AND kind=? ORDER BY updated_at LIMIT ?",
-                    (kind, limit),
-                ).fetchall()
+            query = "SELECT * FROM communication_events WHERE status='dead_letter'"
+            args: list[Any] = []
+            if kind is not None:
+                query += " AND kind=?"
+                args.append(kind)
+            if channel is not None:
+                query += " AND channel=?"
+                args.append(channel)
+            query += " ORDER BY updated_at LIMIT ?"
+            args.append(limit)
+            rows = self._connection.execute(query, args).fetchall()
         return [self._decode(row) for row in rows if row is not None]
 
-    def pending(self, *, kind: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def pending(
+        self, *, kind: str | None = None, channel: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
         with self._lock:
             query = "SELECT * FROM communication_events WHERE status NOT IN ('delivered','dead_letter')"
             args: list[Any] = []
             if kind is not None:
                 query += " AND kind=?"
                 args.append(kind)
+            if channel is not None:
+                query += " AND channel=?"
+                args.append(channel)
             query += " ORDER BY created_at LIMIT ?"
             args.append(limit)
             rows = self._connection.execute(query, args).fetchall()
         return [self._decode(row) for row in rows if row is not None]
+
+    def get_cursor(self, name: str, *, default: int = 0) -> int:
+        """Read a monotonic durable cursor used by polling channels."""
+        if not name:
+            raise ValueError("cursor name is required")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT value FROM communication_cursors WHERE name=?", (name,)
+            ).fetchone()
+        return int(row["value"]) if row is not None else int(default)
+
+    def set_cursor(self, name: str, value: int) -> int:
+        """Persist a cursor monotonically and return the stored value."""
+        if not name:
+            raise ValueError("cursor name is required")
+        value = int(value)
+        if value < 0:
+            raise ValueError("cursor value must be non-negative")
+        now = time.time()
+        with self._lock:
+            self._connection.execute(
+                "INSERT INTO communication_cursors(name,value,updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET value=MAX(value,excluded.value), "
+                "updated_at=excluded.updated_at",
+                (name, value, now),
+            )
+            row = self._connection.execute(
+                "SELECT value FROM communication_cursors WHERE name=?", (name,)
+            ).fetchone()
+        return int(row["value"])
 
     def metrics(self) -> dict[str, int | float]:
         with self._lock:

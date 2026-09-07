@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import uuid
+import hashlib
 from typing import Any, Protocol
 
 from event_handler import Event, EventHandler, EventPriority, EventType
@@ -21,6 +22,37 @@ class ChannelLifecycleError(RuntimeError):
     """Un adaptateur n'a pas pu démarrer ou s'arrêter proprement."""
 
     status_code = 503
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Identité canonique d'un interlocuteur, indépendante du protocole."""
+    id: str
+    channel: str | None = None
+    display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class ConversationThread:
+    """Conversation et sous-fil (notamment les topics Telegram)."""
+    id: str
+    conversation_id: str
+    channel: str | None = None
+    message_thread_id: str | None = None
+
+
+@dataclass(frozen=True)
+class IntentState:
+    """État d'intention transporté avec un message ou une sortie."""
+    name: str | None = None
+    status: str | None = None
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+def canonical_id(kind: str, channel: str, native_id: Any) -> str:
+    """Construit un identifiant stable et sûr pour les handoffs cross-canal."""
+    value = f"{channel}:{native_id}"
+    return f"{kind}:{hashlib.sha256(value.encode('utf-8')).hexdigest()[:24]}"
 
 
 @dataclass(frozen=True)
@@ -39,6 +71,14 @@ class InboundMessage:
     text: str | None = None
     received_at: datetime | None = None
     correlation_id: str | None = None
+    conversation_id: str | None = None
+    user_id: str | None = None
+    message_thread_id: str | None = None
+    thread_id: str | None = None
+    parent_message_id: str | None = None
+    principal: Principal | None = None
+    conversation: ConversationThread | None = None
+    intent: IntentState | None = None
 
     def __post_init__(self) -> None:
         # Les anciens adaptateurs mettent parfois l'identifiant dans payload.
@@ -54,6 +94,15 @@ class InboundMessage:
             candidate = self.metadata.get("correlation_id")
             if candidate is not None:
                 object.__setattr__(self, "correlation_id", str(candidate))
+        for name in ("conversation_id", "user_id", "message_thread_id", "thread_id", "parent_message_id"):
+            if getattr(self, name) is None:
+                candidate = self.metadata.get(name) or self.payload.get(name)
+                if candidate is not None:
+                    object.__setattr__(self, name, str(candidate))
+        if self.principal is None and self.user_id is not None:
+            object.__setattr__(self, "principal", Principal(canonical_id("principal", self.channel, self.user_id), self.channel))
+        if self.conversation is None and self.conversation_id is not None:
+            object.__setattr__(self, "conversation", ConversationThread(canonical_id("conversation", self.channel, self.conversation_id), self.conversation_id, self.channel, self.message_thread_id))
 
 
 @dataclass(frozen=True)
@@ -70,6 +119,14 @@ class AgentOutput:
     correlation_id: str | None = None
     idempotency_key: str | None = None
     text: str | None = None
+    conversation_id: str | None = None
+    user_id: str | None = None
+    message_thread_id: str | None = None
+    thread_id: str | None = None
+    parent_message_id: str | None = None
+    principal: Principal | None = None
+    conversation: ConversationThread | None = None
+    intent: IntentState | None = None
 
     def __post_init__(self) -> None:
         if self.output_id is None:
@@ -88,6 +145,16 @@ class AgentOutput:
             candidate = self.metadata.get("idempotency_key")
             if candidate is not None:
                 object.__setattr__(self, "idempotency_key", str(candidate))
+        for name in ("conversation_id", "user_id", "message_thread_id", "thread_id", "parent_message_id"):
+            if getattr(self, name) is None:
+                candidate = self.metadata.get(name)
+                if candidate is not None:
+                    object.__setattr__(self, name, str(candidate))
+        if self.principal is None and self.user_id is not None:
+            object.__setattr__(self, "principal", Principal(canonical_id("principal", self.channel or str(self.metadata.get("channel", "unknown")), self.user_id), self.channel))
+        if self.conversation is None and self.conversation_id is not None:
+            channel = self.channel or str(self.metadata.get("channel", "unknown"))
+            object.__setattr__(self, "conversation", ConversationThread(canonical_id("conversation", channel, self.conversation_id), self.conversation_id, channel, self.message_thread_id))
 
 
 class ChannelAdapter(Protocol):
@@ -181,6 +248,14 @@ class ChannelRouter:
             metadata["received_at"] = message.received_at
         if message.correlation_id is not None:
             metadata["correlation_id"] = message.correlation_id
+        for name in ("conversation_id", "user_id", "message_thread_id", "thread_id", "parent_message_id"):
+            value = getattr(message, name)
+            if value is not None:
+                metadata[name] = value
+        for name in ("principal", "conversation", "intent"):
+            value = getattr(message, name)
+            if value is not None:
+                metadata[name] = value
         return self.event_handler.publish(
             message.event_type,
             message.payload,
@@ -196,7 +271,10 @@ class ChannelRouter:
         """Envoie une sortie au channel demande par l'evenement ou par defaut."""
         if not isinstance(output, AgentOutput):
             raise TypeError("Le router attend un AgentOutput.")
-        channel = output.channel or output.metadata.get("channel") or self.default_channel
+        channel = output.channel or output.metadata.get("channel")
+        if not channel and output.conversation_id:
+            channel = self._channel_for_conversation(output.conversation_id)
+        channel = channel or self.default_channel
         if not channel:
             raise RuntimeError("Aucun channel cible pour la sortie Orion.")
         with self._lock:
@@ -207,6 +285,13 @@ class ChannelRouter:
             return adapter.send(output)
         except (TimeoutError, ConnectionError) as exc:
             raise ChannelLifecycleError(f"Channel indisponible : {channel}") from exc
+
+    def _channel_for_conversation(self, conversation_id: str) -> str | None:
+        """Best-effort routing from an explicitly identified conversation."""
+        for name in self._adapters:
+            if str(conversation_id).startswith(f"{name}:"):
+                return name
+        return None
 
     def start(self) -> ChannelRouter:
         with self._lock:
@@ -262,4 +347,5 @@ __all__ = [
     "ChannelLifecycleError",
     "ChannelRouter",
     "InboundMessage",
+    "Principal", "ConversationThread", "IntentState", "canonical_id",
 ]

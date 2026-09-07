@@ -26,6 +26,7 @@ from email.message import EmailMessage
 from email.policy import default as email_policy
 from email.utils import parseaddr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -41,6 +42,21 @@ CLIProvider = Callable[[], Any]
 
 MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 MAX_CHANNEL_QUEUE = 1000
+
+
+class TelegramAPIError(RuntimeError):
+    """Erreur fonctionnelle renvoyée par l'API Telegram (JSON ``ok=false``)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = int(error_code) if error_code is not None else None
+        self.retry_after = float(retry_after) if retry_after is not None else None
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -124,6 +140,16 @@ def markdown_to_telegram_html(text: str) -> str:
     for token, markup in protected.items():
         converted = converted.replace(token, markup)
     return converted
+
+
+def escape_telegram_markdown_v2(text: str) -> str:
+    """Escape plain text for Telegram's MarkdownV2 parser.
+
+    Telegram treats a surprisingly large set of punctuation as syntax.  This
+    helper deliberately escapes all of it; callers can still pass intentional
+    markup by using the HTML mode (the safe fallback used by the adapter).
+    """
+    return re.sub(r"([_\\*\[\]\(\)~`>#+\-=|{}.!])", r"\\\1", str(text))
 
 
 def split_telegram_message(text: str, *, max_chars: int = 3500) -> list[str]:
@@ -370,7 +396,7 @@ class CLIAdapter:
                 continue
             self._submit_text(line)
 
-    def _submit_text(self, text: str) -> None:
+    def _submit_text(self, text: str, *, parent_request_id: str | None = None, context: Any = None) -> None:
         """Publie un texte sans laisser une exception de callback tuer la CLI."""
         if self._on_message is None:
             return
@@ -387,8 +413,9 @@ class CLIAdapter:
             event = self._on_message(
                 InboundMessage(
                     channel=self.name,
-                    payload={"text": text},
+                    payload={"text": text, **({"parent_request_id": parent_request_id} if parent_request_id else {}), **({"context": context} if context is not None else {})},
                     reply_to="stdout",
+                    metadata={**({"parent_request_id": parent_request_id} if parent_request_id else {}), **({"context": context} if context is not None else {})},
                     correlation_id=correlation_id,
                 )
             )
@@ -498,6 +525,36 @@ class CLIAdapter:
                 self.console.warning("Seules les requêtes échouées ou annulées peuvent être relancées.")
             else:
                 self._submit_text(request.text)
+        elif name == "resume":
+            target_id = command.args[0] if command.args else None
+            request = self.console.requests.get(target_id) if target_id else None
+            if request is None and target_id:
+                self.console.error(f"Requête introuvable : {target_id}")
+            elif request is None:
+                candidates = [r for r in self.console.requests.snapshot() if isinstance(r, Mapping) and r.get("state") in {"failed", "canceled"}]
+                if candidates:
+                    target_id = candidates[-1].get("request_id") or candidates[-1].get("id")
+                    request = self.console.requests.get(target_id)
+            resume = getattr(self.console, "resume_context", None)
+            if callable(resume):
+                try:
+                    resume_data = resume(target_id) if target_id else resume()
+                    if isinstance(resume_data, Mapping):
+                        text = resume_data.get("text")
+                        parent_id = resume_data.get("parent_request_id") or target_id
+                        resume_context = resume_data.get("context")
+                    else:
+                        text, parent_id, resume_context = resume_data, target_id, None
+                    if text:
+                        self._submit_text(str(text), parent_request_id=parent_id, context=resume_context)
+                    else:
+                        self.console.warning("Aucun contexte à reprendre.")
+                except Exception as exc:
+                    self.console.error(f"Impossible de reprendre la requête : {exc}")
+            elif request is not None and getattr(request, "text", None):
+                self._submit_text(request.text, parent_request_id=target_id)
+            else:
+                self.console.warning("La console n'expose pas de contexte de reprise.")
         elif name == "debug":
             self.console.status(
                 {"Requêtes en attente": self._pending, "Arrêt demandé": self._stop_requested.is_set()}
@@ -592,6 +649,7 @@ class HttpWebhookAdapter:
         outbound_allowlist: Iterable[str] | None = None,
         timeout: float = 20.0,
         request_timeout: float = 10.0,
+        replay_window: float = 300.0,
         max_body_bytes: int = MAX_WEBHOOK_BODY_BYTES,
         queue_size: int = MAX_CHANNEL_QUEUE,
         allowlist: Iterable[str] | None = None,
@@ -606,6 +664,7 @@ class HttpWebhookAdapter:
         self.outbound_url = outbound_url
         self.timeout = float(timeout)
         self.request_timeout = float(request_timeout)
+        self.replay_window = float(replay_window)
         self.max_body_bytes = int(max_body_bytes)
         self.queue_size = int(queue_size)
         self.source_allowlist = tuple(str(item).strip() for item in (allowlist or ()) if str(item).strip())
@@ -616,6 +675,8 @@ class HttpWebhookAdapter:
             raise ValueError("queue_size doit être compris entre 1 et 1000.")
         if self.timeout <= 0 or self.request_timeout <= 0:
             raise ValueError("Les timeouts HTTP doivent être positifs.")
+        if self.replay_window <= 0 or self.replay_window > 86400:
+            raise ValueError("replay_window doit être compris entre 0 et 86400 secondes.")
         if not (self.auth_token or self.hmac_secret) and not _is_loopback_host(self.host):
             raise ValueError("Un webhook hors loopback doit utiliser un token ou une signature HMAC.")
         if self.outbound_url:
@@ -636,6 +697,7 @@ class HttpWebhookAdapter:
         self._stop_requested = threading.Event()
         self._idempotency_lock = threading.Lock()
         self._idempotency: OrderedDict[str, str] = OrderedDict()
+        self._nonces: OrderedDict[str, float] = OrderedDict()
 
     def _worker_loop(self) -> None:
         while not self._stop_requested.is_set():
@@ -683,7 +745,10 @@ class HttpWebhookAdapter:
             supplied = headers.get("X-Orion-Signature", "") or headers.get("X-Hub-Signature-256", "")
             if supplied.startswith("sha256="):
                 supplied = supplied[7:]
-            expected = hmac.new(self.hmac_secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+            timestamp = headers.get("X-Orion-Timestamp", "")
+            nonce = headers.get("X-Orion-Nonce", "")
+            signed = f"{timestamp}\n{nonce}\n".encode("utf-8") + raw
+            expected = hmac.new(self.hmac_secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
             return hmac.compare_digest(supplied, expected)
         # Le seul mode sans secret est la liaison loopback, validée au démarrage.
         return _is_loopback_host(self.host)
@@ -698,6 +763,26 @@ class HttpWebhookAdapter:
             while len(self._idempotency) > self.queue_size:
                 self._idempotency.popitem(last=False)
         return "new"
+
+    def _check_replay(self, headers: Mapping[str, str]) -> bool:
+        if not self.hmac_secret:
+            return True
+        try:
+            timestamp = float(headers.get("X-Orion-Timestamp", ""))
+        except (TypeError, ValueError):
+            return False
+        nonce = headers.get("X-Orion-Nonce", "")
+        now = time.time()
+        if not nonce or len(nonce) > 256 or abs(now - timestamp) > self.replay_window:
+            return False
+        with self._idempotency_lock:
+            for key, value in list(self._nonces.items()):
+                if now - value > self.replay_window:
+                    self._nonces.pop(key, None)
+            if nonce in self._nonces:
+                return False
+            self._nonces[nonce] = timestamp
+        return True
 
     def _handle_post(self, handler: BaseHTTPRequestHandler) -> None:
         if urlsplit(handler.path).path != self.path:
@@ -772,6 +857,9 @@ class HttpWebhookAdapter:
             return
         if not self._authenticate(raw, handler.headers):
             self._error(handler, 401, "unauthorized", "Authentification invalide.")
+            return
+        if not self._check_replay(handler.headers):
+            self._error(handler, 401, "replay_rejected", "Signature expirée ou nonce déjà utilisé.")
             return
         try:
             payload = json.loads(raw.decode("utf-8"))
@@ -891,6 +979,11 @@ class HttpWebhookAdapter:
                     text=message.text,
                     received_at=message.received_at,
                     correlation_id=message.correlation_id,
+                    conversation_id=message.conversation_id,
+                    user_id=message.user_id,
+                    message_thread_id=message.message_thread_id,
+                    thread_id=message.thread_id,
+                    parent_message_id=message.parent_message_id,
                 )
         try:
             self._queue.put_nowait(message)
@@ -948,104 +1041,456 @@ class TelegramAdapter:
         *,
         poll_timeout: int = 25,
         allowed_chat_ids: list[int] | None = None,
+        allowed_user_ids: list[int] | None = None,
+        allow_all_chats: bool = False,
+        accept_edited: bool = False,
+        bootstrap_owner: bool = True,
+        owner_path: str | None = None,
+        outbound_allowed_chat_ids: list[int] | None = None,
+        offset_path: str | None = None,
+        ledger: CommunicationLedger | None = None,
+        replay_window: float = 300.0,
         api_timeout: float = 35.0,
         parse_mode: str | None = "HTML",
         max_message_chars: int = 3500,
+        max_retries: int = 3,
+        retry_backoff: float = 0.5,
+        retry_max_delay: float = 30.0,
+        queue_size: int = MAX_CHANNEL_QUEUE,
     ) -> None:
         if not token:
             raise ValueError("Le token Telegram est obligatoire.")
         self.token = token
-        self.poll_timeout = poll_timeout
+        self.poll_timeout = int(poll_timeout)
+        if self.poll_timeout < 0:
+            raise ValueError("poll_timeout Telegram doit être positif ou nul.")
+        if not isinstance(allow_all_chats, bool) or not isinstance(accept_edited, bool) or not isinstance(bootstrap_owner, bool):
+            raise ValueError("allow_all_chats, accept_edited et bootstrap_owner doivent être des booléens.")
         self.allowed_chat_ids = {int(item) for item in (allowed_chat_ids or [])}
+        self.allowed_user_ids = {int(item) for item in (allowed_user_ids or [])}
+        self.allow_all_chats = allow_all_chats
+        self.accept_edited = accept_edited
+        self.bootstrap_owner = bootstrap_owner
+        # The inbound allowlist is the default outbound policy too.  A
+        # separate list is useful for bots that may receive from a larger set
+        # but must only answer selected chats.
+        self.outbound_allowed_chat_ids = {
+            int(item) for item in (
+                outbound_allowed_chat_ids
+                if outbound_allowed_chat_ids is not None
+                else allowed_chat_ids
+                or []
+            )
+        }
+        self._seen_chat_ids: set[int] = set()
         if parse_mode not in {None, "HTML", "MarkdownV2"}:
             raise ValueError("parse_mode Telegram doit être HTML, MarkdownV2 ou null.")
         if max_message_chars < 500 or max_message_chars > 4096:
             raise ValueError("max_message_chars Telegram doit être compris entre 500 et 4096.")
+        if max_retries < 0:
+            raise ValueError("max_retries Telegram doit être positif ou nul.")
+        if retry_backoff < 0 or retry_max_delay < 0:
+            raise ValueError("Les délais de retry Telegram ne peuvent pas être négatifs.")
+        if queue_size < 1 or queue_size > MAX_CHANNEL_QUEUE:
+            raise ValueError("queue_size Telegram doit être compris entre 1 et 1000.")
         self.parse_mode = parse_mode
         self.max_message_chars = int(max_message_chars)
-        self.client = httpx.Client(base_url=f"https://api.telegram.org/bot{token}", timeout=api_timeout)
+        self.max_retries = int(max_retries)
+        self.retry_backoff = float(retry_backoff)
+        self.retry_max_delay = float(retry_max_delay)
+        self.api_timeout = float(api_timeout)
+        self.client = httpx.Client(base_url=f"https://api.telegram.org/bot{token}", timeout=self.api_timeout)
+        self._client_closed = False
+        self.ledger = ledger
+        self.replay_window = float(replay_window)
+        if self.replay_window <= 0 or self.replay_window > 86400:
+            raise ValueError("replay_window doit être compris entre 0 et 86400 secondes.")
+        self.offset_path = os.fspath(offset_path) if offset_path else None
+        self.owner_path = os.fspath(owner_path) if owner_path else None
+        if self.offset_path:
+            Path(self.offset_path).parent.mkdir(parents=True, exist_ok=True)
+        if self.owner_path:
+            Path(self.owner_path).parent.mkdir(parents=True, exist_ok=True)
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._on_message: MessageCallback | None = None
-        self._offset = 0
-        self._queue: queue.Queue[InboundMessage | None] = queue.Queue(maxsize=MAX_CHANNEL_QUEUE)
+        self._state_lock = threading.RLock()
+        self._offset = self._load_offset()
+        self._owner_chat_id, self._owner_user_id = self._load_owner()
+        self._dedupe_lock = threading.Lock()
+        self._dedupe: OrderedDict[str, None] = OrderedDict()
+        self._worker_id = f"telegram-worker-{os.getpid()}-{id(self)}"
+        self._queue: queue.Queue[InboundMessage | None] = queue.Queue(maxsize=int(queue_size))
+
+    @property
+    def offset(self) -> int:
+        return self._offset
+
+    def _cursor_name(self) -> str:
+        return "telegram:" + hashlib.sha256(self.token.encode("utf-8")).hexdigest()[:16]
+
+    def _load_offset(self) -> int:
+        if self.offset_path:
+            try:
+                value = int(Path(self.offset_path).read_text(encoding="utf-8").strip() or "0")
+                return max(0, value)
+            except (OSError, ValueError):
+                return 0
+        if self.ledger is not None and hasattr(self.ledger, "get_cursor"):
+            try:
+                return max(0, int(self.ledger.get_cursor(self._cursor_name())))
+            except (OSError, ValueError, TypeError, RuntimeError):
+                return 0
+        return 0
+
+    def _load_owner(self) -> tuple[int | None, int | None]:
+        if not self.owner_path:
+            return None, None
+        try:
+            data = json.loads(Path(self.owner_path).read_text(encoding="utf-8"))
+            chat_id = int(data["chat_id"])
+            user_id = int(data["user_id"]) if data.get("user_id") is not None else None
+            return chat_id, user_id
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None, None
+
+    def _persist_owner(self, chat_id: int, user_id: int | None) -> None:
+        if not self.owner_path:
+            self._owner_chat_id, self._owner_user_id = chat_id, user_id
+            return
+        path = Path(self.owner_path)
+        temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        data = {"chat_id": int(chat_id), "user_id": int(user_id) if user_id is not None else None}
+        try:
+            with temp.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp, path)
+        finally:
+            try:
+                temp.unlink()
+            except FileNotFoundError:
+                pass
+        self._owner_chat_id, self._owner_user_id = int(chat_id), user_id
+
+    def _persist_offset(self, value: int) -> None:
+        value = max(0, int(value))
+        if value <= self._offset:
+            return
+        if self.offset_path:
+            path = Path(self.offset_path)
+            temp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                with temp.open("w", encoding="utf-8") as handle:
+                    handle.write(str(value))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temp, path)
+                try:
+                    directory_fd = os.open(str(path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                except OSError:
+                    pass
+            finally:
+                try:
+                    temp.unlink()
+                except FileNotFoundError:
+                    pass
+        elif self.ledger is not None and hasattr(self.ledger, "set_cursor"):
+            self.ledger.set_cursor(self._cursor_name(), value)
+        self._offset = value
+
+    def _remember_update(self, key: str) -> bool:
+        with self._dedupe_lock:
+            if key in self._dedupe:
+                self._dedupe.move_to_end(key)
+                return False
+            self._dedupe[key] = None
+            while len(self._dedupe) > self._queue.maxsize * 2:
+                self._dedupe.popitem(last=False)
+            return True
+
+    def _forget_update(self, key: str) -> None:
+        with self._dedupe_lock:
+            self._dedupe.pop(key, None)
+
+    @staticmethod
+    def _retry_status(exc: BaseException) -> tuple[int | None, float | None]:
+        if isinstance(exc, httpx.HTTPStatusError):
+            response = exc.response
+            retry_after: float | None = None
+            try:
+                retry_after = float(response.headers.get("Retry-After", ""))
+            except (TypeError, ValueError):
+                pass
+            return response.status_code, retry_after
+        if isinstance(exc, TelegramAPIError):
+            return exc.error_code, exc.retry_after
+        return None, None
 
     def _worker_loop(self) -> None:
-        while not self._stop_requested.is_set():
+        while True:
             try:
                 message = self._queue.get(timeout=0.2)
             except queue.Empty:
+                if self._stop_requested.is_set():
+                    return
                 continue
             try:
                 if message is None:
                     return
+                ledger_claimed = True
+                if self.ledger is not None and hasattr(self.ledger, "claim_by_id") and message.message_id:
+                    try:
+                        ledger_claimed = bool(
+                            self.ledger.claim_by_id(message.message_id, worker_id=self._worker_id)
+                        )
+                    except Exception:
+                        # Keep the item available for a transient SQLite
+                        # failure instead of silently dropping it after the
+                        # Telegram cursor has advanced.
+                        try:
+                            self._queue.put_nowait(message)
+                        except queue.Full:
+                            pass
+                        self._stop_requested.wait(0.2)
+                        ledger_claimed = False
+                if not ledger_claimed:
+                    continue
                 callback = self._on_message
-                if callback is not None:
-                    callback(message)
-            except Exception:
+                if callback is None:
+                    try:
+                        self._queue.put_nowait(message)
+                    except queue.Full:
+                        pass
+                    continue
+                callback(message)
+                if self.ledger is not None and hasattr(self.ledger, "ack") and message.message_id:
+                    try:
+                        self.ledger.ack(message.message_id, worker_id=self._worker_id)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                if self.ledger is not None and hasattr(self.ledger, "fail") and message is not None and message.message_id:
+                    try:
+                        self.ledger.fail(message.message_id, exc, worker_id=self._worker_id)
+                    except Exception:
+                        pass
                 continue
             finally:
                 self._queue.task_done()
 
     def _api(self, method: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        response = self.client.post(f"/{method}", json=dict(payload))
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = response.text[:1000].replace("\n", " ")
-            raise httpx.HTTPStatusError(
-                f"Telegram HTTP {response.status_code}: {detail}",
-                request=exc.request,
-                response=exc.response,
-            ) from exc
-        data = response.json()
-        if not data.get("ok"):
-            raise RuntimeError(f"Telegram API error: {data}")
-        return data
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.client.post(f"/{method}", json=dict(payload))
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    detail = response.text[:1000].replace("\n", " ")
+                    raise httpx.HTTPStatusError(
+                        f"Telegram HTTP {response.status_code}: {detail}",
+                        request=exc.request,
+                        response=exc.response,
+                    ) from exc
+                data = response.json()
+                if not data.get("ok"):
+                    parameters = data.get("parameters") or {}
+                    raise TelegramAPIError(
+                        f"Telegram API error: {data}",
+                        error_code=data.get("error_code"),
+                        retry_after=parameters.get("retry_after"),
+                    )
+                return data
+            except (httpx.HTTPStatusError, httpx.RequestError, TelegramAPIError) as exc:
+                status, retry_after = self._retry_status(exc)
+                retryable = isinstance(exc, httpx.RequestError) or (
+                    status is not None and (status == 429 or status >= 500)
+                )
+                if not retryable or attempt >= self.max_retries or self._stop_requested.is_set():
+                    raise
+                delay = retry_after if retry_after is not None else self.retry_backoff * (2 ** attempt)
+                delay = min(self.retry_max_delay, max(0.0, float(delay)))
+                self._stop_requested.wait(delay)
+        raise RuntimeError("Telegram API retry loop unexpectedly exhausted")
 
     def start(self, on_message: MessageCallback) -> None:
-        self._on_message = on_message
-        self._stop_requested.clear()
-        self._worker = threading.Thread(target=self._worker_loop, name="orion-telegram-worker", daemon=True)
-        self._worker.start()
-        self._thread = threading.Thread(target=self._run, name="orion-telegram", daemon=True)
-        self._thread.start()
+        if not callable(on_message):
+            raise TypeError("on_message doit être appelable.")
+        with self._state_lock:
+            if self._thread is not None and self._thread.is_alive():
+                self._on_message = on_message
+                return
+            if self._client_closed:
+                self.client = httpx.Client(base_url=f"https://api.telegram.org/bot{self.token}", timeout=self.api_timeout)
+                self._client_closed = False
+            self._on_message = on_message
+            self._stop_requested.clear()
+            self._worker = threading.Thread(target=self._worker_loop, name="orion-telegram-worker", daemon=True)
+            self._worker.start()
+            self._thread = threading.Thread(target=self._run, name="orion-telegram", daemon=True)
+            self._thread.start()
 
     def _run(self) -> None:
         while not self._stop_requested.is_set():
             try:
                 data = self._api("getUpdates", {"offset": self._offset, "timeout": self.poll_timeout})
                 for update in data.get("result", []):
-                    message = update.get("message") or update.get("edited_message") or {}
+                    if not isinstance(update, Mapping):
+                        continue
+                    try:
+                        update_id = int(update.get("update_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    message = update.get("message")
+                    if not message and self.accept_edited:
+                        message = update.get("edited_message")
+                    message = message or {}
+                    if not isinstance(message, Mapping):
+                        self._persist_offset(update_id + 1)
+                        continue
                     chat = message.get("chat") or {}
-                    chat_id = chat.get("id")
-                    if chat_id is None or (self.allowed_chat_ids and int(chat_id) not in self.allowed_chat_ids):
+                    try:
+                        chat_id = int(chat.get("id"))
+                    except (TypeError, ValueError):
+                        self._persist_offset(update_id + 1)
+                        continue
+                    sender_info = message.get("from") or {}
+                    try:
+                        user_id = int(sender_info.get("id")) if sender_info.get("id") is not None else None
+                    except (TypeError, ValueError):
+                        user_id = None
+                    accepted_chat = self.allow_all_chats or chat_id in self.allowed_chat_ids
+                    accepted_user = bool(self.allowed_user_ids and user_id in self.allowed_user_ids)
+                    owner_bootstrap = (
+                        self.bootstrap_owner
+                        and not self.allow_all_chats
+                        and not self.allowed_chat_ids
+                        and not self.allowed_user_ids
+                        and self._owner_chat_id is None
+                        # Bootstrap is intentionally restricted to a direct
+                        # private conversation.  A group/channel must never
+                        # be able to claim the bot as its owner, and Telegram
+                        # updates without a sender identity are not bindable.
+                        and str(chat.get("type", "")).lower() == "private"
+                        and user_id is not None
+                    )
+                    owner_match = (
+                        self.bootstrap_owner
+                        and self._owner_chat_id is not None
+                        and chat_id == self._owner_chat_id
+                        and (self._owner_user_id is None or user_id == self._owner_user_id)
+                    )
+                    if not accepted_chat and not accepted_user and not owner_bootstrap and not owner_match:
+                        self._persist_offset(update_id + 1)
                         continue
                     text = message.get("text")
                     if not isinstance(text, str) or self._on_message is None:
+                        self._persist_offset(update_id + 1)
+                        continue
+                    raw_message_id = message.get("message_id")
+                    try:
+                        numeric_message_id = int(raw_message_id) if raw_message_id is not None else None
+                    except (TypeError, ValueError):
+                        numeric_message_id = None
+                    update_kind = "edited:" if update.get("edited_message") and not update.get("message") else ""
+                    message_id = (
+                        f"{update_kind}{chat_id}:{numeric_message_id}"
+                        if numeric_message_id is not None
+                        else f"{update_kind}update:{update_id}"
+                    )
+                    thread_id = message.get("message_thread_id")
+                    try:
+                        numeric_thread_id = int(thread_id) if thread_id is not None else None
+                    except (TypeError, ValueError):
+                        numeric_thread_id = None
+                    conversation_id = f"{chat_id}:{numeric_thread_id}" if numeric_thread_id is not None else str(chat_id)
+                    correlation_id = f"telegram:update:{update_id}"
+                    if not self._remember_update(message_id):
+                        self._persist_offset(update_id + 1)
                         continue
                     inbound = InboundMessage(
                         channel=self.name,
                         payload={
                             "text": text,
                             "chat_id": chat_id,
-                            "user_id": (message.get("from") or {}).get("id"),
-                            "username": (message.get("from") or {}).get("username"),
+                            "user_id": user_id,
+                            "username": sender_info.get("username"),
+                            "update_id": update_id,
+                            "message_id": message_id,
+                            "conversation_id": conversation_id,
+                            "message_thread_id": numeric_thread_id,
                             "raw": update,
                         },
                         reply_to=str(chat_id),
                         source=self.name,
-                        metadata={"chat_id": chat_id},
+                        metadata={
+                            "chat_id": chat_id,
+                            "conversation_id": conversation_id,
+                            "update_id": update_id,
+                            "message_thread_id": numeric_thread_id,
+                        },
+                        message_id=message_id,
+                        sender=str(user_id) if user_id is not None else None,
+                        text=text,
+                        correlation_id=correlation_id,
                     )
+                    if self.ledger is not None and hasattr(self.ledger, "record_inbound"):
+                        try:
+                            ledger_id, is_new = self.ledger.record_inbound(
+                                channel=self.name,
+                                payload=dict(inbound.payload),
+                                message_id=message_id,
+                                event_id=f"telegram:update:{update_id}",
+                                correlation_id=correlation_id,
+                                reply_to=str(chat_id),
+                            )
+                            if not is_new:
+                                existing = self.ledger.get(ledger_id) if hasattr(self.ledger, "get") else None
+                                # A queued durable row can have been created
+                                # immediately before a full local queue.  It
+                                # must be offered again; delivered rows are
+                                # genuine duplicates and may advance offset.
+                                if existing is None or existing.get("status") not in {"queued", "failed"}:
+                                    self._persist_offset(update_id + 1)
+                                    continue
+                            if ledger_id != message_id:
+                                inbound = InboundMessage(
+                                    channel=inbound.channel, payload=inbound.payload,
+                                    reply_to=inbound.reply_to, source=inbound.source,
+                                    metadata=inbound.metadata, message_id=ledger_id,
+                                    sender=inbound.sender, text=inbound.text,
+                                    correlation_id=inbound.correlation_id,
+                                    event_type=inbound.event_type, priority=inbound.priority,
+                                    received_at=inbound.received_at,
+                                    conversation_id=inbound.conversation_id,
+                                    user_id=inbound.user_id,
+                                    message_thread_id=inbound.message_thread_id,
+                                    thread_id=inbound.thread_id,
+                                    parent_message_id=inbound.parent_message_id,
+                                )
+                        except Exception:
+                            # Do not advance Telegram's cursor if durable
+                            # deduplication could not accept this update.
+                            self._forget_update(message_id)
+                            break
                     try:
                         self._queue.put_nowait(inbound)
                     except queue.Full:
                         # L'offset reste inchangé : Telegram renverra ce message
                         # une fois la file à nouveau disponible.
+                        self._forget_update(message_id)
                         break
-                    self._offset = max(self._offset, int(update.get("update_id", 0)) + 1)
-            except (httpx.HTTPError, RuntimeError, ValueError):
+                    self._seen_chat_ids.add(chat_id)
+                    if owner_bootstrap:
+                        self._persist_owner(chat_id, user_id)
+                    self._persist_offset(update_id + 1)
+            except (httpx.HTTPError, RuntimeError, ValueError, OSError):
                 if not self._stop_requested.wait(2.0):
                     continue
 
@@ -1053,37 +1498,74 @@ class TelegramAdapter:
         chat_id = output.recipient or output.metadata.get("chat_id") or output.metadata.get("reply_to")
         if chat_id is None:
             raise RuntimeError("Aucun chat_id Telegram pour cette sortie.")
+        try:
+            chat_id = int(chat_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Le chat_id Telegram doit être un entier.") from exc
+        if not (
+            self.allow_all_chats
+            or chat_id in self.outbound_allowed_chat_ids
+            or chat_id in self._seen_chat_ids
+            or (
+                self.bootstrap_owner
+                and self._owner_chat_id is not None
+                and chat_id == self._owner_chat_id
+            )
+        ):
+            raise RuntimeError("La destination Telegram n'est pas dans l'allowlist de sortie.")
         for chunk in split_telegram_message(output.content, max_chars=self.max_message_chars):
-            text = markdown_to_telegram_html(chunk) if self.parse_mode == "HTML" else chunk
+            text = (
+                markdown_to_telegram_html(chunk)
+                if self.parse_mode == "HTML"
+                else escape_telegram_markdown_v2(chunk)
+                if self.parse_mode == "MarkdownV2"
+                else chunk
+            )
             payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+            thread_id = output.metadata.get("message_thread_id")
+            if thread_id is not None:
+                try:
+                    payload["message_thread_id"] = int(thread_id)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("message_thread_id Telegram doit être un entier.") from exc
             if self.parse_mode:
                 payload["parse_mode"] = self.parse_mode
             try:
                 self._api("sendMessage", payload)
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, TelegramAPIError) as exc:
                 # Un découpage au milieu d'un bloc Markdown peut produire un
                 # HTML incomplet. La réponse doit tout de même parvenir à
                 # l'utilisateur plutôt que de perdre tout le RUN.
-                if self.parse_mode != "HTML" or exc.response.status_code != 400:
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else exc.error_code
+                if status != 400 or self.parse_mode not in {"HTML", "MarkdownV2"}:
                     raise
-                self._api(
-                    "sendMessage",
-                    {"chat_id": chat_id, "text": chunk},
+                fallback = (
+                    {"chat_id": chat_id, "text": markdown_to_telegram_html(chunk), "parse_mode": "HTML"}
+                    if self.parse_mode == "MarkdownV2"
+                    else {"chat_id": chat_id, "text": chunk}
                 )
+                self._api("sendMessage", fallback)
 
     def stop(self) -> None:
-        self._stop_requested.set()
-        if self._thread is not None:
-            self._thread.join(timeout=self.poll_timeout + 2)
+        with self._state_lock:
+            thread, worker = self._thread, self._worker
+            if thread is None and worker is None:
+                self._stop_requested.set()
+                return
+            self._stop_requested.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(2.0, self.poll_timeout + 2))
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+        with self._state_lock:
             self._thread = None
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
-        if self._worker is not None:
-            self._worker.join(timeout=2.0)
             self._worker = None
-        self.client.close()
+            self._on_message = None
+        try:
+            self.client.close()
+            self._client_closed = True
+        except Exception:
+            pass
 
 
 class EmailAdapter:
@@ -1319,5 +1801,7 @@ __all__ = [
     "EmailAdapter",
     "HttpWebhookAdapter",
     "TelegramAdapter",
+    "TelegramAPIError",
+    "escape_telegram_markdown_v2",
     "secret_from_env",
 ]

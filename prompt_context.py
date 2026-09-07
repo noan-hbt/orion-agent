@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 import os
 import re
 import threading
@@ -241,7 +242,7 @@ class PromptComposer:
         event_value = event.to_dict() if hasattr(event, "to_dict") else event
         task_value = task.to_dict() if hasattr(task, "to_dict") else task
         data = {
-            "request": request or {}, "event": event_value or {}, "task": task_value or {},
+            "request": {} if request is None else request, "event": {} if event_value is None else event_value, "task": {} if task_value is None else task_value,
             "loaded_state": dict(loaded_state or {}), "profile": snapshot.user_profile,
             "preferences": snapshot.preferences, "memories": snapshot.memories,
             "history": list(history), "waiting_subagents": list(notifications),
@@ -317,6 +318,14 @@ class ConversationJournal:
                 ][:20]
             compact.append(item)
         with self._lock:
+            normalized_conversation = str(conversation_id or "default")
+            # Les retries d'un même événement sont fréquents (redémarrage,
+            # livraison au moins une fois). Retourner l'entrée existante rend
+            # l'opération idempotente sans réécrire les anciens JSONL.
+            if event_id is not None and str(event_id).strip():
+                existing = self._find_event(str(event_id), normalized_conversation)
+                if existing is not None:
+                    return existing
             entry = JournalEntry(
                 self._next_id,
                 event_id,
@@ -325,13 +334,32 @@ class ConversationJournal:
                 _now().isoformat(),
                 source=source,
                 channel=channel,
-                conversation_id=str(conversation_id or "default"),
+                conversation_id=normalized_conversation,
             )
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry.__dict__, ensure_ascii=False, default=str) + "\n")
             self._next_id += 1
             return entry
+
+    def _find_event(self, event_id: str, conversation_id: str) -> JournalEntry | None:
+        if not self.path.exists():
+            return None
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return None
+        for line in reversed(lines):
+            try:
+                raw = json.loads(line)
+                if (str(raw.get("event_id")) == event_id and
+                        str(raw.get("conversation_id") or "default") == conversation_id):
+                    return JournalEntry(int(raw["id"]), raw.get("event_id"), raw.get("task_id"),
+                                        list(raw.get("messages", [])), raw["created_at"],
+                                        raw.get("source"), raw.get("channel"), conversation_id)
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return None
 
     @staticmethod
     def _sender_label(role: Any) -> str:
@@ -405,7 +433,9 @@ class ConversationJournal:
                             "sender",
                             self._sender_label(item.get("role")),
                         )
-                        item.setdefault("source", entry_source or entry_channel or "unknown")
+                        # Préserver la provenance portée par chaque message
+                        # lorsqu'elle existe, et retomber sur celle de l'entrée.
+                        item.setdefault("source", entry_source if entry_source is not None else (entry_channel or "unknown"))
                         if entry_channel:
                             item.setdefault("channel", entry_channel)
                         item["journal_id"] = int(raw.get("id", 0))
@@ -415,6 +445,102 @@ class ConversationJournal:
                 except (TypeError, ValueError, json.JSONDecodeError):
                     continue
         return messages[-limit:]
+
+
+class SQLiteConversationJournal(ConversationJournal):
+    """Backend SQLite optionnel, compatible avec le journal JSONL historique.
+
+    Le schéma conserve le même objet ``JournalEntry`` et les mêmes méthodes
+    ``append``/``after``/``recent_messages``.  ``migrate_jsonl`` permet une
+    migration idempotente (les identifiants et les doublons sont préservés).
+    """
+
+    def __init__(self, path: str | Path = "data/conversations.sqlite3", *, max_message_chars: int = 4000) -> None:
+        self.path = Path(path)
+        self.max_message_chars = max_message_chars
+        self._lock = threading.RLock()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        self._db.execute("""CREATE TABLE IF NOT EXISTS journal (
+            id INTEGER PRIMARY KEY, event_id TEXT, task_id INTEGER,
+            messages TEXT NOT NULL, created_at TEXT NOT NULL, source TEXT,
+            channel TEXT, conversation_id TEXT NOT NULL DEFAULT 'default',
+            UNIQUE(event_id, conversation_id)
+        )""")
+        self._db.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
+    @staticmethod
+    def _entry(row: sqlite3.Row) -> JournalEntry:
+        return JournalEntry(int(row["id"]), row["event_id"], row["task_id"],
+                            json.loads(row["messages"]), row["created_at"],
+                            row["source"], row["channel"], row["conversation_id"] or "default")
+
+    def append(self, *, event_id: str | None, task_id: int | None,
+               messages: Sequence[Mapping[str, Any]], source: str | None = None,
+               channel: str | None = None, conversation_id: str = "default",
+               timestamp: str | None = None) -> JournalEntry:
+        # Réutilise la normalisation et la déduplication du backend historique.
+        compact = ConversationJournal.append
+        normalized = str(conversation_id or "default")
+        dummy = object.__new__(ConversationJournal)
+        dummy.max_message_chars = self.max_message_chars
+        items = []
+        for message in messages:
+            item = {"role": str(message.get("role", "")), "sender": self._sender_label(message.get("role")),
+                    "source": source or channel or "unknown", "at": str(message.get("at") or timestamp or _now().isoformat())}
+            if channel: item["channel"] = channel
+            if message.get("content") is not None: item["content"] = str(message["content"])[:self.max_message_chars] if isinstance(message.get("content"), str) else _safe(message["content"], max_chars=self.max_message_chars)
+            items.append(item)
+        with self._lock:
+            if event_id:
+                row = self._db.execute("SELECT * FROM journal WHERE event_id=? AND conversation_id=?", (str(event_id), normalized)).fetchone()
+                if row: return self._entry(row)
+            cur = self._db.execute("INSERT INTO journal(event_id,task_id,messages,created_at,source,channel,conversation_id) VALUES(?,?,?,?,?,?,?)",
+                (event_id, task_id, json.dumps(items, ensure_ascii=False), _now().isoformat(), source, channel, normalized))
+            self._db.commit()
+            return JournalEntry(cur.lastrowid, event_id, task_id, items, _now().isoformat(), source, channel, normalized)
+
+    def after(self, cursor: int, *, limit: int = 20) -> list[JournalEntry]:
+        if limit < 1: return []
+        with self._lock:
+            return [self._entry(r) for r in self._db.execute("SELECT * FROM journal WHERE id>? ORDER BY id LIMIT ?", (int(cursor), int(limit))).fetchall()]
+
+    def recent_messages(self, *, conversation_id: str = "default", limit: int = 20) -> list[dict[str, Any]]:
+        if limit < 1: return []
+        with self._lock:
+            rows = self._db.execute("SELECT * FROM journal WHERE conversation_id=? ORDER BY id", (str(conversation_id or "default"),)).fetchall()
+        messages = []
+        for row in rows:
+            if str(row["source"] or "").startswith("subagent:"): continue
+            for message in json.loads(row["messages"]):
+                if not isinstance(message, Mapping): continue
+                item = dict(message); item.setdefault("journal_id", int(row["id"])); item.setdefault("task_id", row["task_id"])
+                item.setdefault("source", row["source"] or row["channel"] or "unknown"); item.setdefault("at", row["created_at"])
+                if row["channel"]: item.setdefault("channel", row["channel"])
+                messages.append(item)
+        return messages[-limit:]
+
+    @classmethod
+    def migrate_jsonl(cls, jsonl_path: str | Path, sqlite_path: str | Path, *, max_message_chars: int = 4000) -> int:
+        target = cls(sqlite_path, max_message_chars=max_message_chars); count = 0
+        source = Path(jsonl_path)
+        if not source.exists(): return 0
+        with target._lock:
+            for line in source.read_text(encoding="utf-8").splitlines():
+                try: raw = json.loads(line)
+                except (json.JSONDecodeError, TypeError): continue
+                if not isinstance(raw, Mapping) or not isinstance(raw.get("messages"), list): continue
+                conv = str(raw.get("conversation_id") or "default"); event = raw.get("event_id")
+                exists = target._db.execute("SELECT 1 FROM journal WHERE id=? OR (event_id IS NOT NULL AND event_id=? AND conversation_id=?)", (int(raw.get("id", 0) or 0), event, conv)).fetchone()
+                if exists: continue
+                target._db.execute("INSERT OR IGNORE INTO journal(id,event_id,task_id,messages,created_at,source,channel,conversation_id) VALUES(?,?,?,?,?,?,?,?)", (raw.get("id"), event, raw.get("task_id"), json.dumps(raw["messages"], ensure_ascii=False), raw.get("created_at") or _now().isoformat(), raw.get("source"), raw.get("channel"), conv)); count += 1
+            target._db.commit()
+        return count
 
 
 class MemoryExtractor:
@@ -584,6 +710,7 @@ class MemoryMaintenance:
 
 __all__ = [
     "ConversationJournal",
+    "SQLiteConversationJournal",
     "DEFAULT_CORE",
     "DEFAULT_METHODOLOGY",
     "DEFAULT_PERSONALITY",

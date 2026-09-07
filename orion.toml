@@ -43,6 +43,7 @@ retry_delay = 1.0
 retry_backoff = 2.0
 
 [runtime]
+max_deferred_events = 10000
 max_turns = 12
 wake_queue_size = 0
 dedupe_window = 86400.0
@@ -119,10 +120,24 @@ slow_request_seconds = 15.0
 # [channels.telegram]
 # enabled = true
 # token_env = "TELEGRAM_BOT_TOKEN"
-# allowed_chat_ids = []
+# Sécurité : les chats sont refusés par défaut. Définir explicitement
+# allow_all_chats = true uniquement pour un bot volontairement ouvert.
+# allowed_chat_ids = [123456789]
+# allowed_user_ids = []
+# outbound_allowed_chat_ids = [123456789]
+# allow_all_chats = false
+# Premier message autorisé comme bootstrap et mémorisé durablement.
+# bootstrap_owner = true
+# owner_path = "data/telegram.owner"
+# accept_edited = false
+# offset_path = "data/telegram.offset"
 # poll_timeout = 25
 # parse_mode = "HTML"
 # max_message_chars = 3500
+# max_retries = 3
+# retry_backoff = 0.5
+# retry_max_delay = 30.0
+# queue_size = 1000
 #
 # [channels.email]
 # enabled = true
@@ -200,6 +215,16 @@ batch_size = 20
 min_entries = 20
 poll_interval = 30.0
 max_input_chars = 30000
+
+[context_os]
+# Durable context control plane. Disabled preserves the historical JSONL setup.
+enabled = false
+registry_path = "data/context_registry.sqlite3"
+journal_enabled = false
+journal_path = "data/context_journal.sqlite3"
+memory_path = "data/memory.sqlite3"
+memory_namespace = "default"
+state_path = "data/thread_state.json"
 
 [tools]
 # Les paquets sont installes dans ce dossier et charges au demarrage.

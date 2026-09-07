@@ -66,6 +66,9 @@ _COMMANDS = (
     "/clear",
     "/stop",
     "/retry",
+    "/resume",
+    "/threads",
+    "/trace",
     "/debug",
     "/exit",
 )
@@ -145,6 +148,9 @@ _COMMAND_SPECS: dict[str, tuple[int, int, frozenset[str]]] = {
     "requests": (0, 1, frozenset({"help", "json"})),
     "stop": (0, 1, frozenset({"help", "force", "json"})),
     "retry": (1, 1, frozenset({"help", "json"})),
+    "resume": (0, 1, frozenset({"help", "json"})),
+    "threads": (0, 1, frozenset({"help", "json"})),
+    "trace": (0, 1, frozenset({"help", "json"})),
     "debug": (0, 0, frozenset({"help", "json"})),
     "jobs": (0, 1, frozenset({"help", "json", "watch"})),
     "agents": (0, 0, frozenset({"help", "json"})),
@@ -153,7 +159,7 @@ _COMMAND_SPECS: dict[str, tuple[int, int, frozenset[str]]] = {
     "clear": (0, 0, frozenset({"help"})),
     "exit": (0, 0, frozenset({"help", "force"})),
 }
-_COMMAND_ALIASES = {"commands": "help", "history": "requests", "quit": "exit"}
+_COMMAND_ALIASES = {"commands": "help", "history": "requests", "events": "requests", "quit": "exit"}
 
 # Keep the help catalogue next to the parser contract.  The old help text was
 # maintained separately and silently drifted: ``/requests``, ``/retry`` and
@@ -164,6 +170,9 @@ _COMMAND_DESCRIPTIONS = {
     "requests": "Lister les requetes recentes (ou une requete par identifiant)",
     "stop": "Annuler une requete active (ou toutes avec all)",
     "retry": "Relancer une requete echouee ou annulee",
+    "resume": "Reprendre la derniere requete avec son contexte",
+    "threads": "Afficher les conversations et intentions persistantes",
+    "trace": "Afficher la trace de contexte d'une conversation",
     "debug": "Afficher les informations de diagnostic de la CLI",
     "jobs": "Lister les travaux delegues recents",
     "agents": "Lister les sous-agents disponibles",
@@ -309,6 +318,8 @@ class CLIRequest:
     error: str | None = None
     seq: int = 0
     last_fragment: str | None = None
+    parent_request_id: str | None = None
+    context: Mapping[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
     updated_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
 
@@ -339,7 +350,8 @@ class CLIRequestTracker:
         self._active: str | None = None
         self._stopped = False
 
-    def create(self, text: str = "", *, request_id: str | None = None, correlation_id: str | None = None) -> CLIRequest:
+    def create(self, text: str = "", *, request_id: str | None = None, correlation_id: str | None = None,
+               parent_request_id: str | None = None, context: Mapping[str, Any] | None = None) -> CLIRequest:
         with self._lock:
             if self._stopped:
                 raise RuntimeError("Le tracker CLI est arrete.")
@@ -347,7 +359,9 @@ class CLIRequestTracker:
             if identifier in self._items:
                 return self._items[identifier]
             now = datetime.now().astimezone()
-            item = CLIRequest(identifier, str(correlation_id or identifier), text=str(text), created_at=now, updated_at=now)
+            item = CLIRequest(identifier, str(correlation_id or identifier), text=str(text),
+                              parent_request_id=str(parent_request_id) if parent_request_id else None,
+                              context=dict(context or {}), created_at=now, updated_at=now)
             self._items[identifier] = item
             self._active = identifier
             while len(self._items) > self.max_items:
@@ -421,6 +435,8 @@ class CLIRequestTracker:
             "error": item.error,
             "seq": item.seq,
             "last_fragment": item.last_fragment,
+            "parent_request_id": item.parent_request_id,
+            "context": dict(item.context),
             "created_at": item.created_at.isoformat(),
             "updated_at": item.updated_at.isoformat(),
         }
@@ -479,6 +495,8 @@ class CLIRequestTracker:
                     "error": item.error,
                     "seq": item.seq,
                     "last_fragment": item.last_fragment,
+                    "parent_request_id": item.parent_request_id,
+                    "context": dict(item.context),
                     "created_at": item.created_at.isoformat(),
                     "updated_at": item.updated_at.isoformat(),
                 }
@@ -565,6 +583,8 @@ class CLIConsole:
         self._short_id_owners: dict[str, str] = {}
         self._last_request_id: str | None = None
         self._job_items: list[Any] = []
+        self._threads_provider: Any = None
+        self._trace_provider: Any = None
         self._runtime_values: dict[str, Any] = {}
         self._last_rendered_seq: dict[str, int] = {}
         # TTY presentation state.  Events can arrive on worker threads and in
@@ -639,6 +659,48 @@ class CLIConsole:
                 unsubscribe = None
             with self._usage_lock:
                 self._usage_unsubscribe = unsubscribe if callable(unsubscribe) else None
+
+    def set_threads_provider(self, provider: Any = None) -> None:
+        """Configure le fournisseur des conversations persistantes."""
+        self._threads_provider = provider
+
+    def set_trace_provider(self, provider: Any = None) -> None:
+        """Configure le fournisseur de trace de contexte."""
+        self._trace_provider = provider
+
+    @staticmethod
+    def _provider_value(provider: Any, default: Any = None) -> Any:
+        if provider is None:
+            return default
+        try:
+            if callable(provider):
+                return provider()
+            for name in ("list", "snapshot", "trace"):
+                method = getattr(provider, name, None)
+                if callable(method):
+                    return method()
+            return provider
+        except Exception:
+            return default
+
+    def threads(self, items: Sequence[Any] | None = None) -> list[Any]:
+        """Retourne et affiche les conversations (thread, intent, contexte)."""
+        values = list(items if items is not None else (self._provider_value(self._threads_provider, []) or []))
+        self.items("Conversations persistantes", values, empty="Aucune conversation persistante.")
+        return values
+
+    def trace(self, items: Sequence[Any] | None = None) -> list[Any]:
+        """Retourne et affiche la trace de contexte, sans doublonner les entrées."""
+        values = list(items if items is not None else (self._provider_value(self._trace_provider, []) or []))
+        seen: set[str] = set()
+        unique: list[Any] = []
+        for value in values:
+            key = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) if isinstance(value, Mapping) else str(value)
+            if key not in seen:
+                seen.add(key)
+                unique.append(value)
+        self.items("Trace de contexte", unique, empty="Aucune trace de contexte.")
+        return unique
 
     # Naming used by a few integrations before UsageLedger had a public name.
     set_usage_ledger = set_usage_provider
@@ -1319,11 +1381,22 @@ class CLIConsole:
         *,
         request_id: str | None = None,
         correlation_id: str | None = None,
+        parent_request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> CLIRequest:
-        item = self.requests.create(text, request_id=request_id, correlation_id=correlation_id)
+        item = self.requests.create(text, request_id=request_id, correlation_id=correlation_id,
+                                    parent_request_id=parent_request_id, context=context)
         self._short_id(item.request_id)
         self._last_request_id = item.request_id
         return item
+
+    def resume_context(self, request_id: str | None = None) -> dict[str, Any] | None:
+        """Retourne le texte et les métadonnées nécessaires à une reprise."""
+        item = self.requests.get(request_id or self._last_request_id or "")
+        if item is None or not item.text:
+            return None
+        return {"text": item.text, "parent_request_id": item.request_id,
+                "context": dict(item.context), "request_id": item.request_id}
 
     def update_request(
         self,

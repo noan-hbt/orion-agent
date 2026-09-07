@@ -17,6 +17,7 @@ from typing import Any
 
 from channels import InboundMessage
 from orion_config import load_orion
+from observability import doctor, health, readiness
 
 
 EXIT_OK = 0
@@ -160,12 +161,40 @@ def configure_cli(application: object, shutdown: threading.Event) -> object | No
             for job in subagents.list_jobs(limit=20)
         ]
 
+    def cli_threads() -> list[dict[str, object]]:
+        """Expose les conversations persistantes avec leur intent courant."""
+        source = getattr(application, "threads", None) or getattr(application, "conversations", None)
+        if source is None:
+            source = getattr(runtime, "threads", None) or getattr(runtime, "conversations", None)
+        if source is None:
+            return []
+        try:
+            values = source() if callable(source) else source
+            if hasattr(values, "list") and callable(values.list):
+                values = values.list()
+            return [dict(item) if isinstance(item, dict) else item for item in (values or [])]
+        except Exception:
+            return []
+
+    def cli_trace() -> list[dict[str, object]]:
+        """Expose la trace persistante (thread, intent, événements)."""
+        source = getattr(application, "context_trace", None) or getattr(runtime, "context_trace", None)
+        if source is None:
+            return []
+        try:
+            values = source() if callable(source) else source
+            return [dict(item) if isinstance(item, dict) else item for item in (values or [])]
+        except Exception:
+            return []
+
     for setter_name, provider in {
         "set_status_provider": cli_status,
         "set_tools_provider": cli_tools,
         "set_tasks_provider": cli_tasks,
         "set_agents_provider": cli_agents,
         "set_jobs_provider": cli_jobs,
+        "set_threads_provider": cli_threads,
+        "set_trace_provider": cli_trace,
     }.items():
         setter = getattr(cli_adapter, setter_name, None)
         if callable(setter):
@@ -231,6 +260,8 @@ def _once_error_event(
     correlation_id: str,
     seq: int,
     error_type: str = "RuntimeError",
+    parent_request_id: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "kind": "request.updated",
@@ -241,7 +272,7 @@ def _once_error_event(
         "text": None,
         "timestamp": _now_iso(),
         "error": {"type": error_type, "message": message},
-        "meta": {},
+        "meta": {"parent_request_id": parent_request_id, "context": dict(context or {})},
     }
 
 
@@ -251,6 +282,8 @@ def run_once(
     *,
     output: str = "text",
     timeout: float = 120.0,
+    parent_request_id: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> int:
     """Exécute une seule demande sans lancer la lecture interactive.
 
@@ -302,7 +335,8 @@ def run_once(
                     payload={"text": prompt.strip()},
                     reply_to="stdout",
                     correlation_id=correlation_id,
-                    metadata={"correlation_id": correlation_id},
+                    metadata={"correlation_id": correlation_id, "parent_request_id": parent_request_id,
+                              "context": dict(context or {})},
                     text=prompt.strip(),
                 )
             )
@@ -387,8 +421,16 @@ def run_command(
 ) -> int:
     """Exécute une commande d'observation locale sans lancer de conversation."""
     normalized = str(command).strip().lstrip("/").lower()
+    if normalized not in {"status", "doctor", "health", "readiness"}:
+        raise ValueError("--command accepte : status, doctor, health ou readiness.")
     if normalized != "status":
-        raise ValueError("--command accepte actuellement uniquement 'status'.")
+        value = {"doctor": doctor, "health": health, "readiness": readiness}[normalized](config_path)
+        if output == "jsonl":
+            print(json.dumps({"kind": "system." + normalized, **value}, ensure_ascii=False), flush=True)
+        else:
+            for key, item in value.items():
+                print(f"{key}: {item}")
+        return EXIT_OK if value.get("ok", value.get("ready", False)) else EXIT_RUNTIME
     if output not in {"text", "jsonl"}:
         raise ValueError("output doit être 'text' ou 'jsonl'.")
     application = load_orion(config_path)
@@ -432,10 +474,10 @@ def main(argv: list[str] | None = None) -> int:
             return run_once(args.config, args.once, output=args.output, timeout=args.timeout)
         if args.command is not None:
             normalized_command = str(args.command).strip().lstrip("/").lower()
-            if normalized_command != "status":
+            if normalized_command not in {"status", "doctor", "health", "readiness"}:
                 parser.print_usage(sys.stderr)
                 print(
-                    f"{parser.prog}: error: --command accepte actuellement uniquement 'status'.",
+                    f"{parser.prog}: error: commande inconnue (status, doctor, health, readiness).",
                     file=sys.stderr,
                 )
                 return EXIT_USAGE

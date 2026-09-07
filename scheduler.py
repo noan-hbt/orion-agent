@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import threading
 import time
 import uuid
@@ -139,17 +140,35 @@ class JsonScheduleStore(InMemoryScheduleStore):
     def _load(self) -> None:
         if not self.path.exists():
             return
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or not isinstance(raw.get("schedules", []), list):
+                raise ValueError("format JSON invalide")
+            schedules = [Schedule.from_dict(data) for data in raw.get("schedules", [])]
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            try:
+                os.replace(self.path, self.path.with_name(self.path.name + ".corrupt"))
+            except OSError:
+                pass
+            return
         with self._lock:
             self._schedules = {
                 item.id: item
-                for item in (Schedule.from_dict(data) for data in raw.get("schedules", []))
+                for item in schedules
             }
 
     def _flush(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {"schedules": [item.to_dict() for item in self.list()]}
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary = self.path.with_name(self.path.name + f".tmp-{uuid.uuid4().hex}")
+        try:
+            temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with temporary.open("r+b") as stream:
+                stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            try: temporary.unlink()
+            except OSError: pass
 
     def save(self, schedule: Schedule) -> Schedule:
         saved = super().save(schedule)
@@ -166,14 +185,21 @@ class Scheduler:
         *,
         store: ScheduleStore | None = None,
         poll_interval: float = 1.0,
+        max_publish_retries: int = 3,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval doit être supérieur à zéro.")
+        if max_publish_retries < 0:
+            raise ValueError("max_publish_retries doit être positif ou nul.")
         self.event_handler = event_handler
         self.store = store or InMemoryScheduleStore()
         self.poll_interval = poll_interval
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
+        self._lifecycle_lock = threading.RLock()
+        self._trigger_lock = threading.Lock()
+        self._publish_attempts: dict[str, int] = {}
+        self.max_publish_retries = int(max_publish_retries)
 
     @property
     def running(self) -> bool:
@@ -225,12 +251,18 @@ class Scheduler:
 
     def trigger_due(self, *, now: datetime | None = None) -> int:
         """Déclenche immédiatement les schedules échus ; retourne leur nombre."""
+        if not self._trigger_lock.acquire(blocking=False):
+            return 0
         current_time = _as_utc(now or _now())
         triggered = 0
-        for schedule in self.store.list(status=ScheduleStatus.ACTIVE):
-            if schedule.run_at > current_time:
-                continue
-            self.event_handler.publish(
+        try:
+          for schedule in self.store.list(status=ScheduleStatus.ACTIVE):
+            if schedule.run_at > current_time: continue
+            attempts = self._publish_attempts.get(schedule.id, 0)
+            if attempts > self.max_publish_retries: continue
+            self._publish_attempts[schedule.id] = attempts + 1
+            try:
+              self.event_handler.publish(
                 EventType.SCHEDULE,
                 schedule.payload,
                 priority=schedule.priority,
@@ -239,31 +271,32 @@ class Scheduler:
                     "schedule_id": schedule.id,
                     "task_id": schedule.task_id,
                 },
-            )
+              )
+            except Exception:
+              continue
             schedule.status = ScheduleStatus.FIRED
             schedule.fired_at = current_time
             self.store.save(schedule)
+            self._publish_attempts.pop(schedule.id, None)
             triggered += 1
-        return triggered
+          return triggered
+        finally:
+          self._trigger_lock.release()
 
     def start(self) -> Scheduler:
-        if self.running:
-            return self
-        self._stop_requested.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            name="agent-scheduler",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self.running: return self
+            self._stop_requested.clear()
+            self._thread = threading.Thread(target=self._run, name="agent-scheduler", daemon=True)
+            self._thread.start()
         return self
 
     def stop(self, *, wait: bool = True) -> None:
-        self._stop_requested.set()
-        thread = self._thread
-        if thread is not None and wait:
-            thread.join()
-        self._thread = None
+        with self._lifecycle_lock:
+            self._stop_requested.set(); thread = self._thread
+        if thread is not None and wait and thread is not threading.current_thread(): thread.join()
+        with self._lifecycle_lock:
+            if self._thread is thread: self._thread = None
 
     def _run(self) -> None:
         while not self._stop_requested.is_set():

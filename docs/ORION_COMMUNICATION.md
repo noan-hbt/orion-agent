@@ -19,6 +19,12 @@ utilise `auth_token_env` ou `hmac_secret_env`; les valeurs `token`, `secret`,
 `password` et `api_key` en clair sont refusées. `allowlist` limite les sources
 entrantes et `reply_allowlist` reste la politique des destinations de réponse.
 
+En mode HMAC, chaque requête doit aussi porter `X-Orion-Timestamp` et
+`X-Orion-Nonce`. La signature est le HMAC-SHA256 de
+`timestamp + "\\n" + nonce + "\\n" + corps_brut`; le timestamp doit rester dans
+`gateway.replay_window` (300 secondes par défaut) et un nonce ne peut être
+réutilisé pendant cette fenêtre.
+
 Une ancienne section `[channels.web]`, `[channels.api]` ou
 `[channels.webhook]` doit déclarer `auth_token_env` ou `allowlist` avant d'être
 activée. Cette règle évite une exposition implicite lors de la migration.
@@ -36,6 +42,28 @@ prompts et sorties sur la sortie fournie, ce qui fonctionne avec un pipe et
 d'arrêt idempotentes. Le tracker expose les états `queued`, `running`,
 `streaming`, `succeeded`, `failed` et `canceled`, ainsi que `request_id` et
 `correlation_id`.
+
+## Telegram
+
+Telegram est fermé par défaut après son initialisation. Si aucune allowlist
+n'est fournie et que `bootstrap_owner = true` (valeur par défaut), le premier
+message entrant définit l'owner (`chat_id` et `user_id`) et est accepté ; cet
+owner est persisté dans `owner_path` et les autres chats sont ensuite refusés.
+Pour un démarrage strict sans bootstrap, définir `bootstrap_owner = false` et
+fournir `allowed_chat_ids`, `allowed_user_ids` ou `allow_all_chats = true`. La
+même règle s'applique aux sorties, sauf si `outbound_allowed_chat_ids` fournit
+une allowlist de réponse dédiée. Les identifiants normalisés sont `update_id`,
+`message_id` (forme `chat_id:message_id`) et `conversation_id` (le `chat_id`
+texte).
+
+Le curseur de long polling est sauvegardé atomiquement dans `offset_path`.
+Sans fichier, un `CommunicationLedger` fourni peut conserver ce curseur dans
+SQLite. Un update rejeté ou déjà dédupliqué fait progresser le curseur ; un
+update qui rencontre une file pleine est rejoué. Les appels Bot API réessaient
+de façon bornée les erreurs réseau, `429` et `5xx`, en respectant
+`Retry-After`. `start()` et `stop()` sont idempotents et un adaptateur arrêté
+peut être redémarré. Les réponses MarkdownV2 sont échappées ; en cas de
+réponse Telegram `400`, l'adaptateur retente en HTML.
 
 ## Migration
 

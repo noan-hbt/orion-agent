@@ -122,6 +122,11 @@ class ContextAssembler:
         policy: ContextPolicy | None = None,
         redaction_enabled: bool = True,
         token_counter: Any | None = None,
+        memory_store: Any | None = None,
+        memory_namespace: str = "default",
+        # Optional context registry/retrieval wiring.  Kept deliberately
+        # duck-typed so older MemoryStore implementations remain supported.
+        context_registry: Any | None = None,
     ) -> None:
         if policy is None:
             policy = ContextPolicy(
@@ -142,6 +147,9 @@ class ContextAssembler:
         self.token_counter = token_counter
         self._cache: OrderedDict[str, str] = OrderedDict()
         self._cache_size = int(cache_size)
+        self.memory_store = memory_store
+        self.memory_namespace = str(memory_namespace)
+        self.context_registry = context_registry
 
     def count_tokens(self, text: str) -> int:
         if self.token_counter is not None:
@@ -360,6 +368,29 @@ class ContextAssembler:
         return result
 
     def assemble(self, components: Sequence[ContextComponent]) -> dict[str, str]:
+        # Memory is deliberately opt-in: callers provide a MemoryStore and a
+        # component named ``memory_query``. Existing callers are unchanged.
+        if self.memory_store is not None:
+            resolved = []
+            for c in components:
+                if c.name != "memory_query":
+                    resolved.append(c)
+                    continue
+                try:
+                    found = self.memory_store.search(str(c.value), namespace=self.memory_namespace)
+                except Exception:
+                    found = []
+                # Make provenance explicit and stable; dataclasses and legacy
+                # mapping results are both accepted.
+                items = []
+                for item in found or []:
+                    if isinstance(item, Mapping):
+                        value = dict(item)
+                    else:
+                        value = {k: getattr(item, k) for k in ("id", "content", "provenance", "confidence", "namespace") if hasattr(item, k)}
+                    items.append(value)
+                resolved.append(ContextComponent("memories", items, c.max_chars, c.priority, c.max_tokens))
+            components = resolved
         rendered = {component.name: self.render(component) for component in components}
         remaining_chars = self.total_max_chars
         remaining_tokens = self.total_max_tokens

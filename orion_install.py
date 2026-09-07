@@ -9,7 +9,11 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
+import re
 import shutil
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -21,6 +25,8 @@ CHANNEL_SECRET_DEFAULTS = {
     "api": "ORION_WEBHOOK_TOKEN",
     "webhook": "ORION_WEBHOOK_TOKEN",
 }
+VALID_CHANNELS = frozenset({"cli", "telegram", "discord", "email", "web", "api", "webhook"})
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _ask(label: str, default: str = "") -> str:
@@ -30,7 +36,11 @@ def _ask(label: str, default: str = "") -> str:
 
 
 def _ask_secret(label: str) -> str:
-    return getpass.getpass(f"{label} (laisser vide pour conserver l'existant): ").strip()
+    prompt = f"{label} (laisser vide pour conserver l'existant): "
+    try:
+        if sys.stdin.isatty(): return getpass.getpass(prompt).strip()
+    except (AttributeError, OSError): pass
+    return input(prompt).strip() if sys.stdin.isatty() else ""
 
 
 def _toml_string(value: str) -> str:
@@ -41,20 +51,51 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     values = {key: value for key, value in values.items() if value}
     if not values:
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = existing.splitlines()
     for key, value in values.items():
         prefix = f"{key}="
         for index, line in enumerate(lines):
-            if line.startswith(prefix):
-                lines[index] = f"{prefix}{value}"
+            if re.match(rf"^(?:export\s+)?{re.escape(key)}\s*=", line):
+                lead = "export " if line.lstrip().startswith("export ") else ""
+                lines[index] = f"{lead}{key}={_dotenv_value(value)}"
                 break
         else:
             if lines and lines[-1].strip():
                 lines.append("")
-            lines.append(f"{prefix}{value}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            lines.append(f"{prefix}{_dotenv_value(value)}")
+    _atomic_write(path, "\n".join(lines) + "\n")
+    # Best-effort protection on POSIX; Windows ACLs are handled by the user
+    # or deployment policy and chmod may be a no-op there.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
+
+def _dotenv_value(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_./:@%+,-]+", value): return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content); handle.flush(); os.fsync(handle.fileno())
+        os.replace(name, path)
+    except BaseException:
+        try: os.unlink(name)
+        except OSError: pass
+        raise
+
+def _validate_inputs(channels: list[str], secrets: dict[str, str]) -> None:
+    if len(set(channels)) != len(channels) or any(not c or c not in VALID_CHANNELS for c in channels):
+        raise ValueError("Channels invalides")
+    for name in secrets:
+        if not ENV_NAME_RE.fullmatch(name):
+            raise ValueError(f"Nom de variable d'environnement invalide: {name!r}")
 
 def _config_text(
     model: str,
@@ -75,6 +116,10 @@ def _config_text(
             channel_sections.append(
                 f'[channels.telegram]\nenabled = true\n'
                 f'token_env = {_toml_string(secret_envs[channel])}\n'
+                "# Le premier message definit l'owner du bot.\n"
+                "bootstrap_owner = true\n"
+                'owner_path = "data/telegram.owner"\n'
+                'offset_path = "data/telegram.offset"\n'
                 "max_message_chars = 3500"
             )
         elif channel == "discord":
@@ -294,7 +339,6 @@ def install(
 ) -> None:
     if config_path.exists() and not force:
         raise FileExistsError(f"{config_path} existe deja ; utilisez --force pour le remplacer.")
-    backup_path = _backup_config(config_path) if config_path.exists() and force else None
     selected_model = model or _ask("Modele OpenRouter", "openai/gpt-5.6-luna")
     selected_compactor_model = compactor_model or _ask(
         "Modele de compaction du contexte",
@@ -306,6 +350,7 @@ def install(
     )
     selected_key = api_key if api_key is not None else _ask_secret("Cle OPENROUTER_API_KEY")
     selected_channels = channels if channels is not None else [item.strip() for item in _ask("Channels actives (separes par des virgules)", "cli").split(",") if item.strip()]
+    _validate_inputs(selected_channels, secrets or {})
     selected_memory = memory if memory is not None else _ask("Activer la memoire automatique ? oui/non", "non").lower() in {"oui", "o", "yes", "y"}
     selected_memory_model = memory_model or (
         _ask("Modele d'extraction de memoire", "deepseek/deepseek-v4-flash-0731")
@@ -313,7 +358,7 @@ def install(
         else "deepseek/deepseek-v4-flash-0731"
     )
     collected_secrets = dict(secrets or {})
-    if "TAVILY_API_KEY" not in collected_secrets:
+    if "TAVILY_API_KEY" not in collected_secrets and api_key is None and not secrets:
         collected_secrets["TAVILY_API_KEY"] = _ask_secret(
             "Cle Tavily (optionnelle ; laisser vide pour garder la recherche publique)"
         )
@@ -334,9 +379,7 @@ def install(
             "username": _ask("Adresse email Orion"),
         }
     default_channel = selected_channels[0] if selected_channels else None
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        _config_text(
+    config_content = _config_text(
             selected_model,
             selected_channels,
             default_channel,
@@ -346,9 +389,9 @@ def install(
             selected_compactor_model,
             selected_memory_model,
             selected_reflection_model,
-        ),
-        encoding="utf-8",
-    )
+        )
+    backup_path = _backup_config(config_path) if config_path.exists() and force else None
+    _atomic_write(config_path, config_content)
     _write_env(env_path, {"OPENROUTER_API_KEY": selected_key, **collected_secrets})
     print(f"Configuration ecrite dans {config_path}")
     if backup_path is not None:

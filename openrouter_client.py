@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import threading
 from typing import Any
+from budgets import BudgetTracker, CircuitBreaker, RateLimiter, jittered_backoff
 
 try:
     import httpx
@@ -340,6 +341,8 @@ class OpenRouterClient:
         default_params: Mapping[str, Any] | None = None,
         usage_observer: Callable[[dict[str, Any]], Any] | None = None,
         usage_ledger: UsageLedger | None = None,
+        budget: BudgetTracker | None = None,
+        rate_limit: float | None = None,
     ) -> None:
         if httpx is None:
             raise OpenRouterConfigurationError(
@@ -364,6 +367,9 @@ class OpenRouterClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        self.budget = budget
+        self._circuit = CircuitBreaker()
+        self._rate_limiter = RateLimiter(rate_limit)
         self.default_params = dict(default_params or {})
         self.usage_ledger = usage_ledger or UsageLedger()
         if usage_observer is not None:
@@ -543,7 +549,7 @@ class OpenRouterClient:
                 return max(0.0, float(retry_after))
             except ValueError:
                 pass
-        return backoff * (2**retry_number)
+        return jittered_backoff(backoff, retry_number)
 
     @staticmethod
     def _error_from_response(response: Any) -> OpenRouterAPIError:
@@ -575,6 +581,10 @@ class OpenRouterClient:
         usage_record: LLMUsageRecord | None = None,
     ) -> dict[str, Any]:
         client = self._sync_client()
+        if self.budget is not None: self.budget.check()
+        if not self._circuit.allow():
+            raise OpenRouterTransportError("Circuit breaker OpenRouter ouvert.")
+        self._rate_limiter.wait()
         for attempt in range(self.max_retries + 1):
             if usage_record is not None:
                 usage_record.attempt = attempt + 1
@@ -583,20 +593,23 @@ class OpenRouterClient:
                     method, path.lstrip("/"), params=params, json=json_body
                 )
             except httpx.TimeoutException as exc:
+                self._circuit.failure()
                 if attempt >= self.max_retries:
                     raise OpenRouterTimeoutError("La requête OpenRouter a expiré.") from exc
-                time.sleep(self.retry_backoff * (2**attempt))
+                time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
             except httpx.HTTPError as exc:
+                self._circuit.failure()
                 if attempt >= self.max_retries:
                     raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                time.sleep(self.retry_backoff * (2**attempt))
+                time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
 
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
                 time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
                 continue
             if response.is_error:
+                self._circuit.failure()
                 raise self._error_from_response(response)
             try:
                 payload = response.json()
@@ -604,6 +617,8 @@ class OpenRouterClient:
                 raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
+            self._circuit.success()
+            if self.budget is not None: self.budget.record(calls=1)
             if usage_record is not None:
                 usage_record.provider_request_id = (
                     response.headers.get("x-request-id")
@@ -623,6 +638,13 @@ class OpenRouterClient:
         usage_record: LLMUsageRecord | None = None,
     ) -> dict[str, Any]:
         client = self._async_http_client()
+        if self.budget is not None:
+            self.budget.check()
+        if not self._circuit.allow():
+            raise OpenRouterTransportError("Circuit breaker OpenRouter ouvert.")
+        # RateLimiter is deliberately synchronous but bounded; yielding here
+        # avoids blocking the event loop while preserving the same pacing.
+        await asyncio.sleep(self._rate_limiter.reserve())
         for attempt in range(self.max_retries + 1):
             if usage_record is not None:
                 usage_record.attempt = attempt + 1
@@ -631,20 +653,23 @@ class OpenRouterClient:
                     method, path.lstrip("/"), params=params, json=json_body
                 )
             except httpx.TimeoutException as exc:
+                self._circuit.failure()
                 if attempt >= self.max_retries:
                     raise OpenRouterTimeoutError("La requête OpenRouter a expiré.") from exc
-                await asyncio.sleep(self.retry_backoff * (2**attempt))
+                await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
             except httpx.HTTPError as exc:
+                self._circuit.failure()
                 if attempt >= self.max_retries:
                     raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                await asyncio.sleep(self.retry_backoff * (2**attempt))
+                await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
 
             if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
                 await asyncio.sleep(self._retry_delay(response, attempt, self.retry_backoff))
                 continue
             if response.is_error:
+                self._circuit.failure()
                 raise self._error_from_response(response)
             try:
                 payload = response.json()
@@ -652,6 +677,9 @@ class OpenRouterClient:
                 raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
+            self._circuit.success()
+            if self.budget is not None:
+                self.budget.record(calls=1)
             if usage_record is not None:
                 usage_record.provider_request_id = (
                     response.headers.get("x-request-id")
@@ -825,11 +853,11 @@ class OpenRouterClient:
                 except httpx.TimeoutException as exc:
                     if attempt >= self.max_retries:
                         raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
-                    time.sleep(self.retry_backoff * (2**attempt))
+                    time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 except httpx.HTTPError as exc:
                     if attempt >= self.max_retries:
                         raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                    time.sleep(self.retry_backoff * (2**attempt))
+                    time.sleep(jittered_backoff(self.retry_backoff, attempt))
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise
@@ -908,11 +936,11 @@ class OpenRouterClient:
                 except httpx.TimeoutException as exc:
                     if attempt >= self.max_retries:
                         raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
-                    await asyncio.sleep(self.retry_backoff * (2**attempt))
+                    await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 except httpx.HTTPError as exc:
                     if attempt >= self.max_retries:
                         raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                    await asyncio.sleep(self.retry_backoff * (2**attempt))
+                    await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise

@@ -11,6 +11,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -111,6 +112,10 @@ class ActionLedger:
             "CREATE INDEX IF NOT EXISTS idx_actions_lookup "
             "ON actions(operation, target, status, created_at)"
         )
+        # Additive schema marker for future migrations; existing databases are
+        # intentionally left untouched beyond this durable version stamp.
+        if int(self._connection.execute("PRAGMA user_version").fetchone()[0]) < 1:
+            self._connection.execute("PRAGMA user_version = 1")
         self._connection.commit()
 
     @staticmethod
@@ -214,7 +219,7 @@ class ActionLedger:
             now = datetime.now(timezone.utc).timestamp()
             self._connection.execute(
                 "UPDATE actions SET status='succeeded', result_json=?, error=NULL, "
-                "updated_at=? WHERE action_key=?",
+                "updated_at=? WHERE action_key=? AND status='running'",
                 (self._json(self._bounded_result(result)), now, key),
             )
             self._connection.commit()
@@ -225,7 +230,8 @@ class ActionLedger:
         with self._lock:
             now = datetime.now(timezone.utc).timestamp()
             self._connection.execute(
-                "UPDATE actions SET status='failed', error=?, updated_at=? WHERE action_key=?",
+                "UPDATE actions SET status='failed', error=?, updated_at=? "
+                "WHERE action_key=? AND status='running'",
                 (error, now, key),
             )
             self._connection.commit()

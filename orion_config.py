@@ -69,6 +69,7 @@ class RuntimeConfig:
     parallel_tool_calls: bool = False
     queue_events_during_run: bool = True
     wake_on_subagent_progress: bool = False
+    max_deferred_events: int = 10000
 
 
 @dataclass
@@ -193,6 +194,18 @@ class MemoryConfig:
 
 
 @dataclass
+class ContextOSConfig:
+    """Durable Context OS backends (opt-in, preserving legacy defaults)."""
+    enabled: bool = False
+    registry_path: str = "data/context_registry.sqlite3"
+    journal_enabled: bool = False
+    journal_path: str = "data/context_journal.sqlite3"
+    memory_path: str = "data/memory.sqlite3"
+    memory_namespace: str = "default"
+    state_path: str = "data/thread_state.json"
+
+
+@dataclass
 class LedgerConfig:
     path: str = "data/action_ledger.sqlite3"
 
@@ -236,6 +249,7 @@ class GatewayConfig:
     max_body_bytes: int = 256 * 1024
     queue_size: int = 1000
     request_timeout: float = 20.0
+    replay_window: float = 300.0
     auth_mode: str = "token"
     auth_token_env: str = "ORION_GATEWAY_TOKEN"
     hmac_secret_env: str | None = None
@@ -266,6 +280,7 @@ class OrionConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    context_os: ContextOSConfig = field(default_factory=ContextOSConfig)
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
     tasks: TaskConfig = field(default_factory=TaskConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
@@ -299,6 +314,7 @@ class OrionConfig:
         prompt = _section(data, "prompt")
         context = _section(data, "context")
         memory = _section(data, "memory")
+        context_os = _section(data, "context_os")
         ledger = _section(data, "ledger")
         tasks = _section(data, "tasks")
         tools = _section(data, "tools")
@@ -341,6 +357,7 @@ class OrionConfig:
             prompt=PromptConfig(**{key: value for key, value in prompt.items() if key in PromptConfig.__dataclass_fields__}),
             context=ContextConfig(**{key: value for key, value in context.items() if key in ContextConfig.__dataclass_fields__}),
             memory=MemoryConfig(**{key: value for key, value in memory.items() if key in MemoryConfig.__dataclass_fields__}),
+            context_os=ContextOSConfig(**{key: value for key, value in context_os.items() if key in ContextOSConfig.__dataclass_fields__}),
             ledger=LedgerConfig(**{key: value for key, value in ledger.items() if key in LedgerConfig.__dataclass_fields__}),
             tasks=TaskConfig(**{key: value for key, value in tasks.items() if key in TaskConfig.__dataclass_fields__}),
             tools=ToolsConfig(
@@ -510,9 +527,15 @@ class OrionConfig:
         if self.memory.min_entries > self.memory.batch_size:
             raise ValueError("memory.min_entries ne peut pas depasser memory.batch_size.")
         integer(self.memory.max_input_chars, "memory.max_input_chars", 1)
+        integer(self.runtime.max_deferred_events, "runtime.max_deferred_events", 1)
         self._run_time()
 
         text(self.ledger.path, "ledger.path")
+        text(self.context_os.registry_path, "context_os.registry_path")
+        text(self.context_os.journal_path, "context_os.journal_path")
+        text(self.context_os.memory_path, "context_os.memory_path")
+        text(self.context_os.memory_namespace, "context_os.memory_namespace")
+        text(self.context_os.state_path, "context_os.state_path")
         text(self.tasks.path, "tasks.path")
         text(self.tools.directory, "tools.directory")
         text(self.tools.state_path, "tools.state_path")
@@ -548,6 +571,65 @@ class OrionConfig:
                 cli_settings["slow_request_seconds"],
                 "channels.cli.slow_request_seconds",
             )
+        telegram_settings = self.channels.settings.get("telegram")
+        if telegram_settings is None:
+            telegram_settings = {}
+        if not isinstance(telegram_settings, dict):
+            raise ValueError("channels.telegram doit etre une table TOML.")
+        if "telegram" in self.channels.enabled or telegram_settings:
+            text(telegram_settings.get("token_env", "TELEGRAM_BOT_TOKEN"), "channels.telegram.token_env")
+            for key in ("allowed_chat_ids", "allowed_user_ids", "outbound_allowed_chat_ids"):
+                values = telegram_settings.get(key, [])
+                if not isinstance(values, list):
+                    raise ValueError(f"channels.telegram.{key} doit etre une liste d'entiers.")
+                for item in values:
+                    if isinstance(item, bool):
+                        raise ValueError(f"channels.telegram.{key} doit etre une liste d'entiers.")
+                    try:
+                        int(item)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"channels.telegram.{key} doit etre une liste d'entiers.") from exc
+            if (
+                not bool(telegram_settings.get("allow_all_chats", False))
+                and not bool(telegram_settings.get("bootstrap_owner", True))
+                and not telegram_settings.get("allowed_chat_ids")
+                and not telegram_settings.get("allowed_user_ids")
+            ):
+                raise ValueError(
+                    "channels.telegram doit declarer allowed_chat_ids, allowed_user_ids "
+                    "ou allow_all_chats=true."
+                )
+            if "allow_all_chats" in telegram_settings and not isinstance(telegram_settings["allow_all_chats"], bool):
+                raise ValueError("channels.telegram.allow_all_chats doit etre un booléen.")
+            if "accept_edited" in telegram_settings and not isinstance(telegram_settings["accept_edited"], bool):
+                raise ValueError("channels.telegram.accept_edited doit etre un booléen.")
+            if "bootstrap_owner" in telegram_settings and not isinstance(telegram_settings["bootstrap_owner"], bool):
+                raise ValueError("channels.telegram.bootstrap_owner doit etre un booléen.")
+            if "poll_timeout" in telegram_settings:
+                integer(telegram_settings["poll_timeout"], "channels.telegram.poll_timeout")
+            if "api_timeout" in telegram_settings:
+                number(telegram_settings["api_timeout"], "channels.telegram.api_timeout", strict=True)
+            if "max_retries" in telegram_settings:
+                integer(telegram_settings["max_retries"], "channels.telegram.max_retries")
+            if "retry_backoff" in telegram_settings:
+                number(telegram_settings["retry_backoff"], "channels.telegram.retry_backoff")
+            if "retry_max_delay" in telegram_settings:
+                number(telegram_settings["retry_max_delay"], "channels.telegram.retry_max_delay")
+            if "queue_size" in telegram_settings:
+                integer(telegram_settings["queue_size"], "channels.telegram.queue_size", 1)
+                if telegram_settings["queue_size"] > 1000:
+                    raise ValueError("channels.telegram.queue_size ne peut pas depasser 1000.")
+            if "offset_path" in telegram_settings and telegram_settings["offset_path"] is not None:
+                text(telegram_settings["offset_path"], "channels.telegram.offset_path")
+            if "owner_path" in telegram_settings and telegram_settings["owner_path"] is not None:
+                text(telegram_settings["owner_path"], "channels.telegram.owner_path")
+            parse_mode = telegram_settings.get("parse_mode", "HTML")
+            if parse_mode not in {None, "HTML", "MarkdownV2"}:
+                raise ValueError("channels.telegram.parse_mode est invalide.")
+            max_chars = telegram_settings.get("max_message_chars", 3500)
+            integer(max_chars, "channels.telegram.max_message_chars", 500)
+            if max_chars > 4096:
+                raise ValueError("channels.telegram.max_message_chars ne peut pas depasser 4096.")
         text(self.gateway.host, "gateway.host")
         integer(self.gateway.port, "gateway.port", 1)
         if self.gateway.port > 65535:
@@ -562,6 +644,9 @@ class OrionConfig:
         if self.gateway.queue_size > 1000:
             raise ValueError("gateway.queue_size ne peut pas depasser 1000.")
         number(self.gateway.request_timeout, "gateway.request_timeout", strict=True)
+        number(self.gateway.replay_window, "gateway.replay_window", strict=True)
+        if self.gateway.replay_window > 86400:
+            raise ValueError("gateway.replay_window ne peut pas depasser 86400 secondes.")
         text(self.gateway.ledger_path, "gateway.ledger_path")
         auth_mode = text(self.gateway.auth_mode, "gateway.auth_mode").lower()
         if auth_mode not in {"token", "hmac"}:
@@ -643,8 +728,33 @@ class OrionConfig:
                         token,
                         poll_timeout=int(settings.get("poll_timeout", 25)),
                         allowed_chat_ids=[int(item) for item in settings.get("allowed_chat_ids", [])],
+                        allowed_user_ids=[int(item) for item in settings.get("allowed_user_ids", [])],
+                        allow_all_chats=bool(settings.get("allow_all_chats", False)),
+                        accept_edited=bool(settings.get("accept_edited", False)),
+                        bootstrap_owner=bool(settings.get("bootstrap_owner", True)),
+                        owner_path=(
+                            self.path(str(settings["owner_path"]))
+                            if "owner_path" in settings and settings.get("owner_path")
+                            else (self.path("data/telegram.owner") if "owner_path" not in settings else None)
+                        ),
+                        outbound_allowed_chat_ids=(
+                            [int(item) for item in settings["outbound_allowed_chat_ids"]]
+                            if settings.get("outbound_allowed_chat_ids") is not None else None
+                        ),
+                        # Keep Telegram's cursor durable by default; an empty
+                        # value explicitly opts into the in-memory legacy mode.
+                        offset_path=(
+                            self.path(str(settings["offset_path"]))
+                            if "offset_path" in settings and settings.get("offset_path")
+                            else (self.path("data/telegram.offset") if "offset_path" not in settings else None)
+                        ),
                         parse_mode=settings.get("parse_mode", "HTML"),
                         max_message_chars=int(settings.get("max_message_chars", 3500)),
+                        api_timeout=float(settings.get("api_timeout", 35.0)),
+                        max_retries=int(settings.get("max_retries", 3)),
+                        retry_backoff=float(settings.get("retry_backoff", 0.5)),
+                        retry_max_delay=float(settings.get("retry_max_delay", 30.0)),
+                        queue_size=int(settings.get("queue_size", 1000)),
                     )
                 )
             elif name == "email":
@@ -681,6 +791,7 @@ class OrionConfig:
                         path=str(settings.get("path", "/webhook")),
                         auth_token=auth_token,
                         outbound_url=outbound_url,
+                        replay_window=float(settings.get("replay_window", 300.0)),
                     )
                 )
             else:
@@ -716,6 +827,7 @@ class OrionConfig:
                     hmac_secret=hmac_secret,
                     timeout=self.gateway.request_timeout,
                     request_timeout=self.gateway.request_timeout,
+                    replay_window=self.gateway.replay_window,
                     max_body_bytes=self.gateway.max_body_bytes,
                     queue_size=self.gateway.queue_size,
                     allowlist=self.gateway.allowlist,
@@ -736,7 +848,10 @@ class OrionConfig:
         from event_handler import EventHandler
         from openrouter_client import OpenRouterClient
         from context_assembler import ContextAssembler, ContextPolicy
-        from prompt_context import ConversationJournal, MemoryExtractor, MemoryMaintenance, PromptContextStore
+        from context_os import ThreadStateStore
+        from context_registry import ContextRegistry
+        from memory_store import MemoryStore
+        from prompt_context import ConversationJournal, SQLiteConversationJournal, MemoryExtractor, MemoryMaintenance, PromptContextStore
         from reflection_engine import ReflectionEngine
         from runtime import AgentRuntime
         from scheduler import JsonScheduleStore, Scheduler
@@ -772,7 +887,21 @@ class OrionConfig:
                 "additional": self.prompt.additional,
             }.items() if value is not None},
         )
-        journal = ConversationJournal(self.path(self.prompt.journal_path))
+        # Context OS is opt-in.  Existing deployments retain JSONL and
+        # in-memory runtime state unless the new section is explicitly enabled.
+        context_registry = None
+        thread_state_store = None
+        retrieval_store = None
+        if self.context_os.enabled:
+            for backend_path in (self.context_os.registry_path, self.context_os.journal_path,
+                                 self.context_os.memory_path, self.context_os.state_path):
+                self.path(backend_path) and Path(self.path(backend_path)).parent.mkdir(parents=True, exist_ok=True)
+            context_registry = ContextRegistry(self.path(self.context_os.registry_path))
+            thread_state_store = ThreadStateStore(self.path(self.context_os.state_path))
+            retrieval_store = MemoryStore(self.path(self.context_os.memory_path))
+        journal = (SQLiteConversationJournal(self.path(self.context_os.journal_path))
+                   if self.context_os.enabled and self.context_os.journal_enabled
+                   else ConversationJournal(self.path(self.prompt.journal_path)))
         assembler_options = {
             "compactor": llm if (self.context.compaction_enabled and (self.context.context_mode == "legacy" or self.context.llm_compaction_enabled)) else None,
             "compactor_model": self.context.compactor_model,
@@ -833,7 +962,9 @@ class OrionConfig:
         assembler_options["policy"] = policy
         supported = inspect.signature(ContextAssembler).parameters
         context_assembler = ContextAssembler(
-            **{key: value for key, value in assembler_options.items() if key in supported}
+            **{key: value for key, value in assembler_options.items() if key in supported},
+            **({"memory_store": retrieval_store, "memory_namespace": self.context_os.memory_namespace,
+                "context_registry": context_registry} if self.context_os.enabled else {})
         )
         tool_manager = ToolManager(
             self.path(self.tools.directory),
@@ -925,6 +1056,7 @@ class OrionConfig:
             parallel_tool_calls=self.runtime.parallel_tool_calls,
             queue_events_during_run=self.runtime.queue_events_during_run,
             wake_on_subagent_progress=self.runtime.wake_on_subagent_progress,
+            max_deferred_events=self.runtime.max_deferred_events,
             response_max_chars=self.response.max_chars,
             response_max_sentences=self.response.max_sentences,
             response_concise=self.response.concise,
@@ -938,6 +1070,9 @@ class OrionConfig:
             task_context_max_chars=self.context.task_max_chars,
             event_context_max_chars=self.context.event_max_chars,
             context_mode=self.context.context_mode,
+            thread_state_store=thread_state_store,
+            context_registry=context_registry,
+            retrieval_store=retrieval_store,
             memory_maintenance=maintenance,
             on_output=channel_router.route,
         ).attach(events)
@@ -1058,6 +1193,7 @@ __all__ = [
     "LedgerConfig",
     "LLMConfig",
     "MemoryConfig",
+    "ContextOSConfig",
     "OrionApplication",
     "OrionConfig",
     "PromptConfig",
