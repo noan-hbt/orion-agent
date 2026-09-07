@@ -4,6 +4,23 @@
 
 [orion]
 name = "Orion"
+config_version = 2
+
+[gateway]
+# Desactive par defaut; les secrets restent dans l'environnement.
+enabled = false
+host = "127.0.0.1"
+port = 8080
+path = "/webhook"
+max_body_bytes = 262144
+queue_size = 1000
+request_timeout = 20.0
+auth_mode = "token"
+auth_token_env = "ORION_GATEWAY_TOKEN"
+hmac_secret_env = "ORION_GATEWAY_HMAC_SECRET"
+allowlist = []
+reply_allowlist = []
+allow_redirects = false
 
 [llm]
 api_key_env = "OPENROUTER_API_KEY"
@@ -48,6 +65,15 @@ max_tool_output_chars = 12000
 max_session_messages = 100
 history_limit = 200
 emit_progress_events = false
+
+[teams]
+# Bus SQLite partage optionnel entre plusieurs processus Orion.
+enabled = false
+path = "data/teams.sqlite3"
+instance_id = "orion"
+team = "default"
+poll_interval = 1.0
+max_message_chars = 12000
 
 [response]
 concise = true
@@ -147,6 +173,7 @@ enabled = false
 model = "deepseek/deepseek-v4-flash-0731"
 run_at = "23:00"
 batch_size = 20
+min_entries = 20
 poll_interval = 30.0
 max_input_chars = 30000
 

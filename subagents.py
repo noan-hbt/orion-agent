@@ -509,8 +509,7 @@ class SubAgentManager:
             if session is None:
                 raise RuntimeError("Session du sous-agent introuvable.")
             session.messages.append({"role": "user", "content": _clip(message, self.max_context_chars)})
-            if len(session.messages) > self.max_session_messages:
-                session.messages = session.messages[:2] + session.messages[-(self.max_session_messages - 2):]
+            session.messages = self._bounded_messages(session.messages)
             session.status = "active"
             session.updated_at = _now()
             job.status = SubAgentJobStatus.QUEUED
@@ -718,6 +717,10 @@ class SubAgentManager:
         for turn in range(agent.max_turns):
             if self._is_cancel_requested(job_id):
                 return "Travail interrompu à la demande d'Orion."
+            # The in-memory loop can outgrow the persisted session between
+            # turns; compact before every model call so the actual request is
+            # bounded as well as the restart state.
+            messages = self._bounded_messages(messages)
             response = self.llm_client.complete(
                 messages,
                 model=agent.model,
@@ -726,15 +729,18 @@ class SubAgentManager:
             )
             assistant = OpenRouterClient._assistant_message(response)
             messages.append(assistant)
-            self._save_session(job_id, messages)
             calls = OpenRouterClient._tool_calls(assistant)
             text = OpenRouterClient.text_from_message(assistant).strip()
             if not calls:
+                self._save_session(job_id, messages)
                 if self._is_pause_requested(job_id):
                     return _WaitingResult("Pause demandée par Orion.")
                 return text or "Le sous-agent a terminé sans produire de résultat exploitable."
             if text:
-                self._record_progress(job_id, text)
+                # The completed exchange is persisted below, after every tool
+                # result has been attached.  Avoid writing the same state once
+                # merely to publish progress.
+                self._record_progress(job_id, text, persist=False)
             for call in calls:
                 if self._is_cancel_requested(job_id):
                     return "Travail interrompu à la demande d'Orion."
@@ -754,8 +760,11 @@ class SubAgentManager:
                     result = self.llm_client.execute_tool_call(call, raise_tool_errors=False)
                     result["content"] = _clip(result.get("content", ""), self.max_tool_output_chars)
                 messages.append(result)
-                self._save_session(job_id, messages)
                 self._record_tool_call(job_id, call)
+            # Persist an assistant tool call together with all of its results.
+            # A restart cannot load a malformed partial tool exchange; a crash
+            # during execution may retry it, with normal action deduplication.
+            self._save_session(job_id, messages)
             if self._is_pause_requested(job_id):
                 return _WaitingResult("Pause demandée par Orion.")
 
@@ -763,7 +772,10 @@ class SubAgentManager:
             "role": "system",
             "content": "La limite d'étapes est atteinte. Ne lance plus d'outil et fournis maintenant le meilleur résultat exploitable à Orion.",
         }
-        response = self.llm_client.complete([*messages, final_instruction], model=agent.model, tools=None)
+        # Apply the same bound to the final request.  This instruction is only
+        # transient and is deliberately not retained in the session history.
+        final_messages = self._bounded_messages([*messages, final_instruction])
+        response = self.llm_client.complete(final_messages, model=agent.model, tools=None)
         assistant = OpenRouterClient._assistant_message(response)
         self._save_session(job_id, [*messages, assistant], status="completed")
         return OpenRouterClient.text_from_message(assistant).strip() or "Travail partiellement terminé."
@@ -786,13 +798,91 @@ class SubAgentManager:
         *,
         status: str | None = None,
     ) -> None:
-        if len(messages) > self.max_session_messages:
-            messages = messages[:2] + messages[-(self.max_session_messages - 2):]
-        session.messages = messages
+        session.messages = self._bounded_messages(messages)
         if status is not None:
             session.status = status
         session.updated_at = _now()
         self._save_locked()
+
+    def _bounded_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Compacte une session sans laisser de tool call orphelin.
+
+        Les anciens messages restent résumés par le couple system/user initial;
+        la queue commence toujours sur une frontière user ou assistant textuel.
+        Cela réduit le contexte tout en gardant une séquence acceptée par les
+        APIs OpenAI compatibles après redémarrage.
+        """
+        limit = self.max_session_messages
+        if not messages:
+            return []
+
+        # Keep the initial instructions when possible, while excluding their
+        # original positions from the selectable tail.
+        system_index = next((i for i, item in enumerate(messages) if item.get("role") == "system"), None)
+        user_index = next((i for i, item in enumerate(messages) if item.get("role") == "user"), None)
+        prefix: list[dict[str, Any]] = []
+        if system_index is not None:
+            prefix.append(dict(messages[system_index]))
+        if user_index is not None and user_index != system_index:
+            prefix.append(dict(messages[user_index]))
+        skipped_prefix = {index for index in (system_index, user_index) if index is not None}
+
+        # Build atomic history blocks.  An assistant tool request and every
+        # result for that request must enter or leave the retained history as a
+        # unit; otherwise a restart sends an invalid protocol sequence.
+        blocks: list[list[dict[str, Any]]] = []
+        index = 0
+        while index < len(messages):
+            if index in skipped_prefix:
+                index += 1
+                continue
+            item = messages[index]
+            role = item.get("role")
+            if role == "tool":
+                # Results without their assistant request are never useful to
+                # the model and are rejected by OpenAI-compatible APIs.
+                index += 1
+                continue
+            if role == "assistant" and item.get("tool_calls"):
+                calls = item.get("tool_calls")
+                calls = list(calls) if isinstance(calls, list) else []
+                call_ids = [str(call.get("id")) for call in calls if isinstance(call, Mapping) and call.get("id")]
+                result_messages: list[dict[str, Any]] = []
+                next_index = index + 1
+                while next_index < len(messages) and messages[next_index].get("role") == "tool":
+                    result_messages.append(dict(messages[next_index]))
+                    next_index += 1
+                result_ids = {str(result.get("tool_call_id")) for result in result_messages}
+                if call_ids and all(call_id in result_ids for call_id in call_ids):
+                    # Keep only results belonging to this request.  A stray
+                    # result in the same run is an orphan and must be dropped.
+                    expected = set(call_ids)
+                    results = [result for result in result_messages if str(result.get("tool_call_id")) in expected]
+                    blocks.append([dict(item), *results])
+                index = next_index
+                continue
+            blocks.append([dict(item)])
+            index += 1
+
+        budget = max(0, limit - len(prefix))
+        retained_reversed: list[list[dict[str, Any]]] = []
+        used = 0
+        for block in reversed(blocks):
+            block_size = len(block)
+            if used + block_size <= budget:
+                retained_reversed.append(block)
+                used += block_size
+                continue
+            if not retained_reversed and block_size > budget:
+                # A single tool exchange can be larger than the configured
+                # limit.  Keeping it intact is safer than producing an invalid
+                # request; this is the only intentional overrun.
+                retained_reversed.append(block)
+            break
+        retained: list[dict[str, Any]] = []
+        for block in reversed(retained_reversed):
+            retained.extend(block)
+        return prefix + retained
 
     def _save_session(
         self,
@@ -828,7 +918,7 @@ class SubAgentManager:
             job = self._jobs.get(job_id)
             return job is None or job.pause_requested
 
-    def _record_progress(self, job_id: str, message: str) -> None:
+    def _record_progress(self, job_id: str, message: str, *, persist: bool = True) -> None:
         compact = _clip(message, 1200)
         with self._lock:
             job = self._jobs.get(job_id)
@@ -837,7 +927,8 @@ class SubAgentManager:
             job.progress.append(compact)
             job.progress = job.progress[-20:]
             job.updated_at = _now()
-            self._save_locked()
+            if persist:
+                self._save_locked()
             snapshot = SubAgentJob.from_dict(job.to_dict())
         if self.emit_progress_events:
             self._publish(snapshot, "subagent.progress", compact, EventPriority.LOW)
@@ -857,7 +948,8 @@ class SubAgentManager:
             )
             job.tool_calls = job.tool_calls[-50:]
             job.updated_at = _now()
-            self._save_locked()
+            # The enclosing turn persists the job together with the complete
+            # assistant/tool exchange, avoiding one state rewrite per call.
 
     def _publish(self, job: SubAgentJob, event_type: str, message: str | None, priority: EventPriority) -> None:
         agent = self.get_agent(job.agent_id)

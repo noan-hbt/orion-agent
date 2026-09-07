@@ -59,6 +59,29 @@ La CLI accepte les messages multilignes avec `Alt+Entrée`, conserve un historiq
 local et affiche les réponses Markdown. Une alerte apparaît lorsqu'une requête
 dépasse le délai configuré dans `channels.cli.slow_request_seconds`.
 
+Le même démarrage fonctionne dans un terminal, un pipe ou un service : la CLI
+détecte automatiquement le mode non-TTY et lit alors une ligne à la fois.
+`EOF`, `/exit`, `Ctrl+C` et `SIGTERM` partagent le même chemin d'arrêt. Les
+informations de `/status`, `/tools`, `/tasks`, `/agents` et `/jobs` sont lues
+par des providers du runtime au moment de l'affichage, afin de rester cohérentes
+avec les workers actifs.
+
+Pour un appel scriptable, `--once` soumet une seule demande sans lancer de
+lecteur interactif :
+
+```bash
+python orion_run.py --once "quel est l'état des jobs ?"
+python orion_run.py --once "quel est l'état des jobs ?" --output jsonl
+python orion_run.py --command status --output jsonl
+```
+
+Le flux JSONL contient un objet par événement, avec `request_id`,
+`correlation_id`, `state` et `seq`. Le délai de `--once` se règle avec
+`--timeout` (120 secondes par défaut). Les codes de sortie sont `0` pour un
+arrêt normal, `2` pour une erreur d'arguments, `3` pour une configuration ou
+un runtime indisponible, `4` pour une demande échouée et `130` pour une
+interruption clavier.
+
 ## Configuration
 
 Le fichier `orion.toml` contient les paramètres de l'instance :
@@ -85,6 +108,12 @@ default = "cli"
 
 [channels.cli]
 slow_request_seconds = 30.0
+# Les options de rendu restent valables en TTY comme en mode pipe.
+style = true
+banner = true
+markdown = true
+timestamps = true
+history_path = "data/cli_history.txt"
 ```
 
 Pour utiliser plusieurs channels, ajoutez-les à `channels.enabled` et
@@ -135,6 +164,24 @@ déléguer un job. Orion reste alors disponible. Le sous-agent peut :
 - passer en attente avec `wait_for_input` ;
 - reprendre sa session avec `send_to_subagent` ;
 - être mis en pause, repris ou annulé.
+
+Plusieurs instances Orion peuvent aussi travailler dans une équipe locale. Le
+bus est une base SQLite partagée, sans serveur à installer. Chaque instance
+choisit un `instance_id` et un nom d'équipe dans `[teams]`, puis peut envoyer
+un message ou déléguer une tâche avec les tools `send_team_message` et
+`delegate_team_job`. L'instance destinataire reçoit un événement durable
+`team.message` ou `team.job` et peut répondre par le même bus. Les messages
+sont adressés, limités en taille et conservés après un redémarrage. Activez
+ce mode uniquement pour les processus qui partagent le même fichier SQLite ;
+le défaut reste `enabled = false`.
+
+Le contrat de communication et la configuration `config_version = 2` sont
+décrits dans [docs/ORION_COMMUNICATION.md](docs/ORION_COMMUNICATION.md). Le
+mode CLI non-TTY lit et écrit ligne par ligne avec `StringIO`, conserve
+`request_id` et `correlation_id`, et rend EOF, `stop` et `/stop` idempotents.
+Le gateway reste désactivé par défaut; sa file est bornée en mémoire et ne
+promet pas de reprise après crash. Les noms de variables `*_env` empêchent les
+secrets en clair dans la configuration.
 
 Les événements reçus pendant un RUN peuvent être signalés entre deux tools.
 Orion peut les traiter immédiatement ou les laisser pour un RUN séparé.

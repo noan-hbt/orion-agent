@@ -8,7 +8,9 @@ L'ordre de traitement est : priorité décroissante, puis ordre d'arrivée.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import threading
 import time
 import uuid
@@ -45,6 +47,35 @@ class EventType(str, Enum):
 EventHandlerFunction = Callable[["Event"], Any]
 
 
+class DeliveryError(Exception):
+    """Erreur stable de livraison, avec un code utilisable par un appelant."""
+
+    status_code = 503
+
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class EventQueueFullError(Full):
+    """La file est pleine et l'événement n'a pas été accepté."""
+
+    status_code = 429
+
+    def __init__(self, message: str = "La file d'événements est pleine.", *, retry_after: float = 0.1) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+BackpressureError = EventQueueFullError
+
+
+class DuplicateEventError(DeliveryError):
+    """Un identifiant de déduplication a déjà été utilisé avec un autre contenu."""
+
+    status_code = 409
+
+
 @dataclass(slots=True)
 class Event:
     """Événement placé dans la file et transmis aux handlers."""
@@ -58,6 +89,9 @@ class Event:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     max_attempts: int = 3
     attempts: int = 0
+    message_id: str | None = None
+    correlation_id: str | None = None
+    idempotency_key: str | None = None
 
     def __post_init__(self) -> None:
         self.type = self.type.value if isinstance(self.type, Enum) else str(self.type)
@@ -66,6 +100,12 @@ class Event:
             raise ValueError("La priorité doit être supérieure ou égale à zéro.")
         if self.max_attempts < 1:
             raise ValueError("max_attempts doit être supérieur ou égal à un.")
+        if self.message_id is None:
+            self.message_id = self.metadata.get("message_id")
+        if self.correlation_id is None:
+            self.correlation_id = self.metadata.get("correlation_id")
+        if self.idempotency_key is None:
+            self.idempotency_key = self.metadata.get("idempotency_key")
 
 
 class EventQueue:
@@ -80,8 +120,10 @@ class EventQueue:
     def put(self, event: Event, *, timeout: float | None = None) -> None:
         """Ajoute un événement ; lève ``queue.Full`` si la file est pleine."""
         priority_item = (-event.priority, next(self._sequence), event)
-        if timeout is None:
-            self._items.put(priority_item)
+        if timeout is None or timeout == 0:
+            self._items.put_nowait(priority_item)
+        elif timeout < 0:
+            raise ValueError("timeout doit être supérieur ou égal à zéro ou nul.")
         else:
             self._items.put(priority_item, timeout=timeout)
 
@@ -128,7 +170,7 @@ class EventHandler:
         self,
         *,
         workers: int = 0,
-        queue_size: int = 0,
+        queue_size: int = 1000,
         default_max_attempts: int = 3,
         retry_delay: float = 1.0,
         retry_backoff: float = 2.0,
@@ -158,6 +200,9 @@ class EventHandler:
         self._drain_on_stop = True
         self._threads: list[threading.Thread] = []
         self._running = False
+        self._dedupe: dict[str, tuple[str, Event]] = {}
+        self._dedupe_lock = threading.Lock()
+        self._callback_errors: list[Exception] = []
 
     @property
     def running(self) -> bool:
@@ -168,6 +213,12 @@ class EventHandler:
         """Copie des événements qui ont épuisé leurs tentatives."""
         with self._dead_letters_lock:
             return list(self._dead_letters)
+
+    @property
+    def callback_errors(self) -> list[Exception]:
+        """Erreurs de callbacks observées sans interrompre le worker."""
+        with self._dead_letters_lock:
+            return list(self._callback_errors)
 
     def register(self, event_type: str | EventType, handler: EventHandlerFunction) -> None:
         """Associe un handler à un type. ``*`` reçoit tous les événements."""
@@ -195,26 +246,62 @@ class EventHandler:
         metadata: Mapping[str, Any] | None = None,
         max_attempts: int | None = None,
         timeout: float | None = None,
+        message_id: str | None = None,
+        correlation_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> Event:
         """Crée et place un événement dans la file."""
+        event_metadata = dict(metadata or {})
+        if message_id is not None:
+            event_metadata.setdefault("message_id", message_id)
+        if correlation_id is not None:
+            event_metadata.setdefault("correlation_id", correlation_id)
+        if idempotency_key is not None:
+            event_metadata.setdefault("idempotency_key", idempotency_key)
         event = Event(
             type=event_type.value if isinstance(event_type, EventType) else str(event_type),
             payload=dict(payload or {}),
             priority=int(priority),
             source=source,
-            metadata=dict(metadata or {}),
+            metadata=event_metadata,
             max_attempts=(
                 max_attempts if max_attempts is not None else self.default_max_attempts
             ),
+            message_id=message_id,
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
         )
-        self.enqueue(event, timeout=timeout)
+        dedupe_key = message_id or idempotency_key
+        if dedupe_key:
+            fingerprint = self._fingerprint(event)
+            with self._dedupe_lock:
+                existing = self._dedupe.get(str(dedupe_key))
+                if existing is not None:
+                    if existing[0] != fingerprint:
+                        raise DuplicateEventError(
+                            f"Identifiant déjà utilisé avec un contenu différent : {dedupe_key}"
+                        )
+                    return existing[1]
+                self._dedupe[str(dedupe_key)] = (fingerprint, event)
+        try:
+            self.enqueue(event, timeout=timeout)
+        except Full as exc:
+            if dedupe_key:
+                with self._dedupe_lock:
+                    self._dedupe.pop(str(dedupe_key), None)
+            raise EventQueueFullError(retry_after=0.1) from exc
         return event
 
     def enqueue(self, event: Event, *, timeout: float | None = None) -> None:
         """Place un événement déjà construit dans la file."""
         if not isinstance(event, Event):
             raise TypeError("event doit être une instance de Event.")
-        self.queue.put(event, timeout=timeout)
+        try:
+            self.queue.put(event, timeout=timeout)
+        except EventQueueFullError:
+            raise
+        except Full as exc:
+            raise EventQueueFullError(retry_after=0.1) from exc
 
     def start(self) -> None:
         """Démarre les workers configurés ; sans worker, le dispatch est manuel."""
@@ -305,10 +392,14 @@ class EventHandler:
         handlers = self._matching_handlers(event)
         if not handlers:
             if self.on_unhandled is not None:
-                self._invoke(self.on_unhandled, event)
+                try:
+                    self._invoke(self.on_unhandled, event)
+                except Exception as callback_error:
+                    with self._dead_letters_lock:
+                        self._callback_errors.append(callback_error)
+                    self._dead_letter(event)
             else:
-                with self._dead_letters_lock:
-                    self._dead_letters.append(event)
+                self._dead_letter(event)
             return
 
         event.attempts += 1
@@ -320,12 +411,45 @@ class EventHandler:
                 delay = self.retry_delay * (self.retry_backoff ** (event.attempts - 1))
                 if delay:
                     time.sleep(delay)
-                self.queue.put(event)
+                try:
+                    self.queue.put_nowait(event)
+                except Full as retry_exc:
+                    self._dead_letter(event)
+                    self._invoke_error_callback_safely(self.on_error, event, retry_exc)
                 return
-            with self._dead_letters_lock:
+            self._dead_letter(event)
+            self._invoke_error_callback_safely(self.on_error, event, exc)
+
+    def _dead_letter(self, event: Event) -> None:
+        with self._dead_letters_lock:
+            if event not in self._dead_letters:
                 self._dead_letters.append(event)
-            if self.on_error is not None:
-                self._invoke_error_callback(self.on_error, event, exc)
+
+    def _invoke_error_callback_safely(
+        self,
+        callback: Callable[[Event, Exception], Any] | None,
+        event: Event,
+        error: Exception,
+    ) -> None:
+        if callback is None:
+            return
+        try:
+            self._invoke_error_callback(callback, event, error)
+        except Exception as callback_error:
+            with self._dead_letters_lock:
+                self._callback_errors.append(callback_error)
+
+    @staticmethod
+    def _fingerprint(event: Event) -> str:
+        body = {
+            "type": event.type,
+            "payload": event.payload,
+            "priority": event.priority,
+            "source": event.source,
+            "metadata": event.metadata,
+        }
+        encoded = json.dumps(body, sort_keys=True, default=str, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _invoke(handler: Callable[..., Any], event: Event) -> Any:
@@ -357,4 +481,8 @@ __all__ = [
     "EventPriority",
     "EventQueue",
     "EventType",
+    "BackpressureError",
+    "DeliveryError",
+    "DuplicateEventError",
+    "EventQueueFullError",
 ]

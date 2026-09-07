@@ -11,13 +11,18 @@ constructeur.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import os
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+import threading
 from typing import Any
 
 try:
@@ -40,6 +45,208 @@ RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 Message = dict[str, Any]
 ToolHandler = Callable[..., Any]
+
+
+_usage_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "orion_llm_usage_context", default={}
+)
+
+
+@contextmanager
+def usage_context(
+    *,
+    request_id: str | None = None,
+    correlation_id: str | None = None,
+    stage: str = "other",
+    parent_call_id: str | None = None,
+):
+    """Attach Orion correlation metadata to calls made in this context."""
+    values = dict(_usage_context.get())
+    for key, value in {
+        "request_id": request_id,
+        "correlation_id": correlation_id,
+        "stage": stage,
+        "parent_call_id": parent_call_id,
+    }.items():
+        if value is not None:
+            values[key] = value
+    token = _usage_context.set(values)
+    try:
+        yield
+    finally:
+        _usage_context.reset(token)
+
+
+@dataclass(slots=True)
+class LLMUsageRecord:
+    """One logical provider call and its billing/usage metadata."""
+
+    call_id: str
+    request_id: str | None = None
+    correlation_id: str | None = None
+    parent_call_id: str | None = None
+    stage: str = "other"
+    model: str | None = None
+    provider_id: str | None = None
+    provider_request_id: str | None = None
+    attempt: int = 0
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+    latency_ms: float | None = None
+    status: str = "inflight"
+    streamed: bool = False
+    usage_complete: bool = False
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_usd: Decimal | None = None
+    cost_source: str = "unavailable"
+    prompt_details: dict[str, Any] | None = None
+    completion_details: dict[str, Any] | None = None
+    cost_details: dict[str, Any] | None = None
+    error_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result = {
+            key: value
+            for key, value in {
+                "call_id": self.call_id,
+                "request_id": self.request_id,
+                "correlation_id": self.correlation_id,
+                "parent_call_id": self.parent_call_id,
+                "stage": self.stage,
+                "model": self.model,
+                "provider_id": self.provider_id,
+                "provider_request_id": self.provider_request_id,
+                "attempt": self.attempt,
+                "started_at": self.started_at.isoformat(),
+                "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+                "latency_ms": self.latency_ms,
+                "status": self.status,
+                "streamed": self.streamed,
+                "usage_complete": self.usage_complete,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
+                "cost_usd": str(self.cost_usd) if self.cost_usd is not None else None,
+                "cost_source": self.cost_source,
+                "prompt_details": dict(self.prompt_details) if self.prompt_details else None,
+                "completion_details": dict(self.completion_details) if self.completion_details else None,
+                "cost_details": dict(self.cost_details) if self.cost_details else None,
+                "error_type": self.error_type,
+            }.items()
+        }
+        return result
+
+
+class UsageLedger:
+    """Thread-safe, idempotent session aggregate for LLM usage records."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._records: dict[str, LLMUsageRecord] = {}
+        self._subscribers: list[Callable[[dict[str, Any]], Any]] = []
+        self._last_update_at: datetime | None = None
+
+    def subscribe(self, callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
+        with self._lock:
+            if callback not in self._subscribers:
+                self._subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                if callback in self._subscribers:
+                    self._subscribers.remove(callback)
+
+        return unsubscribe
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        records = list(self._records.values())
+        completed = [item for item in records if item.status == "succeeded"]
+        def totals(items: list[LLMUsageRecord]) -> tuple[int, int, int]:
+            return (
+                sum(item.prompt_tokens or 0 for item in items),
+                sum(item.completion_tokens or 0 for item in items),
+                sum(item.total_tokens or 0 for item in items),
+            )
+
+        prompt, completion, total = totals(completed)
+        known = sum(
+            (item.cost_usd for item in completed if item.cost_usd is not None and item.cost_source == "openrouter"),
+            Decimal("0"),
+        )
+        estimated = sum(
+            (item.cost_usd for item in completed if item.cost_usd is not None and item.cost_source == "catalog_estimate"),
+            Decimal("0"),
+        )
+        by_model: dict[str, dict[str, Any]] = {}
+        by_stage: dict[str, dict[str, Any]] = {}
+        for item in completed:
+            model = item.model or "unknown"
+            for target, key in ((by_model, model), (by_stage, item.stage or "other")):
+                row = target.setdefault(key, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "known_cost_usd": Decimal("0")})
+                row["calls"] += 1
+                row["prompt_tokens"] += item.prompt_tokens or 0
+                row["completion_tokens"] += item.completion_tokens or 0
+                row["total_tokens"] += item.total_tokens or 0
+                if item.cost_usd is not None and item.cost_source == "openrouter":
+                    row["known_cost_usd"] += item.cost_usd
+        return {
+            "started_calls": len(records),
+            "inflight_calls": sum(item.status == "inflight" for item in records),
+            "completed_calls": len(completed),
+            "failed_calls": sum(item.status in {"failed", "canceled"} for item in records),
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+            "known_cost_usd": known,
+            "estimated_cost_usd": estimated,
+            "usage_missing_calls": sum(not item.usage_complete or item.cost_usd is None for item in completed),
+            "by_model": by_model,
+            "by_stage": by_stage,
+            "last_update_at": self._last_update_at.isoformat() if self._last_update_at else None,
+        }
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return self._snapshot_locked()
+
+    @property
+    def records(self) -> tuple[LLMUsageRecord, ...]:
+        with self._lock:
+            return tuple(replace(item) for item in self._records.values())
+
+    def ingest(self, record: LLMUsageRecord, *, event: str | None = None) -> None:
+        with self._lock:
+            stored = replace(
+                record,
+                prompt_details=dict(record.prompt_details) if record.prompt_details else None,
+                completion_details=dict(record.completion_details) if record.completion_details else None,
+                cost_details=dict(record.cost_details) if record.cost_details else None,
+            )
+            existing = self._records.get(stored.call_id)
+            if existing is not None and existing.status != "inflight" and stored.status == "inflight":
+                return
+            self._records[stored.call_id] = stored
+            self._last_update_at = datetime.now(timezone.utc)
+            event_name = event or ("usage.started" if stored.status == "inflight" else "usage.updated")
+            payload = {
+                "type": event_name,
+                "call_id": stored.call_id,
+                "request_id": stored.request_id,
+                "record": stored.to_dict(),
+                "snapshot": self._snapshot_locked(),
+            }
+            subscribers = tuple(self._subscribers)
+        for callback in subscribers:
+            try:
+                callback(payload)
+            except Exception:
+                continue
+
+    record = ingest
+
+
 
 
 class OpenRouterError(Exception):
@@ -131,6 +338,8 @@ class OpenRouterClient:
         retry_backoff: float = 0.5,
         headers: Mapping[str, str] | None = None,
         default_params: Mapping[str, Any] | None = None,
+        usage_observer: Callable[[dict[str, Any]], Any] | None = None,
+        usage_ledger: UsageLedger | None = None,
     ) -> None:
         if httpx is None:
             raise OpenRouterConfigurationError(
@@ -156,6 +365,9 @@ class OpenRouterClient:
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.default_params = dict(default_params or {})
+        self.usage_ledger = usage_ledger or UsageLedger()
+        if usage_observer is not None:
+            self.usage_ledger.subscribe(usage_observer)
 
         request_headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -176,6 +388,112 @@ class OpenRouterClient:
 
         if system_prompt:
             self._messages.append({"role": "system", "content": system_prompt})
+
+    @property
+    def usage_records(self) -> tuple[LLMUsageRecord, ...]:
+        """Records observed by this client, in call creation order."""
+        return self.usage_ledger.records
+
+    def subscribe_usage(self, callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
+        return self.usage_ledger.subscribe(callback)
+
+    def usage_snapshot(self) -> dict[str, Any]:
+        return self.usage_ledger.snapshot()
+
+    def usage_context(self, **kwargs: Any):
+        return usage_context(**kwargs)
+
+    def _start_usage(self, *, model: str | None, streamed: bool = False) -> LLMUsageRecord:
+        context = _usage_context.get()
+        record = LLMUsageRecord(
+            call_id=uuid.uuid4().hex,
+            request_id=context.get("request_id"),
+            correlation_id=context.get("correlation_id"),
+            parent_call_id=context.get("parent_call_id"),
+            stage=str(context.get("stage") or "other"),
+            model=model or self.model,
+            streamed=streamed,
+        )
+        self.usage_ledger.ingest(record, event="usage.started")
+        return record
+
+    @staticmethod
+    def _decimal(value: Any) -> Decimal | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _int(value: Any) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _finish_usage(
+        self,
+        record: LLMUsageRecord,
+        payload: Mapping[str, Any] | None = None,
+        *,
+        headers: Mapping[str, Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        if record.status != "inflight":
+            return
+        record.finished_at = datetime.now(timezone.utc)
+        record.latency_ms = max(0.0, (record.finished_at - record.started_at).total_seconds() * 1000)
+        if record.attempt < 1:
+            record.attempt = 1
+        if error is not None:
+            record.status = "failed"
+            record.error_type = type(error).__name__
+            request_id = getattr(error, "request_id", None)
+            if request_id:
+                record.provider_request_id = str(request_id)
+        else:
+            body = payload or {}
+            usage = body.get("usage") if isinstance(body, Mapping) else None
+            if not isinstance(usage, Mapping):
+                usage = {}
+            record.provider_id = str(body.get("id")) if body.get("id") is not None else None
+            effective_model = body.get("model")
+            if effective_model:
+                record.model = str(effective_model)
+            prompt = self._int(usage.get("prompt_tokens"))
+            completion = self._int(usage.get("completion_tokens"))
+            total = self._int(usage.get("total_tokens"))
+            record.prompt_tokens = prompt
+            record.completion_tokens = completion
+            record.total_tokens = total
+            record.usage_complete = bool(usage) and any(value is not None for value in (prompt, completion, total))
+            for key, attr in (
+                ("prompt_tokens_details", "prompt_details"),
+                ("completion_tokens_details", "completion_details"),
+                ("cost_details", "cost_details"),
+            ):
+                value = usage.get(key)
+                if isinstance(value, Mapping):
+                    setattr(record, attr, dict(value))
+            cost = usage.get("cost", body.get("cost"))
+            record.cost_usd = self._decimal(cost)
+            if record.cost_usd is not None:
+                record.cost_source = "openrouter"
+            if headers:
+                record.provider_request_id = (
+                    str(headers.get("x-request-id") or headers.get("x-openrouter-request-id"))
+                    if (headers.get("x-request-id") or headers.get("x-openrouter-request-id"))
+                    else record.provider_request_id
+                )
+            record.status = "succeeded"
+        self.usage_ledger.ingest(record, event="usage.updated")
+
+    def _fail_usage(self, record: LLMUsageRecord, error: BaseException) -> None:
+        self._finish_usage(record, error=error)
 
     # ------------------------------------------------------------------
     # Gestion du cycle de vie et du transport HTTP
@@ -254,9 +572,12 @@ class OpenRouterClient:
         *,
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
+        usage_record: LLMUsageRecord | None = None,
     ) -> dict[str, Any]:
         client = self._sync_client()
         for attempt in range(self.max_retries + 1):
+            if usage_record is not None:
+                usage_record.attempt = attempt + 1
             try:
                 response = client.request(
                     method, path.lstrip("/"), params=params, json=json_body
@@ -283,6 +604,11 @@ class OpenRouterClient:
                 raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
+            if usage_record is not None:
+                usage_record.provider_request_id = (
+                    response.headers.get("x-request-id")
+                    or response.headers.get("x-openrouter-request-id")
+                )
             return payload
 
         raise OpenRouterTransportError("La requête OpenRouter a échoué après plusieurs tentatives.")
@@ -294,9 +620,12 @@ class OpenRouterClient:
         *,
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
+        usage_record: LLMUsageRecord | None = None,
     ) -> dict[str, Any]:
         client = self._async_http_client()
         for attempt in range(self.max_retries + 1):
+            if usage_record is not None:
+                usage_record.attempt = attempt + 1
             try:
                 response = await client.request(
                     method, path.lstrip("/"), params=params, json=json_body
@@ -323,6 +652,11 @@ class OpenRouterClient:
                 raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
+            if usage_record is not None:
+                usage_record.provider_request_id = (
+                    response.headers.get("x-request-id")
+                    or response.headers.get("x-openrouter-request-id")
+                )
             return payload
 
         raise OpenRouterTransportError("La requête OpenRouter a échoué après plusieurs tentatives.")
@@ -364,18 +698,26 @@ class OpenRouterClient:
         **params: Any,
     ) -> dict[str, Any]:
         """Effectue un appel non-streaming à ``chat/completions``."""
-        return self._request_json(
-            "POST",
-            "chat/completions",
-            json_body=self._payload(
-                messages,
-                model=model,
-                tools=tools,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-                **params,
-            ),
-        )
+        record = self._start_usage(model=model)
+        try:
+            payload = self._request_json(
+                "POST",
+                "chat/completions",
+                json_body=self._payload(
+                    messages,
+                    model=model,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    parallel_tool_calls=parallel_tool_calls,
+                    **params,
+                ),
+                usage_record=record,
+            )
+        except BaseException as exc:
+            self._fail_usage(record, exc)
+            raise
+        self._finish_usage(record, payload)
+        return payload
 
     # Alias explicite pour les utilisateurs habitués au SDK OpenAI.
     chat_completion = complete
@@ -391,18 +733,26 @@ class OpenRouterClient:
         **params: Any,
     ) -> dict[str, Any]:
         """Version asynchrone de :meth:`complete`."""
-        return await self._request_json_async(
-            "POST",
-            "chat/completions",
-            json_body=self._payload(
-                messages,
-                model=model,
-                tools=tools,
-                tool_choice=tool_choice,
-                parallel_tool_calls=parallel_tool_calls,
-                **params,
-            ),
-        )
+        record = self._start_usage(model=model)
+        try:
+            payload = await self._request_json_async(
+                "POST",
+                "chat/completions",
+                json_body=self._payload(
+                    messages,
+                    model=model,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    parallel_tool_calls=parallel_tool_calls,
+                    **params,
+                ),
+                usage_record=record,
+            )
+        except BaseException as exc:
+            self._fail_usage(record, exc)
+            raise
+        self._finish_usage(record, payload)
+        return payload
 
     async_chat_completion = complete_async
 
@@ -425,6 +775,7 @@ class OpenRouterClient:
         **params: Any,
     ) -> Generator[dict[str, Any], None, None]:
         """Diffuse les événements JSON du flux SSE OpenRouter."""
+        record = self._start_usage(model=model, streamed=True)
         payload = self._payload(
             messages,
             model=model,
@@ -434,38 +785,54 @@ class OpenRouterClient:
             stream=True,
             **params,
         )
+        stream_options = payload.get("stream_options")
+        if not isinstance(stream_options, Mapping):
+            stream_options = {}
+        payload["stream_options"] = {**dict(stream_options), "include_usage": True}
         client = self._sync_client()
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                with client.stream("POST", "chat/completions", json=payload) as response:
-                    if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
-                        time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
-                        continue
-                    if response.is_error:
-                        response.read()
-                        raise self._error_from_response(response)
-                    for line in response.iter_lines():
-                        if not line or line.startswith(":"):
+        final_event: Mapping[str, Any] | None = None
+        try:
+            for attempt in range(self.max_retries + 1):
+                record.attempt = attempt + 1
+                try:
+                    with client.stream("POST", "chat/completions", json=payload) as response:
+                        if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                            time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
                             continue
-                        data = line[5:].strip() if line.startswith("data:") else line.strip()
-                        if data == "[DONE]":
-                            return
-                        try:
-                            event = json.loads(data)
-                        except json.JSONDecodeError as exc:
-                            raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
-                        if isinstance(event, dict):
-                            yield event
-                    return
-            except httpx.TimeoutException as exc:
-                if attempt >= self.max_retries:
-                    raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
-                time.sleep(self.retry_backoff * (2**attempt))
-            except httpx.HTTPError as exc:
-                if attempt >= self.max_retries:
-                    raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                time.sleep(self.retry_backoff * (2**attempt))
+                        if response.is_error:
+                            response.read()
+                            raise self._error_from_response(response)
+                        record.provider_request_id = (
+                            response.headers.get("x-request-id")
+                            or response.headers.get("x-openrouter-request-id")
+                        )
+                        for line in response.iter_lines():
+                            if not line or line.startswith(":"):
+                                continue
+                            data = line[5:].strip() if line.startswith("data:") else line.strip()
+                            if data == "[DONE]":
+                                self._finish_usage(record, final_event or {})
+                                return
+                            try:
+                                event = json.loads(data)
+                            except json.JSONDecodeError as exc:
+                                raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
+                            if isinstance(event, dict):
+                                final_event = event
+                                yield event
+                        self._finish_usage(record, final_event or {})
+                        return
+                except httpx.TimeoutException as exc:
+                    if attempt >= self.max_retries:
+                        raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
+                    time.sleep(self.retry_backoff * (2**attempt))
+                except httpx.HTTPError as exc:
+                    if attempt >= self.max_retries:
+                        raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    time.sleep(self.retry_backoff * (2**attempt))
+        except BaseException as exc:
+            self._fail_usage(record, exc)
+            raise
 
     def stream_text(
         self, messages: Sequence[Mapping[str, Any]], **kwargs: Any
@@ -491,6 +858,7 @@ class OpenRouterClient:
         **params: Any,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Version asynchrone du flux SSE."""
+        record = self._start_usage(model=model, streamed=True)
         payload = self._payload(
             messages,
             model=model,
@@ -500,38 +868,54 @@ class OpenRouterClient:
             stream=True,
             **params,
         )
+        stream_options = payload.get("stream_options")
+        if not isinstance(stream_options, Mapping):
+            stream_options = {}
+        payload["stream_options"] = {**dict(stream_options), "include_usage": True}
         client = self._async_http_client()
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                async with client.stream("POST", "chat/completions", json=payload) as response:
-                    if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
-                        await asyncio.sleep(self._retry_delay(response, attempt, self.retry_backoff))
-                        continue
-                    if response.is_error:
-                        await response.aread()
-                        raise self._error_from_response(response)
-                    async for line in response.aiter_lines():
-                        if not line or line.startswith(":"):
+        final_event: Mapping[str, Any] | None = None
+        try:
+            for attempt in range(self.max_retries + 1):
+                record.attempt = attempt + 1
+                try:
+                    async with client.stream("POST", "chat/completions", json=payload) as response:
+                        if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                            await asyncio.sleep(self._retry_delay(response, attempt, self.retry_backoff))
                             continue
-                        data = line[5:].strip() if line.startswith("data:") else line.strip()
-                        if data == "[DONE]":
-                            return
-                        try:
-                            event = json.loads(data)
-                        except json.JSONDecodeError as exc:
-                            raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
-                        if isinstance(event, dict):
-                            yield event
-                    return
-            except httpx.TimeoutException as exc:
-                if attempt >= self.max_retries:
-                    raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
-                await asyncio.sleep(self.retry_backoff * (2**attempt))
-            except httpx.HTTPError as exc:
-                if attempt >= self.max_retries:
-                    raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
-                await asyncio.sleep(self.retry_backoff * (2**attempt))
+                        if response.is_error:
+                            await response.aread()
+                            raise self._error_from_response(response)
+                        record.provider_request_id = (
+                            response.headers.get("x-request-id")
+                            or response.headers.get("x-openrouter-request-id")
+                        )
+                        async for line in response.aiter_lines():
+                            if not line or line.startswith(":"):
+                                continue
+                            data = line[5:].strip() if line.startswith("data:") else line.strip()
+                            if data == "[DONE]":
+                                self._finish_usage(record, final_event or {})
+                                return
+                            try:
+                                event = json.loads(data)
+                            except json.JSONDecodeError as exc:
+                                raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
+                            if isinstance(event, dict):
+                                final_event = event
+                                yield event
+                        self._finish_usage(record, final_event or {})
+                        return
+                except httpx.TimeoutException as exc:
+                    if attempt >= self.max_retries:
+                        raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
+                    await asyncio.sleep(self.retry_backoff * (2**attempt))
+                except httpx.HTTPError as exc:
+                    if attempt >= self.max_retries:
+                        raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    await asyncio.sleep(self.retry_backoff * (2**attempt))
+        except BaseException as exc:
+            self._fail_usage(record, exc)
+            raise
 
     async def stream_text_async(
         self, messages: Sequence[Mapping[str, Any]], **kwargs: Any
@@ -852,6 +1236,7 @@ class OpenRouterClient:
 
 __all__ = [
     "AgentLoopLimitError",
+    "LLMUsageRecord",
     "OpenRouterAPIError",
     "OpenRouterClient",
     "OpenRouterConfigurationError",
@@ -860,4 +1245,6 @@ __all__ = [
     "OpenRouterTransportError",
     "RegisteredTool",
     "ToolExecutionError",
+    "UsageLedger",
+    "usage_context",
 ]

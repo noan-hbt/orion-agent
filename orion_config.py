@@ -7,7 +7,9 @@ champ ``api_key_env`` indique uniquement le nom de la variable a utiliser.
 from __future__ import annotations
 
 import os
+import math
 import threading
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from datetime import time as day_time
 from pathlib import Path
@@ -39,7 +41,7 @@ def _expand(value: Any) -> Any:
 @dataclass
 class LLMConfig:
     api_key_env: str = "OPENROUTER_API_KEY"
-    model: str = "~openai/gpt-latest"
+    model: str = "openai/gpt-4o-mini"
     base_url: str = "https://openrouter.ai/api/v1"
     timeout: float = 60.0
     max_retries: int = 2
@@ -86,6 +88,18 @@ class SubAgentConfig:
     max_session_messages: int = 100
     history_limit: int = 200
     emit_progress_events: bool = False
+
+
+@dataclass
+class TeamConfig:
+    """Bus local optionnel pour plusieurs instances Orion."""
+
+    enabled: bool = False
+    path: str = "data/teams.sqlite3"
+    instance_id: str = "orion"
+    team: str = "default"
+    poll_interval: float = 1.0
+    max_message_chars: int = 12000
 
 
 @dataclass
@@ -146,6 +160,7 @@ class MemoryConfig:
     model: str = "openai/gpt-4o-mini"
     run_at: str = "23:00"
     batch_size: int = 20
+    min_entries: int = 20
     poll_interval: float = 30.0
     max_input_chars: int = 30000
 
@@ -179,15 +194,45 @@ class ChannelConfig:
 
 
 @dataclass
+class GatewayConfig:
+    """Limites et authentification du gateway HTTP.
+
+    Les valeurs sensibles sont toujours lues depuis une variable
+    d'environnement dont le nom est configure ici; aucun secret n'est
+    representable dans ce dataclass.
+    """
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8080
+    path: str = "/webhook"
+    max_body_bytes: int = 256 * 1024
+    queue_size: int = 1000
+    request_timeout: float = 20.0
+    auth_mode: str = "token"
+    auth_token_env: str = "ORION_GATEWAY_TOKEN"
+    hmac_secret_env: str | None = None
+    allowlist: list[str] = field(default_factory=list)
+    reply_allowlist: list[str] = field(default_factory=list)
+    allow_redirects: bool = False
+    ledger_path: str = "data/communication_ledger.sqlite3"
+
+
+CONFIG_VERSION = 2
+
+
+@dataclass
 class OrionConfig:
     """Configuration complete, chargeable depuis ``orion.toml``."""
 
     name: str = "Orion"
+    config_version: int = CONFIG_VERSION
     config_path: Path | None = None
     llm: LLMConfig = field(default_factory=LLMConfig)
     events: EventConfig = field(default_factory=EventConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     subagents: SubAgentConfig = field(default_factory=SubAgentConfig)
+    teams: TeamConfig = field(default_factory=TeamConfig)
     response: ResponseConfig = field(default_factory=ResponseConfig)
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
@@ -198,6 +243,7 @@ class OrionConfig:
     tasks: TaskConfig = field(default_factory=TaskConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     channels: ChannelConfig = field(default_factory=ChannelConfig)
+    gateway: GatewayConfig = field(default_factory=GatewayConfig)
 
     @classmethod
     def from_file(cls, path: str | Path = "orion.toml") -> OrionConfig:
@@ -212,11 +258,14 @@ class OrionConfig:
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> OrionConfig:
+        if not isinstance(data, dict):
+            raise ValueError("La configuration Orion doit etre un objet TOML.")
         orion = _section(data, "orion")
         llm = _section(data, "llm")
         events = _section(data, "events")
         runtime = _section(data, "runtime")
         subagents = _section(data, "subagents")
+        teams = _section(data, "teams")
         response = _section(data, "response")
         reflection = _section(data, "reflection")
         scheduler = _section(data, "scheduler")
@@ -227,6 +276,10 @@ class OrionConfig:
         tasks = _section(data, "tasks")
         tools = _section(data, "tools")
         channels = _section(data, "channels")
+        gateway = _section(data, "gateway")
+        for key in ("auth_token", "hmac_secret", "token", "password", "api_key", "secret"):
+            if key in gateway and gateway[key] not in (None, ""):
+                raise ValueError(f"gateway.{key} est interdit; utilisez *_env sans secret en clair.")
         enabled_channels = channels.get("enabled", [])
         if isinstance(enabled_channels, str):
             enabled_channels = [enabled_channels]
@@ -247,12 +300,14 @@ class OrionConfig:
             for key, value in channels.items()
             if isinstance(value, dict)
         }
-        return cls(
+        config = cls(
             name=str(orion.get("name", "Orion")),
+            config_version=int(data.get("config_version", orion.get("config_version", CONFIG_VERSION))),
             llm=LLMConfig(**{key: value for key, value in llm.items() if key in LLMConfig.__dataclass_fields__}),
             events=EventConfig(**{key: value for key, value in events.items() if key in EventConfig.__dataclass_fields__}),
             runtime=RuntimeConfig(**{key: value for key, value in runtime.items() if key in RuntimeConfig.__dataclass_fields__}),
             subagents=SubAgentConfig(**{key: value for key, value in subagents.items() if key in SubAgentConfig.__dataclass_fields__}),
+            teams=TeamConfig(**{key: value for key, value in teams.items() if key in TeamConfig.__dataclass_fields__}),
             response=ResponseConfig(**{key: value for key, value in response.items() if key in ResponseConfig.__dataclass_fields__}),
             reflection=ReflectionConfig(**{key: value for key, value in reflection.items() if key in ReflectionConfig.__dataclass_fields__}),
             scheduler=SchedulerConfig(**{key: value for key, value in scheduler.items() if key in SchedulerConfig.__dataclass_fields__}),
@@ -274,24 +329,210 @@ class OrionConfig:
                 default=str(channels["default"]) if channels.get("default") else None,
                 settings=channel_settings,
             ),
+            gateway=GatewayConfig(
+                **{
+                    key: value
+                    for key, value in gateway.items()
+                    if key in GatewayConfig.__dataclass_fields__
+                }
+            ),
         )
+        config.validate()
+        return config
+
+    def validate(self) -> OrionConfig:
+        """Valide les invariants opérationnels avant d'allouer des ressources."""
+
+        def text(value: Any, label: str) -> str:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{label} doit etre une chaine non vide.")
+            return value.strip()
+
+        def integer(value: Any, label: str, minimum: int = 0) -> None:
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"{label} doit etre un entier >= {minimum}.")
+
+        def number(value: Any, label: str, minimum: float = 0.0, *, strict: bool = False) -> None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"{label} doit etre un nombre.")
+            value = float(value)
+            if not math.isfinite(value) or value < minimum or (strict and value <= minimum):
+                operator = ">" if strict else ">="
+                raise ValueError(f"{label} doit etre {operator} {minimum}.")
+
+        integer(self.config_version, "config_version", 1)
+        if self.config_version > CONFIG_VERSION:
+            raise ValueError(f"config_version {self.config_version} est trop recente (maximum {CONFIG_VERSION}).")
+        text(self.name, "orion.name")
+        text(self.llm.api_key_env, "llm.api_key_env")
+        text(self.llm.model, "llm.model")
+        text(self.llm.base_url, "llm.base_url")
+        number(self.llm.timeout, "llm.timeout", strict=True)
+        integer(self.llm.max_retries, "llm.max_retries")
+        number(self.llm.retry_backoff, "llm.retry_backoff")
+        if not isinstance(self.llm.default_params, dict):
+            raise ValueError("llm.default_params doit etre un objet.")
+
+        integer(self.events.workers, "events.workers")
+        integer(self.events.queue_size, "events.queue_size")
+        integer(self.events.default_max_attempts, "events.default_max_attempts", 1)
+        number(self.events.retry_delay, "events.retry_delay")
+        number(self.events.retry_backoff, "events.retry_backoff", 1.0)
+        integer(self.runtime.max_turns, "runtime.max_turns", 1)
+        integer(self.runtime.wake_queue_size, "runtime.wake_queue_size")
+        number(self.runtime.dedupe_window, "runtime.dedupe_window")
+
+        text(self.teams.path, "teams.path")
+        instance_id = text(self.teams.instance_id, "teams.instance_id")
+        team = text(self.teams.team, "teams.team")
+        if "*" in instance_id or "*" in team:
+            raise ValueError("teams.instance_id et teams.team ne peuvent pas contenir '*'.")
+        number(self.teams.poll_interval, "teams.poll_interval", strict=True)
+        integer(self.teams.max_message_chars, "teams.max_message_chars", 1)
+
+        integer(self.subagents.workers, "subagents.workers", 1)
+        integer(self.subagents.default_max_turns, "subagents.default_max_turns", 1)
+        for label, value in (
+            ("subagents.max_context_chars", self.subagents.max_context_chars),
+            ("subagents.max_result_chars", self.subagents.max_result_chars),
+            ("subagents.max_tool_output_chars", self.subagents.max_tool_output_chars),
+            ("subagents.max_session_messages", self.subagents.max_session_messages),
+            ("subagents.history_limit", self.subagents.history_limit),
+        ):
+            integer(value, label, 1)
+        if not isinstance(self.subagents.default_tools, list) or any(
+            not isinstance(item, str) or not item.strip() for item in self.subagents.default_tools
+        ):
+            raise ValueError("subagents.default_tools doit etre une liste de noms non vides.")
+
+        integer(self.response.max_chars, "response.max_chars", 500)
+        integer(self.response.max_sentences, "response.max_sentences", 1)
+        integer(self.reflection.max_input_chars, "reflection.max_input_chars", 1)
+        integer(self.reflection.max_output_chars, "reflection.max_output_chars", 1)
+        number(self.reflection.temperature, "reflection.temperature")
+        text(self.reflection.prompt_path, "reflection.prompt_path")
+        number(self.scheduler.poll_interval, "scheduler.poll_interval", strict=True)
+        text(self.scheduler.schedules_path, "scheduler.schedules_path")
+
+        for label, value in (
+            ("prompt.core_path", self.prompt.core_path),
+            ("prompt.context_path", self.prompt.context_path),
+            ("prompt.journal_path", self.prompt.journal_path),
+        ):
+            text(value, label)
+        integer(self.prompt.history_limit, "prompt.history_limit", 1)
+        integer(self.prompt.history_max_chars, "prompt.history_max_chars", 1)
+        for label, value in (
+            ("context.total_max_chars", self.context.total_max_chars),
+            ("context.compactor_input_chars", self.context.compactor_input_chars),
+            ("context.cache_size", self.context.cache_size),
+            ("context.task_max_chars", self.context.task_max_chars),
+            ("context.event_max_chars", self.context.event_max_chars),
+        ):
+            integer(value, label, 1)
+        number(self.memory.poll_interval, "memory.poll_interval", strict=True)
+        integer(self.memory.batch_size, "memory.batch_size", 1)
+        integer(self.memory.min_entries, "memory.min_entries", 1)
+        if self.memory.min_entries > self.memory.batch_size:
+            raise ValueError("memory.min_entries ne peut pas depasser memory.batch_size.")
+        integer(self.memory.max_input_chars, "memory.max_input_chars", 1)
+        self._run_time()
+
+        text(self.ledger.path, "ledger.path")
+        text(self.tasks.path, "tasks.path")
+        text(self.tools.directory, "tools.directory")
+        text(self.tools.state_path, "tools.state_path")
+        for label, values in (("tools.enabled", self.tools.enabled), ("tools.disabled", self.tools.disabled)):
+            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+                raise ValueError(f"{label} doit etre une liste de noms non vides.")
+        if set(self.tools.enabled) & set(self.tools.disabled):
+            raise ValueError("tools.enabled et tools.disabled ne peuvent pas partager un identifiant.")
+        if not isinstance(self.channels.enabled, list) or any(
+            not isinstance(item, str) or not item.strip() for item in self.channels.enabled
+        ):
+            raise ValueError("channels.enabled doit etre une liste de noms non vides.")
+        if self.channels.default is not None:
+            default = text(self.channels.default, "channels.default")
+            if default not in self.channels.enabled and not (
+                default == "gateway" and self.gateway.enabled
+            ):
+                raise ValueError("channels.default doit figurer dans channels.enabled.")
+        if len(set(self.channels.enabled)) != len(self.channels.enabled):
+            raise ValueError("channels.enabled ne doit pas contenir de doublons.")
+        cli_settings = self.channels.settings.get("cli", {})
+        if not isinstance(cli_settings, dict):
+            raise ValueError("channels.cli doit etre une table TOML.")
+        for key in ("style", "banner", "markdown", "timestamps", "enabled"):
+            if key in cli_settings and not isinstance(cli_settings[key], bool):
+                raise ValueError(f"channels.cli.{key} doit etre un booléen.")
+        if "prompt" in cli_settings:
+            text(cli_settings["prompt"], "channels.cli.prompt")
+        if "history_path" in cli_settings and cli_settings["history_path"] is not None:
+            text(cli_settings["history_path"], "channels.cli.history_path")
+        if "slow_request_seconds" in cli_settings:
+            number(
+                cli_settings["slow_request_seconds"],
+                "channels.cli.slow_request_seconds",
+            )
+        text(self.gateway.host, "gateway.host")
+        integer(self.gateway.port, "gateway.port", 1)
+        if self.gateway.port > 65535:
+            raise ValueError("gateway.port doit etre compris entre 1 et 65535.")
+        gateway_path = text(self.gateway.path, "gateway.path")
+        if not gateway_path.startswith("/"):
+            raise ValueError("gateway.path doit commencer par '/'.")
+        integer(self.gateway.max_body_bytes, "gateway.max_body_bytes", 1)
+        if self.gateway.max_body_bytes > 256 * 1024:
+            raise ValueError("gateway.max_body_bytes ne peut pas depasser 256 KiB.")
+        integer(self.gateway.queue_size, "gateway.queue_size", 1)
+        if self.gateway.queue_size > 1000:
+            raise ValueError("gateway.queue_size ne peut pas depasser 1000.")
+        number(self.gateway.request_timeout, "gateway.request_timeout", strict=True)
+        text(self.gateway.ledger_path, "gateway.ledger_path")
+        auth_mode = text(self.gateway.auth_mode, "gateway.auth_mode").lower()
+        if auth_mode not in {"token", "hmac"}:
+            raise ValueError("gateway.auth_mode doit etre 'token' ou 'hmac'.")
+        env_name = self.gateway.auth_token_env if auth_mode == "token" else self.gateway.hmac_secret_env
+        if self.gateway.enabled and (not isinstance(env_name, str) or not env_name.strip()):
+            raise ValueError("Le gateway active doit declarer une variable *_env d'authentification.")
+        for label, values in (("gateway.allowlist", self.gateway.allowlist), ("gateway.reply_allowlist", self.gateway.reply_allowlist)):
+            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+                raise ValueError(f"{label} doit etre une liste de destinations non vides.")
+            for item in values:
+                candidate = item.strip()
+                if "@" in candidate or "*" in candidate:
+                    raise ValueError(f"{label} contient une destination interdite.")
+                if "://" in candidate:
+                    parsed = urlsplit(candidate)
+                    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+                        raise ValueError(f"{label} contient une URL invalide.")
+        for channel_name, settings in self.channels.settings.items():
+            if channel_name not in {"web", "api", "webhook"} or settings.get("enabled", True) is False:
+                continue
+            if not settings.get("auth_token_env") and not settings.get("allowlist"):
+                raise ValueError("Un webhook active doit declarer auth_token_env ou allowlist.")
+        return self
 
     @property
     def base_dir(self) -> Path:
         return self.config_path.parent if self.config_path is not None else Path.cwd()
 
     def path(self, value: str) -> str:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("Un chemin de configuration ne peut pas etre vide.")
         candidate = Path(value)
         return str(candidate if candidate.is_absolute() else self.base_dir / candidate)
 
     def _run_time(self) -> day_time:
         try:
+            if not isinstance(self.memory.run_at, str):
+                raise ValueError
             hour, minute = (int(item) for item in self.memory.run_at.split(":", 1))
             return day_time(hour, minute)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError("memory.run_at doit etre au format HH:MM.") from exc
 
-    def _configure_channels(self, router: Any) -> None:
+    def _configure_channels(self, router: Any, *, usage_ledger: Any = None) -> None:
         from channel_adapters import (
             CLIAdapter,
             DiscordWebhookAdapter,
@@ -318,6 +559,7 @@ class OrionConfig:
                         markdown=bool(settings.get("markdown", True)),
                         timestamps=bool(settings.get("timestamps", True)),
                         slow_request_seconds=float(settings.get("slow_request_seconds", 15.0)),
+                        usage_ledger=usage_ledger,
                     )
                 )
             elif name == "telegram":
@@ -370,8 +612,51 @@ class OrionConfig:
             else:
                 raise ValueError(f"Aucun adaptateur fourni pour le channel configure : {name}")
 
+    def _configure_gateway(self, router: Any) -> Any | None:
+        """Register the top-level ``[gateway]`` adapter when enabled.
+
+        The communication ledger belongs to the application lifetime.  Return
+        it to :meth:`build` so ``OrionApplication.stop`` can close the SQLite
+        connection after the adapter has quiesced.
+        """
+        if not self.gateway.enabled:
+            return None
+        from channel_adapters import HttpWebhookAdapter, secret_from_env
+        from communication_ledger import CommunicationLedger
+
+        auth_token = None
+        hmac_secret = None
+        if self.gateway.auth_mode.lower() == "token":
+            auth_token = secret_from_env(self.gateway.auth_token_env)
+        else:
+            hmac_secret = secret_from_env(self.gateway.hmac_secret_env or "ORION_GATEWAY_HMAC_SECRET")
+        ledger = CommunicationLedger(self.path(self.gateway.ledger_path))
+        try:
+            router.register(
+                HttpWebhookAdapter(
+                    name="gateway",
+                    host=self.gateway.host,
+                    port=self.gateway.port,
+                    path=self.gateway.path,
+                    auth_token=auth_token,
+                    hmac_secret=hmac_secret,
+                    timeout=self.gateway.request_timeout,
+                    request_timeout=self.gateway.request_timeout,
+                    max_body_bytes=self.gateway.max_body_bytes,
+                    queue_size=self.gateway.queue_size,
+                    allowlist=self.gateway.allowlist,
+                    outbound_allowlist=self.gateway.reply_allowlist,
+                    ledger=ledger,
+                )
+            )
+        except Exception:
+            ledger.close()
+            raise
+        return ledger
+
     def build(self) -> OrionApplication:
         """Construit Orion et toutes ses dependances a partir de la config."""
+        self.validate()
         from action_ledger import ActionLedger
         from channels import ChannelRouter
         from event_handler import EventHandler
@@ -382,6 +667,7 @@ class OrionConfig:
         from runtime import AgentRuntime
         from scheduler import JsonScheduleStore, Scheduler
         from subagents import SubAgentManager
+        from teams import TeamBus
         from tasks import JsonTaskStore
         from tool_manager import ToolManager
 
@@ -448,6 +734,16 @@ class OrionConfig:
                 history_limit=self.subagents.history_limit,
                 emit_progress_events=self.subagents.emit_progress_events,
             )
+        team_bus = None
+        if self.teams.enabled:
+            team_bus = TeamBus(
+                self.path(self.teams.path),
+                instance_id=self.teams.instance_id,
+                team=self.teams.team,
+                poll_interval=self.teams.poll_interval,
+                max_message_chars=self.teams.max_message_chars,
+                event_handler=events,
+            )
         maintenance = None
         if self.memory.enabled:
             extractor = MemoryExtractor(
@@ -460,6 +756,7 @@ class OrionConfig:
                 journal,
                 extractor,
                 batch_size=self.memory.batch_size,
+                min_entries=self.memory.min_entries,
                 run_at=self._run_time(),
                 poll_interval=self.memory.poll_interval,
             )
@@ -480,13 +777,18 @@ class OrionConfig:
                 store=JsonScheduleStore(self.path(self.scheduler.schedules_path)),
                 poll_interval=self.scheduler.poll_interval,
             )
-        channel_router = ChannelRouter(events, default_channel=self.channels.default)
-        self._configure_channels(channel_router)
+        channel_router = ChannelRouter(
+            events,
+            default_channel=self.channels.default or ("gateway" if self.gateway.enabled else None),
+        )
+        self._configure_channels(channel_router, usage_ledger=getattr(llm, "usage_ledger", None))
+        gateway_ledger = self._configure_gateway(channel_router)
         runtime = AgentRuntime(
             llm_client=llm,
             task_store=JsonTaskStore(self.path(self.tasks.path)),
             scheduler=scheduler,
             subagent_manager=subagent_manager,
+            team_bus=team_bus,
             action_ledger=ActionLedger(self.path(self.ledger.path)),
             max_turns=self.runtime.max_turns,
             wake_queue_size=self.runtime.wake_queue_size,
@@ -515,7 +817,9 @@ class OrionConfig:
             runtime=runtime,
             scheduler=scheduler,
             subagents=subagent_manager,
+            team_bus=team_bus,
             channels=channel_router,
+            gateway_ledger=gateway_ledger,
         )
 
 
@@ -528,29 +832,76 @@ class OrionApplication:
     runtime: Any
     scheduler: Any = None
     subagents: Any = None
+    team_bus: Any = None
     channels: Any = None
+    gateway_ledger: Any = None
+    _lifecycle_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _started: bool = field(default=False, init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
 
     def start(self) -> OrionApplication:
-        self.events.start()
-        if self.scheduler is not None:
-            self.scheduler.start()
-        if self.subagents is not None:
-            self.subagents.start()
-        if self.channels is not None:
-            self.channels.start()
-        self.runtime.start()
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("L'application Orion est fermée.")
+            if self._started:
+                return self
+            started: list[Any] = []
+            try:
+                started.append(self.events)
+                self.events.start()
+                if self.scheduler is not None:
+                    started.append(self.scheduler)
+                    self.scheduler.start()
+                if self.subagents is not None:
+                    started.append(self.subagents)
+                    self.subagents.start()
+                if self.team_bus is not None:
+                    started.append(self.team_bus)
+                    self.team_bus.start()
+                if self.channels is not None:
+                    started.append(self.channels)
+                    self.channels.start()
+                started.append(self.runtime)
+                self.runtime.start()
+            except Exception:
+                # Un démarrage partiel ne doit pas laisser de threads de
+                # poller ou de channel derrière l'exception de configuration.
+                for component in reversed(started):
+                    try:
+                        component.stop()
+                    except Exception:
+                        pass
+                if self.gateway_ledger is not None:
+                    self.gateway_ledger.close()
+                raise
+            self._started = True
         return self
 
     def stop(self) -> None:
-        if self.subagents is not None:
-            self.subagents.stop()
-        self.runtime.stop()
-        if self.channels is not None:
-            self.channels.stop()
-        if self.scheduler is not None:
-            self.scheduler.stop()
-        self.events.stop()
-        self.llm.close()
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._started = False
+            # Arrêter d'abord les producteurs d'événements évite d'alimenter
+            # le runtime pendant son drain final. Le TeamBus reste ouvert
+            # jusqu'à la fin du runtime pour acquitter les événements déjà
+            # en file.
+            if self.channels is not None:
+                self.channels.stop()
+            if self.scheduler is not None:
+                self.scheduler.stop()
+            if self.team_bus is not None:
+                self.team_bus.stop()
+            if self.subagents is not None:
+                self.subagents.stop()
+            self.runtime.stop()
+            if self.team_bus is not None:
+                self.team_bus.close()
+            self.events.stop()
+            self.llm.close()
+            if self.gateway_ledger is not None:
+                self.gateway_ledger.close()
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         """Demarre Orion et maintient le processus actif jusqu'a son arret."""
@@ -570,8 +921,10 @@ def load_orion(path: str | Path = "orion.toml") -> OrionApplication:
 
 
 __all__ = [
+    "CONFIG_VERSION",
     "EventConfig",
     "ChannelConfig",
+    "GatewayConfig",
     "LedgerConfig",
     "LLMConfig",
     "MemoryConfig",
@@ -581,6 +934,7 @@ __all__ = [
     "ReflectionConfig",
     "RuntimeConfig",
     "SubAgentConfig",
+    "TeamConfig",
     "SchedulerConfig",
     "TaskConfig",
     "load_orion",

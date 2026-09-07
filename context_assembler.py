@@ -163,7 +163,17 @@ class ContextAssembler:
             max_chars=max(component.max_chars, 2000),
         )
         projected = self._serialize(projection)
-        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        # La projection deterministe est déjà suffisante dans la plupart des
+        # cas (par exemple une tâche dont le snapshot complet contient des
+        # runs, actions et timestamps). Ne payons pas un appel LLM pour une
+        # réduction que nous avons déjà obtenue localement.
+        if len(projected) <= component.max_chars:
+            return projected
+
+        # La clé doit représenter ce qui sera réellement envoyé au compactor,
+        # et non les champs volumineux ou non pertinents éliminés par la
+        # projection.
+        digest = hashlib.sha256(projected.encode("utf-8")).hexdigest()
         cache_key = f"{component.name}:{component.max_chars}:{digest}"
         return self._llm_compact(
             component.name,

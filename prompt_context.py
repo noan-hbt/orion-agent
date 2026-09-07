@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import threading
 import time
@@ -423,24 +424,92 @@ class MemoryExtractor:
 class MemoryMaintenance:
     """Maintenance manuelle ou quotidienne du profil et de la memoire."""
 
-    def __init__(self, journal: ConversationJournal, extractor: MemoryExtractor, *, batch_size: int = 20, run_at: day_time = day_time(23, 0), poll_interval: float = 30.0) -> None:
-        if batch_size < 1 or poll_interval <= 0:
-            raise ValueError("batch_size et poll_interval doivent etre positifs.")
+    def __init__(
+        self,
+        journal: ConversationJournal,
+        extractor: MemoryExtractor,
+        *,
+        batch_size: int = 20,
+        min_entries: int | None = None,
+        run_at: day_time = day_time(23, 0),
+        poll_interval: float = 30.0,
+    ) -> None:
+        selected_min_entries = batch_size if min_entries is None else int(min_entries)
+        if batch_size < 1 or selected_min_entries < 1 or selected_min_entries > batch_size or poll_interval <= 0:
+            raise ValueError("min_entries/batch_size doivent etre positifs et min_entries <= batch_size.")
         self.journal = journal
         self.extractor = extractor
         self.batch_size = batch_size
+        self.min_entries = selected_min_entries
         self.run_at = run_at
         self.poll_interval = poll_interval
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
+        self._run_lock = threading.Lock()
+        self._process_lock_path = self._memory_lock_path()
+
+    def _memory_lock_path(self) -> Path | None:
+        state_path = str(self.extractor.store.path)
+        if state_path == ":memory:":
+            return None
+        path = Path(state_path)
+        return path.with_name(f".{path.name}.memory.lock")
+
+    def _acquire_process_lock(self) -> int | None:
+        """Reserve une extraction pour une seule instance Orion.
+
+        Le fichier est créé de manière atomique afin que plusieurs processus
+        partageant le même journal ne lancent pas le même appel LLM. Un
+        verrou abandonné est récupéré après une durée généreuse couvrant un
+        appel réseau lent.
+        """
+        path = self._process_lock_path
+        if path is None:
+            return -1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stale_after = max(300.0, self.poll_interval * 10.0)
+        try:
+            descriptor = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale_after:
+                    path.unlink()
+                    return self._acquire_process_lock()
+            except FileNotFoundError:
+                return self._acquire_process_lock()
+            return None
+        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+        return descriptor
+
+    def _release_process_lock(self, descriptor: int | None) -> None:
+        if descriptor in {-1, None}:
+            return
+        try:
+            os.close(descriptor)
+        finally:
+            if self._process_lock_path is not None:
+                try:
+                    self._process_lock_path.unlink()
+                except FileNotFoundError:
+                    pass
 
     def run_once(self) -> int:
-        entries = self.journal.after(self.extractor.store.journal_cursor, limit=self.batch_size)
-        if not entries:
+        if not self._run_lock.acquire(blocking=False):
             return 0
-        extraction = self.extractor.extract(entries)
-        self.extractor.store.apply_extraction(extraction, journal_cursor=entries[-1].id)
-        return len(entries)
+        descriptor: int | None = None
+        try:
+            descriptor = self._acquire_process_lock()
+            if descriptor is None:
+                return 0
+            entries = self.journal.after(self.extractor.store.journal_cursor, limit=self.batch_size)
+            if len(entries) < self.min_entries:
+                return 0
+            extraction = self.extractor.extract(entries)
+            self.extractor.store.apply_extraction(extraction, journal_cursor=entries[-1].id)
+            return len(entries)
+        finally:
+            self._release_process_lock(descriptor)
+            self._run_lock.release()
 
     @property
     def running(self) -> bool:

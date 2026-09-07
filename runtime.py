@@ -8,6 +8,7 @@ la boucle d'exécution.
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -23,7 +24,7 @@ from action_ledger import ActionLedger, normalize_action_value
 from channels import AgentOutput
 from context_assembler import ContextAssembler, ContextComponent
 from event_handler import Event, EventHandler, EventQueue
-from openrouter_client import OpenRouterClient
+from openrouter_client import OpenRouterClient, usage_context
 from prompt_context import (
     ConversationJournal,
     MemoryMaintenance,
@@ -44,6 +45,7 @@ from tasks import (
 if TYPE_CHECKING:
     from scheduler import Schedule, Scheduler
     from subagents import SubAgentManager
+    from teams import TeamBus
 
 
 class RuntimeState(str, Enum):
@@ -188,6 +190,9 @@ class AgentRuntime:
             "send_to_subagent",
             "pause_subagent_job",
             "resume_subagent_job",
+            "send_team_message",
+            "delegate_team_job",
+            "complete_team_job",
             "acknowledge_pending_event",
         }
     )
@@ -200,6 +205,7 @@ class AgentRuntime:
         task_store: TaskStore | None = None,
         scheduler: Scheduler | None = None,
         subagent_manager: SubAgentManager | None = None,
+        team_bus: TeamBus | None = None,
         system_prompt: str | None = None,
         max_turns: int = 12,
         wake_queue_size: int = 0,
@@ -242,6 +248,7 @@ class AgentRuntime:
         self.task_store = task_store or InMemoryTaskStore()
         self.scheduler = scheduler
         self.subagent_manager = subagent_manager
+        self.team_bus = team_bus
         self.system_prompt = system_prompt
         self.max_turns = max_turns
         self.parallel_tool_calls = bool(parallel_tool_calls)
@@ -258,6 +265,7 @@ class AgentRuntime:
         # doit jamais empêcher la réception d'un événement pendant un RUN.
         self._deferred_events = EventQueue(maxsize=0)
         self._deferred_event_index: dict[str, Event] = {}
+        self._queued_event_ids: set[str] = set()
         self._acknowledged_deferred_events: set[str] = set()
         self.action_ledger = action_ledger or ActionLedger(action_ledger_path or ":memory:")
         self.dedupe_window = float(dedupe_window)
@@ -285,6 +293,8 @@ class AgentRuntime:
         self._state = RuntimeState.SLEEP
         self._state_lock = threading.RLock()
         self._execution_lock = threading.RLock()
+        # Protège start/stop contre la création concurrente de workers.
+        self._lifecycle_lock = threading.RLock()
         self._stop_requested = threading.Event()
         self._drain_on_stop = True
         self._thread: threading.Thread | None = None
@@ -364,6 +374,24 @@ class AgentRuntime:
         if self.on_state_change is not None and old_state != new_state:
             self.on_state_change(old_state, new_state, event)
 
+    @property
+    def usage_ledger(self) -> Any:
+        """Session usage ledger exposed for CLI/status consumers."""
+        if self.llm_client is None:
+            return None
+        return getattr(self.llm_client, "usage_ledger", None)
+
+    @staticmethod
+    def _usage_scope(context: RunContext, stage: str, *, parent_call_id: str | None = None):
+        event = context.event
+        correlation_id = event.correlation_id or event.metadata.get("correlation_id")
+        return usage_context(
+            request_id=str(event.id),
+            correlation_id=str(correlation_id) if correlation_id is not None else None,
+            stage=stage,
+            parent_call_id=parent_call_id or event.metadata.get("parent_call_id"),
+        )
+
     def attach(
         self,
         event_handler: EventHandler,
@@ -395,45 +423,74 @@ class AgentRuntime:
             # mais ne crÃ©ent pas un RUN et ne polluent pas la conversation.
             return
         with self._execution_lock:
+            # Un même événement peut être livré deux fois par un adaptateur
+            # ou un poller redémarré. Il ne doit pas alimenter deux RUNs.
+            if (
+                event.id in self._deferred_event_index
+                or event.id in self._queued_event_ids
+                or event.id == (self._last_event.id if self._last_event is not None else None)
+            ):
+                return
+            should_preempt = self._should_preempt(event)
+            if should_preempt:
+                self._transition(RuntimeState.PREEMPT, event)
+                self._pause_active_run(event)
             if self._run_in_progress and self.queue_events_during_run:
                 # Ne pas toucher à l'état ni au contexte du RUN courant : le
                 # message sera traité comme un réveil distinct ensuite.
                 self._deferred_events.put(event)
                 self._deferred_event_index[event.id] = event
                 return
-            self.wake_queue.put(event)
-            if self._should_preempt(event):
-                self._transition(RuntimeState.PREEMPT, event)
-                self._pause_active_run(event)
+            try:
+                self.wake_queue.put_nowait(event)
+                self._queued_event_ids.add(event.id)
+            except Full:
+                # Une file bornée ne doit pas bloquer un worker de channel ou
+                # le shutdown. La file différée sera promue quand une place
+                # se libérera.
+                self._deferred_events.put(event)
+                self._deferred_event_index[event.id] = event
             self._transition(RuntimeState.EVENT, event)
 
     def start(self) -> AgentRuntime:
         """Démarre le worker du runtime ; l'état initial reste ``SLEEP``."""
-        if self.running:
-            return self
-        self._stop_requested.clear()
-        self._drain_on_stop = True
-        self._thread = threading.Thread(
-            target=self._run,
-            name="agent-runtime",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self.running:
+                return self
+            if self._thread is not None and not self._thread.is_alive():
+                self._thread = None
+            self._stop_requested.clear()
+            self._drain_on_stop = True
+            self._thread = threading.Thread(
+                target=self._run,
+                name="agent-runtime",
+                daemon=True,
+            )
+            self._thread.start()
         if self.memory_maintenance is not None:
-            self.memory_maintenance.start()
+            try:
+                self.memory_maintenance.start()
+            except Exception:
+                self.stop(wait=True, drain=False)
+                raise
         return self
 
     def stop(self, *, wait: bool = True, drain: bool = True) -> None:
         """Arrête le worker, avec possibilité de traiter les réveils en attente."""
-        self._drain_on_stop = drain
-        self._stop_requested.set()
-        thread = self._thread
-        if thread is not None and wait:
+        with self._lifecycle_lock:
+            self._drain_on_stop = drain
+            self._stop_requested.set()
+            thread = self._thread
+        if thread is not None and wait and thread is not threading.current_thread():
             if drain:
                 thread.join()
             else:
                 thread.join(timeout=2.0)
-        self._thread = None
+        with self._lifecycle_lock:
+            # Conserver le handle tant que le thread vit empêche start() de
+            # lancer un second worker après stop(wait=False).
+            if thread is self._thread and (thread is None or not thread.is_alive()):
+                self._thread = None
         if self.memory_maintenance is not None:
             self.memory_maintenance.stop(wait=wait)
 
@@ -830,7 +887,19 @@ class AgentRuntime:
             )
         if self.subagent_manager is not None:
             definitions.extend(self._subagent_tool_definitions())
+        if self.team_bus is not None:
+            definitions.extend(self._team_tool_definitions())
         return definitions
+
+    @staticmethod
+    def _team_tool_definitions() -> list[dict[str, Any]]:
+        return [
+            {"type": "function", "function": {"name": "list_team_messages", "description": "Consulte les messages persistants reçus par les autres instances Orion.", "parameters": {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}, "unread_only": {"type": "boolean"}}, "additionalProperties": False}}},
+            {"type": "function", "function": {"name": "send_team_message", "description": "Envoie un message durable à une instance Orion de la même équipe.", "parameters": {"type": "object", "properties": {"recipient": {"type": "string"}, "message": {"type": "string"}, "subject": {"type": "string"}, "priority": {"type": "integer", "minimum": 0, "maximum": 40}, "correlation_id": {"type": "string"}}, "required": ["recipient", "message"], "additionalProperties": False}}},
+            {"type": "function", "function": {"name": "delegate_team_job", "description": "Délègue une tâche bornée à une autre instance Orion ; elle recevra un événement durable.", "parameters": {"type": "object", "properties": {"recipient": {"type": "string"}, "objective": {"type": "string"}, "context": {"type": "string"}, "priority": {"type": "integer", "minimum": 0, "maximum": 40}, "correlation_id": {"type": "string"}}, "required": ["recipient", "objective"], "additionalProperties": False}}},
+            {"type": "function", "function": {"name": "get_team_job", "description": "Consulte l'état durable d'une délégation entre instances.", "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"], "additionalProperties": False}}},
+            {"type": "function", "function": {"name": "complete_team_job", "description": "Publie le résultat vérifiable d'une délégation reçue.", "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}, "result": {"type": "string"}, "success": {"type": "boolean"}}, "required": ["job_id", "result"], "additionalProperties": False}}},
+        ]
 
     @staticmethod
     def _subagent_tool_definitions() -> list[dict[str, Any]]:
@@ -1035,17 +1104,33 @@ class AgentRuntime:
 
     def _tool_definitions(self) -> list[dict[str, Any]]:
         """Combine les tools du runtime et ceux enregistrés sur le client."""
-        definitions = self._runtime_tool_definitions()
-        names = {
-            item.get("function", {}).get("name")
-            for item in definitions
-            if isinstance(item.get("function"), Mapping)
-        }
+        # Le runtime est prioritaire : un plugin ne peut pas remplacer par
+        # accident une primitive de cycle de vie. Le filtrage défensif évite
+        # aussi d'envoyer des entrées invalides au fournisseur LLM.
+        definitions: list[dict[str, Any]] = []
+        names: set[str] = set()
+        for item in self._runtime_tool_definitions():
+            if not isinstance(item, Mapping):
+                continue
+            function = item.get("function")
+            if not isinstance(function, Mapping):
+                continue
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip() or name in names:
+                continue
+            definitions.append(dict(item))
+            names.add(name)
         if self.llm_client is not None:
             for item in self.llm_client.tool_definitions():
-                name = item.get("function", {}).get("name")
-                if name not in names:
-                    definitions.append(item)
+                if not isinstance(item, Mapping):
+                    continue
+                function = item.get("function")
+                if not isinstance(function, Mapping):
+                    continue
+                name = function.get("name")
+                if isinstance(name, str) and name.strip() and name not in names:
+                    definitions.append(dict(item))
+                    names.add(name)
         return definitions
 
     def _legacy_system_instructions(self) -> str:
@@ -1240,7 +1325,8 @@ class AgentRuntime:
                     conversation_id=self._conversation_id(context.event),
                     limit=min(self.history_limit, 6),
                 )
-            reflection = self.reflection_engine.reflect(context, history=history)
+            with self._usage_scope(context, "reflection"):
+                reflection = self.reflection_engine.reflect(context, history=history)
             context.reflection = reflection or None
             return context.reflection
         except Exception as exc:
@@ -1634,6 +1720,30 @@ class AgentRuntime:
                 return self._compact_subagent_job(
                     self.subagent_manager.resume_job(arguments["job_id"])
                 )
+        if self.team_bus is not None:
+            if name == "list_team_messages":
+                return {"messages": [item.to_dict() for item in self.team_bus.inbox(limit=int(arguments.get("limit", 20)), unread_only=bool(arguments.get("unread_only", True)))]}
+            if name in {"send_team_message", "delegate_team_job"}:
+                kind = "job" if name == "delegate_team_job" else "message"
+                body = arguments.get("objective") if kind == "job" else arguments.get("message")
+                if kind == "job" and arguments.get("context"):
+                    body = f"{body}\n\nContexte:\n{arguments['context']}"
+                item = self.team_bus.send(
+                    arguments["recipient"], body,
+                    kind=kind,
+                    subject=arguments.get("subject", "delegation" if kind == "job" else ""),
+                    correlation_id=arguments.get("correlation_id") or (context.task and str(context.task.id)),
+                    priority=int(arguments.get("priority", context.event.priority)),
+                )
+                return {"sent": True, "message": item.to_dict()}
+            if name == "get_team_job":
+                item = self.team_bus.get(arguments["job_id"])
+                return {"job": item.to_dict() if item is not None and item.kind == "job" else None}
+            if name == "complete_team_job":
+                item = self.team_bus.complete_job(
+                    arguments["job_id"], arguments["result"], success=bool(arguments.get("success", True))
+                )
+                return {"updated": True, "job": item.to_dict()}
         raise KeyError(name)
 
     @staticmethod
@@ -1885,11 +1995,12 @@ class AgentRuntime:
                 "content": str(final_messages[0].get("content", "")) + final_instruction,
             }
         try:
-            response = self.llm_client.complete(
-                final_messages,
-                tools=None,
-                parallel_tool_calls=False,
-            )
+            with self._usage_scope(context, "final"):
+                response = self.llm_client.complete(
+                    final_messages,
+                    tools=None,
+                    parallel_tool_calls=False,
+                )
             assistant = OpenRouterClient._assistant_message(response)
             context.messages.append(assistant)
             context.answer = OpenRouterClient.text_from_message(assistant).strip() or None
@@ -1908,7 +2019,8 @@ class AgentRuntime:
             return
 
         reflection = self._run_pre_reflection(context)
-        context.messages = self._initial_run_messages(context, reflection=reflection)
+        with self._usage_scope(context, "compaction"):
+            context.messages = self._initial_run_messages(context, reflection=reflection)
         tools = self._tool_definitions()
         for turn in range(self.max_turns):
             if context.interrupted:
@@ -1918,11 +2030,13 @@ class AgentRuntime:
             # La pré-réflexion éventuelle est déjà terminée ici. Le premier
             # appel principal est une décision, pas une réflexion interne.
             context.phase = RunPhase.DECISION if turn == 0 else RunPhase.NEW_TURN
-            response = self.llm_client.complete(
-                context.messages,
-                tools=tools or None,
-                parallel_tool_calls=self.parallel_tool_calls,
-            )
+            stage = "decision" if turn == 0 else "new_turn"
+            with self._usage_scope(context, stage):
+                response = self.llm_client.complete(
+                    context.messages,
+                    tools=tools or None,
+                    parallel_tool_calls=self.parallel_tool_calls,
+                )
             assistant = OpenRouterClient._assistant_message(response)
             context.messages.append(assistant)
             calls = OpenRouterClient._tool_calls(assistant)
@@ -2002,6 +2116,12 @@ class AgentRuntime:
             event = self.wake_queue.get(timeout=timeout)
         except Empty:
             return None
+        # EventQueue conserve une compatibilité historique où get(None)
+        # renvoie parfois l'élément prioritaire complet.
+        if not isinstance(event, Event) and isinstance(event, tuple) and len(event) == 3:
+            event = event[2]
+        with self._execution_lock:
+            self._queued_event_ids.discard(event.id)
         try:
             self._wake(event)
         finally:
@@ -2044,6 +2164,8 @@ class AgentRuntime:
                 event = self.wake_queue.get(timeout=0.2)
             except Empty:
                 continue
+            with self._execution_lock:
+                self._queued_event_ids.discard(event.id)
             try:
                 self._wake(event)
             finally:
@@ -2053,6 +2175,7 @@ class AgentRuntime:
         self._last_event = event
         self._last_error = None
         self._wake_count += 1
+        team_error: str | None = None
         with self._execution_lock:
             self._current_task = None
             self._run_context = None
@@ -2144,6 +2267,7 @@ class AgentRuntime:
                     self.resume_preempted_task()
             self.sleep()
         except Exception as exc:
+            team_error = str(exc)
             with self._execution_lock:
                 self._run_in_progress = False
                 self._promote_deferred_events()
@@ -2169,6 +2293,21 @@ class AgentRuntime:
                 phase=(self._run_context.phase if self._run_context is not None else None),
             )
             self._transition(RuntimeState.SLEEP, event)
+        finally:
+            self._ack_team_event(event, error=team_error)
+
+    def _ack_team_event(self, event: Event, *, error: str | None = None) -> None:
+        """Acquitte une notification d'équipe après le cycle runtime."""
+        if self.team_bus is None or not event.metadata.get("team_message_id"):
+            return
+        try:
+            message_id = str(event.metadata["team_message_id"])
+            if error and event.type == "team.job":
+                self.team_bus.complete_job(message_id, error, success=False)
+            else:
+                self.team_bus.acknowledge_delivery(message_id)
+        except (KeyError, RuntimeError, OSError, sqlite3.Error):
+            return
 
     def _promote_deferred_events(self) -> None:
         """Transfère les événements reçus pendant le RUN vers la file normale.
@@ -2187,6 +2326,10 @@ class AgentRuntime:
                 self._deferred_event_index.pop(event.id, None)
                 self._deferred_events.task_done()
                 continue
+            if event.id in self._queued_event_ids:
+                self._deferred_event_index.pop(event.id, None)
+                self._deferred_events.task_done()
+                continue
             try:
                 self.wake_queue.put_nowait(event)
             except Full:
@@ -2198,6 +2341,7 @@ class AgentRuntime:
                     self._deferred_event_index[event.id] = event
                 self._deferred_events.task_done()
                 return
+            self._queued_event_ids.add(event.id)
             self._deferred_event_index.pop(event.id, None)
             self._acknowledged_deferred_events.discard(event.id)
             self._deferred_events.task_done()
@@ -2225,6 +2369,13 @@ class AgentRuntime:
         return event.priority > self._run_context.event.priority
 
     def _pause_active_run(self, event: Event) -> None:
+        # _wake() conserve une référence locale au contexte pendant l'appel
+        # LLM. Marquer cette même instance garantit que la boucle s'interrompt
+        # dès le retour du tool courant, même si _run_context est ensuite
+        # détaché pour la reprise.
+        if self._run_context is not None:
+            self._run_context.interrupted = True
+            self._run_context.interrupting_event_id = event.id
         self.pause_current_task(
             reason=f"Interrompu par l'événement prioritaire {event.id}",
             interrupted_by=event,

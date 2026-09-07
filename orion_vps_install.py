@@ -115,7 +115,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path)
     parser.add_argument("--env", type=Path)
     parser.add_argument("--channels", default="telegram", help="Ex: telegram,discord")
-    parser.add_argument("--model", default="~openai/gpt-latest")
+    parser.add_argument("--model", default="openai/gpt-5.6-luna")
     parser.add_argument("--compactor-model", default="deepseek/deepseek-v4-flash-0731")
     parser.add_argument("--reflection-model", default="deepseek/deepseek-v4-flash-0731")
     parser.add_argument("--memory-model", default="deepseek/deepseek-v4-flash-0731")
