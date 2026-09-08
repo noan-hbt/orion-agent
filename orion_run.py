@@ -11,6 +11,7 @@ import signal
 import sys
 import threading
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,17 @@ EXIT_INTERRUPTED = 130
 def _now_iso() -> str:
     """Retourne un horodatage explicite pour les événements JSONL."""
     return datetime.now().astimezone().isoformat()
+
+
+def _normalized_correlation(value: Any, metadata: Mapping[str, Any] | None = None) -> str | None:
+    """Retourne une corrélation canonique, ou ``None`` si elle est absente."""
+    candidate = value
+    if candidate is None and metadata is not None:
+        candidate = metadata.get("correlation_id")
+    if candidate is None:
+        return None
+    normalized = str(candidate).strip()
+    return normalized or None
 
 
 def _report_error(event: object, error: Exception) -> None:
@@ -243,7 +255,7 @@ def _once_event(output: Any, *, seq: int) -> dict[str, Any]:
     return {
         "kind": "request.streaming" if intermediate else "request.updated",
         "request_id": output.event_id,
-        "correlation_id": output.correlation_id or output.metadata.get("correlation_id"),
+        "correlation_id": _normalized_correlation(output.correlation_id, output.metadata),
         "state": "streaming" if intermediate else ("failed" if error else "succeeded"),
         "seq": seq,
         "text": output.content,
@@ -281,6 +293,20 @@ def _once_error_event(
     }
 
 
+def _system_error_event(error: Exception, *, command: str) -> dict[str, Any]:
+    """Construit l'erreur structurée des commandes non interactives."""
+    return {
+        "kind": "system.error",
+        "request_id": None,
+        "correlation_id": None,
+        "state": "failed",
+        "seq": 0,
+        "timestamp": _now_iso(),
+        "error": {"type": type(error).__name__, "message": str(error)},
+        "meta": {"command": command},
+    }
+
+
 def run_once(
     config_path: str | Path,
     prompt: str,
@@ -313,9 +339,39 @@ def run_once(
     output_done = threading.Event()
     output_lock = threading.Lock()
     correlation_id = uuid.uuid4().hex
+    accepting = True
+    sequence = 0
+
+    def next_seq() -> int:
+        nonlocal sequence
+        sequence += 1
+        return sequence
 
     def capture(agent_output: Any) -> None:
+        # Un run --once ne doit ni se terminer sur la sortie d'un autre run,
+        # ni imprimer une réponse arrivée après timeout/stop.
+        candidate = _normalized_correlation(
+            getattr(agent_output, "correlation_id", None),
+            getattr(agent_output, "metadata", {}),
+        )
+        if candidate != correlation_id:
+            return
         with output_lock:
+            if not accepting:
+                return
+            # Les transports peuvent rejouer exactement la même sortie.
+            output_key = (
+                str(getattr(agent_output, "output_id", None) or getattr(agent_output, "event_id", None) or ""),
+                str(getattr(agent_output, "metadata", {}).get("seq", "")),
+                str(getattr(agent_output, "content", "")),
+            )
+            if output_key in {
+                (str(getattr(item, "output_id", None) or getattr(item, "event_id", None) or ""),
+                 str(getattr(item, "metadata", {}).get("seq", "")),
+                 str(getattr(item, "content", "")))
+                for item in outputs
+            }:
+                return
             outputs.append(agent_output)
         if not bool(agent_output.metadata.get("intermediate", False)):
             output_done.set()
@@ -329,7 +385,7 @@ def run_once(
                 "request_id": None,
                 "correlation_id": correlation_id,
                 "state": "ready",
-                "seq": 0,
+                "seq": next_seq(),
                 "timestamp": _now_iso(),
             }, ensure_ascii=False, default=str), flush=True)
         try:
@@ -350,7 +406,7 @@ def run_once(
                 print(json.dumps(_once_error_event(
                     f"{type(exc).__name__}: {exc}",
                     correlation_id=correlation_id,
-                    seq=0,
+                    seq=next_seq(),
                     error_type=type(exc).__name__,
                 ), ensure_ascii=False, default=str), flush=True)
                 print(json.dumps({
@@ -358,7 +414,7 @@ def run_once(
                     "request_id": None,
                     "correlation_id": correlation_id,
                     "state": "stopping",
-                    "seq": 1,
+                    "seq": next_seq(),
                     "timestamp": _now_iso(),
                 }, ensure_ascii=False, default=str), flush=True)
             else:
@@ -366,11 +422,13 @@ def run_once(
             return EXIT_RUNTIME
 
         if not output_done.wait(timeout):
+            with output_lock:
+                accepting = False
             if output == "jsonl":
                 print(json.dumps(_once_error_event(
                     "TimeoutError: délai dépassé en attente de la réponse.",
                     correlation_id=correlation_id,
-                    seq=0,
+                    seq=next_seq(),
                     error_type="TimeoutError",
                 ), ensure_ascii=False, default=str), flush=True)
                 print(json.dumps({
@@ -378,7 +436,7 @@ def run_once(
                     "request_id": None,
                     "correlation_id": correlation_id,
                     "state": "stopping",
-                    "seq": 1,
+                    "seq": next_seq(),
                     "timestamp": _now_iso(),
                 }, ensure_ascii=False, default=str), flush=True)
             else:
@@ -386,16 +444,17 @@ def run_once(
             return EXIT_REQUEST_FAILED
 
         with output_lock:
+            accepting = False
             captured = list(outputs)
         if output == "jsonl":
-            for seq, item in enumerate(captured):
-                print(json.dumps(_once_event(item, seq=seq), ensure_ascii=False, default=str), flush=True)
+            for item in captured:
+                print(json.dumps(_once_event(item, seq=next_seq()), ensure_ascii=False, default=str), flush=True)
             print(json.dumps({
                 "kind": "session.stopping",
                 "request_id": captured[-1].event_id if captured else None,
                 "correlation_id": correlation_id,
                 "state": "stopping",
-                "seq": len(captured),
+                "seq": next_seq(),
                 "timestamp": _now_iso(),
             }, ensure_ascii=False, default=str), flush=True)
         else:
@@ -438,7 +497,13 @@ def run_command(
         return EXIT_OK if value.get("ok", value.get("ready", False)) else EXIT_RUNTIME
     if output not in {"text", "jsonl"}:
         raise ValueError("output doit être 'text' ou 'jsonl'.")
-    application = load_orion(config_path)
+    try:
+        application = load_orion(config_path)
+    except Exception as exc:
+        if output == "jsonl":
+            print(json.dumps(_system_error_event(exc, command=normalized), ensure_ascii=False), flush=True)
+            return EXIT_RUNTIME
+        raise
     try:
         runtime = application.runtime
         values: dict[str, Any] = {

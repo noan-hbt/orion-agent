@@ -1,0 +1,3 @@
+[console_scripts]
+orion = orion_run:main
+orion-toolbox = orion_toolbox:main

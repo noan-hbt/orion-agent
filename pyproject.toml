@@ -17,13 +17,15 @@ dependencies = [
 
 [project.scripts]
 orion-toolbox = "orion_toolbox:main"
+orion = "orion_run:main"
 
 [tool.setuptools]
 # Orion is intentionally a flat-module application.  Explicitly listing the
 # modules prevents setuptools from treating the repository as an invalid
 # package layout while keeping the existing imports and entry points intact.
 py-modules = [
-    "action_ledger", "channel_adapters", "channels", "cli_ui",
+    "action_ledger", "channel_adapters", "channels", "cli_ui", "cli_cockpit", "cli_cockpit_backend", "cli_cockpit_events",
+    "cli_cockpit_actions", "cli_cockpit_observability",
     "communication_ledger", "context_assembler", "context_os", "context_registry",
     "identity_resolver", "event_handler",
     "approvals", "budgets",
