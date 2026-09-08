@@ -94,8 +94,13 @@ def configure_cli(application: object, shutdown: threading.Event) -> object | No
             "Pré-réflexion": (
                 "active" if runtime.reflection_engine is not None else "désactivée"
             ),
+            # ``run_context`` can outlive a completed wake.  Never advertise
+            # a stale RUN phase while the runtime is asleep; that status was
+            # particularly confusing in long-lived CLI sessions.
             "Phase RUN": (
-                run_context.phase.value.upper() if run_context is not None else "aucune"
+                run_context.phase.value.upper()
+                if run_context is not None and str(runtime.state.value).lower() == "run"
+                else "aucune"
             ),
             "Tâche active": (
                 f"#{task.id} · {task.objective}" if task is not None else "aucune"

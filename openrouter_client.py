@@ -560,10 +560,39 @@ class OpenRouterClient:
 
         error_data = payload.get("error", payload) if isinstance(payload, dict) else payload
         if isinstance(error_data, dict):
-            message = str(error_data.get("message", error_data))
+            # OpenRouter often wraps the useful provider diagnostic in
+            # ``error.metadata.raw`` while keeping ``error.message`` at the
+            # unhelpful value ``Provider returned error``.  Preserve the
+            # structured object on the exception, but also expose the useful
+            # parts in ``str(exc)`` so a Telegram/CLI error is actionable.
+            parts: list[str] = []
+            message_value = error_data.get("message")
+            if message_value:
+                parts.append(str(message_value))
+            for key in ("code", "type"):
+                value = error_data.get(key)
+                if value and str(value) not in parts:
+                    parts.append(f"{key}={value}")
+            metadata = error_data.get("metadata")
+            if isinstance(metadata, Mapping):
+                provider = metadata.get("provider_name") or metadata.get("provider")
+                if provider:
+                    parts.append(f"provider={provider}")
+                raw = metadata.get("raw") or metadata.get("error")
+                if raw:
+                    if isinstance(raw, Mapping):
+                        raw = json.dumps(raw, ensure_ascii=False, default=str)
+                    raw_text = str(raw)
+                    # Avoid duplicating the generic message, while bounding
+                    # an unexpectedly large provider response.
+                    if raw_text and raw_text not in parts:
+                        parts.append(raw_text[:2000])
+            message = " · ".join(parts) or str(error_data)
         else:
             message = str(error_data)
         request_id = response.headers.get("x-request-id") or response.headers.get("x-openrouter-request-id")
+        if request_id:
+            message = f"{message} [request_id={request_id}]"
         return OpenRouterAPIError(
             f"OpenRouter HTTP {response.status_code}: {message}",
             status_code=response.status_code,
@@ -705,15 +734,107 @@ class OpenRouterClient:
         if not messages:
             raise OpenRouterConfigurationError("messages ne peut pas être vide.")
         payload: dict[str, Any] = dict(self.default_params)
-        payload.update({"model": model or self.model, "messages": [dict(m) for m in messages]})
-        if tools is not None:
-            payload["tools"] = [dict(tool) for tool in tools]
-        if tool_choice is not None:
-            payload["tool_choice"] = tool_choice
-        if parallel_tool_calls is not None:
-            payload["parallel_tool_calls"] = parallel_tool_calls
+        payload.update(
+            {
+                "model": model or self.model,
+                "messages": [self._normalize_message(m) for m in messages],
+            }
+        )
+        normalized_tools = [dict(tool) for tool in tools] if tools else []
+        if normalized_tools:
+            payload["tools"] = normalized_tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+            if parallel_tool_calls is not None:
+                payload["parallel_tool_calls"] = parallel_tool_calls
         payload.update(params)
+        # ``tools=[]`` and tool controls without tools are rejected by some
+        # OpenAI-compatible providers.  This also removes stale values from
+        # default_params when a final text-only turn is requested.
+        if not normalized_tools:
+            payload.pop("tools", None)
+            payload.pop("tool_choice", None)
+            payload.pop("parallel_tool_calls", None)
         return payload
+
+    @staticmethod
+    def _normalize_message(message: Mapping[str, Any]) -> Message:
+        """Return an OpenAI-compatible copy of one outbound message.
+
+        Provider adapters differ in how strictly they validate message
+        fields.  In particular, a ``role=tool`` message accepts
+        ``tool_call_id`` and ``content``; the optional ``name`` field is a
+        legacy function-calling field and causes HTTP 400 on some routes.
+        Keep the internal history untouched and normalize only the outbound
+        copy.  Assistant tool calls are copied defensively so non-string
+        argument objects cannot become invalid JSON payloads.
+        """
+        normalized = dict(message)
+        if normalized.get("role") == "tool":
+            content = normalized.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False, default=str)
+            result: Message = {
+                "role": "tool",
+                "tool_call_id": str(normalized.get("tool_call_id", "")),
+                "content": content,
+            }
+            return result
+
+        calls = normalized.get("tool_calls")
+        if normalized.get("role") == "assistant" and isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
+            normalized_calls: list[dict[str, Any]] = []
+            for call in calls:
+                if not isinstance(call, Mapping):
+                    continue
+                normalized_call = dict(call)
+                function = normalized_call.get("function")
+                if isinstance(function, Mapping):
+                    normalized_function = dict(function)
+                    arguments = normalized_function.get("arguments")
+                    if arguments is not None and not isinstance(arguments, str):
+                        normalized_function["arguments"] = json.dumps(
+                            arguments, ensure_ascii=False, default=str
+                        )
+                    normalized_call["function"] = normalized_function
+                normalized_calls.append(normalized_call)
+            normalized["tool_calls"] = normalized_calls
+        return normalized
+
+    @staticmethod
+    def _compatibility_fallback_payload(
+        payload: Mapping[str, Any], error: OpenRouterAPIError
+    ) -> dict[str, Any] | None:
+        """Drop optional tool controls after a provider-side HTTP 400.
+
+        ``parallel_tool_calls`` is part of the Chat Completions contract but
+        is not implemented by every provider behind OpenRouter.  A request
+        rejected for that optional field is safe to retry without it: the
+        model can still return one or more calls and Orion will execute them
+        according to its local policy.  Restrict this fallback to HTTP 400
+        responses and only when the field was actually sent.
+        """
+        if error.status_code != 400 or "parallel_tool_calls" not in payload:
+            return None
+        detail = str(error).lower()
+        compatibility_hint = any(
+            token in detail
+            for token in (
+                "parallel_tool_calls",
+                "parallel tool",
+                "unsupported",
+                "not support",
+                "unrecognized",
+                "unknown field",
+                "additional propert",
+                "provider returned error",
+            )
+        )
+        if not compatibility_hint:
+            return None
+        fallback = dict(payload)
+        fallback.pop("parallel_tool_calls", None)
+        return fallback
 
     def complete(
         self,
@@ -728,19 +849,37 @@ class OpenRouterClient:
         """Effectue un appel non-streaming à ``chat/completions``."""
         record = self._start_usage(model=model)
         try:
-            payload = self._request_json(
-                "POST",
-                "chat/completions",
-                json_body=self._payload(
-                    messages,
-                    model=model,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    parallel_tool_calls=parallel_tool_calls,
-                    **params,
-                ),
-                usage_record=record,
+            request_payload = self._payload(
+                messages,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                **params,
             )
+            try:
+                payload = self._request_json(
+                    "POST",
+                    "chat/completions",
+                    json_body=request_payload,
+                    usage_record=record,
+                )
+            except OpenRouterAPIError as exc:
+                fallback_payload = self._compatibility_fallback_payload(request_payload, exc)
+                if fallback_payload is None:
+                    raise
+                try:
+                    payload = self._request_json(
+                        "POST",
+                        "chat/completions",
+                        json_body=fallback_payload,
+                        usage_record=record,
+                    )
+                except OpenRouterAPIError as fallback_error:
+                    raise fallback_error from exc
+                # ``_request_json`` reports transport attempts, while this is
+                # a second logical payload after a compatibility downgrade.
+                record.attempt = max(record.attempt, 2)
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise
@@ -763,19 +902,35 @@ class OpenRouterClient:
         """Version asynchrone de :meth:`complete`."""
         record = self._start_usage(model=model)
         try:
-            payload = await self._request_json_async(
-                "POST",
-                "chat/completions",
-                json_body=self._payload(
-                    messages,
-                    model=model,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    parallel_tool_calls=parallel_tool_calls,
-                    **params,
-                ),
-                usage_record=record,
+            request_payload = self._payload(
+                messages,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                **params,
             )
+            try:
+                payload = await self._request_json_async(
+                    "POST",
+                    "chat/completions",
+                    json_body=request_payload,
+                    usage_record=record,
+                )
+            except OpenRouterAPIError as exc:
+                fallback_payload = self._compatibility_fallback_payload(request_payload, exc)
+                if fallback_payload is None:
+                    raise
+                try:
+                    payload = await self._request_json_async(
+                        "POST",
+                        "chat/completions",
+                        json_body=fallback_payload,
+                        usage_record=record,
+                    )
+                except OpenRouterAPIError as fallback_error:
+                    raise fallback_error from exc
+                record.attempt = max(record.attempt, 2)
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise

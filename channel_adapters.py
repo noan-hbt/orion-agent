@@ -202,7 +202,11 @@ class CLIAdapter:
         cost_provider: Any = None,
     ) -> None:
         self.prompt = prompt
-        self.output = output or sys.stdout
+        # A valid injected stream may intentionally be falsy (for example a
+        # test wrapper or a closed-looking proxy).  Only ``None`` means
+        # "use stdout"; replacing such a stream makes the CLI impossible to
+        # embed reliably.
+        self.output = sys.stdout if output is None else output
         self.console = CLIConsole(
             output=self.output,
             use_color=style,
@@ -228,6 +232,8 @@ class CLIAdapter:
         self._tasks_provider: CLIProvider | None = None
         self._agents_provider: CLIProvider | None = None
         self._jobs_provider: CLIProvider | None = None
+        self._threads_provider: CLIProvider | None = None
+        self._trace_provider: CLIProvider | None = None
         self._usage_provider: Any = usage_provider or usage_ledger or cost_provider
         self._pending = 0
         self._pending_lock = threading.Lock()
@@ -236,6 +242,11 @@ class CLIAdapter:
         self.slow_request_seconds = max(0.0, float(slow_request_seconds))
         self._slow_alert_stop = threading.Event()
         self._slow_alert_thread: threading.Thread | None = None
+        # Runtime calls the diagnostic callback before publishing its
+        # user-facing error output.  Keep the diagnostic correlated so the
+        # latter can be rendered once as a single error panel.
+        self._reported_errors: dict[str, str] = {}
+        self._canceled_tokens: set[str] = set()
 
     def set_exit_handler(self, handler: Callable[[], Any]) -> None:
         self._exit_handler = handler
@@ -254,6 +265,14 @@ class CLIAdapter:
 
     def set_jobs_provider(self, provider: CLIProvider) -> None:
         self._jobs_provider = provider
+
+    def set_threads_provider(self, provider: CLIProvider) -> None:
+        self._threads_provider = provider
+        self.console.set_threads_provider(provider)
+
+    def set_trace_provider(self, provider: CLIProvider) -> None:
+        self._trace_provider = provider
+        self.console.set_trace_provider(provider)
 
     def set_usage_provider(self, provider: Any = None) -> None:
         """Expose the session usage ledger to the console when available."""
@@ -279,8 +298,18 @@ class CLIAdapter:
             )
             self._slow_alert_thread.start()
 
-    def _begin_pending(self, text: str = "") -> int:
-        request = self.console.new_request(text)
+    def _begin_pending(
+        self,
+        text: str = "",
+        *,
+        parent_request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> int:
+        request = self.console.new_request(
+            text,
+            parent_request_id=parent_request_id,
+            context=context,
+        )
         # La demande est réellement remise au router juste après sa création.
         # ``running`` permet au tracker de distinguer une saisie en attente
         # d'une requête déjà publiée.
@@ -292,6 +321,7 @@ class CLIAdapter:
                 {
                     "sequence": sequence,
                     "request_id": request.request_id,
+                    "correlation_id": request.correlation_id,
                     "event_id": None,
                     "started_at": time.monotonic(),
                     "alerted": False,
@@ -315,6 +345,7 @@ class CLIAdapter:
         self,
         event_id: str | None = None,
         *,
+        correlation_id: str | None = None,
         state: str = "succeeded",
         error: str | None = None,
     ) -> None:
@@ -325,11 +356,16 @@ class CLIAdapter:
                     if request.get("event_id") == str(event_id):
                         index = position
                         break
-                if index is None:
-                    # Une sortie asynchrone (scheduler, sous-agent, etc.) ne
-                    # doit pas terminer arbitrairement une requête CLI.
-                    return
-            elif self._pending_requests:
+            if index is None and correlation_id:
+                for position, request in enumerate(self._pending_requests):
+                    if request.get("correlation_id") == str(correlation_id):
+                        index = position
+                        break
+            if (event_id or correlation_id) and index is None:
+                # Une sortie asynchrone (scheduler, sous-agent, etc.) ne doit
+                # pas terminer arbitrairement une requête CLI.
+                return
+            if not (event_id or correlation_id) and self._pending_requests:
                 # Repli pour les callbacks qui ne renvoient pas d'Event.
                 index = 0
             if index is not None:
@@ -350,6 +386,18 @@ class CLIAdapter:
         if not request_id:
             return
         with self._pending_lock:
+            removed = [
+                item
+                for item in self._pending_requests
+                if item.get("request_id") == request_id
+            ]
+            for item in removed:
+                for key in ("request_id", "event_id", "correlation_id"):
+                    value = item.get(key)
+                    if value:
+                        self._canceled_tokens.add(str(value))
+            while len(self._canceled_tokens) > 512:
+                self._canceled_tokens.pop()
             self._pending_requests = [
                 item
                 for item in self._pending_requests
@@ -400,7 +448,11 @@ class CLIAdapter:
         """Publie un texte sans laisser une exception de callback tuer la CLI."""
         if self._on_message is None:
             return
-        sequence = self._begin_pending(text)
+        sequence = self._begin_pending(
+            text,
+            parent_request_id=parent_request_id,
+            context=context,
+        )
         try:
             with self._pending_lock:
                 request = next(
@@ -442,6 +494,29 @@ class CLIAdapter:
             self.console.error(f"Impossible de charger ces informations : {exc}")
             return fallback
 
+    def _resolve_request_id(self, identifier: str | None) -> str | None:
+        """Resolve a full request id or an unambiguous displayed prefix."""
+        if not identifier:
+            return None
+        wanted = str(identifier).strip().lower()
+        if not wanted:
+            return None
+        exact = self.console.requests.get(wanted)
+        if exact is not None:
+            return exact.request_id
+        candidates = [
+            str(item.get("request_id") or "")
+            for item in self.console.requests.snapshot()
+            if str(item.get("request_id") or "").lower().startswith(wanted)
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            self.console.warning(
+                f"Identifiant ambigu : {identifier} ({len(candidates)} requêtes correspondent)."
+            )
+        return None
+
     def _handle_command(self, line: str) -> bool:
         """Parse and dispatch one local command.
 
@@ -460,11 +535,16 @@ class CLIAdapter:
         command: CLICommand = parsed
         name = command.name
         if name == "help":
-            self.console.help()
+            self.console.help(
+                command.args[0] if command.args else None,
+                json_output=command.has("json"),
+            )
         elif name == "clear":
             self.console.clear()
         elif name == "stop":
             target = command.args[0] if command.args else None
+            if command.has("force") and target is None:
+                target = "all"
             if target == "all":
                 with self._pending_lock:
                     request_ids = [item["request_id"] for item in self._pending_requests]
@@ -476,7 +556,8 @@ class CLIAdapter:
                 else:
                     self.console.warning("Aucune requête active à arrêter.")
             else:
-                canceled = self.console.requests.cancel(target)
+                resolved = self._resolve_request_id(target) if target else None
+                canceled = self.console.requests.cancel(resolved)
                 if canceled is None:
                     self.console.warning("Aucune requête active à arrêter.")
                 else:
@@ -489,36 +570,41 @@ class CLIAdapter:
                 self._status_provider,
                 {"CLI": "active", "Requêtes en attente": self._pending},
             )
-            self.console.status(values)
+            if command.has("watch"):
+                self.console.warning("--watch affiche un instantané ; utilisez /status pour le rafraîchir.")
+            self.console.status(values, json_output=command.has("json"))
         elif name == "tools":
             values = self._filter_items(
                 self._provider_value(self._tools_provider, []),
                 command.args[0] if command.args else None,
             )
-            self.console.items("Tools disponibles", values, empty="Aucun tool chargé.")
+            self.console.items("Tools disponibles", values, empty="Aucun tool chargé.", json_output=command.has("json"))
         elif name == "tasks":
             values = self._filter_items(
                 self._provider_value(self._tasks_provider, []),
                 command.args[0] if command.args else None,
             )
-            self.console.items("Tâches récentes", values, empty="Aucune tâche durable.")
+            self.console.items("Tâches récentes", values, empty="Aucune tâche durable.", json_output=command.has("json"))
         elif name == "agents":
             values = self._provider_value(self._agents_provider, [])
-            self.console.items("Sous-agents", values, empty="Aucun sous-agent configuré.")
+            self.console.items("Sous-agents", values, empty="Aucun sous-agent configuré.", json_output=command.has("json"))
         elif name == "jobs":
             values = self._filter_items(
                 self._provider_value(self._jobs_provider, []),
                 command.args[0] if command.args else None,
             )
-            self.console.items("Travaux délégués", values, empty="Aucun travail délégué.")
+            if command.has("watch"):
+                self.console.warning("--watch affiche un instantané ; utilisez /jobs pour le rafraîchir.")
+            self.console.items("Travaux délégués", values, empty="Aucun travail délégué.", json_output=command.has("json"))
         elif name == "requests":
             values = self._filter_items(
                 self.console.requests.snapshot(),
                 command.args[0] if command.args else None,
             )
-            self.console.items("Requêtes récentes", values, empty="Aucune requête récente.")
+            self.console.items("Requêtes récentes", values, empty="Aucune requête récente.", json_output=command.has("json"))
         elif name == "retry":
-            request = self.console.requests.get(command.args[0])
+            resolved = self._resolve_request_id(command.args[0])
+            request = self.console.requests.get(resolved) if resolved else None
             if request is None or not request.text:
                 self.console.error(f"Requête introuvable : {command.args[0]}")
             elif request.state not in {"failed", "canceled"}:
@@ -527,6 +613,7 @@ class CLIAdapter:
                 self._submit_text(request.text)
         elif name == "resume":
             target_id = command.args[0] if command.args else None
+            target_id = self._resolve_request_id(target_id) if target_id else None
             request = self.console.requests.get(target_id) if target_id else None
             if request is None and target_id:
                 self.console.error(f"Requête introuvable : {target_id}")
@@ -557,8 +644,21 @@ class CLIAdapter:
                 self.console.warning("La console n'expose pas de contexte de reprise.")
         elif name == "debug":
             self.console.status(
-                {"Requêtes en attente": self._pending, "Arrêt demandé": self._stop_requested.is_set()}
+                {"Requêtes en attente": self._pending, "Arrêt demandé": self._stop_requested.is_set()},
+                json_output=command.has("json"),
             )
+        elif name == "threads":
+            values = self._filter_items(
+                self._provider_value(self._threads_provider, []),
+                command.args[0] if command.args else None,
+            )
+            self.console.threads(values, json_output=command.has("json"))
+        elif name == "trace":
+            values = self._filter_items(
+                self._provider_value(self._trace_provider, []),
+                command.args[0] if command.args else None,
+            )
+            self.console.trace(values, json_output=command.has("json"))
         return True
 
     @staticmethod
@@ -580,21 +680,66 @@ class CLIAdapter:
                 if isinstance(item, Mapping)
                 else (item,)
             )
-            if any(value is not None and str(value).lower() == wanted for value in values):
+            if any(
+                value is not None
+                and (
+                    str(value).lower() == wanted
+                    or str(value).lower().startswith(wanted)
+                )
+                for value in values
+            ):
                 result.append(item)
         return result
 
     def send(self, output: AgentOutput) -> None:
+        event_id = str(output.event_id or "")
+        with self._pending_lock:
+            if any(
+                token
+                and token in self._canceled_tokens
+                for token in (event_id, str(output.correlation_id or ""))
+            ):
+                # A network/provider callback can arrive after /stop.  The
+                # cancelled request must stay quiet instead of reopening the
+                # transcript with a late answer.
+                return
+        is_error = bool(output.metadata.get("error", False))
+        if is_error:
+            # ``runtime.on_error`` records the technical diagnostic first and
+            # then emits the user-facing AgentOutput.  Render one compact
+            # error block instead of routing the error through the assistant
+            # transcript (which used to create the repeated Orion blocks in
+            # the CLI screenshot).
+            with self._pending_lock:
+                diagnostic = self._reported_errors.pop(event_id, None) if event_id else None
+            self._finish_pending(
+                output.event_id,
+                correlation_id=output.correlation_id,
+                state="failed",
+                error=str(output.content or diagnostic or "échec de la requête"),
+            )
+            message = str(output.content or "La requête a échoué.")
+            if diagnostic and diagnostic not in message:
+                message = f"{message}\nDétail : {diagnostic}"
+            self.console.error(message)
+            return
         intermediate = bool(output.metadata.get("intermediate", False))
         if not intermediate:
-            self._finish_pending(output.event_id)
-        elif output.event_id:
+            self._finish_pending(output.event_id, correlation_id=output.correlation_id)
+        elif output.event_id or output.correlation_id:
             with self._pending_lock:
                 request = next(
                     (
                         item
                         for item in self._pending_requests
-                        if item.get("event_id") == str(output.event_id)
+                        if (
+                            output.event_id
+                            and item.get("event_id") == str(output.event_id)
+                        )
+                        or (
+                            output.correlation_id
+                            and item.get("correlation_id") == str(output.correlation_id)
+                        )
                     ),
                     None,
                 )
@@ -607,22 +752,36 @@ class CLIAdapter:
             output.content,
             intermediate=intermediate,
             timestamp=output.metadata.get("timestamp"),
+            request_id=output.event_id,
         )
 
     def report_error(self, event: object, error: Exception) -> None:
+        event_id = str(getattr(event, "id", "") or "")
+        diagnostic = f"{type(error).__name__} · événement {getattr(event, 'type', 'unknown')}\n{error}"
+        if event_id:
+            with self._pending_lock:
+                self._reported_errors[event_id] = diagnostic
+                # Keep diagnostics bounded in a long-running CLI.  Dicts
+                # preserve insertion order on supported Python versions.
+                while len(self._reported_errors) > 256:
+                    self._reported_errors.pop(next(iter(self._reported_errors)))
         self._finish_pending(
             getattr(event, "id", None),
+            correlation_id=getattr(event, "correlation_id", None),
             state="failed",
             error=f"{type(error).__name__}: {error}",
         )
-        event_type = getattr(event, "type", "unknown")
-        self.console.error(f"{type(error).__name__} · événement {event_type}\n{error}")
 
     def stop(self) -> None:
         self._stop_requested.set()
         self._slow_alert_stop.set()
         self.console.stop()
         with self._pending_lock:
+            for item in self._pending_requests:
+                for key in ("request_id", "event_id", "correlation_id"):
+                    value = item.get(key)
+                    if value:
+                        self._canceled_tokens.add(str(value))
             self._pending_requests.clear()
             self._pending = 0
             self.console.set_busy(False)

@@ -272,7 +272,7 @@ class CLIEventRenderer:
             # Les mises à jour de jobs restent utiles en mode pipe sans
             # exposer le payload interne complet ni des secrets éventuels.
             if kind.startswith("job.") and isinstance(payload.get("meta"), Mapping):
-                safe_job_fields = ("owner", "instance", "team", "objective", "attempt", "result_summary")
+                safe_job_fields = ("owner", "instance", "team", "objective", "attempt", "result_summary", "summary")
                 fields.extend(
                     f"{key}={payload['meta'][key]}"
                     for key in safe_job_fields
@@ -586,7 +586,11 @@ class CLIConsole:
         self._threads_provider: Any = None
         self._trace_provider: Any = None
         self._runtime_values: dict[str, Any] = {}
-        self._last_rendered_seq: dict[str, int] = {}
+        # Sequence guards are scoped by request *and event kind*.  A running
+        # event and its terminal event may legitimately both start at seq=0,
+        # while a repeated event with the same kind/sequence is a duplicate.
+        self._last_rendered_seq: dict[tuple[str, str], int] = {}
+        self._rendered_event_keys: set[tuple[str, str, int, str]] = set()
         # TTY presentation state.  Events can arrive on worker threads and in
         # very small fragments; retaining a little conversation state keeps
         # the visible transcript calm without changing the event contract.
@@ -607,6 +611,7 @@ class CLIConsole:
         self._usage_cache_at = 0.0
         self._usage_last_invalidation = 0.0
         self._usage_refresh_interval = 0.35
+        self._rich_console: Any = None
 
         # NO_COLOR is an explicit user contract and therefore wins over an
         # integration's optimistic ``use_color=True`` preference.
@@ -683,13 +688,13 @@ class CLIConsole:
         except Exception:
             return default
 
-    def threads(self, items: Sequence[Any] | None = None) -> list[Any]:
+    def threads(self, items: Sequence[Any] | None = None, *, json_output: bool = False) -> list[Any]:
         """Retourne et affiche les conversations (thread, intent, contexte)."""
         values = list(items if items is not None else (self._provider_value(self._threads_provider, []) or []))
-        self.items("Conversations persistantes", values, empty="Aucune conversation persistante.")
+        self.items("Conversations persistantes", values, empty="Aucune conversation persistante.", json_output=json_output)
         return values
 
-    def trace(self, items: Sequence[Any] | None = None) -> list[Any]:
+    def trace(self, items: Sequence[Any] | None = None, *, json_output: bool = False) -> list[Any]:
         """Retourne et affiche la trace de contexte, sans doublonner les entrées."""
         values = list(items if items is not None else (self._provider_value(self._trace_provider, []) or []))
         seen: set[str] = set()
@@ -699,7 +704,7 @@ class CLIConsole:
             if key not in seen:
                 seen.add(key)
                 unique.append(value)
-        self.items("Trace de contexte", unique, empty="Aucune trace de contexte.")
+        self.items("Trace de contexte", unique, empty="Aucune trace de contexte.", json_output=json_output)
         return unique
 
     # Naming used by a few integrations before UsageLedger had a public name.
@@ -811,8 +816,15 @@ class CLIConsole:
             return str(next(iter(by_model)))
         return self.model
 
-    def usage_summary(self) -> str:
-        """Compact cost/token summary; empty when no provider is attached."""
+    def usage_summary(self, *, include_model: bool = True) -> str:
+        """Compact cost/token summary; empty when no provider is attached.
+
+        ``include_model`` is useful for views which already render the model
+        as a dedicated field (the banner and ``/status``).  Keeping the
+        default unchanged preserves the small public helper used by existing
+        integrations while preventing the duplicated model visible in the
+        interactive transcript.
+        """
         snapshot = self._usage_snapshot()
         if snapshot is None:
             return ""
@@ -867,7 +879,7 @@ class CLIConsole:
             calls = (snapshot.get("completed_calls") or 0) + (snapshot.get("inflight_calls") or 0)
         parts = [" / ".join(costs), f"{self._format_usage_tokens(total_tokens)} tok", f"{call_count} calls"]
         model = self._usage_model(snapshot)
-        if model:
+        if include_model and model:
             parts.insert(0, str(model))
         return " · ".join(parts)
 
@@ -880,7 +892,7 @@ class CLIConsole:
         model = self._usage_model(snapshot)
         if model:
             details["Modèle"] = model
-        details["Coût session"] = self.usage_summary()
+        details["Coût session"] = self.usage_summary(include_model=False)
         details["Tokens"] = snapshot.get("total_tokens", (snapshot.get("prompt_tokens") or 0) + (snapshot.get("completion_tokens") or 0))
         details["Appels"] = snapshot.get("started_calls", snapshot.get("completed_calls", 1 if snapshot.get("call_id") else 0))
         details["En cours"] = snapshot.get("inflight_calls", 0)
@@ -893,13 +905,18 @@ class CLIConsole:
         if not _RICH_AVAILABLE or not getattr(self.output, "isatty", lambda: False)():
             return None
         target = sys.stdout if self._uses_stdout else self.output
-        return Console(
-            file=target,
-            force_terminal=self.use_color,
-            no_color=not self.use_color,
-            highlight=False,
-            soft_wrap=False,
-        )
+        if self._rich_console is None:
+            self._rich_console = Console(
+                file=target,
+                force_terminal=self.use_color,
+                no_color=not self.use_color,
+                highlight=False,
+                # Rich must wrap long stream fragments at the terminal edge;
+                # the previous ``soft_wrap=False`` let token streams run off
+                # screen and corrupt the prompt.
+                soft_wrap=True,
+            )
+        return self._rich_console
 
     def _width(self, console: Any) -> int:
         try:
@@ -1125,6 +1142,10 @@ class CLIConsole:
         else:  # pragma: no cover
             print(file=self.output, flush=True)
         self._stream_open.discard(request_id)
+        # A stream can contain thousands of provider fragments.  Keeping its
+        # complete text after the block is closed needlessly grows a long
+        # lived CLI session, so discard it at the same lifecycle boundary.
+        self._stream_text.pop(request_id, None)
         if self._active_stream == request_id:
             self._active_stream = None
 
@@ -1134,16 +1155,38 @@ class CLIConsole:
         if active and active != except_request and active in self._stream_open:
             self._close_stream(console, active)
 
-    def _response_block(self, console: Any, content: str, *, request_id: str | None = None, style: str | None = None) -> None:
+    def _print_response_content(self, console: Any, content: str, *, style: str | None = None) -> None:
+        """Render a final response as Markdown when the option is enabled."""
+        if self.render_markdown and _RICH_AVAILABLE and style is None:
+            # Padding gives the conversation text the same visual inset as the
+            # plain renderer while allowing Rich to wrap lists and code
+            # fences correctly at the terminal width.
+            console.print(Padding(Markdown(content), (0, 2, 0, 2)))
+            return
+        self._print_tty_wrapped(console, content, indent="  ", style=style)
+
+    def _response_block(
+        self,
+        console: Any,
+        content: str,
+        *,
+        request_id: str | None = None,
+        style: str | None = None,
+        timestamp: str | None = None,
+    ) -> None:
         self._close_active_stream(console, except_request=request_id)
         stream_id = request_id if request_id and request_id in self._stream_open else "stream"
         had_stream = stream_id in self._stream_open
         if had_stream:
             self._close_stream(console, stream_id)
         if not had_stream:
-            header = Text(self.name, style=f"bold {self._ACCENT}")
+            label = self.name
+            time_label = self._time_label(timestamp)
+            if time_label:
+                label = f"{label} {self._glyph('·', '-')} {time_label}"
+            header = Text(label, style=f"bold {self._ACCENT}")
             console.print(header)
-        self._print_tty_wrapped(console, content, indent="  ", style=style)
+        self._print_response_content(console, content, style=style)
 
     def _request_line(
         self,
@@ -1249,7 +1292,9 @@ class CLIConsole:
     def _toolbar(self) -> FormattedText:
         if self._screen_reader:
             return FormattedText([])
-        usage = self.usage_summary()
+        # The model is shown in the banner/status identity; keep the
+        # toolbar focused on the live cost/tokens counters.
+        usage = self.usage_summary(include_model=False)
         usage_text = f"  {self._glyph('·', '-')} {usage}  " if usage else ""
         if self._busy:
             fragments = [
@@ -1289,14 +1334,27 @@ class CLIConsole:
             marker="..." if self._ascii else "…",
         )
         separator = self._glyph("·", "-")
-        line = f"{self.name} {separator} {model}"
-        usage = self.usage_summary()
+        ready = "travail en cours" if self._busy else ("pret" if self._ascii else "prêt")
+        usage = self.usage_summary(include_model=False)
+        body = Text()
+        body.append("modèle ", style=self._MUTED)
+        body.append(model, style=f"bold {self._ACCENT}")
+        body.append(f"  {separator}  {ready}", style=self._RUN if self._busy else self._SUCCESS)
         if usage:
             # Usage remains available to existing provider integrations, but
             # is visually subordinate to the model identity.
-            line += f"  {separator} {usage}"
+            body.append(f"\n{separator}  {usage}", style=self._MUTED)
         with self._lock:
-            self._print_tty_line(console, line, style=f"bold {self._ACCENT}")
+            console.print(
+                Panel(
+                    body,
+                    title=self.name,
+                    title_align="left",
+                    border_style=self._ACCENT,
+                    padding=(0, 1),
+                    expand=False,
+                )
+            )
 
     def read(self, prompt: str = "❯ ") -> str:
         if self._stop_requested.is_set():
@@ -1342,7 +1400,10 @@ class CLIConsole:
                     value = value.decode("utf-8", errors="replace")
                 return str(value).rstrip("\r\n")
             raise EOFError
-        with patch_stdout(raw=True):
+        # ``raw=False`` lets prompt-toolkit redraw the input line when a
+        # worker emits an activity/error message.  ``raw=True`` left the
+        # cursor and typed text interleaved with asynchronous Orion output.
+        with patch_stdout(raw=False):
             display_prompt = f"Vous  {self._glyph('›', '>')}  "
             return self._session.prompt(
                 FormattedText([("class:prompt", display_prompt)]),
@@ -1442,16 +1503,44 @@ class CLIConsole:
         """
         payload = event.as_dict() if isinstance(event, CLIEvent) else dict(event)
         kind = str(payload.get("kind", "event"))
-        if self._console() is None:
-            return CLIEventRenderer(self.output, mode="plain").render(payload)
-        console = self._console()
         request_id = str(payload.get("request_id") or "")
         seq = int(payload.get("seq") or 0)
-        if request_id and seq and seq < self._last_rendered_seq.get(request_id, -1):
-            return ""
-        if request_id and seq:
-            self._last_rendered_seq[request_id] = seq
         with self._lock:
+            if request_id:
+                # Event producers are not required to assign a sequence to
+                # their first update (seq=0).  De-duplicate exact seq=0
+                # replays by fingerprint, while using monotonic guards for
+                # positively sequenced streams.  The lock covers both the
+                # read and write so concurrent workers cannot print twice.
+                fingerprint = json.dumps(
+                    {
+                        key: value
+                        for key, value in payload.items()
+                        if key != "timestamp"
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    default=str,
+                )
+                rendered_key = (request_id, kind, seq, fingerprint)
+                if rendered_key in self._rendered_event_keys:
+                    return ""
+                sequence_key = (request_id, kind)
+                last_seq = self._last_rendered_seq.get(sequence_key, -1)
+                if seq > 0 and seq <= last_seq:
+                    return ""
+                self._rendered_event_keys.add(rendered_key)
+                if len(self._rendered_event_keys) > 4096:
+                    # Replay protection is intentionally bounded; a process
+                    # that stays open for days must not accumulate every
+                    # historical event fingerprint forever.
+                    for _ in range(1024):
+                        self._rendered_event_keys.pop()
+                if seq > 0:
+                    self._last_rendered_seq[sequence_key] = seq
+            console = self._console()
+            if console is None:
+                return CLIEventRenderer(self.output, mode="plain").render(payload)
             if kind == "session.ready":
                 self._banner_shown = False
                 self.banner()
@@ -1499,7 +1588,12 @@ class CLIConsole:
                         if had_stream:
                             self._print_tty_wrapped(console, text, indent="  ")
                         else:
-                            self._response_block(console, text, request_id=request_id)
+                            self._response_block(
+                                console,
+                                text,
+                                request_id=request_id,
+                                timestamp=payload.get("timestamp"),
+                            )
                     self._emit_usage_note(console, request_id, payload, terminal=True)
                 elif state == "failed":
                     self._close_active_stream(console, except_request=request_id)
@@ -1547,7 +1641,7 @@ class CLIConsole:
         meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else {}
         usage = meta.get("usage_summary") or meta.get("usage")
         if not usage and terminal:
-            usage = self.usage_summary()
+            usage = self.usage_summary(include_model=False)
         if usage:
             self._activity_line(
                 console,
@@ -1570,9 +1664,12 @@ class CLIConsole:
         *,
         intermediate: bool = False,
         timestamp: str | None = None,
+        request_id: str | None = None,
     ) -> None:
-        content = str(content).strip()
-        if not content:
+        # Do not strip meaningful leading/trailing whitespace from Markdown or
+        # code blocks.  Use a separate emptiness check instead.
+        content = str(content)
+        if not content.strip():
             return
         console = self._console()
         if console is None:
@@ -1581,22 +1678,47 @@ class CLIConsole:
             return
         with self._lock:
             if intermediate:
-                active = self.requests.status()
-                request_id = active["request_id"] if active else "stream"
-                self._append_stream(console, request_id, content)
+                selected_id = str(request_id or "")
+                if not selected_id:
+                    active = self.requests.status()
+                    selected_id = str(active["request_id"]) if active else "stream"
+                request_label = (
+                    f" {self._glyph('·', '-')} req {self._short_id(selected_id)}"
+                    if selected_id != "stream"
+                    else ""
+                )
+                time_label = self._time_label(timestamp)
+                time_prefix = f"[{time_label}] " if time_label else ""
+                # Progress is an activity annotation, not a second assistant
+                # answer.  Keeping it out of the token stream prevents
+                # intermediate scheduler/sub-agent updates from being
+                # concatenated with the final response (the main source of
+                # the repeated-looking transcript).
+                self._activity_line(
+                    console,
+                    f"{time_prefix}{self.name} {self._glyph('·', '-')} travail en cours{request_label} : {content}",
+                    key=f"progress:{selected_id}",
+                    style=self._PROGRESS,
+                )
             else:
-                active = self.requests.status()
-                if active is None and self._last_request_id:
+                selected_id = str(request_id or "")
+                active = self.requests.status(selected_id) if selected_id else self.requests.status()
+                if not selected_id and active is None and self._last_request_id:
                     active = self.requests.status(self._last_request_id)
-                request_id = active["request_id"] if active else None
-                self._response_block(console, content, request_id=request_id)
-                if request_id:
-                    usage = self.usage_summary()
+                selected_id = selected_id or (str(active["request_id"]) if active else "")
+                self._response_block(
+                    console,
+                    content,
+                    request_id=selected_id or None,
+                    timestamp=timestamp,
+                )
+                if selected_id:
+                    usage = self.usage_summary(include_model=False)
                     if usage:
                         self._activity_line(
                             console,
-                            f"req {self._short_id(request_id)} {self._glyph('·', '-')} {usage}",
-                            key=f"usage:{request_id}",
+                            f"req {self._short_id(selected_id)} {self._glyph('·', '-')} {usage}",
+                            key=f"usage:{selected_id}",
                         )
 
     def system(self, content: str) -> None:
@@ -1621,8 +1743,17 @@ class CLIConsole:
             self._print_plain(f"Erreur : {content}")
             return
         with self._lock:
-            self._print_tty_wrapped(console, f"{self.name} {self._glyph('·', '-')} erreur", style=f"bold {self._ERROR}")
-            self._print_tty_wrapped(console, content, indent="  ", style=self._ERROR)
+            body = Text(str(content), style=self._ERROR)
+            console.print(
+                Panel(
+                    body,
+                    title=f"{self.name} {self._glyph('·', '-')} erreur",
+                    title_align="left",
+                    border_style=self._ERROR,
+                    padding=(0, 1),
+                    expand=False,
+                )
+            )
 
     def clear(self) -> None:
         console = self._console()
@@ -1698,8 +1829,22 @@ class CLIConsole:
             lines.extend(f"  {' ' * max_usage}  {part}" for part in wrapped[1:])
         return lines
 
-    def help(self) -> None:
+    def help(self, command: str | None = None, *, json_output: bool = False) -> None:
         rows = self._help_rows()
+        if command:
+            requested = str(command).lstrip("/").lower()
+            requested = _COMMAND_ALIASES.get(requested, requested)
+            rows = [row for row in rows if row[0].split()[0].lstrip("/").lower() == requested]
+            if not rows:
+                self.error(f"Commande inconnue : /{requested}")
+                return
+        if json_output:
+            payload = [
+                {"usage": usage, "description": description, "aliases": aliases}
+                for usage, description, aliases in rows
+            ]
+            self._print_plain(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            return
         console = self._console()
         if console is None:
             self._print_plain("\nCOMMANDES\n" + "\n".join(self._help_lines(rows)))
@@ -1748,7 +1893,7 @@ class CLIConsole:
             for command, description in rows:
                 self._print_tty_line(console, f"   {command:<12} {description}")
 
-    def status(self, values: Mapping[str, Any]) -> None:
+    def status(self, values: Mapping[str, Any], *, json_output: bool = False) -> None:
         self._runtime_values = dict(values)
         usage = self.usage_details()
         if usage:
@@ -1756,16 +1901,104 @@ class CLIConsole:
             # to /status and /debug without requiring a particular ledger type.
             self._runtime_values.update({key: value for key, value in usage.items() if key not in self._runtime_values})
         console = self._console()
+        if json_output:
+            self._print_plain(json.dumps(self._runtime_values, ensure_ascii=False, default=str, separators=(",", ":")))
+            return
         if console is None:
             self._print_plain("\n" + "\n".join(f"{key}: {value}" for key, value in self._runtime_values.items()))
             return
         with self._lock:
-            self._print_tty_line(console, "Status Orion", style=f"bold {self._ACCENT}")
+            grid = Table.grid(padding=(0, 2), expand=False)
+            grid.add_column(style=f"bold {self._ACCENT}", no_wrap=True)
+            grid.add_column(style="white")
             for key, value in self._runtime_values.items():
-                self._print_tty_wrapped(console, f"  {key}: {value}")
+                grid.add_row(str(key), str(value))
+            console.print(
+                Panel(
+                    grid,
+                    title="Status Orion",
+                    title_align="left",
+                    border_style=self._ACCENT,
+                    padding=(0, 1),
+                    expand=False,
+                )
+            )
 
-    def items(self, title: str, items: Sequence[Any], *, empty: str) -> None:
+    @staticmethod
+    def _items_view(title: str) -> str:
+        normalized = str(title).lower()
+        if "tool" in normalized:
+            return "tools"
+        if "agent" in normalized:
+            return "agents"
+        if "tâche" in normalized or "tache" in normalized:
+            return "tasks"
+        if "requête" in normalized or "requete" in normalized:
+            return "requests"
+        if "conversation" in normalized or "thread" in normalized:
+            return "threads"
+        if "trace" in normalized:
+            return "trace"
+        if "travaux" in normalized or "job" in normalized:
+            return "jobs"
+        return "items"
+
+    def _item_table(self, console: Any, view: str, items: Sequence[Any]) -> Any:
+        """Render each collection with columns matching its domain.
+
+        The previous renderer forced every object through ``_job_line``.  A
+        compact table keeps the operator view scannable without changing the
+        provider payload contract.
+        """
+        columns: dict[str, tuple[str, ...]] = {
+            "tools": ("Tool", "Description"),
+            "agents": ("ID", "Agent", "État"),
+            "tasks": ("ID", "État", "Objectif"),
+            "jobs": ("ID", "État", "Objectif"),
+            "requests": ("ID", "État", "Demande"),
+            "threads": ("Thread", "Canal", "Intention"),
+            "trace": ("Heure", "Événement", "Détail"),
+            "items": ("ID", "Valeur"),
+        }
+        headers = columns.get(view, columns["items"])
+        table = Table(
+            *headers,
+            box=None,
+            show_header=True,
+            header_style=f"bold {self._MUTED}",
+            padding=(0, 1),
+            pad_edge=False,
+            expand=False,
+        )
+        for item in items:
+            if isinstance(item, Mapping):
+                identifier = item.get("request_id") or item.get("id") or item.get("job_id") or item.get("thread_id") or "-"
+                state = self._state_label(item.get("status") or item.get("state"))
+                if view == "tools":
+                    row = (str(item.get("name") or item.get("id") or "tool"), str(item.get("description") or item.get("label") or ""))
+                elif view == "agents":
+                    row = (str(identifier), str(item.get("name") or item.get("model") or "agent"), state)
+                elif view in {"tasks", "jobs"}:
+                    row = (self._short_id(str(identifier)), state, str(item.get("objective") or item.get("label") or item.get("name") or ""))
+                elif view == "requests":
+                    row = (self._short_id(str(identifier)), state, str(item.get("text") or item.get("last_fragment") or item.get("error") or ""))
+                elif view == "threads":
+                    row = (str(item.get("thread_id") or item.get("id") or "-"), str(item.get("channel") or item.get("conversation_id") or "-"), str(item.get("intent") or item.get("goal") or item.get("objective") or item.get("state") or ""))
+                elif view == "trace":
+                    row = (self._time_label(str(item.get("timestamp") or "")), str(item.get("kind") or item.get("event") or item.get("type") or "event"), str(item.get("summary") or item.get("text") or item.get("detail") or ""))
+                else:
+                    row = (str(identifier), str(item.get("value") or item.get("label") or item))
+            else:
+                value = str(item)
+                row = ("-", value) if len(headers) == 2 else ("-", "-", value)
+            table.add_row(*(str(value) for value in row))
+        return table
+
+    def items(self, title: str, items: Sequence[Any], *, empty: str, json_output: bool = False) -> None:
         self._job_items = list(items) if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0 else self._job_items
+        if json_output:
+            self._print_plain(json.dumps({"title": title, "items": list(items)}, ensure_ascii=False, default=str, separators=(",", ":")))
+            return
         console = self._console()
         if not items:
             self.system(empty)
@@ -1777,9 +2010,17 @@ class CLIConsole:
             return
         with self._lock:
             heading = "Jobs" if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0 else title
-            self._print_tty_line(console, heading, style=f"bold {self._ACCENT}")
-            for index, item in enumerate(items):
-                self._job_line(console, item, index, len(items))
+            view = self._items_view(title)
+            console.print(
+                Panel(
+                    self._item_table(console, view, items),
+                    title=heading,
+                    title_align="left",
+                    border_style=self._ACCENT,
+                    padding=(0, 1),
+                    expand=False,
+                )
+            )
 
 
 __all__ = [

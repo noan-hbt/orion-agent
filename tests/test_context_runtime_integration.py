@@ -6,6 +6,7 @@ from context_assembler import ContextAssembler, ContextComponent
 from context_os import ThreadStateStore
 from event_handler import Event
 from memory_store import MemoryStore
+from prompt_context import ConversationJournal
 from runtime import AgentRuntime, RunContext
 
 
@@ -72,3 +73,34 @@ def test_context_budget_is_respected_and_priority_is_retained():
     ])
     assert sum(len(value) for value in rendered.values()) <= 320
     assert "important request" in rendered["request"]
+
+
+def test_failed_run_is_journaled_for_continue(tmp_path):
+    """A provider failure must leave enough history for a follow-up message."""
+
+    class FailingLLM:
+        def tool_definitions(self):
+            return []
+
+        def complete(self, *args, **kwargs):
+            raise RuntimeError("provider returned error")
+
+    journal = ConversationJournal(tmp_path / "conversation.jsonl")
+    runtime = AgentRuntime(
+        llm_client=FailingLLM(),
+        conversation_journal=journal,
+        action_ledger_path=str(tmp_path / "actions.sqlite3"),
+    )
+    event = Event(
+        "message",
+        {"text": "Crée une équipe de sous-agents"},
+        source="telegram",
+        metadata={"channel": "telegram", "conversation_id": "telegram:20"},
+    )
+
+    runtime._wake(event)
+
+    history = journal.recent_messages(conversation_id="telegram:20", limit=20)
+    contents = [str(item.get("content", "")) for item in history]
+    assert any("Crée une équipe de sous-agents" in content for content in contents)
+    assert any("RUN a été interrompu" in content for content in contents)

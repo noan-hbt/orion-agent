@@ -1808,6 +1808,74 @@ class AgentRuntime:
         if answer:
             context.answer = answer
 
+    def _journal_context(
+        self,
+        context: RunContext | None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        """Persist the conversational state reached by a RUN.
+
+        Journaling used to happen only on the success path of ``_wake``.  A
+        provider/tool exception therefore erased the last request from the
+        history from the model's point of view, making a later ``Continue``
+        start from an apparently unrelated conversation.  Keep this helper
+        best-effort: a journal failure must never replace the original run
+        error or stop the runtime.
+        """
+        if (
+            context is None
+            or self.conversation_journal is None
+            or context.event.type.startswith("subagent.")
+        ):
+            return
+
+        journal_messages = [
+            message
+            for message in context.messages
+            if isinstance(message, Mapping) and message.get("role") != "system"
+        ]
+        if not journal_messages:
+            # Context assembly itself can fail before the first model request.
+            # Preserve the plain inbound text in that case so a later
+            # ``Continue`` still has an anchor for the conversation.
+            request_text = (
+                context.event.payload.get("text")
+                or context.event.payload.get("message")
+            )
+            if request_text:
+                journal_messages.append({"role": "user", "content": str(request_text)})
+        if error is not None:
+            phase = context.phase.value if isinstance(context.phase, RunPhase) else str(context.phase)
+            journal_messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Le RUN a été interrompu avant sa réponse finale. "
+                        f"Phase atteinte : {phase}. "
+                        f"Erreur technique : {type(error).__name__}. "
+                        "La dernière demande peut être reprise avec son contexte."
+                    ),
+                }
+            )
+        if not journal_messages:
+            return
+        try:
+            self.conversation_journal.append(
+                event_id=context.event.id,
+                task_id=context.task.id if context.task is not None else None,
+                messages=journal_messages,
+                source=context.event.source,
+                channel=(
+                    context.event.metadata.get("channel")
+                    or context.event.payload.get("_orion_channel")
+                ),
+                conversation_id=self._conversation_id(context.event),
+                timestamp=context.event.created_at.isoformat(),
+            )
+        except Exception:
+            return
+
     def _execute_runtime_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         context = self._run_context
         if context is None:
@@ -2553,29 +2621,7 @@ class AgentRuntime:
             output_text = context.answer or self._fallback_tool_output(context)
             if output_text is not None:
                 self._emit_output(context, output_text)
-            if (
-                self.conversation_journal is not None
-                and context.messages
-                and not context.event.type.startswith("subagent.")
-            ):
-                journal_messages = [
-                    message
-                    for message in context.messages
-                    if message.get("role") != "system"
-                ]
-                if journal_messages:
-                    self.conversation_journal.append(
-                        event_id=event.id,
-                        task_id=context.task.id if context.task is not None else None,
-                        messages=journal_messages,
-                        source=event.source,
-                        channel=(
-                            event.metadata.get("channel")
-                            or event.payload.get("_orion_channel")
-                        ),
-                        conversation_id=self._conversation_id(event),
-                        timestamp=event.created_at.isoformat(),
-                    )
+            self._journal_context(context)
             with self._execution_lock:
                 self._run_in_progress = False
                 self._promote_deferred_events()
@@ -2605,6 +2651,10 @@ class AgentRuntime:
                 self._run_in_progress = False
                 self._promote_deferred_events()
             self._last_error = exc
+            # Keep the partial exchange before exposing the failure.  A
+            # follow-up message such as ``Continue`` must see the request and
+            # tool observations that led to this error.
+            self._journal_context(self._run_context, error=exc)
             if self._current_task is not None and self._run_context is not None:
                 try:
                     self._current_task.finish_run(
