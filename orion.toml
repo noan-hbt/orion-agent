@@ -41,6 +41,7 @@ queue_size = 0
 default_max_attempts = 3
 retry_delay = 1.0
 retry_backoff = 2.0
+durable_path = "data/events.sqlite3"
 
 [runtime]
 max_deferred_events = 10000
@@ -52,13 +53,14 @@ parallel_tool_calls = true
 # sans les injecter dans le contexte du RUN courant.
 queue_events_during_run = true
 wake_on_subagent_progress = false
+durable_path = "data/events.sqlite3"
 
 [subagents]
-enabled = true
+enabled = false
 state_path = "data/subagents.json"
 workers = 3
 default_model = "deepseek/deepseek-v4-flash-0731"
-default_tools = ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
+default_tools = []
 default_max_turns = 8
 max_context_chars = 16000
 max_result_chars = 24000
@@ -91,13 +93,14 @@ max_output_chars = 5000
 temperature = 0.7
 
 [tasks]
+enabled = false
 path = "data/tasks.json"
 
 [ledger]
 path = "data/action_ledger.sqlite3"
 
 [scheduler]
-enabled = true
+enabled = false
 poll_interval = 1.0
 schedules_path = "data/schedules.json"
 
@@ -165,8 +168,8 @@ core_path = "ORION_CORE.md"
 context_path = "data/prompt_context.json"
 journal_path = "data/conversations.jsonl"
 history_enabled = true
-history_limit = 20
-history_max_chars = 100000
+history_limit = 2000
+history_max_chars = 140000
 # Ces champs sont optionnels. La personnalite et la methodologie peuvent aussi
 # etre conservees dans data/prompt_context.json.
 # personality = "Tu es Orion : fiable, calme, pragmatique et direct."
@@ -179,8 +182,8 @@ context_mode = "contract"
 compaction_enabled = true
 llm_compaction_enabled = false
 compactor_model = "deepseek/deepseek-v4-flash-0731"
-total_max_chars = 60000
-total_max_tokens = 12000
+total_max_chars = 200000
+total_max_tokens = 48000
 output_reserve_tokens = 3000
 compactor_input_chars = 30000
 cache_size = 64
@@ -188,8 +191,8 @@ task_max_chars = 12000
 task_max_tokens = 3000
 event_max_chars = 10000
 event_max_tokens = 3000
-history_max_chars = 10000
-history_max_tokens = 2500
+history_max_chars = 140000
+history_max_tokens = 30000
 policy_max_chars = 12000
 policy_max_tokens = 3000
 request_max_chars = 8000
@@ -200,7 +203,7 @@ notifications_tools_max_chars = 8000
 notifications_tools_max_tokens = 2000
 reflection_max_chars = 2000
 reflection_max_tokens = 500
-history_turn_limit = 20
+history_turn_limit = 2000
 reflection_enabled = true
 reflection_format = "advisory_json"
 redaction_enabled = true
@@ -230,9 +233,16 @@ state_path = "data/thread_state.json"
 # Les paquets sont installes dans ce dossier et charges au demarrage.
 directory = "tools"
 state_path = "data/installed_tools.json"
-# Liste vide = charger tous les tools installes.
+# Orion démarre sans capability optionnelle. Les tools et modules bundled
+# (orion.web, orion.files, orion.tasks, orion.subagents, orion.team, etc.)
+# doivent être activés explicitement via la toolbox.
 enabled = []
 disabled = []
+
+[tools.policy]
+# Défense en profondeur côté opérateur. Une classification déclarée ici peut
+# renforcer un manifest mais ne peut jamais abaisser son niveau de risque.
+privileged = ["terminal"]
 
 [tools.terminal]
 # Le terminal travaille dans le projet par défaut.
@@ -241,7 +251,9 @@ max_output_chars = 12000
 allow_outside_root = false
 
 [tools.web]
-# auto utilise Tavily si TAVILY_API_KEY existe, sinon la recherche publique.
+# auto est résolu par Orion avant le chargement du plugin : Tavily si
+# TAVILY_API_KEY existe, sinon recherche HTTP publique. Selenium/Chrome n'est
+# utilisé que si provider = "browser" est demandé explicitement.
 provider = "auto"
 api_provider = "tavily"
 api_key_env = "TAVILY_API_KEY"
@@ -257,6 +269,10 @@ search_engines = ["bing_rss", "duckduckgo_html", "duckduckgo_lite"]
 cache_ttl = 300
 cache_size = 128
 allow_private = false
+
+[tools.files]
+max_read_chars = 40000
+max_file_bytes = 2000000
 
 [tools.github]
 # Dépôt utilisé par python orion_toolbox.py si --repo n'est pas fourni.

@@ -103,3 +103,23 @@ def test_assistant_sender_is_normalized_for_history(journal):
     message = journal.recent_messages(limit=1)[0]
     assert message["role"] == "assistant"
     assert message["sender"] == "orion"
+
+
+def test_explicit_worker_sender_is_preserved_for_history(journal):
+    journal.append(
+        event_id="subagent.completed:job-5",
+        task_id=None,
+        source="cli",
+        conversation_id="cli:main",
+        messages=[
+            {
+                "role": "assistant",
+                "sender": "subagent:toml-analyst",
+                "content": "Résultat du worker.",
+            }
+        ],
+    )
+
+    message = journal.recent_messages(conversation_id="cli:main", limit=1)[0]
+    assert message["role"] == "assistant"
+    assert message["sender"] == "subagent:toml-analyst"

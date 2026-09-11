@@ -6,10 +6,16 @@ entrypoint = "tool:register"
 api_version = 1
 permissions = ["process", "filesystem"]
 
+[policy]
+classification = "privileged"
+explicit_enable = true
+tool_classifications = { terminal = "privileged" }
+
 [guidance]
 summary = "Exécute des commandes locales contrôlées dans l'espace de travail."
 instructions = "Vérifie la commande et son périmètre avant exécution. Explique les commandes destructrices ou irréversibles et demande confirmation lorsque la politique l'exige."
 constraints = [
   "Ne divulgue jamais de secrets trouvés dans l'environnement ou les fichiers.",
-  "N'exécute pas de commande destructive sans autorisation explicite."
+  "N'exécute pas de commande destructive sans autorisation explicite.",
+  "Le contrôle cwd/env/timeout n'est pas un sandbox OS ; une isolation forte du filesystem ou du réseau nécessite un conteneur ou une VM."
 ]

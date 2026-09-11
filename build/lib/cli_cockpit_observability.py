@@ -60,6 +60,27 @@ def _section(app: Any, names: tuple[str, ...]) -> Any:
     return None
 
 
+def _action_ledger_snapshot(runtime: Any) -> Any:
+    """Read only the ActionLedger's explicit safe snapshot contract.
+
+    Unlike generic service discovery, this deliberately does not fall back to
+    ``list``/``all``/``get`` because those APIs may expose raw action records,
+    arguments, results, targets, or errors.
+    """
+    if runtime is None:
+        return None
+    ledger = _get(runtime, "action_ledger")
+    if ledger is None:
+        return None
+    snapshot = getattr(ledger, "snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        return _plain(snapshot())
+    except Exception:
+        return None
+
+
 def collect_observability(application: Any) -> dict[str, Any]:
     """Collect a stable snapshot from the supplied application object."""
     runtime = _get(application, "runtime")
@@ -82,6 +103,7 @@ def collect_observability(application: Any) -> dict[str, Any]:
         "memory": _section(application, ("memory", "memory_store")),
         "galaxy": _section(application, ("galaxy", "galaxy_store")),
         "skills": _section(application, ("skill", "skills", "tool_manager")),
+        "actions": _action_ledger_snapshot(runtime),
     }
     return result
 

@@ -21,6 +21,7 @@ def _completion_context(*, result="Canberra est la capitale de l'Australie.", ev
         {
             "job_id": "job-web-1",
             "session_id": "session-1",
+            "agent_name": "web-researcher",
             "result": result,
             "internal_event": True,
             "worker_payload": {"tool_calls": [{"name": "web"}]},
@@ -40,7 +41,7 @@ def _journal_runtime(journal):
     return AgentRuntime(llm_client=None, conversation_journal=journal)
 
 
-def test_subagent_completion_is_persisted_as_parent_assistant_message(tmp_path):
+def test_subagent_completion_is_persisted_with_worker_sender_identity(tmp_path):
     journal = ConversationJournal(tmp_path / "conversation.jsonl")
     context = _completion_context()
 
@@ -49,8 +50,23 @@ def test_subagent_completion_is_persisted_as_parent_assistant_message(tmp_path):
     messages = journal.recent_messages(conversation_id="telegram:20")
     assert len(messages) == 1
     assert messages[0]["role"] == "assistant"
-    assert messages[0]["sender"] == "orion"
+    assert messages[0]["sender"] == "subagent:web-researcher"
     assert messages[0]["content"] == "Canberra est la capitale de l'Australie."
+
+
+def test_conversational_completion_journals_worker_then_orion_synthesis(tmp_path):
+    journal = ConversationJournal(tmp_path / "conversation.jsonl")
+    context = _completion_context()
+    context.event.metadata["resume_orchestrator"] = True
+    context.answer = "Orion confirme la synthèse du worker."
+
+    _journal_runtime(journal)._journal_context(context)
+
+    messages = journal.recent_messages(conversation_id="telegram:20")
+    assert [(item["sender"], item["content"]) for item in messages] == [
+        ("subagent:web-researcher", "Canberra est la capitale de l'Australie."),
+        ("orion", "Orion confirme la synthèse du worker."),
+    ]
 
 
 def test_completion_does_not_inject_internal_worker_envelope(tmp_path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from threading import Barrier, Thread
 
@@ -55,6 +56,7 @@ def test_restart_requeues_running_jobs_and_preserves_session(tmp_path):
         ]
         manager._save_locked()
 
+    manager.close()
     restarted = _manager(tmp_path)
     recovered = restarted.get_job(job.id)
     session = restarted.get_session(job.session_id)
@@ -136,6 +138,7 @@ def test_cancel_queued_job_transitions_session_and_emits_once(tmp_path):
     assert [item["event_type"] for item in events.published] == ["subagent.cancelled"]
 
     # A restart must not duplicate an already acknowledged outbox event.
+    manager.close()
     restarted = _manager(tmp_path, events=events)
     assert [item["event_type"] for item in events.published] == ["subagent.cancelled"]
     assert restarted.get_job(job.id).status is SubAgentJobStatus.CANCELLED
@@ -170,7 +173,72 @@ def test_corrupt_state_is_reported(tmp_path):
         _manager(tmp_path)
 
 
-def test_stop_marks_running_job_failed_and_restart_does_not_requeue(tmp_path):
+def test_subagent_allowed_tools_may_narrow_but_not_exceed_operator_ceiling(tmp_path):
+    manager = _manager(tmp_path, default_tools=["web"])
+
+    narrowed = manager.create_agent(
+        "researcher",
+        "researches",
+        allowed_tools=["web"],
+    )
+    assert narrowed.allowed_tools == ["web"]
+
+    with pytest.raises(PermissionError, match="terminal"):
+        manager.create_agent(
+            "unsafe",
+            "tries to escalate",
+            allowed_tools=["web", "terminal"],
+        )
+
+
+def test_update_rejects_tool_capability_escalation_and_preserves_existing_tools(tmp_path):
+    manager = _manager(tmp_path, default_tools=["web"])
+    agent = manager.create_agent("worker", "does work", allowed_tools=["web"])
+
+    with pytest.raises(PermissionError, match="terminal"):
+        manager.update_agent(agent.id, allowed_tools=["web", "terminal"])
+
+    assert manager.get_agent(agent.id).allowed_tools == ["web"]
+
+
+def test_restart_constrains_persisted_tools_to_current_operator_ceiling(tmp_path):
+    original = _manager(tmp_path, default_tools=["web", "terminal"])
+    agent = original.create_agent(
+        "legacy-worker",
+        "old broader permissions",
+        allowed_tools=["web", "terminal"],
+    )
+
+    original.close()
+    restarted = _manager(tmp_path, default_tools=["web"])
+    recovered = restarted.get_agent(agent.id)
+
+    assert recovered is not None
+    assert recovered.allowed_tools == ["web"]
+
+    persisted = json.loads((tmp_path / "subagents.json").read_text(encoding="utf-8"))
+    persisted_agent = next(item for item in persisted["agents"] if item["id"] == agent.id)
+    assert persisted_agent["allowed_tools"] == ["web"]
+
+
+def test_empty_operator_default_tools_is_an_empty_capability_ceiling(tmp_path):
+    manager = _manager(tmp_path, default_tools=[])
+    agent = manager.create_agent("tool-less", "no tools")
+
+    assert agent.allowed_tools == []
+    with pytest.raises(PermissionError, match="web"):
+        manager.update_agent(agent.id, allowed_tools=["web"])
+
+
+def test_omitted_default_tools_is_fail_closed(tmp_path):
+    manager = _manager(tmp_path)
+    agent = manager.create_agent("tool-less-default", "no implicit tools")
+
+    assert manager.default_tools == ()
+    assert agent.allowed_tools == []
+
+
+def test_stop_does_not_terminalize_unconfirmed_running_job(tmp_path):
     events = _RecordingEvents()
     manager = _manager(tmp_path, events=events)
     agent = manager.create_agent("worker", "does work")
@@ -182,16 +250,19 @@ def test_stop_marks_running_job_failed_and_restart_does_not_requeue(tmp_path):
     manager.stop(wait=False)
     stopped = manager.get_job(job.id)
     assert stopped is not None
-    assert stopped.status is SubAgentJobStatus.FAILED
-    assert "arrêt" in (stopped.error or "").lower()
+    assert stopped.status is SubAgentJobStatus.RUNNING
 
+    # With no worker owning this synthetic RUNNING record, restart applies the
+    # existing crash-recovery rule and requeues it instead of persisting a
+    # false terminal outcome while an external action could still be in flight.
+    manager.close()
     restarted = _manager(tmp_path, events=events)
-    assert restarted.get_job(job.id).status is SubAgentJobStatus.FAILED
-    assert [item["event_type"] for item in events.published].count("subagent.failed") == 1
+    assert restarted.get_job(job.id).status is SubAgentJobStatus.QUEUED
+    assert [item["event_type"] for item in events.published].count("subagent.failed") == 0
 
 
 def test_max_runtime_is_enforced_before_next_model_turn(tmp_path, monkeypatch):
-    manager = _manager(tmp_path, max_runtime_seconds=1)
+    manager = _manager(tmp_path, max_runtime_seconds=1, default_tools=["web"])
     manager.llm_client.tool_definitions = lambda: [
         {"type": "function", "function": {"name": "web_search"}}
     ]
@@ -206,7 +277,7 @@ def test_max_runtime_is_enforced_before_next_model_turn(tmp_path, monkeypatch):
             {"id": "call-1", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}
         ]}}]
     }
-    agent = manager.create_agent("worker", "does work", allowed_tools=["web_search"], max_turns=3)
+    agent = manager.create_agent("worker", "does work", allowed_tools=["web"], max_turns=3)
     job = manager.submit("bounded work", agent_id=agent.id)
     ticks = iter((10.0, 10.0, 12.0))
     monkeypatch.setattr("subagents.time.monotonic", lambda: next(ticks))

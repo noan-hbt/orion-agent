@@ -69,7 +69,9 @@ def _systemd_quote(value: str) -> str:
 def _atomic_write(path: Path, text: str, mode: int | None = None) -> None:
     """Write in the same directory, then replace; never leave a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=str(path.parent), text=True
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text)
@@ -87,14 +89,19 @@ def _backup(path: Path) -> Path:
     candidate = path.with_name(path.name + ".backup")
     i = 1
     while candidate.exists():
-        candidate = path.with_name(f"{path.name}.backup.{i}"); i += 1
+        candidate = path.with_name(f"{path.name}.backup.{i}")
+        i += 1
     shutil.copy2(path, candidate)
     return candidate
 
 
-def _validate_inside(path: Path, root: Path, label: str, parser: argparse.ArgumentParser) -> None:
-    try: path.relative_to(root)
-    except ValueError: parser.error(f"{label} doit etre dans --install-dir")
+def _validate_inside(
+    path: Path, root: Path, label: str, parser: argparse.ArgumentParser
+) -> None:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        parser.error(f"{label} doit etre dans --install-dir")
 
 
 def _validate_user(user: str, parser: argparse.ArgumentParser) -> None:
@@ -102,8 +109,11 @@ def _validate_user(user: str, parser: argparse.ArgumentParser) -> None:
         parser.error("--service-user contient un nom Linux invalide")
     if os.name == "posix":
         try:
-            import pwd; pwd.getpwnam(user.rstrip("$"))
-        except KeyError: parser.error(f"Utilisateur inexistant : {user}")
+            import pwd
+
+            pwd.getpwnam(user.rstrip("$"))
+        except KeyError:
+            parser.error(f"Utilisateur inexistant : {user}")
 
 
 def _validate_service_name(name: str, parser: argparse.ArgumentParser) -> None:
@@ -138,7 +148,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths={_systemd_quote(str(install_dir / 'data'))} {_systemd_quote(str(env_path))}
+ReadWritePaths={_systemd_quote(str(install_dir / "data"))} {_systemd_quote(str(env_path))}
 UMask=0077
 LimitNOFILE=4096
 LimitNPROC=256
@@ -177,12 +187,18 @@ def main() -> None:
     parser.add_argument("--compactor-model", default="deepseek/deepseek-v4-flash-0731")
     parser.add_argument("--reflection-model", default="deepseek/deepseek-v4-flash-0731")
     parser.add_argument("--memory-model", default="deepseek/deepseek-v4-flash-0731")
-    parser.add_argument("--memory", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--memory", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--email-imap-host", default="imap.example.com")
     parser.add_argument("--email-smtp-host", default="smtp.example.com")
     parser.add_argument("--email-username", default="")
-    parser.add_argument("--set-secret", action="append", default=[], metavar="NAME=VALUE")
-    parser.add_argument("--systemd", action="store_true", help="Genere aussi orion.service")
+    parser.add_argument(
+        "--set-secret", action="append", default=[], metavar="NAME=VALUE"
+    )
+    parser.add_argument(
+        "--systemd", action="store_true", help="Genere aussi orion.service"
+    )
     parser.add_argument("--service-name", default="orion")
     parser.add_argument("--service-user", default="orion")
     parser.add_argument("--python", dest="python_executable", default=sys.executable)
@@ -192,7 +208,9 @@ def main() -> None:
     _validate_service_name(args.service_name, parser)
     _validate_user(args.service_user, parser)
 
-    channels = [item.strip().lower() for item in args.channels.split(",") if item.strip()]
+    channels = [
+        item.strip().lower() for item in args.channels.split(",") if item.strip()
+    ]
     invalid = sorted(set(channels) - SUPPORTED_CHANNELS)
     if invalid:
         parser.error(f"Channels inconnus : {', '.join(invalid)}")
@@ -209,7 +227,8 @@ def main() -> None:
         parser.error("--python introuvable")
     install_dir.mkdir(parents=True, exist_ok=True)
     run_script = install_dir / "orion_run.py"
-    if args.systemd and not run_script.is_file(): parser.error(f"Fichier manquant : {run_script}")
+    if args.systemd and not run_script.is_file():
+        parser.error(f"Fichier manquant : {run_script}")
 
     if config_path.exists() and not args.force:
         parser.error(f"{config_path} existe deja ; utilisez --force pour le remplacer.")
@@ -221,32 +240,43 @@ def main() -> None:
     secrets = _parse_secrets(args.set_secret, parser)
     selected_values = {**env_file_values, **secrets}
     for name in ("OPENROUTER_API_KEY",):
-        _require_secret(name, values=selected_values, env_file_values=env_file_values, parser=parser)
+        _require_secret(
+            name, values=selected_values, env_file_values=env_file_values, parser=parser
+        )
     for channel in channels:
         env_name = CHANNEL_SECRET_DEFAULTS.get(channel)
         if env_name:
-            _require_secret(env_name, values=selected_values, env_file_values=env_file_values, parser=parser)
+            _require_secret(
+                env_name,
+                values=selected_values,
+                env_file_values=env_file_values,
+                parser=parser,
+            )
 
     secret_envs = {
         channel: CHANNEL_SECRET_DEFAULTS[channel]
         for channel in channels
         if channel in CHANNEL_SECRET_DEFAULTS
     }
-    email_settings = {
-        "imap_host": args.email_imap_host,
-        "smtp_host": args.email_smtp_host,
-        "username": args.email_username,
-    } if "email" in channels else None
+    email_settings = (
+        {
+            "imap_host": args.email_imap_host,
+            "smtp_host": args.email_smtp_host,
+            "username": args.email_username,
+        }
+        if "email" in channels
+        else None
+    )
     config_text = _config_text(
-            args.model,
-            channels,
-            channels[0],
-            bool(args.memory),
-            secret_envs,
-            email_settings,
-            compactor_model=args.compactor_model,
-            memory_model=args.memory_model,
-            reflection_model=args.reflection_model,
+        args.model,
+        channels,
+        channels[0],
+        bool(args.memory),
+        secret_envs,
+        email_settings,
+        compactor_model=args.compactor_model,
+        memory_model=args.memory_model,
+        reflection_model=args.reflection_model,
     )
     _atomic_write(config_path, config_text, 0o644)
 
@@ -259,9 +289,13 @@ def main() -> None:
     lines = existing.splitlines()
     for key, value in env_to_write.items():
         for i, line in enumerate(lines):
-            if line.startswith(key + "="): lines[i] = f"{key}={value}"; break
-        else: lines.append(f"{key}={value}")
-    if env_path.exists() and args.force: _backup(env_path)
+            if line.startswith(key + "="):
+                lines[i] = f"{key}={value}"
+                break
+        else:
+            lines.append(f"{key}={value}")
+    if env_path.exists() and args.force:
+        _backup(env_path)
     _atomic_write(env_path, "\n".join(lines) + "\n", 0o600)
 
     print(f"Configuration VPS ecrite dans {config_path}")
@@ -270,19 +304,25 @@ def main() -> None:
     if args.systemd:
         service_path = install_dir / f"{args.service_name}.service"
         service_text = _service_text(
-                service_name=args.service_name,
-                install_dir=install_dir,
-                config_path=config_path,
-                env_path=env_path,
-                python_executable=args.python_executable,
-                run_script=run_script,
-                user=args.service_user,
+            service_name=args.service_name,
+            install_dir=install_dir,
+            config_path=config_path,
+            env_path=env_path,
+            python_executable=args.python_executable,
+            run_script=run_script,
+            user=args.service_user,
         )
         _atomic_write(service_path, service_text, 0o644)
         verifier = shutil.which("systemd-analyze")
         if verifier:
-            result = subprocess.run([verifier, "verify", str(service_path)], capture_output=True, text=True)
-            if result.returncode: parser.error("Unite systemd invalide : " + (result.stderr or result.stdout).strip())
+            result = subprocess.run(
+                [verifier, "verify", str(service_path)], capture_output=True, text=True
+            )
+            if result.returncode:
+                parser.error(
+                    "Unite systemd invalide : "
+                    + (result.stderr or result.stdout).strip()
+                )
         print(f"Unite systemd generee dans {service_path}")
         print(
             "Activation : sudo cp "

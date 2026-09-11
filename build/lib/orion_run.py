@@ -6,7 +6,9 @@ Usage : ``python orion_run.py --config orion.toml``.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
+import shlex
 import signal
 import sys
 import threading
@@ -14,14 +16,15 @@ import uuid
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+from types import MethodType
 from typing import Any
 
-from channels import InboundMessage
-from orion_config import load_orion
-from observability import doctor, health, readiness
-from cli_v2 import OrionCLIAdapter
 from cli_cockpit import CockpitCLIAdapter
 from cli_cockpit_backend import CockpitBackend
+from channels import InboundMessage
+from openrouter_client import OpenRouterError
+from orion_config import load_orion
+from observability import doctor, health, readiness
 
 
 EXIT_OK = 0
@@ -58,15 +61,25 @@ def _report_error(event: object, error: Exception) -> None:
     )
 
 
-def _install_signal_handlers(shutdown: threading.Event) -> dict[int, Any]:
+def _install_signal_handlers(
+    shutdown: threading.Event,
+    *,
+    on_shutdown: Any = None,
+) -> dict[int, Any]:
     """Installe les signaux d'arrêt et retourne les handlers précédents."""
     previous: dict[int, Any] = {}
+
+    def request_shutdown(*_: Any) -> None:
+        shutdown.set()
+        if callable(on_shutdown):
+            on_shutdown()
+
     for signal_name in ("SIGINT", "SIGTERM"):
         signal_value = getattr(signal, signal_name, None)
         if signal_value is None:
             continue
         previous[signal_value] = signal.getsignal(signal_value)
-        signal.signal(signal_value, lambda *_: shutdown.set())
+        signal.signal(signal_value, request_shutdown)
     return previous
 
 
@@ -93,12 +106,7 @@ def configure_cli(application: object, shutdown: threading.Event) -> object | No
 
     set_exit_handler = getattr(cli_adapter, "set_exit_handler", None)
     if callable(set_exit_handler):
-        def request_shutdown() -> None:
-            shutdown.set()
-            stopper = getattr(cli_adapter, "stop", None)
-            if callable(stopper):
-                stopper()
-        set_exit_handler(request_shutdown)
+        set_exit_handler(shutdown.set)
 
     runtime = application.runtime
 
@@ -227,38 +235,761 @@ def configure_cli(application: object, shutdown: threading.Event) -> object | No
     return cli_adapter
 
 
-def _install_cli_v2(application: object) -> OrionCLIAdapter | None:
-    """Remplace le channel CLI configuré par l'adaptateur terminal v2.
+_MISSING = object()
 
-    L'ancien adaptateur peut être construit par la configuration, mais il ne
-    doit jamais être démarré en parallèle : deux lecteurs stdin produiraient
-    exactement les doublons et les entrées corrompues que l'interface doit
-    éviter. Le remplacement intervient avant ``application.start()``.
+
+def _configured_cli_setting(adapter: object, name: str) -> Any:
+    """Read a safe presentation setting from the configured CLI adapter.
+
+    The legacy CLI keeps some constructor options on its console rather than
+    the adapter itself.  Only presentation/IO values are copied here; runtime
+    ownership and security-sensitive services remain owned by the application.
     """
-    channels = getattr(application, "channels", None)
-    if channels is None or not callable(getattr(channels, "register", None)):
-        return None
+    console = getattr(adapter, "console", None)
+    direct = {
+        "prompt": (adapter, "prompt"),
+        "input": (adapter, "input"),
+        "output": (adapter, "output"),
+        "slow_request_seconds": (adapter, "slow_request_seconds"),
+        "history_path": (adapter, "history_path"),
+    }
+    console_values = {
+        "input": (console, "input_stream"),
+        "output": (console, "output"),
+        "style": (console, "use_color"),
+        "banner": (console, "show_banner"),
+        "name": (console, "name"),
+        "model": (console, "model"),
+        "markdown": (console, "render_markdown"),
+        "timestamps": (console, "show_timestamps"),
+    }
+    source = direct.get(name)
+    if source is not None and source[0] is not None and hasattr(source[0], source[1]):
+        return getattr(source[0], source[1])
+    source = console_values.get(name)
+    if source is not None and source[0] is not None and hasattr(source[0], source[1]):
+        return getattr(source[0], source[1])
+    if name in {"usage_provider", "usage_ledger", "cost_provider"}:
+        provider = getattr(adapter, "_usage_provider", _MISSING)
+        if provider is _MISSING and console is not None:
+            provider = getattr(console, "_usage_provider", _MISSING)
+        return provider
+    return _MISSING
+
+
+def _cockpit_constructor_kwargs(configured_adapter: object) -> dict[str, Any]:
+    """Return only configured CLI settings accepted by this cockpit build."""
     try:
-        channels.unregister("cli")
-    except Exception:
-        # Un router minimal de test peut ne pas exposer unregister().
-        pass
-    adapter = OrionCLIAdapter()
-    channels.register(adapter)
-    return adapter
+        parameters = inspect.signature(CockpitCLIAdapter).parameters
+    except (TypeError, ValueError):
+        return {}
+    accepts_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    candidates = (
+        "input",
+        "output",
+        "prompt",
+        "style",
+        "banner",
+        "name",
+        "model",
+        "history_path",
+        "markdown",
+        "timestamps",
+        "slow_request_seconds",
+        "usage_provider",
+        "usage_ledger",
+        "cost_provider",
+    )
+    result: dict[str, Any] = {}
+    for name in candidates:
+        if not accepts_kwargs and name not in parameters:
+            continue
+        value = _configured_cli_setting(configured_adapter, name)
+        if value is not _MISSING:
+            result[name] = value
+    return result
+
+
+def _copy_cli_handlers(configured_adapter: object, cockpit: object) -> None:
+    """Best-effort copy of already configured capability providers."""
+    for attribute, setter_name in (
+        ("_status_provider", "set_status_provider"),
+        ("_tools_provider", "set_tools_provider"),
+        ("_tasks_provider", "set_tasks_provider"),
+        ("_agents_provider", "set_agents_provider"),
+        ("_jobs_provider", "set_jobs_provider"),
+        ("_threads_provider", "set_threads_provider"),
+        ("_trace_provider", "set_trace_provider"),
+        ("_usage_provider", "set_usage_provider"),
+        ("_exit_handler", "set_exit_handler"),
+    ):
+        value = getattr(configured_adapter, attribute, None)
+        setter = getattr(cockpit, setter_name, None)
+        if value is not None and callable(setter):
+            setter(value)
+
+
+class _CockpitCompatibilityBackend:
+    """Bridge legacy request controls while the new cockpit owns stdin/stdout.
+
+    The old CLI request tracker is intentionally retained as UI state only. It
+    never owns the runtime and `/stop` keeps the historical semantics: cancel
+    the visible request and suppress its late output, without stopping Orion's
+    durable runtime worker.
+    """
+
+    _COMMANDS = (
+        "requests",
+        "stop",
+        "retry",
+        "resume",
+        "jobs",
+        "threads",
+        "trace",
+        "debug",
+    )
+    _COMMAND_HELP = {
+        "requests": ("/requests [request-id]", "Lister les requêtes récentes."),
+        "stop": ("/stop [request-id|all]", "Annuler une requête active."),
+        "retry": ("/retry <request-id>", "Relancer une requête échouée ou annulée."),
+        "resume": ("/resume [request-id]", "Reprendre une requête avec son contexte."),
+        "jobs": ("/jobs [job-id]", "Lister les travaux délégués récents."),
+        "threads": ("/threads [thread-id]", "Afficher les conversations et intentions persistantes."),
+        "trace": ("/trace [thread-id]", "Afficher la trace de contexte d'une conversation."),
+        "debug": ("/debug", "Afficher les informations de diagnostic de la CLI."),
+    }
+
+    def __init__(self, backend: object, application: object, configured_adapter: object) -> None:
+        self._backend = backend
+        self._application = application
+        self._configured_adapter = configured_adapter
+        self._console = getattr(configured_adapter, "console", None)
+        self._tracker = getattr(self._console, "requests", None)
+        self._publisher: Any = None
+        self._lock = threading.RLock()
+        self._request_by_correlation: dict[str, str] = {}
+        self._correlation_by_event: dict[str, str] = {}
+        self._cancelled_tokens: set[str] = set()
+        self._stop_requested = threading.Event()
+
+    @property
+    def tracking_available(self) -> bool:
+        return (
+            self._tracker is not None
+            and callable(getattr(self._console, "new_request", None))
+            and callable(getattr(self._tracker, "snapshot", None))
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._backend, name)
+
+    def commands(self) -> tuple[str, ...]:
+        provider = getattr(self._backend, "commands", None)
+        base = tuple(provider()) if callable(provider) else ()
+        return tuple(dict.fromkeys((*base, *self._COMMANDS)))
+
+    def _compat_available(self, name: str) -> bool:
+        if name in {"requests", "stop", "retry", "resume", "debug"}:
+            return self.tracking_available
+        if name == "jobs":
+            return (
+                getattr(self._configured_adapter, "_jobs_provider", None) is not None
+                or callable(getattr(getattr(self._application, "subagents", None), "list_jobs", None))
+            )
+        if name == "threads":
+            return getattr(self._configured_adapter, "_threads_provider", None) is not None
+        if name == "trace":
+            return getattr(self._configured_adapter, "_trace_provider", None) is not None
+        return False
+
+    def _help_projection(self, target: str | None = None) -> Any:
+        if target is not None:
+            normalized = str(target).lstrip("/").lower()
+            if normalized in self._COMMAND_HELP:
+                usage, description = self._COMMAND_HELP[normalized]
+                return {
+                    "command": normalized,
+                    "usage": usage,
+                    "description": description,
+                    "available": self._compat_available(normalized),
+                }
+            provider = getattr(self._backend, "_help_projection", None)
+            return provider(normalized) if callable(provider) else None
+
+        provider = getattr(self._backend, "_help_projection", None)
+        base = provider() if callable(provider) else None
+        result = dict(base) if isinstance(base, Mapping) else {"commands": []}
+        commands = [
+            dict(item)
+            for item in result.get("commands", [])
+            if isinstance(item, Mapping)
+        ]
+        known = {str(item.get("command", "")).lower() for item in commands}
+        for name in self._COMMANDS:
+            if name in known:
+                continue
+            usage, description = self._COMMAND_HELP[name]
+            commands.append(
+                {
+                    "command": name,
+                    "usage": usage,
+                    "description": description,
+                    "available": self._compat_available(name),
+                }
+            )
+        result["commands"] = commands
+        return result
+
+    def _legacy_provider_value(self, attribute: str, fallback: Any) -> Any:
+        provider = getattr(self._configured_adapter, attribute, None)
+        resolver = getattr(self._configured_adapter, "_provider_value", None)
+        if callable(resolver):
+            return resolver(provider, fallback)
+        if provider is None:
+            return fallback
+        try:
+            return provider() if callable(provider) else provider
+        except Exception:
+            return fallback
+
+    def _legacy_filter_items(self, items: Any, identifier: str | None) -> list[Any]:
+        filter_items = getattr(self._configured_adapter, "_filter_items", None)
+        if callable(filter_items):
+            return list(filter_items(items, identifier))
+        if identifier is None:
+            return list(items) if isinstance(items, (list, tuple)) else []
+        if not isinstance(items, (list, tuple)):
+            return []
+        wanted = str(identifier).lower()
+        result: list[Any] = []
+        for item in items:
+            values = (
+                (item.get("id"), item.get("request_id"), item.get("name"), item.get("label"))
+                if isinstance(item, Mapping)
+                else (item,)
+            )
+            if any(
+                value is not None
+                and (
+                    str(value).lower() == wanted
+                    or str(value).lower().startswith(wanted)
+                )
+                for value in values
+            ):
+                result.append(item)
+        return result
+
+    def _legacy_threads(self, identifier: str | None) -> dict[str, Any]:
+        values = self._legacy_provider_value("_threads_provider", [])
+        return {
+            "title": "threads",
+            "data": self._legacy_filter_items(values, identifier),
+        }
+
+    def _legacy_trace(self, identifier: str | None) -> dict[str, Any]:
+        values = self._legacy_filter_items(
+            self._legacy_provider_value("_trace_provider", []),
+            identifier,
+        )
+        seen: set[str] = set()
+        unique: list[Any] = []
+        for value in values:
+            key = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) if isinstance(value, Mapping) else str(value)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(value)
+        return {"title": "trace", "data": unique}
+
+    def _legacy_debug(self) -> dict[str, Any]:
+        pending = sum(
+            1
+            for item in self._request_rows()
+            if item.get("state") not in {"succeeded", "failed", "canceled"}
+        )
+        return {
+            "title": "debug",
+            "data": {
+                "Requêtes en attente": pending,
+                "Arrêt demandé": self._stop_requested.is_set(),
+            },
+        }
+
+    def bind_publisher(self, publisher: Any) -> None:
+        if callable(publisher):
+            self._publisher = publisher
+            self._stop_requested.clear()
+
+    def mark_stop_requested(self) -> None:
+        self._stop_requested.set()
+
+    @staticmethod
+    def _message_context(message: InboundMessage) -> tuple[str | None, Mapping[str, Any] | None]:
+        payload = message.payload if isinstance(message.payload, Mapping) else {}
+        metadata = message.metadata if isinstance(message.metadata, Mapping) else {}
+        parent = payload.get("parent_request_id") or metadata.get("parent_request_id")
+        context = payload.get("context") or metadata.get("context")
+        return (
+            str(parent) if parent else None,
+            context if isinstance(context, Mapping) else None,
+        )
+
+    def _new_request(
+        self,
+        text: str,
+        *,
+        correlation_id: str | None,
+        parent_request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> Any:
+        if not self.tracking_available:
+            return None
+        try:
+            request = self._console.new_request(
+                text,
+                correlation_id=correlation_id,
+                parent_request_id=parent_request_id,
+                context=context,
+            )
+            update = getattr(self._console, "update_request", None)
+            if callable(update):
+                update(request.request_id, "running")
+            else:
+                self._tracker.update(request.request_id, "running")
+            with self._lock:
+                self._request_by_correlation[str(request.correlation_id)] = str(request.request_id)
+            return request
+        except Exception:
+            # Request tracking is presentation state. A broken legacy console
+            # must never prevent delivery to the durable application pipeline.
+            return None
+
+    def forward_submission(self, message: InboundMessage, publisher: Any) -> Any:
+        self.bind_publisher(publisher)
+        parent, context = self._message_context(message)
+        text = message.text
+        if text is None and isinstance(message.payload, Mapping):
+            text = message.payload.get("text")
+        request = self._new_request(
+            str(text or ""),
+            correlation_id=message.correlation_id,
+            parent_request_id=parent,
+            context=context,
+        )
+        try:
+            event = publisher(message)
+        except Exception as exc:
+            if request is not None:
+                self._update_request(
+                    str(request.request_id),
+                    "failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            raise
+        if request is not None:
+            event_id = getattr(event, "id", None)
+            if event_id:
+                with self._lock:
+                    self._correlation_by_event[str(event_id)] = str(request.correlation_id)
+        return event
+
+    def _update_request(
+        self,
+        request_id: str,
+        state: str,
+        *,
+        error: str | None = None,
+        text: str | None = None,
+        seq: int | None = None,
+    ) -> None:
+        try:
+            update = getattr(self._console, "update_request", None)
+            if callable(update):
+                update(request_id, state, error=error, text=text, seq=seq)
+            elif self._tracker is not None:
+                self._tracker.update(request_id, state, error=error, text=text, seq=seq)
+        except (KeyError, RuntimeError, TypeError, ValueError):
+            pass
+
+    def observe_output(self, output: object) -> bool:
+        """Update legacy request state; return False for cancelled late output."""
+        metadata = getattr(output, "metadata", {})
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        event_id = str(getattr(output, "event_id", None) or "")
+        correlation_id = str(
+            getattr(output, "correlation_id", None)
+            or metadata.get("correlation_id")
+            or ""
+        )
+        tokens = {
+            token
+            for token in (
+                event_id,
+                correlation_id,
+                str(getattr(output, "output_id", None) or ""),
+                str(getattr(output, "idempotency_key", None) or ""),
+            )
+            if token
+        }
+        with self._lock:
+            if tokens & self._cancelled_tokens:
+                return False
+            if not correlation_id and event_id:
+                correlation_id = self._correlation_by_event.get(event_id, "")
+            request_id = self._request_by_correlation.get(correlation_id, "")
+        if not request_id:
+            return True
+
+        intermediate = bool(metadata.get("intermediate", False))
+        error_value = metadata.get("error")
+        text = str(getattr(output, "content", None) or getattr(output, "text", None) or "")
+        sequence = metadata.get("seq")
+        try:
+            normalized_seq = int(sequence) if sequence is not None else None
+        except (TypeError, ValueError, OverflowError):
+            normalized_seq = None
+        if intermediate:
+            self._update_request(request_id, "streaming", text=text, seq=normalized_seq)
+            return True
+
+        self._update_request(
+            request_id,
+            "failed" if error_value else "succeeded",
+            error=text if error_value else None,
+            text=text,
+            seq=normalized_seq,
+        )
+        with self._lock:
+            self._request_by_correlation.pop(correlation_id, None)
+            if event_id:
+                self._correlation_by_event.pop(event_id, None)
+        return True
+
+    def _request_rows(self) -> list[dict[str, Any]]:
+        if self._tracker is None:
+            return []
+        try:
+            values = self._tracker.snapshot()
+        except Exception:
+            return []
+        return [dict(item) for item in values if isinstance(item, Mapping)]
+
+    @staticmethod
+    def _filter_rows(rows: list[dict[str, Any]], identifier: str | None) -> list[dict[str, Any]]:
+        if not identifier:
+            return rows
+        wanted = str(identifier).lower()
+        return [
+            row
+            for row in rows
+            if any(
+                value is not None and str(value).lower().startswith(wanted)
+                for value in (row.get("request_id"), row.get("id"), row.get("name"), row.get("objective"))
+            )
+        ]
+
+    def _resolve_request(self, identifier: str) -> tuple[dict[str, Any] | None, str | None]:
+        rows = self._filter_rows(self._request_rows(), identifier)
+        exact = [row for row in rows if str(row.get("request_id", "")).lower() == identifier.lower()]
+        if exact:
+            return exact[0], None
+        if len(rows) == 1:
+            return rows[0], None
+        if not rows:
+            return None, f"Requête introuvable : {identifier}"
+        return None, f"Identifiant ambigu : {identifier} ({len(rows)} requêtes correspondent)."
+
+    def _cancel_row(self, row: Mapping[str, Any]) -> str | None:
+        request_id = str(row.get("request_id") or "")
+        if not request_id or self._tracker is None:
+            return None
+        try:
+            item = self._tracker.cancel(request_id)
+        except Exception:
+            return None
+        if item is None:
+            return None
+        correlation_id = str(row.get("correlation_id") or getattr(item, "correlation_id", "") or "")
+        with self._lock:
+            self._cancelled_tokens.add(request_id)
+            if correlation_id:
+                self._cancelled_tokens.add(correlation_id)
+                self._request_by_correlation.pop(correlation_id, None)
+                for event_id, mapped in list(self._correlation_by_event.items()):
+                    if mapped == correlation_id:
+                        self._cancelled_tokens.add(event_id)
+                        self._correlation_by_event.pop(event_id, None)
+            if len(self._cancelled_tokens) > 1024:
+                self._cancelled_tokens.clear()
+        return request_id
+
+    def _resubmit(
+        self,
+        text: str,
+        *,
+        parent_request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not callable(self._publisher):
+            return {"title": "request", "data": None, "error": "CLI non démarrée."}
+        correlation_id = f"cli-{uuid.uuid4().hex}"
+        payload: dict[str, Any] = {"text": text}
+        metadata: dict[str, Any] = {}
+        if parent_request_id:
+            payload["parent_request_id"] = parent_request_id
+            metadata["parent_request_id"] = parent_request_id
+        if context is not None:
+            payload["context"] = dict(context)
+            metadata["context"] = dict(context)
+        message = InboundMessage(
+            channel="cli",
+            source="cli",
+            payload=payload,
+            reply_to="stdout",
+            correlation_id=correlation_id,
+            metadata=metadata,
+            text=text,
+        )
+        self.forward_submission(message, self._publisher)
+        with self._lock:
+            request_id = self._request_by_correlation.get(correlation_id)
+        data = self._tracker.status(request_id) if request_id and self._tracker is not None else None
+        return {"title": "request", "data": data or {"correlation_id": correlation_id, "state": "running"}}
+
+    def _jobs(self, identifier: str | None) -> dict[str, Any]:
+        configured_provider = getattr(self._configured_adapter, "_jobs_provider", None)
+        if configured_provider is not None:
+            values = self._legacy_provider_value("_jobs_provider", [])
+            return {
+                "title": "jobs",
+                "data": self._legacy_filter_items(values, identifier),
+            }
+        subagents = getattr(self._application, "subagents", None)
+        if subagents is None:
+            return {"title": "jobs", "data": []}
+        listing = getattr(subagents, "list_jobs", None)
+        if not callable(listing):
+            return {"title": "jobs", "data": []}
+        try:
+            values = listing(limit=20)
+        except TypeError:
+            values = listing()
+        plain = getattr(self._backend, "_plain", None)
+        rows = plain(values) if callable(plain) else values
+        if not isinstance(rows, list):
+            rows = list(rows) if isinstance(rows, tuple) else []
+        rows = [dict(item) if isinstance(item, Mapping) else {"value": str(item)} for item in rows]
+        return {"title": "jobs", "data": self._filter_rows(rows, identifier)}
+
+    def execute(self, command: str) -> Any:
+        raw = str(command or "").strip()
+        normalized = raw[1:] if raw.startswith("/") else raw
+        try:
+            parts = shlex.split(normalized)
+        except ValueError as exc:
+            return {"title": "command", "data": None, "error": str(exc)}
+        name = parts[0].lower() if parts else "status"
+        args = parts[1:]
+        positional = [item for item in args if not item.startswith("--")]
+
+        if "--help" in args and name in self._COMMAND_HELP:
+            return {"title": "help", "data": self._help_projection(name)}
+
+        if name in {"help", "commands"}:
+            target = positional[0] if positional else None
+            data = self._help_projection(target)
+            if target is not None and data is None:
+                return {
+                    "title": name,
+                    "data": None,
+                    "error": f"Commande inconnue ou indisponible: /{target.lstrip('/')}",
+                }
+            return {"title": name, "data": data}
+
+        if name == "requests":
+            rows = self._request_rows()
+            return {
+                "title": "requests",
+                "data": self._filter_rows(rows, positional[0] if positional else None),
+            }
+        if name == "jobs":
+            return self._jobs(positional[0] if positional else None)
+        if name == "threads":
+            if len(positional) > 1:
+                return {"title": name, "data": None, "error": "Usage: /threads [thread-id]"}
+            return self._legacy_threads(positional[0] if positional else None)
+        if name == "trace":
+            if len(positional) > 1:
+                return {"title": name, "data": None, "error": "Usage: /trace [thread-id]"}
+            return self._legacy_trace(positional[0] if positional else None)
+        if name == "debug":
+            if positional:
+                return {"title": name, "data": None, "error": "Usage: /debug"}
+            return self._legacy_debug()
+        if name == "stop":
+            if self._tracker is None:
+                return {"title": "stop", "data": None, "error": "Provider indisponible: requests"}
+            target = positional[0] if positional else ("all" if "--force" in args else None)
+            if target == "all":
+                stopped = [
+                    request_id
+                    for row in self._request_rows()
+                    if row.get("state") not in {"succeeded", "failed", "canceled"}
+                    for request_id in [self._cancel_row(row)]
+                    if request_id
+                ]
+                return {"title": "stop", "data": {"stopped": stopped}}
+            if target:
+                row, error = self._resolve_request(target)
+                if error:
+                    return {"title": "stop", "data": None, "error": error}
+            else:
+                active = getattr(self._tracker, "status", None)
+                row = active() if callable(active) else None
+            if not isinstance(row, Mapping):
+                return {"title": "stop", "data": {"stopped": []}}
+            request_id = self._cancel_row(row)
+            return {"title": "stop", "data": {"stopped": [request_id] if request_id else []}}
+        if name == "retry":
+            if not positional:
+                return {"title": "retry", "data": None, "error": "Usage: /retry <request-id>"}
+            row, error = self._resolve_request(positional[0])
+            if error:
+                return {"title": "retry", "data": None, "error": error}
+            if row is None or not row.get("text"):
+                return {"title": "retry", "data": None, "error": f"Requête introuvable : {positional[0]}"}
+            if row.get("state") not in {"failed", "canceled"}:
+                return {
+                    "title": "retry",
+                    "data": None,
+                    "error": "Seules les requêtes échouées ou annulées peuvent être relancées.",
+                }
+            return self._resubmit(str(row["text"]))
+        if name == "resume":
+            row: dict[str, Any] | None = None
+            if positional:
+                row, error = self._resolve_request(positional[0])
+                if error:
+                    return {"title": "resume", "data": None, "error": error}
+            else:
+                candidates = [
+                    item
+                    for item in self._request_rows()
+                    if item.get("state") in {"failed", "canceled"} and item.get("text")
+                ]
+                candidates.sort(
+                    key=lambda item: (str(item.get("updated_at") or ""), str(item.get("request_id") or "")),
+                    reverse=True,
+                )
+                row = candidates[0] if candidates else None
+            if row is None or not row.get("text"):
+                return {"title": "resume", "data": None, "error": "Aucune requête à reprendre."}
+            request_id = str(row.get("request_id") or "")
+            context = row.get("context") if isinstance(row.get("context"), Mapping) else None
+            resume_context = getattr(self._console, "resume_context", None)
+            if callable(resume_context) and request_id:
+                try:
+                    resumed = resume_context(request_id)
+                    if isinstance(resumed, Mapping):
+                        text = str(resumed.get("text") or row["text"])
+                        parent = str(resumed.get("parent_request_id") or request_id)
+                        value = resumed.get("context")
+                        context = value if isinstance(value, Mapping) else context
+                        return self._resubmit(text, parent_request_id=parent, context=context)
+                except Exception:
+                    pass
+            return self._resubmit(str(row["text"]), parent_request_id=request_id, context=context)
+
+        execute = getattr(self._backend, "execute", None)
+        if callable(execute):
+            return execute(command)
+        return {"title": name, "data": None, "error": f"Commande inconnue: /{name}"}
+
+
+def _wire_cockpit_compatibility(cockpit: object, backend: _CockpitCompatibilityBackend) -> None:
+    """Attach request lifecycle hooks without changing cockpit implementation."""
+    original_start = getattr(cockpit, "start", None)
+    if callable(original_start):
+        def start_with_tracking(_self: object, on_message: Any) -> Any:
+            backend.bind_publisher(on_message)
+            return original_start(lambda message: backend.forward_submission(message, on_message))
+
+        try:
+            setattr(cockpit, "start", MethodType(start_with_tracking, cockpit))
+        except (AttributeError, TypeError):
+            pass
+
+    original_send = getattr(cockpit, "send", None)
+    if callable(original_send):
+        def send_with_tracking(_self: object, output: object) -> Any:
+            if not backend.observe_output(output):
+                return output
+            return original_send(output)
+
+        try:
+            setattr(cockpit, "send", MethodType(send_with_tracking, cockpit))
+        except (AttributeError, TypeError):
+            pass
+
+    original_stop = getattr(cockpit, "stop", None)
+    if callable(original_stop):
+        def stop_with_tracking(_self: object) -> Any:
+            backend.mark_stop_requested()
+            return original_stop()
+
+        try:
+            setattr(cockpit, "stop", MethodType(stop_with_tracking, cockpit))
+        except (AttributeError, TypeError):
+            pass
 
 
 def _install_cockpit(application: object) -> CockpitCLIAdapter | None:
-    """Installe le cockpit terminal comme unique adaptateur CLI interactif."""
+    """Remplace le CLI configuré par le cockpit avant le démarrage.
+
+    Une instance headless ne doit pas acquérir de lecteur stdin implicitement :
+    le remplacement n'a donc lieu que lorsqu'un channel ``cli`` existe déjà.
+    L'ancien adaptateur est retiré avant ``application.start()`` afin qu'il ne
+    puisse jamais démarrer son propre thread de lecture en parallèle.
+    """
     channels = getattr(application, "channels", None)
-    if channels is None or not callable(getattr(channels, "register", None)):
+    if channels is None:
         return None
+    adapters = getattr(channels, "adapters", {})
+    if not isinstance(adapters, Mapping) or "cli" not in adapters:
+        return None
+
+    current = adapters["cli"]
+    if isinstance(current, CockpitCLIAdapter):
+        return current
+
+    unregister = getattr(channels, "unregister", None)
+    register = getattr(channels, "register", None)
+    if not callable(unregister) or not callable(register):
+        return None
+
+    backend = _CockpitCompatibilityBackend(
+        CockpitBackend(application),
+        application,
+        current,
+    )
+    adapter = CockpitCLIAdapter(
+        backend=backend,
+        **_cockpit_constructor_kwargs(current),
+    )
+    _copy_cli_handlers(current, adapter)
+    _wire_cockpit_compatibility(adapter, backend)
+    unregister("cli")
     try:
-        channels.unregister("cli")
+        register(adapter)
     except Exception:
-        pass
-    adapter = CockpitCLIAdapter(backend=CockpitBackend(application))
-    channels.register(adapter)
+        # Le remplacement doit être transactionnel même pour un router injecté
+        # par une intégration : si le cockpit ne peut pas être enregistré,
+        # restaurer le channel configuré plutôt que laisser l'application sans CLI.
+        register(current)
+        raise
     return adapter
 
 
@@ -269,9 +1000,14 @@ def run(
 ) -> int:
     """Construit et exécute Orion jusqu'à EOF, ``/exit`` ou signal."""
     shutdown = stop_event or threading.Event()
-    previous = _install_signal_handlers(shutdown)
+    previous: dict[int, Any] = {}
     try:
         application = load_orion(config_path)
+        # Configure the adapter produced by OrionConfig before replacing it so
+        # the cockpit bridge can retain legacy-only providers such as threads,
+        # trace and jobs.  This only wires callbacks; the legacy adapter is
+        # still unregistered before application.start() and never owns stdin.
+        configure_cli(application, shutdown)
         cli_adapter = _install_cockpit(application)
         configured_adapter = configure_cli(application, shutdown)
         if configured_adapter is not None:
@@ -292,14 +1028,20 @@ def run(
 
         application.events.on_error = report_error
         application.runtime.on_error = report_error
-        # ``run_forever`` est adapté aux processus headless. En mode CLI,
-        # c'est l'adaptateur qui possède la boucle stdin et doit rester au
-        # premier plan jusqu'à EOF ou /exit.
-        if cli_adapter is not None and callable(getattr(cli_adapter, "loop", None)):
+        interactive_loop = getattr(cli_adapter, "loop", None) if cli_adapter is not None else None
+        stop_cli = getattr(cli_adapter, "stop", None) if callable(interactive_loop) else None
+        previous = _install_signal_handlers(
+            shutdown,
+            on_shutdown=stop_cli if callable(stop_cli) else None,
+        )
+        if callable(interactive_loop):
+            # ChannelRouter.start() only installs the cockpit callback; the
+            # foreground loop below is the sole owner/reader of stdin.
             application.start()
             try:
-                cli_adapter.loop()
+                interactive_loop()
             finally:
+                shutdown.set()
                 application.stop()
         else:
             application.run_forever(shutdown)
@@ -615,7 +1357,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.output != "text":
             parser.error("--output jsonl nécessite --once")
         return run(args.config)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, OpenRouterError) as exc:
         print(f"[orion:error] {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         return EXIT_RUNTIME
 

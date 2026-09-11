@@ -9,8 +9,8 @@ des travaux à des sous-agents indépendants.
 Prérequis : Python 3.10 ou supérieur.
 
 ```bash
-git clone <url-du-repo> Horizon
-cd Horizon
+git clone https://github.com/noan-hbt/orion-agent
+cd orion-agent
 python -m venv .venv
 ```
 
@@ -23,19 +23,30 @@ source .venv/bin/activate
 # Windows PowerShell
 .\.venv\Scripts\Activate.ps1
 
-pip install -r requirements.txt
-python orion_install.py
-python orion_run.py
+python -m pip install .
+orion-install
+orion
 ```
 
 L'installateur configure le modèle OpenRouter, la clé API, les channels et les
 options principales. La configuration est enregistrée dans `orion.toml` et les
-secrets dans `.env`.
+secrets dans `.env`. Les fichiers `ORION_CORE.md` et `REFLECTION_CORE.md` sont
+provisionnés à côté de la configuration s'ils sont absents.
+
+Pour développer sur le dépôt, utilisez l'installation éditable avec les outils
+de test/build/lint :
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+`requirements.txt` et `requirements-dev.txt` restent disponibles comme shims
+compatibles ; les versions de dépendances sont déclarées dans `pyproject.toml`.
 
 Pour reconfigurer une installation existante :
 
 ```bash
-python orion_install.py --force
+orion-install --force
 ```
 
 Ne commitez jamais `.env`.
@@ -46,13 +57,13 @@ Orion reste actif jusqu'à `/exit` ou `Ctrl+C`.
 
 | Commande | Fonction |
 |---|---|
-| `/help` | Afficher l'aide |
+| `/commands` | Afficher les commandes principales |
 | `/status` | Voir l'état du runtime |
+| `/dashboard` | Afficher le snapshot du cockpit |
+| `/watch` | Afficher la vue d'événements |
 | `/tools` | Lister les tools chargés |
 | `/tasks` | Lister les tâches durables |
 | `/agents` | Lister les sous-agents |
-| `/jobs` | Lister les jobs délégués |
-| `/clear` | Nettoyer l'écran |
 | `/exit` | Arrêter Orion |
 
 La CLI accepte les messages multilignes avec `Alt+Entrée`, conserve un historique
@@ -70,9 +81,9 @@ Pour un appel scriptable, `--once` soumet une seule demande sans lancer de
 lecteur interactif :
 
 ```bash
-python orion_run.py --once "quel est l'état des jobs ?"
-python orion_run.py --once "quel est l'état des jobs ?" --output jsonl
-python orion_run.py --command status --output jsonl
+orion --once "quel est l'état des jobs ?"
+orion --once "quel est l'état des jobs ?" --output jsonl
+orion --command status --output jsonl
 ```
 
 Le flux JSONL contient un objet par événement, avec `request_id`,
@@ -123,7 +134,23 @@ configurez leur section correspondante. Les secrets sont toujours placés dans
 ```dotenv
 OPENROUTER_API_KEY=...
 TELEGRAM_BOT_TOKEN=...
+TELEGRAM_PAIRING_SECRET=...
 ```
+
+Pour une nouvelle installation Telegram, `orion-install` génère un secret de
+pairing fort, le stocke uniquement dans `.env` et affiche une seule fois la
+commande `/pair <secret>` à envoyer en message privé au bot. Le secret n'est
+jamais écrit dans `orion.toml`. Les anciennes configurations sans
+`bootstrap_pairing_secret_env` conservent leur comportement de bootstrap legacy.
+
+Pour une nouvelle installation email, l'installateur écrit
+`allowed_senders = []` par défaut : aucun email entrant n'est accepté tant que
+vous n'avez pas défini une allowlist. Vous pouvez la préparer dès l'installation
+avec une ou plusieurs options `--email-allowed-sender owner@example.com`. Les
+anciennes configurations où `allowed_senders` est absent conservent leur
+comportement historique pour compatibilité ; ajoutez explicitement l'allowlist
+pour les durcir. Le mot de passe email reste uniquement dans `.env` via
+`EMAIL_PASSWORD`.
 
 ## Tools
 
@@ -131,16 +158,16 @@ Les tools sont des extensions installées dans `tools/`. Les tools fournis avec
 le projet sont notamment `terminal` et `web`.
 
 ```bash
-python orion_tools.py install tool_packages/terminal
-python orion_tools.py install tool_packages/web
-python orion_tools.py list
-python orion_tools.py update --all
+orion-tools install tool_packages/terminal
+orion-tools install tool_packages/web
+orion-tools list
+orion-tools update --all
 ```
 
 Pour découvrir et installer des tools depuis le dépôt GitHub configuré :
 
 ```bash
-python orion_toolbox.py --repo noan-hbt/orion-tools
+orion-toolbox --repo noan-hbt/orion-tools
 ```
 
 Le toolbox demande les paramètres nécessaires à chaque tool. Les clés API sont
@@ -200,7 +227,7 @@ Pour une instance sans interface graphique, utilisez l'installateur headless :
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python3 -m pip install .
 
 python3 orion_vps_install.py \
   --channels telegram \
@@ -216,7 +243,7 @@ du serveur et le suivi des logs.
 ## Dépannage rapide
 
 ```bash
-python orion_run.py
+orion
 ```
 
 Sur un VPS :

@@ -31,6 +31,7 @@ def _manager(tmp_path, llm, *, guidance=None, max_context_chars=16_000):
         llm,
         EventHandler(),
         state_path=tmp_path / "subagents.json",
+        default_tools=["web_search"],
         tool_guidance=guidance,
         max_context_chars=max_context_chars,
         emit_progress_events=False,

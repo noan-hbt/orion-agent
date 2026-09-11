@@ -1,0 +1,2 @@
+# Editable development install plus the dev extra declared in pyproject.toml.
+-e .[dev]

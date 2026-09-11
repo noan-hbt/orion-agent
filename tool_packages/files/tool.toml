@@ -1,0 +1,35 @@
+id = "orion.files"
+name = "Workspace Files"
+version = "1.1.0"
+description = "Tool fichiers unifié pour lister, lire et rechercher dans le workspace Orion sans écriture."
+entrypoint = "tool:register"
+api_version = 1
+permissions = ["filesystem_read"]
+
+[policy]
+classification = "read_only"
+tool_classifications = { files = "read_only" }
+
+[guidance]
+summary = "Inspecte les fichiers texte du workspace local via un tool unique en lecture seule."
+instructions = "Utilise files(action='list', ...) pour découvrir les chemins, files(action='read', path=...) pour lire une plage de lignes et files(action='search', query=...) pour trouver du texte. Les chemins doivent rester dans le workspace et les fichiers sensibles connus sont refusés."
+constraints = [
+  "N'essaie jamais de contourner les restrictions de chemin ou les fichiers sensibles refusés.",
+  "N'utilise pas cet outil pour modifier, supprimer ou exécuter des fichiers.",
+  "Préfère des lectures ciblées plutôt que de charger inutilement de très gros fichiers."
+]
+
+[configuration]
+section = "files"
+
+[[configuration.fields]]
+key = "max_read_chars"
+label = "Nombre maximal de caractères retournés par lecture"
+type = "integer"
+default = 40000
+
+[[configuration.fields]]
+key = "max_file_bytes"
+label = "Taille maximale d'un fichier texte lisible"
+type = "integer"
+default = 2000000

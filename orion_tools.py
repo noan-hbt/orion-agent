@@ -53,6 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("source", help="Chemin local ou URL d'une archive .zip.")
     install.add_argument("--force", action="store_true", help="Remplacer la version existante.")
     install.add_argument("--configure", action="store_true", help="Demander les paramètres déclarés par le tool.")
+    install.add_argument(
+        "--enable",
+        action="store_true",
+        help="Autoriser explicitement le chargement Python du tool au prochain démarrage.",
+    )
+
+    enable = commands.add_parser("enable", help="Activer un tool déjà installé.")
+    enable.add_argument("tool_id", help="Identifiant du tool à activer.")
+
+    disable = commands.add_parser("disable", help="Désactiver un tool installé.")
+    disable.add_argument("tool_id", help="Identifiant du tool à désactiver.")
 
     update = commands.add_parser("update", help="Mettre à jour un ou tous les tools.")
     update.add_argument("tool_id", nargs="?", help="Identifiant du tool à mettre à jour.")
@@ -87,7 +98,37 @@ def main(argv: list[str] | None = None) -> int:
                 config_path=config.config_path or args.config,
                 env_path=config.base_dir / ".env",
             )
-        print(f"Tool installé : {manifest.id} {manifest.version}")
+        if args.enable:
+            manager.set_package_enabled(
+                manifest.id,
+                True,
+                config_path=config.config_path or args.config,
+            )
+            print(f"Tool installé et activé : {manifest.id} {manifest.version}")
+        else:
+            print(f"Tool installé : {manifest.id} {manifest.version}")
+            print(
+                "Chargement désactivé par sécurité. Utilise "
+                f"`orion-tools enable {manifest.id}` ou réinstalle avec --enable."
+            )
+        return 0
+
+    if args.command == "enable":
+        manager.set_package_enabled(
+            args.tool_id,
+            True,
+            config_path=config.config_path or args.config,
+        )
+        print(f"Tool activé : {args.tool_id}. Redémarre Orion pour le charger.")
+        return 0
+
+    if args.command == "disable":
+        manager.set_package_enabled(
+            args.tool_id,
+            False,
+            config_path=config.config_path or args.config,
+        )
+        print(f"Tool désactivé : {args.tool_id}. Redémarre Orion pour appliquer.")
         return 0
 
     if args.command == "update":

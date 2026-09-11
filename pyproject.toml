@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openrouter-agent-client"
 version = "0.1.0"
-description = "Client Python synchrone/asynchrone pour OpenRouter avec boucle agentique"
+description = "Orion, agent IA personnel event-driven avec tools, tâches durables et sous-agents"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27,<1",
@@ -15,25 +16,37 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "pytest>=8",
+    "ruff>=0.6,<1",
+]
+
 [project.scripts]
 orion-toolbox = "orion_toolbox:main"
 orion = "orion_run:main"
+orion-install = "orion_install:main"
+orion-tools = "orion_tools:main"
+
+[project.urls]
+Repository = "https://github.com/noan-hbt/orion-agent"
 
 [tool.setuptools]
 # Orion is intentionally a flat-module application.  Explicitly listing the
 # modules prevents setuptools from treating the repository as an invalid
 # package layout while keeping the existing imports and entry points intact.
 py-modules = [
-    "action_ledger", "channel_adapters", "channels", "cli_ui", "cli_cockpit", "cli_cockpit_backend", "cli_cockpit_events",
+    "action_ledger", "channel_adapters", "channels", "cli_ui", "cli_v2", "cli_cockpit", "cli_cockpit_backend", "cli_cockpit_events",
     "cli_cockpit_actions", "cli_cockpit_observability",
-    "communication_ledger", "context_assembler", "context_os", "context_registry",
+    "communication_ledger", "context_assembler", "context_os", "context_registry", "durable_events",
     "identity_resolver", "event_handler",
     "approvals", "budgets",
     "github_tools", "handoff_context", "openrouter_client", "orion_config",
     "orion_install", "orion_run", "orion_toolbox", "orion_tools",
     "orion_vps_install", "outbox", "memory_store", "observability",
     "prompt_context", "reflection_engine",
-    "runtime", "scheduler", "subagents", "tasks", "teams", "tool_manager",
+    "runtime", "scheduler", "subagents", "tasks", "teams", "tool_manager", "tool_policy",
     "workflows",
 ]
 
@@ -44,11 +57,15 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["tool_packages*"]
+include = ["tool_packages*", "orion_resources*"]
 namespaces = true
 
 [tool.setuptools.package-data]
 "*" = ["*.toml", "*.md"]
+"orion_resources" = ["*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "allow_network: explicitly allow real network access when ORION_TEST_OFFLINE=1",
+]

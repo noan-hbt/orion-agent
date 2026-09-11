@@ -9,7 +9,7 @@ en continu ; le channel CLI n'est pas activé par défaut dans ce mode.
 Depuis le dossier du dépôt :
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3 -m pip install .
 python3 orion_vps_install.py \
   --channels telegram,discord \
   --set-secret OPENROUTER_API_KEY=... \

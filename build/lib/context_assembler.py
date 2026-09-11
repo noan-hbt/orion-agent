@@ -82,7 +82,7 @@ class ContextPolicy:
     total_max_tokens: int = 12_000
     output_reserve_tokens: int = 3_000
     history_turn_limit: int = 20
-    redaction_enabled: bool = True
+    redaction_enabled: bool = False
     llm_compaction_enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -120,7 +120,7 @@ class ContextAssembler:
         compactor_input_chars: int = 30_000,
         cache_size: int = 64,
         policy: ContextPolicy | None = None,
-        redaction_enabled: bool = True,
+        redaction_enabled: bool = False,
         token_counter: Any | None = None,
         memory_store: Any | None = None,
         memory_namespace: str = "default",
@@ -185,25 +185,67 @@ class ContextAssembler:
             return cls._clip_text(value, max_chars)
         if isinstance(value, Mapping):
             result: dict[str, Any] = {}
+            fragment_sizes: dict[str, int] = {}
+            encoded_size = 2  # opening/closing braces
             omitted = 0
+
+            def fragment_size(key: str, item: Any) -> int:
+                # Serializing the one-entry object gives the exact JSON size of
+                # ``key:value`` (including escaping/quotes) without repeatedly
+                # re-encoding the growing result mapping.
+                return len(
+                    json.dumps(
+                        {key: item},
+                        ensure_ascii=False,
+                        default=str,
+                        separators=(",", ":"),
+                    )
+                ) - 2
+
+            def assign(key: str, item: Any, *, size: int | None = None) -> int:
+                """Assign one entry and return the resulting encoded JSON size."""
+                nonlocal encoded_size
+                if size is None:
+                    size = fragment_size(key, item)
+                if key in result:
+                    encoded_size += size - fragment_sizes[key]
+                else:
+                    if result:
+                        encoded_size += 1  # comma separator
+                    encoded_size += size
+                result[key] = item
+                fragment_sizes[key] = size
+                return encoded_size
+
+            def remove(key: str) -> None:
+                nonlocal encoded_size
+                size = fragment_sizes.pop(key)
+                result.pop(key)
+                encoded_size -= size
+                if result:
+                    encoded_size -= 1  # one comma disappears with the entry
+
             for key, item in value.items():
                 key = str(key)
                 candidate = cls._shrink_value(item, max_chars=max(1, max_chars // 3))
-                trial = dict(result)
-                trial[key] = candidate
-                if len(cls._serialize(trial)) <= max_chars:
-                    result[key] = candidate
+                candidate_size = fragment_size(key, candidate)
+                if key in result:
+                    trial_size = encoded_size + candidate_size - fragment_sizes[key]
+                else:
+                    trial_size = encoded_size + candidate_size + (1 if result else 0)
+                if trial_size <= max_chars:
+                    assign(key, candidate, size=candidate_size)
                 else:
                     omitted += 1
-            if omitted or len(cls._serialize(result)) > max_chars:
-                result["truncated"] = True
-                result["omitted"] = max(1, omitted)
-            while len(cls._serialize(result)) > max_chars and result:
+            if omitted or encoded_size > max_chars:
+                assign("truncated", True)
+                assign("omitted", max(1, omitted))
+            while encoded_size > max_chars and result:
                 removable = next((key for key in result if key not in {"truncated", "omitted"}), None)
                 if removable is None:
                     break
-                result.pop(removable)
-            if len(cls._serialize(result)) > max_chars:
+                remove(removable)
+            if encoded_size > max_chars:
                 return {}
             return result
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -232,11 +274,10 @@ class ContextAssembler:
     def compact_value(cls, value: Any, *, max_chars: int = 4000) -> Any:
         if max_chars < 1:
             raise ValueError("max_chars must be positive")
-        return cls._shrink_value(redact_value(value), max_chars=max_chars)
+        return cls._shrink_value(value, max_chars=max_chars)
 
     @classmethod
     def _projection(cls, name: str, value: Any, *, max_chars: int) -> Any:
-        value = redact_value(value)
         if not isinstance(value, Mapping):
             return cls._shrink_value(value, max_chars=max_chars)
         preferred: dict[str, tuple[str, ...]] = {
@@ -286,6 +327,31 @@ class ContextAssembler:
         within = len(raw) <= component.max_chars and (token_limit is None or self.count_tokens(raw) <= token_limit)
         if within:
             return value
+        if (
+            component.name == "history"
+            and isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes, bytearray))
+        ):
+            bounded = self.bound_history(
+                value,
+                max_chars=component.max_chars,
+                max_tokens=token_limit or max(1, self.count_tokens(raw)),
+                turn_limit=self.policy.history_turn_limit,
+            )
+            # A custom tokenizer may be stricter than the deterministic
+            # fallback used by bound_history. Tighten the char allowance until
+            # both contracts agree, still dropping whole history blocks only.
+            if token_limit is not None:
+                allowed_chars = component.max_chars
+                while bounded and self.count_tokens(self._serialize(bounded)) > token_limit:
+                    allowed_chars = max(1, allowed_chars - max(1, allowed_chars // 8))
+                    bounded = self.bound_history(
+                        value,
+                        max_chars=allowed_chars,
+                        max_tokens=token_limit,
+                        turn_limit=self.policy.history_turn_limit,
+                    )
+            return bounded
         projection = self._projection(component.name, value, max_chars=component.max_chars)
         projected = self._serialize(projection)
         preferred = {
@@ -320,58 +386,228 @@ class ContextAssembler:
 
     @classmethod
     def _history_blocks(cls, history: Sequence[Any]) -> list[list[Any]]:
+        """Group history into protocol-safe atomic trimming blocks.
+
+        Assistant tool calls and their tool results are never separated.  If
+        the input already contains an orphan/malformed tool sequence, drop that
+        protocol fragment rather than preserving a provider-invalid history.
+        """
         blocks: list[list[Any]] = []
         index = 0
         values = list(history)
+
+        def tool_block(start: int) -> tuple[list[Any] | None, int]:
+            assistant = values[start]
+            if not isinstance(assistant, Mapping):
+                return None, start + 1
+            calls = assistant.get("tool_calls")
+            if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes, bytearray)):
+                return None, start + 1
+            ids = [
+                str(call.get("id"))
+                for call in calls
+                if isinstance(call, Mapping) and call.get("id") is not None
+            ]
+            declared = set(ids)
+            cursor = start + 1
+            results: list[Any] = []
+            seen: list[str] = []
+            while cursor < len(values):
+                item = values[cursor]
+                if not isinstance(item, Mapping) or item.get("role") != "tool":
+                    break
+                results.append(item)
+                seen.append(str(item.get("tool_call_id")))
+                cursor += 1
+            valid = bool(declared) and len(ids) == len(declared) and set(seen) == declared and len(seen) == len(declared)
+            return ([assistant, *results] if valid else None), cursor
+
         while index < len(values):
             message = values[index]
-            block = [message]
-            if isinstance(message, Mapping) and message.get("role") == "assistant" and message.get("tool_calls"):
-                ids = {str(call.get("id")) for call in message.get("tool_calls", []) if isinstance(call, Mapping)}
-                index += 1
-                while index < len(values) and isinstance(values[index], Mapping) and values[index].get("role") == "tool" and str(values[index].get("tool_call_id")) in ids:
-                    block.append(values[index]); index += 1
-                blocks.append(block)
-                continue
             if isinstance(message, Mapping) and message.get("role") == "user" and index + 1 < len(values):
                 nxt = values[index + 1]
                 if isinstance(nxt, Mapping) and nxt.get("role") == "assistant":
-                    block.append(nxt); index += 1
-            blocks.append(block)
+                    if nxt.get("tool_calls"):
+                        protocol, next_index = tool_block(index + 1)
+                        if protocol is not None:
+                            blocks.append([message, *protocol])
+                        else:
+                            blocks.append([message])
+                        index = next_index
+                        continue
+                    blocks.append([message, nxt])
+                    index += 2
+                    continue
+            if isinstance(message, Mapping) and message.get("role") == "assistant" and message.get("tool_calls"):
+                protocol, next_index = tool_block(index)
+                if protocol is not None:
+                    blocks.append(protocol)
+                index = next_index
+                continue
+            if isinstance(message, Mapping) and message.get("role") == "tool":
+                # Never keep an orphaned tool result.
+                index += 1
+                continue
+            blocks.append([message])
             index += 1
         return blocks
 
     @classmethod
     def bound_history(cls, history: Sequence[Any], *, max_chars: int = 10_000, max_tokens: int = 2_500, turn_limit: int | None = None) -> list[Any]:
-        blocks = cls._history_blocks(redact_value(history))
+        blocks = cls._history_blocks(history)
+        omitted_by_turn_limit = 0
         if turn_limit is not None:
-            blocks = blocks[-max(1, int(turn_limit)):]
+            limit = max(1, int(turn_limit))
+            omitted_by_turn_limit = max(0, len(blocks) - limit)
+            blocks = blocks[-limit:]
+
+        def flatten(selected: Sequence[Sequence[Any]], omitted: int, *, marker: bool = True) -> list[Any]:
+            result: list[Any] = []
+            if omitted and marker:
+                result.append({"truncated": True, "omitted": omitted})
+            for block in selected:
+                result.extend(block)
+            return result
+
+        def fits(value: list[Any]) -> bool:
+            encoded = cls._serialize(value)
+            return len(encoded) <= max_chars and _token_count(encoded) <= max_tokens
+
         kept: list[list[Any]] = []
-        total_chars = 2
-        total_tokens = 1
+        total_blocks = len(blocks)
         for block in reversed(blocks):
-            encoded = cls._serialize(block)
-            if kept and (total_chars + len(encoded) > max_chars or total_tokens + _token_count(encoded) > max_tokens):
+            candidate = [block, *kept]
+            omitted = omitted_by_turn_limit + total_blocks - len(candidate)
+            candidate_value = flatten(candidate, omitted)
+            if not fits(candidate_value):
+                # Prefer recent real history over an informational marker when
+                # the marker alone is what makes an otherwise valid candidate
+                # exceed a tight budget.
+                candidate_without_marker = flatten(candidate, omitted, marker=False)
+                if not kept and fits(candidate_without_marker):
+                    kept = candidate
                 break
-            if not kept and len(encoded) > max_chars:
-                block = cls._shrink_value(block, max_chars=max_chars - 2)
-                if not isinstance(block, list):
-                    block = [{"truncated": True, "omitted": 1}]
-            kept.insert(0, block)
-            encoded = cls._serialize(block)
-            total_chars += len(encoded)
-            total_tokens += _token_count(encoded)
-        omitted = max(0, len(blocks) - len(kept))
-        result: list[Any] = ([{"truncated": True, "omitted": omitted}] if omitted else [])
-        for block in kept:
-            result.extend(block)
-        return result
+            kept = candidate
+
+        omitted = omitted_by_turn_limit + max(0, total_blocks - len(kept))
+        result = flatten(kept, omitted)
+        if fits(result):
+            return result
+        # A very tight budget may not have room for the truncation marker.
+        result = flatten(kept, omitted, marker=False)
+        if fits(result):
+            return result
+        return []
+
+    def guard_messages(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+        stage: str = "provider",
+        final: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Return a provider-safe message list within the full input budget.
+
+        The budget includes the serialized message envelope and tool schemas.
+        Leading system messages are treated as immutable policy prefix: they
+        are retained preferentially, but still consume the same char/token
+        budget as every other provider input. Remaining history is reduced by
+        :meth:`bound_history`, which keeps tool-call/result blocks atomic.
+        """
+        del final  # Callers pass the actual tool set; no hidden final-mode discount.
+
+        normalized = [dict(message) for message in messages]
+        tool_list = [dict(tool) for tool in tools] if tools else []
+
+        prefix: list[dict[str, Any]] = []
+        remainder = list(normalized)
+        while remainder and remainder[0].get("role") == "system":
+            prefix.append(remainder.pop(0))
+
+        def provider_payload(selected: Sequence[Mapping[str, Any]]) -> str:
+            body: dict[str, Any] = {"messages": list(selected)}
+            if tool_list:
+                body["tools"] = tool_list
+            return self._serialize(body)
+
+        def fits(selected: Sequence[Mapping[str, Any]]) -> bool:
+            encoded = provider_payload(selected)
+            return (
+                len(encoded) <= self.total_max_chars
+                and self.count_tokens(encoded) <= self.total_max_tokens
+            )
+
+        # Policy + tools are not reducible here. If they already exceed the
+        # provider input budget, sending any request would be impossible.
+        if not fits(prefix):
+            encoded = provider_payload(prefix)
+            raise ValueError(
+                "Context provider budget exceeded by policy/system messages and tool schemas "
+                f"at stage={stage!r}: chars={len(encoded)}/{self.total_max_chars}, "
+                f"tokens={self.count_tokens(encoded)}/{self.total_max_tokens}."
+            )
+
+        if not remainder or fits(normalized):
+            return normalized
+
+        # Derive a conservative allowance for the reducible suffix. The final
+        # provider-envelope check below remains authoritative because JSON
+        # separators/wrappers also consume budget.
+        base = provider_payload(prefix)
+        available_chars = max(1, self.total_max_chars - len(base))
+        available_tokens = max(1, self.total_max_tokens - self.count_tokens(base))
+
+        def bounded_suffix(chars: int, tokens: int) -> list[dict[str, Any]]:
+            bounded = self.bound_history(
+                remainder,
+                max_chars=max(1, chars),
+                max_tokens=max(1, tokens),
+                turn_limit=self.policy.history_turn_limit,
+            )
+            # bound_history may emit an informational truncation marker. It is
+            # useful in stored context but is not a valid chat message because
+            # it has no role, so omit it from the provider payload.
+            return [
+                dict(item)
+                for item in bounded
+                if isinstance(item, Mapping) and item.get("role") is not None
+            ]
+
+        suffix = bounded_suffix(available_chars, available_tokens)
+        guarded = [*prefix, *suffix]
+        if fits(guarded):
+            return guarded
+
+        # A custom token counter or envelope overhead can make the first
+        # conservative estimate slightly too large. Tighten the suffix budget
+        # geometrically, always re-running the protocol-safe reducer.
+        chars = available_chars
+        tokens = available_tokens
+        previous: tuple[int, int] | None = None
+        while suffix:
+            chars = max(1, chars - max(1, chars // 8))
+            tokens = max(1, tokens - max(1, tokens // 8))
+            current = (chars, tokens)
+            if current == previous:
+                break
+            previous = current
+            suffix = bounded_suffix(chars, tokens)
+            guarded = [*prefix, *suffix]
+            if fits(guarded):
+                return guarded
+
+        # Policy alone was proven to fit, so dropping all reducible messages is
+        # always preferable to emitting an over-budget provider request.
+        return prefix
 
     def assemble(self, components: Sequence[ContextComponent]) -> dict[str, str]:
         # Memory is deliberately opt-in: callers provide a MemoryStore and a
         # component named ``memory_query``. Existing callers are unchanged.
         if self.memory_store is not None:
-            resolved = []
+            resolved: list[ContextComponent] = []
+            retrieved: list[Any] = []
+            retrieval_limits: list[ContextComponent] = []
             for c in components:
                 if c.name != "memory_query":
                     resolved.append(c)
@@ -389,7 +625,43 @@ class ContextAssembler:
                     else:
                         value = {k: getattr(item, k) for k in ("id", "content", "provenance", "confidence", "namespace") if hasattr(item, k)}
                     items.append(value)
-                resolved.append(ContextComponent("memories", items, c.max_chars, c.priority, c.max_tokens))
+                retrieved.extend(items)
+                retrieval_limits.append(c)
+
+            if retrieval_limits:
+                existing_index = next(
+                    (index for index, item in enumerate(resolved) if item.name == "memories"),
+                    None,
+                )
+                if existing_index is None:
+                    template = retrieval_limits[0]
+                    resolved.append(
+                        ContextComponent(
+                            "memories",
+                            retrieved,
+                            template.max_chars,
+                            template.priority,
+                            template.max_tokens,
+                        )
+                    )
+                elif retrieved:
+                    # Runtime contract context may already contain memories
+                    # extracted into PromptContextStore.  Retrieval augments
+                    # that durable set; it must never overwrite it merely
+                    # because both components share the public ``memories``
+                    # name.
+                    existing = resolved[existing_index]
+                    base = existing.value if isinstance(existing.value, list) else [existing.value]
+                    resolved[existing_index] = ContextComponent(
+                        "memories",
+                        [*base, *retrieved],
+                        max(existing.max_chars, *(item.max_chars for item in retrieval_limits)),
+                        max(existing.priority, *(item.priority for item in retrieval_limits)),
+                        max(
+                            existing.max_tokens or 0,
+                            *(item.max_tokens or 0 for item in retrieval_limits),
+                        ) or None,
+                    )
             components = resolved
         rendered = {component.name: self.render(component) for component in components}
         remaining_chars = self.total_max_chars
@@ -401,6 +673,33 @@ class ContextAssembler:
             if len(value) > allowed_chars or self.count_tokens(value) > remaining_tokens:
                 if target_chars < 2:
                     rendered[component.name] = ""
+                elif (
+                    component.name == "history"
+                    and isinstance(component.value, Sequence)
+                    and not isinstance(component.value, (str, bytes, bytearray))
+                ):
+                    bounded_history = self.bound_history(
+                        component.value,
+                        max_chars=target_chars,
+                        max_tokens=max(1, remaining_tokens),
+                        turn_limit=self.policy.history_turn_limit,
+                    )
+                    rendered[component.name] = self._serialize(bounded_history)
+                    while (
+                        rendered[component.name]
+                        and self.count_tokens(rendered[component.name]) > remaining_tokens
+                        and target_chars > 2
+                    ):
+                        target_chars = max(2, target_chars - max(1, target_chars // 8))
+                        bounded_history = self.bound_history(
+                            component.value,
+                            max_chars=target_chars,
+                            max_tokens=max(1, remaining_tokens),
+                            turn_limit=self.policy.history_turn_limit,
+                        )
+                        rendered[component.name] = self._serialize(bounded_history)
+                    if self.count_tokens(rendered[component.name]) > remaining_tokens:
+                        rendered[component.name] = ""
                 else:
                     bounded = self._shrink_value(component.value, max_chars=target_chars)
                     if isinstance(component.value, (Mapping, Sequence)) and not isinstance(component.value, str):
@@ -419,7 +718,14 @@ class ContextAssembler:
         return rendered
 
     def evidence_envelope(self, data: Mapping[str, Any], *, source: str = "runtime", max_chars: int | None = None) -> str:
-        payload = {"schema": EVIDENCE_SCHEMA, "source": str(source), "trust": "untrusted", "redacted": True, "data": redact_value(dict(data))}
+        payload_data = redact_value(dict(data)) if self.policy.redaction_enabled else dict(data)
+        payload = {
+            "schema": EVIDENCE_SCHEMA,
+            "source": str(source),
+            "trust": "untrusted",
+            "redacted": bool(self.policy.redaction_enabled),
+            "data": payload_data,
+        }
         encoded = self._serialize(self._shrink_value(payload, max_chars=max_chars or self.total_max_chars))
         encoded = encoded.replace("BEGIN_ORION_EVIDENCE", "BEGIN_ORION_EVIDENCE_")
         encoded = encoded.replace("END_ORION_EVIDENCE", "END_ORION_EVIDENCE_")

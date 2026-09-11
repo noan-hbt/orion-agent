@@ -1,9 +1,3 @@
-httpx>=0.27,<1
-python-dotenv>=1.0,<2
-prompt-toolkit>=3.0.48,<4
-rich>=13.7,<15
-tomli>=2.0; python_version < "3.11"
-
-# Build/test tooling (runtime dependencies are declared in pyproject.toml).
-build>=1.2
-pytest>=8
+# Compatibility shim for source checkouts.
+# Runtime dependencies live in pyproject.toml, which is the single source of truth.
+.

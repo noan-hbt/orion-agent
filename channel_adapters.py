@@ -20,8 +20,10 @@ import smtplib
 import sys
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from email.message import EmailMessage
 from email.policy import default as email_policy
 from email.utils import parseaddr
@@ -86,6 +88,9 @@ def _validate_http_url(url: str) -> tuple[str, str, int | None]:
 
 def _url_matches_allowlist(url: str, allowlist: Iterable[str]) -> bool:
     scheme, hostname, port = _validate_http_url(url)
+    parsed = urlsplit(str(url))
+    target_path = parsed.path or "/"
+    target_query = parsed.query
     for candidate in allowlist:
         value = str(candidate).strip()
         if not value:
@@ -95,13 +100,66 @@ def _url_matches_allowlist(url: str, allowlist: Iterable[str]) -> bool:
                 allowed_scheme, allowed_host, allowed_port = _validate_http_url(value)
             except ValueError:
                 continue
-            if (scheme, hostname, port) == (allowed_scheme, allowed_host, allowed_port):
+            allowed = urlsplit(value)
+            # A full URL is an exact egress policy, not an origin wildcard.
+            # Host-only entries below remain the explicit way to allow every
+            # path/query on one host.
+            if (
+                (scheme, hostname, port) == (allowed_scheme, allowed_host, allowed_port)
+                and target_path == (allowed.path or "/")
+                and target_query == allowed.query
+            ):
                 return True
         else:
             candidate_host = value.lower().strip("[]")
             if hostname == candidate_host:
                 return True
     return False
+
+
+def _durable_inbound_message(row: Mapping[str, Any]) -> InboundMessage:
+    """Rebuild a normalized inbound message from one communication row."""
+    payload = row.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid durable inbound payload")
+    data = dict(payload)
+    channel = str(row.get("channel") or "")
+    row_id = str(row.get("id") or "")
+    if not channel or not row_id:
+        raise ValueError("invalid durable inbound identity")
+    metadata = {
+        key: data[key]
+        for key in (
+            "chat_id",
+            "update_id",
+            "conversation_id",
+            "message_thread_id",
+            "thread_id",
+            "parent_message_id",
+        )
+        if data.get(key) is not None
+    }
+    return InboundMessage(
+        channel=channel,
+        payload=data,
+        reply_to=(str(row["reply_to"]) if row.get("reply_to") is not None else None),
+        source=channel,
+        metadata=metadata,
+        # Claims and ACKs use the ledger's internal row id, which can be scoped
+        # when two channels supplied the same external message id.
+        message_id=row_id,
+        sender=(
+            str(data.get("sender", data.get("user_id")))
+            if data.get("sender", data.get("user_id")) is not None
+            else None
+        ),
+        text=(str(data["text"]) if data.get("text") is not None else None),
+        correlation_id=(
+            str(row["correlation_id"])
+            if row.get("correlation_id") is not None
+            else None
+        ),
+    )
 
 
 def markdown_to_telegram_html(text: str) -> str:
@@ -978,26 +1036,102 @@ class HttpWebhookAdapter:
         self._idempotency_lock = threading.Lock()
         self._idempotency: OrderedDict[str, str] = OrderedDict()
         self._nonces: OrderedDict[str, float] = OrderedDict()
+        self._worker_id = f"{self.name}-worker-{os.getpid()}-{id(self)}"
+
+    def _claim_durable_inbound(self) -> dict[str, Any] | None:
+        if self.ledger is None:
+            return None
+        lease_seconds = max(30.0, self.request_timeout * 2.0)
+        # ``message`` is retained for rows written by the pre-durable-inbound
+        # HTTP implementation.  New rows use the canonical ``inbound`` kind.
+        for kind in ("inbound", "message"):
+            claimed = self.ledger.claim(
+                worker_id=self._worker_id,
+                kind=kind,
+                channel=self.name,
+                lease_seconds=lease_seconds,
+            )
+            if claimed is not None:
+                return claimed
+        return None
 
     def _worker_loop(self) -> None:
-        while not self._stop_requested.is_set():
+        while True:
+            queue_item = False
+            claimed: dict[str, Any] | None = None
             try:
                 message = self._queue.get(timeout=0.2)
+                queue_item = True
             except queue.Empty:
-                continue
+                try:
+                    claimed = self._claim_durable_inbound()
+                except Exception:
+                    if self._stop_requested.is_set():
+                        return
+                    self._stop_requested.wait(0.2)
+                    continue
+                if claimed is None:
+                    if self._stop_requested.is_set():
+                        return
+                    continue
+                try:
+                    message = _durable_inbound_message(claimed)
+                except Exception as exc:
+                    try:
+                        self.ledger.fail(
+                            str(claimed.get("id") or ""),
+                            type(exc).__name__,
+                            worker_id=self._worker_id,
+                        )
+                    except Exception:
+                        pass
+                    continue
             try:
                 if message is None:
                     return
+                if self.ledger is not None and claimed is None:
+                    if not message.message_id:
+                        continue
+                    try:
+                        claimed = self.ledger.claim_by_id(
+                            message.message_id,
+                            worker_id=self._worker_id,
+                            lease_seconds=max(30.0, self.request_timeout * 2.0),
+                        )
+                    except Exception:
+                        # The durable row remains retriable. Never execute the
+                        # callback unless this worker owns a live ledger lease.
+                        continue
+                    if claimed is None:
+                        # Delivered rows and rows already owned by another
+                        # worker/duplicate request must not execute twice.
+                        continue
                 callback = self._on_message
                 if callback is not None:
-                    callback(message)
-                    if self.ledger is not None:
-                        self.ledger.ack(message.message_id or "")
+                    try:
+                        callback(message)
+                    except Exception as exc:
+                        if self.ledger is not None and message.message_id:
+                            try:
+                                self.ledger.fail(
+                                    message.message_id,
+                                    type(exc).__name__,
+                                    worker_id=self._worker_id,
+                                )
+                            except Exception:
+                                pass
+                        continue
+                    if self.ledger is not None and message.message_id:
+                        self.ledger.ack(
+                            message.message_id,
+                            worker_id=self._worker_id,
+                        )
             except Exception:
                 # Une erreur de traitement ne doit pas tuer le lecteur HTTP.
                 continue
             finally:
-                self._queue.task_done()
+                if queue_item:
+                    self._queue.task_done()
 
     @staticmethod
     def _error(handler: BaseHTTPRequestHandler, status: int, code: str, message: str) -> None:
@@ -1055,6 +1189,21 @@ class HttpWebhookAdapter:
         now = time.time()
         if not nonce or len(nonce) > 256 or abs(now - timestamp) > self.replay_window:
             return False
+        if self.ledger is not None:
+            try:
+                secret_scope = hashlib.sha256(
+                    self.hmac_secret.encode("utf-8", "replace")
+                ).hexdigest()[:16]
+                return self.ledger.remember_nonce(
+                    f"http-hmac:{self.name}:{secret_scope}",
+                    nonce,
+                    expires_at=timestamp + self.replay_window,
+                )
+            except Exception:
+                # Replay protection is a security boundary.  Persistence
+                # failure must therefore fail closed rather than silently
+                # degrading to a process-local cache.
+                return False
         with self._idempotency_lock:
             for key, value in list(self._nonces.items()):
                 if now - value > self.replay_window:
@@ -1160,7 +1309,7 @@ class HttpWebhookAdapter:
             if state == "conflict":
                 self._error(handler, 409, "idempotency_conflict", "Cette clé a déjà été utilisée avec un contenu différent.")
                 return
-            if state == "same":
+            if state == "same" and self.ledger is None:
                 self._respond_accepted(handler)
                 return
         if not self.receive_payload(payload, reply_to=reply_to, enqueue_only=True, idempotency_key=key):
@@ -1186,6 +1335,12 @@ class HttpWebhookAdapter:
     def start(self, on_message: MessageCallback) -> None:
         self._on_message = on_message
         self._stop_requested.clear()
+        self._worker_id = f"{self.name}-worker-{os.getpid()}-{uuid.uuid4().hex}"
+        if self.ledger is not None:
+            try:
+                self.ledger.recover_expired_leases()
+            except Exception:
+                pass
         self._worker = threading.Thread(target=self._worker_loop, name=f"orion-{self.name}-worker", daemon=True)
         self._worker.start()
         adapter = self
@@ -1201,6 +1356,10 @@ class HttpWebhookAdapter:
                 return
 
         self._server = ThreadingHTTPServer((self.host, self.port), Handler)
+        # ``server_close`` must wait for request handlers that were already in
+        # flight when stop() began.  Only then can the worker drain every row
+        # those handlers durably accepted before returning 202.
+        self._server.daemon_threads = False
         self.port = int(self._server.server_address[1])
         self._thread = threading.Thread(target=self._server.serve_forever, name=f"orion-{self.name}", daemon=True)
         self._thread.start()
@@ -1229,12 +1388,16 @@ class HttpWebhookAdapter:
         )
         if self.ledger is not None:
             try:
+                # Keep the historical HTTP ``message`` kind so existing
+                # ledgers dedupe across upgrades.  The worker hydrates both
+                # this legacy/current kind and canonical ``inbound`` rows.
                 ledger_id, is_new = self.ledger.record(
                     channel=self.name,
                     payload=dict(payload),
                     message_id=message.message_id,
                     idempotency_key=idempotency_key,
                     correlation_id=message.correlation_id,
+                    reply_to=reply_to,
                 )
             except ValueError:
                 return False
@@ -1268,6 +1431,11 @@ class HttpWebhookAdapter:
         try:
             self._queue.put_nowait(message)
         except queue.Full:
+            # The HTTP request is already durable.  Returning success lets the
+            # ledger worker process it later instead of asking the client to
+            # retry an input that has in fact been accepted.
+            if self.ledger is not None:
+                return True
             if enqueue_only:
                 return False
             raise RuntimeError(f"La file du channel {self.name} est pleine.")
@@ -1283,20 +1451,23 @@ class HttpWebhookAdapter:
                 raise ValueError("La destination n'est pas dans l'allowlist de sortie.")
         except ValueError as exc:
             raise RuntimeError(f"Destination de sortie refusée pour le channel {self.name}.") from exc
+        headers = (
+            {"Idempotency-Key": str(output.idempotency_key)}
+            if output.idempotency_key
+            else None
+        )
         response = httpx.post(
             url,
             json={"text": output.content, "content": output.content, "task_id": output.task_id},
+            headers=headers,
             timeout=self.timeout,
             follow_redirects=False,
         )
         response.raise_for_status()
 
     def stop(self) -> None:
-        self._stop_requested.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+        # Quiesce the network producer first.  Only after no new POST can be
+        # accepted do we ask the worker to drain every RAM-admitted durable row.
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()
@@ -1304,6 +1475,8 @@ class HttpWebhookAdapter:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+        self._stop_requested.set()
+        self._queue.join()
         if self._worker is not None:
             self._worker.join(timeout=2.0)
             self._worker = None
@@ -1325,6 +1498,7 @@ class TelegramAdapter:
         allow_all_chats: bool = False,
         accept_edited: bool = False,
         bootstrap_owner: bool = True,
+        bootstrap_pairing_secret: str | None = None,
         owner_path: str | None = None,
         outbound_allowed_chat_ids: list[int] | None = None,
         offset_path: str | None = None,
@@ -1346,11 +1520,17 @@ class TelegramAdapter:
             raise ValueError("poll_timeout Telegram doit être positif ou nul.")
         if not isinstance(allow_all_chats, bool) or not isinstance(accept_edited, bool) or not isinstance(bootstrap_owner, bool):
             raise ValueError("allow_all_chats, accept_edited et bootstrap_owner doivent être des booléens.")
+        if bootstrap_pairing_secret is not None and (
+            not isinstance(bootstrap_pairing_secret, str) or not bootstrap_pairing_secret
+        ):
+            raise ValueError("bootstrap_pairing_secret Telegram doit être une chaîne non vide ou null.")
         self.allowed_chat_ids = {int(item) for item in (allowed_chat_ids or [])}
         self.allowed_user_ids = {int(item) for item in (allowed_user_ids or [])}
         self.allow_all_chats = allow_all_chats
         self.accept_edited = accept_edited
         self.bootstrap_owner = bootstrap_owner
+        self.bootstrap_pairing_secret = bootstrap_pairing_secret
+        self._outbound_policy_explicit = outbound_allowed_chat_ids is not None
         # The inbound allowlist is the default outbound policy too.  A
         # separate list is useful for bots that may receive from a larger set
         # but must only answer selected chats.
@@ -1513,22 +1693,71 @@ class TelegramAdapter:
             return exc.error_code, exc.retry_after
         return None, None
 
+    def _claim_durable_inbound(self) -> dict[str, Any] | None:
+        if self.ledger is None:
+            return None
+        return self.ledger.claim(
+            worker_id=self._worker_id,
+            kind="inbound",
+            channel=self.name,
+            lease_seconds=max(30.0, self.api_timeout * 2.0),
+        )
+
+    def _advance_offset_after_terminal_delivery(self, message: InboundMessage) -> None:
+        try:
+            update_id = int(message.payload.get("update_id"))
+        except (TypeError, ValueError):
+            return
+        self._persist_offset(update_id + 1)
+
     def _worker_loop(self) -> None:
         while True:
+            queue_item = False
+            claimed: dict[str, Any] | None = None
             try:
                 message = self._queue.get(timeout=0.2)
+                queue_item = True
             except queue.Empty:
-                if self._stop_requested.is_set():
-                    return
-                continue
+                try:
+                    claimed = self._claim_durable_inbound()
+                except Exception:
+                    if self._stop_requested.is_set():
+                        return
+                    self._stop_requested.wait(0.2)
+                    continue
+                if claimed is None:
+                    if self._stop_requested.is_set():
+                        return
+                    continue
+                try:
+                    message = _durable_inbound_message(claimed)
+                except Exception as exc:
+                    try:
+                        self.ledger.fail(
+                            str(claimed.get("id") or ""),
+                            type(exc).__name__,
+                            worker_id=self._worker_id,
+                        )
+                    except Exception:
+                        pass
+                    continue
             try:
                 if message is None:
                     return
                 ledger_claimed = True
-                if self.ledger is not None and hasattr(self.ledger, "claim_by_id") and message.message_id:
+                if (
+                    self.ledger is not None
+                    and claimed is None
+                    and hasattr(self.ledger, "claim_by_id")
+                    and message.message_id
+                ):
                     try:
                         ledger_claimed = bool(
-                            self.ledger.claim_by_id(message.message_id, worker_id=self._worker_id)
+                            self.ledger.claim_by_id(
+                                message.message_id,
+                                worker_id=self._worker_id,
+                                lease_seconds=max(30.0, self.api_timeout * 2.0),
+                            )
                         )
                     except Exception:
                         # Keep the item available for a transient SQLite
@@ -1552,18 +1781,33 @@ class TelegramAdapter:
                 callback(message)
                 if self.ledger is not None and hasattr(self.ledger, "ack") and message.message_id:
                     try:
-                        self.ledger.ack(message.message_id, worker_id=self._worker_id)
+                        if self.ledger.ack(message.message_id, worker_id=self._worker_id):
+                            # With a durable ledger, provider cursor advancement
+                            # follows local ACK.  A crash before ACK therefore
+                            # leaves either a provider replay or a recoverable
+                            # durable row; a crash after ACK can safely advance
+                            # from the row during restart hydration.
+                            self._advance_offset_after_terminal_delivery(message)
                     except Exception:
                         pass
             except Exception as exc:
                 if self.ledger is not None and hasattr(self.ledger, "fail") and message is not None and message.message_id:
                     try:
-                        self.ledger.fail(message.message_id, exc, worker_id=self._worker_id)
+                        status = self.ledger.fail(
+                            message.message_id,
+                            type(exc).__name__,
+                            worker_id=self._worker_id,
+                        )
+                        if status == "dead_letter":
+                            # Terminal local failure is durably visible; stop
+                            # asking Telegram to redeliver it forever.
+                            self._advance_offset_after_terminal_delivery(message)
                     except Exception:
                         pass
                 continue
             finally:
-                self._queue.task_done()
+                if queue_item:
+                    self._queue.task_done()
 
     def _api(self, method: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         for attempt in range(self.max_retries + 1):
@@ -1611,6 +1855,12 @@ class TelegramAdapter:
                 self._client_closed = False
             self._on_message = on_message
             self._stop_requested.clear()
+            self._worker_id = f"telegram-worker-{os.getpid()}-{uuid.uuid4().hex}"
+            if self.ledger is not None:
+                try:
+                    self.ledger.recover_expired_leases()
+                except Exception:
+                    pass
             self._worker = threading.Thread(target=self._worker_loop, name="orion-telegram-worker", daemon=True)
             self._worker.start()
             self._thread = threading.Thread(target=self._run, name="orion-telegram", daemon=True)
@@ -1645,31 +1895,55 @@ class TelegramAdapter:
                         user_id = int(sender_info.get("id")) if sender_info.get("id") is not None else None
                     except (TypeError, ValueError):
                         user_id = None
+                    text = message.get("text")
+
+                    # A configured pairing command is an adapter-local control
+                    # message, never application input.  Consume every explicit
+                    # ``/pair`` attempt (successful or not) before constructing
+                    # an InboundMessage or writing to the communication ledger,
+                    # so the pairing secret cannot leak into runtime context or
+                    # durable message history.
+                    pairing_attempt = (
+                        self.bootstrap_pairing_secret is not None
+                        and isinstance(text, str)
+                        and (text == "/pair" or text.startswith("/pair ") or text.startswith("/pair\t"))
+                    )
+                    if pairing_attempt:
+                        match = re.fullmatch(r"/pair[ \t]+(.+)", text)
+                        supplied_secret = match.group(1) if match else ""
+                        can_pair = (
+                            self.bootstrap_owner
+                            and not self.allow_all_chats
+                            and not self.allowed_chat_ids
+                            and not self.allowed_user_ids
+                            and self._owner_chat_id is None
+                            and str(chat.get("type", "")).lower() == "private"
+                            and user_id is not None
+                            and hmac.compare_digest(
+                                supplied_secret.encode("utf-8"),
+                                self.bootstrap_pairing_secret.encode("utf-8"),
+                            )
+                        )
+                        if can_pair:
+                            self._persist_owner(chat_id, user_id)
+                        self._persist_offset(update_id + 1)
+                        continue
                     accepted_chat = self.allow_all_chats or chat_id in self.allowed_chat_ids
                     accepted_user = bool(self.allowed_user_ids and user_id in self.allowed_user_ids)
-                    owner_bootstrap = (
-                        self.bootstrap_owner
-                        and not self.allow_all_chats
-                        and not self.allowed_chat_ids
-                        and not self.allowed_user_ids
-                        and self._owner_chat_id is None
-                        # Bootstrap is intentionally restricted to a direct
-                        # private conversation.  A group/channel must never
-                        # be able to claim the bot as its owner, and Telegram
-                        # updates without a sender identity are not bindable.
-                        and str(chat.get("type", "")).lower() == "private"
-                        and user_id is not None
-                    )
                     owner_match = (
                         self.bootstrap_owner
                         and self._owner_chat_id is not None
                         and chat_id == self._owner_chat_id
                         and (self._owner_user_id is None or user_id == self._owner_user_id)
                     )
-                    if not accepted_chat and not accepted_user and not owner_bootstrap and not owner_match:
+                    # Historical ``bootstrap_owner=true`` used to let the
+                    # first arbitrary private DM claim an unconfigured bot.
+                    # Keep the legacy flag/config parseable, but never infer
+                    # ownership from inbound traffic: a new owner must arrive
+                    # through an explicit allowlist or authenticated /pair.
+                    if not accepted_chat and not accepted_user and not owner_match:
                         self._persist_offset(update_id + 1)
                         continue
-                    text = message.get("text")
                     if not isinstance(text, str) or self._on_message is None:
                         self._persist_offset(update_id + 1)
                         continue
@@ -1692,7 +1966,8 @@ class TelegramAdapter:
                     conversation_id = f"{chat_id}:{numeric_thread_id}" if numeric_thread_id is not None else str(chat_id)
                     correlation_id = f"telegram:update:{update_id}"
                     if not self._remember_update(message_id):
-                        self._persist_offset(update_id + 1)
+                        if self.ledger is None:
+                            self._persist_offset(update_id + 1)
                         continue
                     inbound = InboundMessage(
                         channel=self.name,
@@ -1736,8 +2011,13 @@ class TelegramAdapter:
                                 # immediately before a full local queue.  It
                                 # must be offered again; delivered rows are
                                 # genuine duplicates and may advance offset.
-                                if existing is None or existing.get("status") not in {"queued", "failed"}:
+                                if existing is None:
+                                    self._forget_update(message_id)
+                                    break
+                                if existing.get("status") in {"delivered", "dead_letter"}:
                                     self._persist_offset(update_id + 1)
+                                    continue
+                                if existing.get("status") not in {"queued", "failed"}:
                                     continue
                             if ledger_id != message_id:
                                 inbound = InboundMessage(
@@ -1767,9 +2047,12 @@ class TelegramAdapter:
                         self._forget_update(message_id)
                         break
                     self._seen_chat_ids.add(chat_id)
-                    if owner_bootstrap:
-                        self._persist_owner(chat_id, user_id)
-                    self._persist_offset(update_id + 1)
+                    # Without a durable ledger the provider cursor is the only
+                    # recovery mechanism, so preserve the legacy enqueue-time
+                    # advancement.  Durable mode advances only after local ACK
+                    # in the worker above.
+                    if self.ledger is None:
+                        self._persist_offset(update_id + 1)
             except (httpx.HTTPError, RuntimeError, ValueError, OSError):
                 if not self._stop_requested.wait(2.0):
                     continue
@@ -1782,16 +2065,20 @@ class TelegramAdapter:
             chat_id = int(chat_id)
         except (TypeError, ValueError) as exc:
             raise RuntimeError("Le chat_id Telegram doit être un entier.") from exc
-        if not (
-            self.allow_all_chats
-            or chat_id in self.outbound_allowed_chat_ids
-            or chat_id in self._seen_chat_ids
-            or (
-                self.bootstrap_owner
-                and self._owner_chat_id is not None
-                and chat_id == self._owner_chat_id
+        if self._outbound_policy_explicit:
+            allowed_outbound = chat_id in self.outbound_allowed_chat_ids
+        else:
+            allowed_outbound = (
+                self.allow_all_chats
+                or chat_id in self.outbound_allowed_chat_ids
+                or chat_id in self._seen_chat_ids
+                or (
+                    self.bootstrap_owner
+                    and self._owner_chat_id is not None
+                    and chat_id == self._owner_chat_id
+                )
             )
-        ):
+        if not allowed_outbound:
             raise RuntimeError("La destination Telegram n'est pas dans l'allowlist de sortie.")
         for chunk in split_telegram_message(output.content, max_chars=self.max_message_chars):
             text = (
@@ -1835,6 +2122,7 @@ class TelegramAdapter:
             self._stop_requested.set()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(2.0, self.poll_timeout + 2))
+        self._queue.join()
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout=2.0)
         with self._state_lock:
@@ -1846,6 +2134,13 @@ class TelegramAdapter:
             self._client_closed = True
         except Exception:
             pass
+
+
+@dataclass
+class _EmailWorkItem:
+    message: InboundMessage
+    done: threading.Event = field(default_factory=threading.Event)
+    succeeded: bool = False
 
 
 class EmailAdapter:
@@ -1867,6 +2162,7 @@ class EmailAdapter:
         subject: str = "Orion",
         smtp_starttls: bool = False,
         allowed_recipient_domains: Iterable[str] | None = None,
+        allowed_senders: Iterable[str] | None = None,
     ) -> None:
         if not username or not password:
             raise ValueError("username et password sont obligatoires pour EmailAdapter.")
@@ -1885,27 +2181,47 @@ class EmailAdapter:
             for domain in (allowed_recipient_domains or ())
             if str(domain).strip()
         }
+        # Missing/legacy ``allowed_senders`` is deliberately fail-closed.
+        # Accepting every sender when the field was absent made old/manual
+        # configurations silently expose Orion to arbitrary inbound email.
+        normalized: set[str] = set()
+        for candidate in allowed_senders or ():
+            raw = str(candidate).strip()
+            if "\r" in raw or "\n" in raw:
+                raise ValueError("allowed_senders contient une adresse invalide.")
+            address = parseaddr(raw)[1].strip().lower()
+            if not address or "@" not in address:
+                raise ValueError("allowed_senders contient une adresse invalide.")
+            normalized.add(address)
+        self.allowed_senders = normalized
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._on_message: MessageCallback | None = None
-        self._queue: queue.Queue[InboundMessage | None] = queue.Queue(maxsize=MAX_CHANNEL_QUEUE)
+        self._queue: queue.Queue[_EmailWorkItem | None] = queue.Queue(maxsize=MAX_CHANNEL_QUEUE)
 
     def _worker_loop(self) -> None:
-        while not self._stop_requested.is_set():
+        # A sentinel, not ``_stop_requested``, terminates this worker so stop()
+        # can first quiesce IMAP polling and then drain already accepted mail.
+        while True:
             try:
-                message = self._queue.get(timeout=0.2)
+                work = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
             try:
-                if message is None:
+                if work is None:
                     return
                 callback = self._on_message
                 if callback is not None:
-                    callback(message)
+                    callback(work.message)
+                    work.succeeded = True
             except Exception:
-                continue
+                # The poller deliberately leaves the corresponding IMAP mail
+                # UNSEEN so the next poll retries it.
+                pass
             finally:
+                if work is not None:
+                    work.done.set()
                 self._queue.task_done()
 
     def start(self, on_message: MessageCallback) -> None:
@@ -1933,7 +2249,11 @@ class EmailAdapter:
             if status != "OK":
                 return
             for message_id in data[0].split():
-                status, fetched = connection.fetch(message_id, "(RFC822)")
+                if self._stop_requested.is_set():
+                    break
+                # RFC822/BODY[] may set \Seen merely by fetching. PEEK keeps
+                # the message unread until policy handling/callback succeeds.
+                status, fetched = connection.fetch(message_id, "(BODY.PEEK[])")
                 if status != "OK" or not fetched:
                     continue
                 raw = next((item[1] for item in fetched if isinstance(item, tuple)), b"")
@@ -1947,24 +2267,34 @@ class EmailAdapter:
                     "body": body,
                     "message_id": message.get("Message-ID"),
                 }
+                if not self._sender_allowed(sender):
+                    # Rejected mail is intentionally consumed so an untrusted
+                    # sender cannot occupy every poll forever.
+                    connection.store(message_id, "+FLAGS", "(\\Seen)")
+                    continue
                 if self._on_message is None:
                     continue
-                try:
-                    self._queue.put_nowait(
-                        InboundMessage(
-                            channel=self.name,
-                            event_type="email",
-                            payload=payload,
-                            reply_to=sender,
-                            source=self.name,
-                        )
+                work = _EmailWorkItem(
+                    InboundMessage(
+                        channel=self.name,
+                        event_type="email",
+                        payload=payload,
+                        reply_to=sender,
+                        source=self.name,
                     )
+                )
+                try:
+                    self._queue.put_nowait(work)
                 except queue.Full:
                     # Ne pas marquer le message : il sera repris au prochain poll.
                     continue
-                # L'acceptation dans la file est durable pour le cycle du
-                # channel ; Seen ne doit avancer qu'après cette acceptation.
-                connection.store(message_id, "+FLAGS", "(\\Seen)")
+                # Queue admission alone is not durable. Wait until the
+                # callback completes before acknowledging the IMAP message.
+                work.done.wait()
+                if work.succeeded:
+                    connection.store(message_id, "+FLAGS", "(\\Seen)")
+                if self._stop_requested.is_set():
+                    break
         finally:
             try:
                 connection.logout()
@@ -1979,6 +2309,9 @@ class EmailAdapter:
                     return part.get_content()
         return message.get_content() if message.get_content_type() == "text/plain" else ""
 
+    def _sender_allowed(self, sender: str) -> bool:
+        return sender.strip().lower() in self.allowed_senders
+
     def send(self, output: AgentOutput) -> None:
         recipient = output.recipient or output.metadata.get("reply_to")
         if not recipient:
@@ -1987,7 +2320,7 @@ class EmailAdapter:
         if "\r" in recipient or "\n" in recipient:
             raise RuntimeError("Destinataire email invalide.")
         display, address = parseaddr(recipient)
-        if not address or "@" not in address or (display and address != recipient and not recipient.endswith(f">")):
+        if not address or "@" not in address or (display and address != recipient and not recipient.endswith(">")):
             raise RuntimeError("Destinataire email invalide.")
         domain = address.rsplit("@", 1)[1].lower()
         if self.allowed_recipient_domains and domain not in self.allowed_recipient_domains:
@@ -2012,13 +2345,15 @@ class EmailAdapter:
         if self._thread is not None:
             self._thread.join(timeout=max(2.0, self.poll_interval + 1.0))
             self._thread = None
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+        # Polling is quiesced first. Drain every item already admitted to the
+        # worker before asking the worker itself to exit.
         if self._worker is not None:
-            self._worker.join(timeout=2.0)
+            self._queue.join()
+            self._queue.put(None)
+            if self._worker is not threading.current_thread():
+                self._worker.join(timeout=2.0)
             self._worker = None
+        self._on_message = None
 
 
 class DiscordWebhookAdapter:

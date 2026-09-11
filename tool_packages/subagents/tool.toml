@@ -1,0 +1,46 @@
+id = "orion.subagents"
+name = "Subagents"
+version = "1.0.0"
+kind = "module"
+description = "Active les workers IA persistants et la delegation asynchrone."
+api_version = 1
+
+[policy]
+classification = "side_effect"
+explicit_enable = true
+
+[guidance]
+summary = "Ajoute la delegation asynchrone vers des sous-agents persistants."
+instructions = "Delegue un travail borne qui peut avancer independamment. Donne au sous-agent le contexte minimal necessaire et attends ses evenements de progression ou de terminaison au lieu de dupliquer son travail."
+constraints = [
+  "Ne delegue pas une demande triviale que le runtime principal peut traiter immediatement.",
+  "Les sous-agents ne doivent utiliser que les capabilities explicitement autorisees par leur plafond de tools."
+]
+
+[configuration]
+section = "subagents"
+table = "subagents"
+
+[[configuration.fields]]
+key = "workers"
+label = "Nombre de workers sous-agents"
+type = "integer"
+default = 3
+
+[[configuration.fields]]
+key = "default_model"
+label = "Modele par defaut"
+type = "string"
+default = "deepseek/deepseek-v4-flash-0731"
+
+[[configuration.fields]]
+key = "default_max_turns"
+label = "Nombre maximal de tours par job"
+type = "integer"
+default = 8
+
+[[configuration.fields]]
+key = "emit_progress_events"
+label = "Emettre les evenements de progression"
+type = "boolean"
+default = false

@@ -21,6 +21,11 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - dependency is optional at import time
+    load_dotenv = None  # type: ignore[assignment]
+
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
     value = data.get(name, {})
@@ -59,6 +64,9 @@ class EventConfig:
     default_max_attempts: int = 3
     retry_delay: float = 1.0
     retry_backoff: float = 2.0
+    dedupe_ttl: float = 86400.0
+    dedupe_max_entries: int = 10000
+    durable_path: str | None = None
 
 
 @dataclass
@@ -70,19 +78,18 @@ class RuntimeConfig:
     queue_events_during_run: bool = True
     wake_on_subagent_progress: bool = False
     max_deferred_events: int = 10000
+    durable_path: str | None = None
 
 
 @dataclass
 class SubAgentConfig:
     """Workers IA persistants, indépendants du runtime principal."""
 
-    enabled: bool = True
+    enabled: bool = False
     state_path: str = "data/subagents.json"
     workers: int = 3
     default_model: str | None = "deepseek/deepseek-v4-flash-0731"
-    default_tools: list[str] = field(
-        default_factory=lambda: ["web_search", "web_fetch", "fetch_url", "fetch_json_api"]
-    )
+    default_tools: list[str] = field(default_factory=list)
     default_max_turns: int = 8
     max_context_chars: int = 16000
     max_result_chars: int = 24000
@@ -127,7 +134,7 @@ class ReflectionConfig:
 
 @dataclass
 class SchedulerConfig:
-    enabled: bool = True
+    enabled: bool = False
     poll_interval: float = 1.0
     schedules_path: str = "data/schedules.json"
 
@@ -138,8 +145,8 @@ class PromptConfig:
     context_path: str = "data/prompt_context.json"
     journal_path: str = "data/conversations.jsonl"
     history_enabled: bool = True
-    history_limit: int = 20
-    history_max_chars: int = 12000
+    history_limit: int = 2000
+    history_max_chars: int = 140000
     personality: str | None = None
     methodology: str | None = None
     additional: str = ""
@@ -154,8 +161,8 @@ class ContextConfig:
     compaction_enabled: bool = True
     llm_compaction_enabled: bool = False
     compactor_model: str = "openai/gpt-4o-mini"
-    total_max_chars: int = 60000
-    total_max_tokens: int = 12000
+    total_max_chars: int = 200000
+    total_max_tokens: int = 48000
     output_reserve_tokens: int = 3000
     compactor_input_chars: int = 30000
     cache_size: int = 64
@@ -163,22 +170,22 @@ class ContextConfig:
     task_max_tokens: int = 3000
     event_max_chars: int = 10000
     event_max_tokens: int = 3000
-    history_max_chars: int = 10000
+    history_max_chars: int = 140000
     policy_max_chars: int = 12000
     policy_max_tokens: int = 3000
     request_max_chars: int = 8000
     request_max_tokens: int = 2000
     profile_memory_max_chars: int = 4000
     profile_memory_max_tokens: int = 1000
-    history_max_tokens: int = 2500
+    history_max_tokens: int = 30000
     notifications_tools_max_chars: int = 8000
     notifications_tools_max_tokens: int = 2000
     reflection_max_chars: int = 2000
     reflection_max_tokens: int = 500
-    history_turn_limit: int = 20
+    history_turn_limit: int = 2000
     reflection_enabled: bool = True
     reflection_format: str = "advisory_json"
-    redaction_enabled: bool = True
+    redaction_enabled: bool = False
     token_counter: str = "fallback"
 
 
@@ -211,7 +218,16 @@ class LedgerConfig:
 
 
 @dataclass
+class ApprovalConfig:
+    """Per-call human approval policy for privileged tools."""
+
+    enabled: bool = False
+    path: str = "data/approvals.sqlite3"
+
+
+@dataclass
 class TaskConfig:
+    enabled: bool = False
     path: str = "data/tasks.json"
 
 
@@ -230,6 +246,7 @@ class ToolsConfig:
 class ChannelConfig:
     enabled: list[str] = field(default_factory=list)
     default: str | None = None
+    ledger_path: str = "data/communication_ledger.sqlite3"
     settings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -260,6 +277,9 @@ class GatewayConfig:
 
 
 CONFIG_VERSION = 2
+TASKS_MODULE_ID = "orion.tasks"
+SUBAGENTS_MODULE_ID = "orion.subagents"
+TEAM_MODULE_ID = "orion.team"
 
 
 @dataclass
@@ -282,6 +302,7 @@ class OrionConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     context_os: ContextOSConfig = field(default_factory=ContextOSConfig)
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
+    approvals: ApprovalConfig = field(default_factory=ApprovalConfig)
     tasks: TaskConfig = field(default_factory=TaskConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     channels: ChannelConfig = field(default_factory=ChannelConfig)
@@ -290,6 +311,8 @@ class OrionConfig:
     @classmethod
     def from_file(cls, path: str | Path = "orion.toml") -> OrionConfig:
         source = Path(path)
+        if load_dotenv is not None:
+            load_dotenv(source.parent / ".env", override=False)
         with source.open("rb") as handle:
             data = _expand(tomllib.load(handle))
         if not isinstance(data, dict):
@@ -316,10 +339,35 @@ class OrionConfig:
         memory = _section(data, "memory")
         context_os = _section(data, "context_os")
         ledger = _section(data, "ledger")
+        approvals = _section(data, "approvals")
         tasks = _section(data, "tasks")
         tools = _section(data, "tools")
         channels = _section(data, "channels")
         gateway = _section(data, "gateway")
+
+        # Public web/files callables were consolidated in config vNext.  Keep
+        # old operator configs useful without re-registering the legacy model
+        # tool names: migrate the known read-only families to their new
+        # capability names and preserve ordering for any unrelated custom
+        # tools.
+        legacy_subagent_tool_names = {
+            "web_search": "web",
+            "web_fetch": "web",
+            "fetch_url": "web",
+            "fetch_json_api": "web",
+            "list_files": "files",
+            "read_file": "files",
+            "search_files": "files",
+        }
+        configured_subagent_tools = subagents.get("default_tools")
+        if isinstance(configured_subagent_tools, list):
+            migrated_tools: list[Any] = []
+            for raw_name in configured_subagent_tools:
+                name = legacy_subagent_tool_names.get(raw_name, raw_name)
+                if name not in migrated_tools:
+                    migrated_tools.append(name)
+            subagents["default_tools"] = migrated_tools
+
         for key in ("auth_token", "hmac_secret", "token", "password", "api_key", "secret"):
             if key in gateway and gateway[key] not in (None, ""):
                 raise ValueError(f"gateway.{key} est interdit; utilisez *_env sans secret en clair.")
@@ -359,6 +407,7 @@ class OrionConfig:
             memory=MemoryConfig(**{key: value for key, value in memory.items() if key in MemoryConfig.__dataclass_fields__}),
             context_os=ContextOSConfig(**{key: value for key, value in context_os.items() if key in ContextOSConfig.__dataclass_fields__}),
             ledger=LedgerConfig(**{key: value for key, value in ledger.items() if key in LedgerConfig.__dataclass_fields__}),
+            approvals=ApprovalConfig(**{key: value for key, value in approvals.items() if key in ApprovalConfig.__dataclass_fields__}),
             tasks=TaskConfig(**{key: value for key, value in tasks.items() if key in TaskConfig.__dataclass_fields__}),
             tools=ToolsConfig(
                 **{
@@ -371,6 +420,16 @@ class OrionConfig:
             channels=ChannelConfig(
                 enabled=[str(item) for item in enabled_channels],
                 default=str(channels["default"]) if channels.get("default") else None,
+                # ``gateway.ledger_path`` was the historical home of the
+                # communication DB.  Honor it as a compatibility fallback,
+                # while making the shared channel outbox configurable even
+                # when the top-level gateway itself is disabled.
+                ledger_path=str(
+                    channels.get(
+                        "ledger_path",
+                        gateway.get("ledger_path", "data/communication_ledger.sqlite3"),
+                    )
+                ),
                 settings=channel_settings,
             ),
             gateway=GatewayConfig(
@@ -422,11 +481,19 @@ class OrionConfig:
         integer(self.events.default_max_attempts, "events.default_max_attempts", 1)
         number(self.events.retry_delay, "events.retry_delay")
         number(self.events.retry_backoff, "events.retry_backoff", 1.0)
+        number(self.events.dedupe_ttl, "events.dedupe_ttl")
+        integer(self.events.dedupe_max_entries, "events.dedupe_max_entries", 1)
+        if self.events.durable_path is not None:
+            text(self.events.durable_path, "events.durable_path")
         integer(self.runtime.max_turns, "runtime.max_turns", 1)
         integer(self.runtime.wake_queue_size, "runtime.wake_queue_size")
         number(self.runtime.dedupe_window, "runtime.dedupe_window")
+        if self.runtime.durable_path is not None:
+            text(self.runtime.durable_path, "runtime.durable_path")
 
         text(self.teams.path, "teams.path")
+        if not isinstance(self.teams.enabled, bool):
+            raise ValueError("teams.enabled doit etre un booléen.")
         instance_id = text(self.teams.instance_id, "teams.instance_id")
         team = text(self.teams.team, "teams.team")
         if "*" in instance_id or "*" in team:
@@ -435,6 +502,8 @@ class OrionConfig:
         integer(self.teams.max_message_chars, "teams.max_message_chars", 1)
 
         integer(self.subagents.workers, "subagents.workers", 1)
+        if not isinstance(self.subagents.enabled, bool):
+            raise ValueError("subagents.enabled doit etre un booléen.")
         integer(self.subagents.default_max_turns, "subagents.default_max_turns", 1)
         for label, value in (
             ("subagents.max_context_chars", self.subagents.max_context_chars),
@@ -456,6 +525,8 @@ class OrionConfig:
         number(self.reflection.temperature, "reflection.temperature")
         text(self.reflection.prompt_path, "reflection.prompt_path")
         number(self.scheduler.poll_interval, "scheduler.poll_interval", strict=True)
+        if not isinstance(self.scheduler.enabled, bool):
+            raise ValueError("scheduler.enabled doit etre un booléen.")
         text(self.scheduler.schedules_path, "scheduler.schedules_path")
 
         for label, value in (
@@ -531,11 +602,16 @@ class OrionConfig:
         self._run_time()
 
         text(self.ledger.path, "ledger.path")
+        if not isinstance(self.approvals.enabled, bool):
+            raise ValueError("approvals.enabled doit etre un bool?en.")
+        text(self.approvals.path, "approvals.path")
         text(self.context_os.registry_path, "context_os.registry_path")
         text(self.context_os.journal_path, "context_os.journal_path")
         text(self.context_os.memory_path, "context_os.memory_path")
         text(self.context_os.memory_namespace, "context_os.memory_namespace")
         text(self.context_os.state_path, "context_os.state_path")
+        if not isinstance(self.tasks.enabled, bool):
+            raise ValueError("tasks.enabled doit etre un booléen.")
         text(self.tasks.path, "tasks.path")
         text(self.tools.directory, "tools.directory")
         text(self.tools.state_path, "tools.state_path")
@@ -548,6 +624,7 @@ class OrionConfig:
             not isinstance(item, str) or not item.strip() for item in self.channels.enabled
         ):
             raise ValueError("channels.enabled doit etre une liste de noms non vides.")
+        text(self.channels.ledger_path, "channels.ledger_path")
         if self.channels.default is not None:
             default = text(self.channels.default, "channels.default")
             if default not in self.channels.enabled and not (
@@ -605,6 +682,11 @@ class OrionConfig:
                 raise ValueError("channels.telegram.accept_edited doit etre un booléen.")
             if "bootstrap_owner" in telegram_settings and not isinstance(telegram_settings["bootstrap_owner"], bool):
                 raise ValueError("channels.telegram.bootstrap_owner doit etre un booléen.")
+            if "bootstrap_pairing_secret_env" in telegram_settings:
+                text(
+                    telegram_settings["bootstrap_pairing_secret_env"],
+                    "channels.telegram.bootstrap_pairing_secret_env",
+                )
             if "poll_timeout" in telegram_settings:
                 integer(telegram_settings["poll_timeout"], "channels.telegram.poll_timeout")
             if "api_timeout" in telegram_settings:
@@ -630,6 +712,20 @@ class OrionConfig:
             integer(max_chars, "channels.telegram.max_message_chars", 500)
             if max_chars > 4096:
                 raise ValueError("channels.telegram.max_message_chars ne peut pas depasser 4096.")
+        email_settings = self.channels.settings.get("email")
+        if email_settings is not None:
+            if not isinstance(email_settings, dict):
+                raise ValueError("channels.email doit etre une table TOML.")
+            for key in ("allowed_senders", "allowed_recipient_domains"):
+                if key not in email_settings:
+                    continue
+                values = email_settings[key]
+                if not isinstance(values, list) or any(
+                    not isinstance(item, str) or not item.strip() for item in values
+                ):
+                    raise ValueError(
+                        f"channels.email.{key} doit etre une liste de valeurs non vides."
+                    )
         text(self.gateway.host, "gateway.host")
         integer(self.gateway.port, "gateway.port", 1)
         if self.gateway.port > 65535:
@@ -668,6 +764,14 @@ class OrionConfig:
         for channel_name, settings in self.channels.settings.items():
             if channel_name not in {"web", "api", "webhook"} or settings.get("enabled", True) is False:
                 continue
+            source_allowlist = settings.get("allowlist", [])
+            if not isinstance(source_allowlist, list) or any(
+                not isinstance(item, str) or not item.strip()
+                for item in source_allowlist
+            ):
+                raise ValueError(
+                    f"channels.{channel_name}.allowlist doit etre une liste de sources non vides."
+                )
             if not settings.get("auth_token_env") and not settings.get("allowlist"):
                 raise ValueError("Un webhook active doit declarer auth_token_env ou allowlist.")
         return self
@@ -691,7 +795,13 @@ class OrionConfig:
         except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError("memory.run_at doit etre au format HH:MM.") from exc
 
-    def _configure_channels(self, router: Any, *, usage_ledger: Any = None) -> None:
+    def _configure_channels(
+        self,
+        router: Any,
+        *,
+        usage_ledger: Any = None,
+        communication_ledger: Any = None,
+    ) -> None:
         from channel_adapters import (
             CLIAdapter,
             DiscordWebhookAdapter,
@@ -723,6 +833,12 @@ class OrionConfig:
                 )
             elif name == "telegram":
                 token = secret_from_env(str(settings.get("token_env", "TELEGRAM_BOT_TOKEN")))
+                pairing_secret_env = settings.get("bootstrap_pairing_secret_env")
+                pairing_secret = (
+                    secret_from_env(str(pairing_secret_env))
+                    if pairing_secret_env is not None
+                    else None
+                )
                 router.register(
                     TelegramAdapter(
                         token,
@@ -732,6 +848,7 @@ class OrionConfig:
                         allow_all_chats=bool(settings.get("allow_all_chats", False)),
                         accept_edited=bool(settings.get("accept_edited", False)),
                         bootstrap_owner=bool(settings.get("bootstrap_owner", True)),
+                        bootstrap_pairing_secret=pairing_secret,
                         owner_path=(
                             self.path(str(settings["owner_path"]))
                             if "owner_path" in settings and settings.get("owner_path")
@@ -755,6 +872,7 @@ class OrionConfig:
                         retry_backoff=float(settings.get("retry_backoff", 0.5)),
                         retry_max_delay=float(settings.get("retry_max_delay", 30.0)),
                         queue_size=int(settings.get("queue_size", 1000)),
+                        ledger=communication_ledger,
                     )
                 )
             elif name == "email":
@@ -771,6 +889,13 @@ class OrionConfig:
                         poll_interval=float(settings.get("poll_interval", 60.0)),
                         subject=str(settings.get("subject", "Orion")),
                         smtp_starttls=bool(settings.get("smtp_starttls", False)),
+                        # Legacy/manual configs may omit the field.  Keep them
+                        # parseable, but make the runtime default explicit and
+                        # fail-closed instead of restoring historical accept-all.
+                        allowed_senders=settings.get("allowed_senders", ()),
+                        allowed_recipient_domains=settings.get(
+                            "allowed_recipient_domains", ()
+                        ),
                     )
                 )
             elif name == "discord":
@@ -792,12 +917,14 @@ class OrionConfig:
                         auth_token=auth_token,
                         outbound_url=outbound_url,
                         replay_window=float(settings.get("replay_window", 300.0)),
+                        allowlist=settings.get("allowlist", ()),
+                        ledger=communication_ledger,
                     )
                 )
             else:
                 raise ValueError(f"Aucun adaptateur fourni pour le channel configure : {name}")
 
-    def _configure_gateway(self, router: Any) -> Any | None:
+    def _configure_gateway(self, router: Any, *, ledger: Any = None) -> Any | None:
         """Register the top-level ``[gateway]`` adapter when enabled.
 
         The communication ledger belongs to the application lifetime.  Return
@@ -815,7 +942,9 @@ class OrionConfig:
             auth_token = secret_from_env(self.gateway.auth_token_env)
         else:
             hmac_secret = secret_from_env(self.gateway.hmac_secret_env or "ORION_GATEWAY_HMAC_SECRET")
-        ledger = CommunicationLedger(self.path(self.gateway.ledger_path))
+        owns_ledger = ledger is None
+        if ledger is None:
+            ledger = CommunicationLedger(self.path(self.channels.ledger_path))
         try:
             router.register(
                 HttpWebhookAdapter(
@@ -836,15 +965,40 @@ class OrionConfig:
                 )
             )
         except Exception:
-            ledger.close()
+            if owns_ledger:
+                ledger.close()
             raise
         return ledger
+
+    def _effective_tool_settings(self) -> dict[str, dict[str, Any]]:
+        """Resolve Orion-owned compatibility semantics before plugins load.
+
+        Tool packages can evolve independently from the core.  ``orion.web``
+        historically documents ``provider = \"auto\"`` as Tavily when its API
+        key exists, otherwise the public HTTP fallback.  Newer installed
+        versions may instead interpret ``auto`` as "start Selenium first".
+        Resolve the value here so installing/updating a package cannot silently
+        launch Chrome for an ordinary web search.  Selenium remains available
+        only when the operator explicitly configures ``provider = \"browser\"``.
+        """
+        settings = {
+            str(name): dict(value)
+            for name, value in self.tools.settings.items()
+            if isinstance(value, dict)
+        }
+        web = settings.get("web")
+        if isinstance(web, dict) and str(web.get("provider", "auto")).strip().lower() == "auto":
+            env_name = str(web.get("api_key_env", "TAVILY_API_KEY")).strip() or "TAVILY_API_KEY"
+            web["provider"] = "tavily" if os.getenv(env_name, "").strip() else "public"
+        return settings
 
     def build(self) -> OrionApplication:
         """Construit Orion et toutes ses dependances a partir de la config."""
         self.validate()
         from action_ledger import ActionLedger
+        from approvals import ApprovalStore
         from channels import ChannelRouter
+        from communication_ledger import CommunicationLedger
         from event_handler import EventHandler
         from openrouter_client import OpenRouterClient
         from context_assembler import ContextAssembler, ContextPolicy
@@ -877,6 +1031,13 @@ class OrionConfig:
             default_max_attempts=self.events.default_max_attempts,
             retry_delay=self.events.retry_delay,
             retry_backoff=self.events.retry_backoff,
+            dedupe_ttl=self.events.dedupe_ttl,
+            dedupe_max_entries=self.events.dedupe_max_entries,
+            durable_path=(
+                self.path(self.events.durable_path)
+                if self.events.durable_path is not None
+                else None
+            ),
         )
         prompt_store = PromptContextStore(
             self.path(self.prompt.context_path),
@@ -966,23 +1127,72 @@ class OrionConfig:
             **({"memory_store": retrieval_store, "memory_namespace": self.context_os.memory_namespace,
                 "context_registry": context_registry} if self.context_os.enabled else {})
         )
+        effective_tool_settings = self._effective_tool_settings()
         tool_manager = ToolManager(
             self.path(self.tools.directory),
             state_path=self.path(self.tools.state_path),
             root_dir=self.base_dir,
+            bundled_dir=Path(__file__).resolve().with_name("tool_packages"),
             config={
                 "enabled": self.tools.enabled,
                 "disabled": self.tools.disabled,
-                **self.tools.settings,
+                **effective_tool_settings,
+                "_core": {
+                    "tasks": dict(vars(self.tasks)),
+                    "scheduler": dict(vars(self.scheduler)),
+                    "subagents": dict(vars(self.subagents)),
+                    "teams": dict(vars(self.teams)),
+                },
             },
         )
         # Only guidance from tools that were actually loaded (and therefore
         # enabled by the configured allow/deny lists) is exposed to the
         # runtime.  ToolManager resets this mapping on every load_all call.
-        tool_manager.load_all(llm)
+        loaded_manifests = tool_manager.load_all(llm)
         tool_guidance = tool_manager.loaded_guidance()
+        tool_policy = tool_manager.tool_policy()
+        tool_policy.set_approvals_enabled(self.approvals.enabled)
+        active_modules = {
+            manifest.id for manifest in loaded_manifests if manifest.kind == "module"
+        }
+        disabled_modules = set(self.tools.disabled)
+
+        def module_or_legacy(module_id: str, legacy_enabled: bool) -> bool:
+            if module_id in disabled_modules:
+                return False
+            return module_id in active_modules or bool(legacy_enabled)
+
+        tasks_enabled = module_or_legacy(
+            TASKS_MODULE_ID,
+            self.tasks.enabled or self.scheduler.enabled,
+        )
+        scheduler_enabled = module_or_legacy(TASKS_MODULE_ID, self.scheduler.enabled)
+        subagents_enabled = module_or_legacy(SUBAGENTS_MODULE_ID, self.subagents.enabled)
+        team_enabled = module_or_legacy(TEAM_MODULE_ID, self.teams.enabled)
+        runtime_surfaces: set[str] = set()
+        if tasks_enabled:
+            runtime_surfaces.add("task")
+        if subagents_enabled:
+            runtime_surfaces.add("subagent")
+        if team_enabled:
+            runtime_surfaces.add("team")
+        # Deferred-event acknowledgement is only model-visible when at least
+        # one runtime capability is active. A truly empty Orion therefore
+        # exposes no runtime tools at all.
+        if runtime_surfaces:
+            runtime_surfaces.add("event")
+        approval_store = (
+            ApprovalStore(self.path(self.approvals.path))
+            if self.approvals.enabled
+            else None
+        )
+        # Runtime and sub-agents must share the exact same durable action
+        # ledger.  Besides avoiding duplicate ownership/SQLite connections,
+        # this ensures a custom [ledger].path protects side effects uniformly
+        # across both execution paths.
+        action_ledger = ActionLedger(self.path(self.ledger.path))
         subagent_manager = None
-        if self.subagents.enabled:
+        if subagents_enabled:
             subagent_manager = SubAgentManager(
                 llm,
                 events,
@@ -998,9 +1208,11 @@ class OrionConfig:
                 max_session_messages=self.subagents.max_session_messages,
                 history_limit=self.subagents.history_limit,
                 emit_progress_events=self.subagents.emit_progress_events,
+                tool_policy=tool_policy,
+                action_ledger=action_ledger,
             )
         team_bus = None
-        if self.teams.enabled:
+        if team_enabled:
             team_bus = TeamBus(
                 self.path(self.teams.path),
                 instance_id=self.teams.instance_id,
@@ -1034,62 +1246,96 @@ class OrionConfig:
                 max_input_chars=self.reflection.max_input_chars,
                 max_output_chars=self.reflection.max_output_chars,
                 temperature=self.reflection.temperature,
+                reflection_format=self.context.reflection_format,
             )
         scheduler = None
-        if self.scheduler.enabled:
+        if scheduler_enabled:
             scheduler = Scheduler(
                 events,
                 store=JsonScheduleStore(self.path(self.scheduler.schedules_path)),
                 poll_interval=self.scheduler.poll_interval,
             )
+        # One application-owned communication ledger backs every channel's
+        # inbound dedupe where supported and, critically, the router's durable
+        # outbound outbox.  It exists even when [gateway] is disabled.
+        communication_ledger = CommunicationLedger(self.path(self.channels.ledger_path))
         channel_router = ChannelRouter(
             events,
             default_channel=self.channels.default or ("gateway" if self.gateway.enabled else None),
+            ledger=communication_ledger,
         )
-        self._configure_channels(channel_router, usage_ledger=getattr(llm, "usage_ledger", None))
-        gateway_ledger = self._configure_gateway(channel_router)
-        runtime = AgentRuntime(
-            llm_client=llm,
-            task_store=JsonTaskStore(self.path(self.tasks.path)),
-            scheduler=scheduler,
-            subagent_manager=subagent_manager,
-            team_bus=team_bus,
-            action_ledger=ActionLedger(self.path(self.ledger.path)),
-            max_turns=self.runtime.max_turns,
-            wake_queue_size=self.runtime.wake_queue_size,
-            dedupe_window=self.runtime.dedupe_window,
-            parallel_tool_calls=self.runtime.parallel_tool_calls,
-            queue_events_during_run=self.runtime.queue_events_during_run,
-            wake_on_subagent_progress=self.runtime.wake_on_subagent_progress,
-            max_deferred_events=self.runtime.max_deferred_events,
-            response_max_chars=self.response.max_chars,
-            response_max_sentences=self.response.max_sentences,
-            response_concise=self.response.concise,
-            reflection_engine=reflection_engine if self.context.reflection_enabled else None,
-            prompt_store=prompt_store,
-            conversation_journal=journal,
-            history_enabled=self.prompt.history_enabled,
-            history_limit=self.prompt.history_limit,
-            history_max_chars=self.prompt.history_max_chars,
-            context_assembler=context_assembler,
-            task_context_max_chars=self.context.task_max_chars,
-            event_context_max_chars=self.context.event_max_chars,
-            context_mode=self.context.context_mode,
-            tool_guidance=tool_guidance,
-            thread_state_store=thread_state_store,
-            context_registry=context_registry,
-            retrieval_store=retrieval_store,
-            memory_maintenance=maintenance,
-            on_output=channel_router.route,
-        ).attach(events)
+        try:
+            self._configure_channels(
+                channel_router,
+                usage_ledger=getattr(llm, "usage_ledger", None),
+                communication_ledger=communication_ledger,
+            )
+            gateway_ledger = self._configure_gateway(
+                channel_router,
+                ledger=communication_ledger,
+            )
+            runtime = AgentRuntime(
+                llm_client=llm,
+                task_store=(JsonTaskStore(self.path(self.tasks.path)) if tasks_enabled else None),
+                scheduler=scheduler,
+                subagent_manager=subagent_manager,
+                team_bus=team_bus,
+                action_ledger=action_ledger,
+                tool_policy=tool_policy,
+                approval_store=approval_store,
+                max_turns=self.runtime.max_turns,
+                wake_queue_size=self.runtime.wake_queue_size,
+                dedupe_window=self.runtime.dedupe_window,
+                parallel_tool_calls=self.runtime.parallel_tool_calls,
+                queue_events_during_run=self.runtime.queue_events_during_run,
+                wake_on_subagent_progress=self.runtime.wake_on_subagent_progress,
+                max_deferred_events=self.runtime.max_deferred_events,
+                durable_path=(
+                    self.path(self.runtime.durable_path)
+                    if self.runtime.durable_path is not None
+                    else None
+                ),
+                response_max_chars=self.response.max_chars,
+                response_max_sentences=self.response.max_sentences,
+                response_concise=self.response.concise,
+                reflection_engine=reflection_engine if self.context.reflection_enabled else None,
+                prompt_store=prompt_store,
+                conversation_journal=journal,
+                history_enabled=self.prompt.history_enabled,
+                history_limit=self.prompt.history_limit,
+                history_max_chars=self.prompt.history_max_chars,
+                context_assembler=context_assembler,
+                task_context_max_chars=self.context.task_max_chars,
+                event_context_max_chars=self.context.event_max_chars,
+                context_mode=self.context.context_mode,
+                tool_guidance=tool_guidance,
+                runtime_surfaces=sorted(runtime_surfaces),
+                thread_state_store=thread_state_store,
+                context_registry=context_registry,
+                retrieval_store=retrieval_store,
+                memory_maintenance=maintenance,
+                on_output=channel_router.route,
+            ).attach(events)
+            if subagent_manager is not None and self.approvals.enabled:
+                # Optional strict mode: privileged worker calls are brokered by
+                # the parent Orion runtime and require an operator decision.
+                subagent_manager.tool_approval_broker = (
+                    runtime._subagent_tool_approval_broker
+                )
+                runtime._reconcile_subagent_approval_decisions()
+        except Exception:
+            communication_ledger.close()
+            raise
         return OrionApplication(
             events=events,
             llm=llm,
             runtime=runtime,
+            tool_manager=tool_manager,
             scheduler=scheduler,
             subagents=subagent_manager,
             team_bus=team_bus,
             channels=channel_router,
+            communication_ledger=communication_ledger,
             gateway_ledger=gateway_ledger,
         )
 
@@ -1101,14 +1347,46 @@ class OrionApplication:
     events: Any
     llm: Any
     runtime: Any
+    tool_manager: Any = None
     scheduler: Any = None
     subagents: Any = None
     team_bus: Any = None
     channels: Any = None
+    communication_ledger: Any = None
     gateway_ledger: Any = None
     _lifecycle_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
     _started: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def task_store(self) -> Any:
+        """Expose the runtime task store without duplicating ownership."""
+        return getattr(self.runtime, "task_store", None)
+
+    @property
+    def context_registry(self) -> Any:
+        """Expose the optional Context OS registry owned by the runtime."""
+        return getattr(self.runtime, "context_registry", None)
+
+    @property
+    def retrieval_store(self) -> Any:
+        """Expose the optional retrieval/memory store owned by the runtime."""
+        return getattr(self.runtime, "retrieval_store", None)
+
+    @property
+    def conversation_journal(self) -> Any:
+        """Expose the conversation journal owned by the runtime."""
+        return getattr(self.runtime, "conversation_journal", None)
+
+    @property
+    def usage_ledger(self) -> Any:
+        """Expose the LLM usage ledger as the canonical cost/usage source."""
+        return getattr(self.llm, "usage_ledger", None)
+
+    @property
+    def approval_store(self) -> Any:
+        """Expose the runtime-owned approval store without duplicating ownership."""
+        return getattr(self.runtime, "approval_store", None)
 
     def start(self) -> OrionApplication:
         with self._lifecycle_lock:
@@ -1142,8 +1420,20 @@ class OrionApplication:
                         component.stop()
                     except Exception:
                         pass
-                if self.gateway_ledger is not None:
-                    self.gateway_ledger.close()
+                closed_resources: set[int] = set()
+                for resource in (
+                    self.scheduler,
+                    self.subagents,
+                    self.communication_ledger,
+                    self.gateway_ledger,
+                ):
+                    if resource is None or id(resource) in closed_resources:
+                        continue
+                    close = getattr(resource, "close", None)
+                    if callable(close):
+                        closed_resources.add(id(resource))
+                        close()
+                self._closed = True
                 raise
             self._started = True
         return self
@@ -1154,25 +1444,56 @@ class OrionApplication:
                 return
             self._closed = True
             self._started = False
-            # Arrêter d'abord les producteurs d'événements évite d'alimenter
-            # le runtime pendant son drain final. Le TeamBus reste ouvert
-            # jusqu'à la fin du runtime pour acquitter les événements déjà
-            # en file.
+            # Quiesce all producers first. EventHandler must then drain every
+            # event it already accepted while the runtime is still alive; only
+            # after that handoff is complete may the runtime perform its own
+            # final drain. Keep TeamBus open through the runtime drain so team
+            # deliveries already in flight can still be acknowledged.
             if self.channels is not None:
                 self.channels.stop()
             if self.scheduler is not None:
                 self.scheduler.stop()
-            if self.team_bus is not None:
-                self.team_bus.stop()
             if self.subagents is not None:
                 self.subagents.stop()
-            self.runtime.stop()
             if self.team_bus is not None:
-                self.team_bus.close()
+                self.team_bus.stop()
             self.events.stop()
-            self.llm.close()
-            if self.gateway_ledger is not None:
-                self.gateway_ledger.close()
+            self.runtime.stop()
+
+            closed_resources: set[int] = set()
+
+            def close_once(resource: Any) -> None:
+                if resource is None:
+                    return
+                resource_id = id(resource)
+                if resource_id in closed_resources:
+                    return
+                close = getattr(resource, "close", None)
+                if not callable(close):
+                    return
+                closed_resources.add(resource_id)
+                close()
+
+            # Runtime-owned stores must stay open until both EventHandler and
+            # the runtime have drained. Some configurations can reuse the same
+            # backing object for more than one role, so close by identity once.
+            for attribute in (
+                "action_ledger",
+                "approval_store",
+                "_durable_store",
+                "context_registry",
+                "retrieval_store",
+                "conversation_journal",
+            ):
+                close_once(getattr(self.runtime, attribute, None))
+
+            close_once(self.events)
+            close_once(self.team_bus)
+            close_once(self.scheduler)
+            close_once(self.subagents)
+            close_once(self.llm)
+            close_once(self.communication_ledger)
+            close_once(self.gateway_ledger)
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         """Demarre Orion et maintient le processus actif jusqu'a son arret."""
@@ -1193,6 +1514,7 @@ def load_orion(path: str | Path = "orion.toml") -> OrionApplication:
 
 __all__ = [
     "CONFIG_VERSION",
+    "ApprovalConfig",
     "EventConfig",
     "ChannelConfig",
     "GatewayConfig",

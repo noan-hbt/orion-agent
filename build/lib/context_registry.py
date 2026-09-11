@@ -4,6 +4,7 @@ The registry deliberately stores JSON payloads: callers can add fields without
 requiring a schema migration.  Revisions are checked in the same transaction
 as writes, making the API safe for concurrent workers.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,12 @@ class ConversationThread:
     scope: str = "global"
     data: dict[str, Any] = field(default_factory=dict)
     revision: int = 0
+
+    @property
+    def kind(self) -> str | None:
+        """Expose the normalized conversation kind without leaking storage details."""
+        value = self.data.get("kind")
+        return None if value is None else str(value)
 
 
 @dataclass(frozen=True)
@@ -82,59 +89,172 @@ class ContextRegistry:
     def _json(value: Mapping[str, Any] | None) -> str:
         return json.dumps(dict(value or {}), ensure_ascii=False, default=str)
 
-    def _write(self, table: str, key: tuple[str, str], fields: dict[str, Any], expected_revision: int | None):
-        where = " AND ".join(f"{k}=?" for k in ("id", "scope") if k in fields or k == "id")
+    def _write(
+        self,
+        table: str,
+        key: tuple[str, str],
+        fields: dict[str, Any],
+        expected_revision: int | None,
+    ):
         # key columns differ only for intent_states; this helper is used by the
         # principal/thread methods below, keeping SQL explicit and auditable.
         cols = list(fields)
         with self._lock, self._db:
-            row = self._db.execute(f"SELECT revision FROM {table} WHERE id=? AND scope=?", key).fetchone()
+            row = self._db.execute(
+                f"SELECT revision FROM {table} WHERE id=? AND scope=?", key
+            ).fetchone()
             current = None if row is None else int(row[0])
             if expected_revision is not None and current != int(expected_revision):
-                raise RevisionConflict(f"revision conflict (expected {expected_revision}, got {current})")
+                raise RevisionConflict(
+                    f"revision conflict (expected {expected_revision}, got {current})"
+                )
             rev = 0 if current is None else current + 1
             vals = [fields[c] for c in cols]
             if row is None:
-                self._db.execute(f"INSERT INTO {table}(id,scope,{','.join(cols)},revision) VALUES(?,?,{','.join('?' for _ in cols)},?)", (*key, *vals, rev))
+                self._db.execute(
+                    f"INSERT INTO {table}(id,scope,{','.join(cols)},revision) VALUES(?,?,{','.join('?' for _ in cols)},?)",
+                    (*key, *vals, rev),
+                )
             else:
-                self._db.execute(f"UPDATE {table} SET {','.join(c+'=?' for c in cols)},revision=? WHERE id=? AND scope=?", (*vals, rev, *key))
+                self._db.execute(
+                    f"UPDATE {table} SET {','.join(c + '=?' for c in cols)},revision=? WHERE id=? AND scope=?",
+                    (*vals, rev, *key),
+                )
             return rev
 
-    def upsert_principal(self, principal: Principal, *, expected_revision: int | None = None) -> Principal:
-        rev = self._write("principals", (principal.id, principal.scope), {"data": self._json(principal.data)}, expected_revision)
+    def upsert_principal(
+        self, principal: Principal, *, expected_revision: int | None = None
+    ) -> Principal:
+        rev = self._write(
+            "principals",
+            (principal.id, principal.scope),
+            {"data": self._json(principal.data)},
+            expected_revision,
+        )
         return Principal(principal.id, principal.scope, dict(principal.data), rev)
 
     def get_principal(self, id: str, scope: str = "global") -> Principal | None:
-        r = self._db.execute("SELECT * FROM principals WHERE id=? AND scope=?", (id, scope)).fetchone()
-        return None if r is None else Principal(r["id"], r["scope"], json.loads(r["data"]), r["revision"])
+        r = self._db.execute(
+            "SELECT * FROM principals WHERE id=? AND scope=?", (id, scope)
+        ).fetchone()
+        return (
+            None
+            if r is None
+            else Principal(r["id"], r["scope"], json.loads(r["data"]), r["revision"])
+        )
 
-    def upsert_thread(self, thread: ConversationThread, *, expected_revision: int | None = None) -> ConversationThread:
-        rev = self._write("conversation_threads", (thread.id, thread.scope), {"principal_id": thread.principal_id, "data": self._json(thread.data)}, expected_revision)
-        return ConversationThread(thread.id, thread.principal_id, thread.scope, dict(thread.data), rev)
+    def upsert_thread(
+        self, thread: ConversationThread, *, expected_revision: int | None = None
+    ) -> ConversationThread:
+        rev = self._write(
+            "conversation_threads",
+            (thread.id, thread.scope),
+            {"principal_id": thread.principal_id, "data": self._json(thread.data)},
+            expected_revision,
+        )
+        return ConversationThread(
+            thread.id, thread.principal_id, thread.scope, dict(thread.data), rev
+        )
 
     def get_thread(self, id: str, scope: str = "global") -> ConversationThread | None:
-        r = self._db.execute("SELECT * FROM conversation_threads WHERE id=? AND scope=?", (id, scope)).fetchone()
-        return None if r is None else ConversationThread(r["id"], r["principal_id"], r["scope"], json.loads(r["data"]), r["revision"])
+        r = self._db.execute(
+            "SELECT * FROM conversation_threads WHERE id=? AND scope=?", (id, scope)
+        ).fetchone()
+        return (
+            None
+            if r is None
+            else ConversationThread(
+                r["id"],
+                r["principal_id"],
+                r["scope"],
+                json.loads(r["data"]),
+                r["revision"],
+            )
+        )
 
-    def upsert_intent(self, state: IntentState, *, expected_revision: int | None = None) -> IntentState:
+    def upsert_intent(
+        self, state: IntentState, *, expected_revision: int | None = None
+    ) -> IntentState:
         with self._lock, self._db:
-            r = self._db.execute("SELECT revision FROM intent_states WHERE thread_id=? AND scope=?", (state.thread_id, state.scope)).fetchone()
+            r = self._db.execute(
+                "SELECT revision FROM intent_states WHERE thread_id=? AND scope=?",
+                (state.thread_id, state.scope),
+            ).fetchone()
             cur = None if r is None else int(r[0])
-            if expected_revision is not None and cur != int(expected_revision): raise RevisionConflict("revision conflict")
+            if expected_revision is not None and cur != int(expected_revision):
+                raise RevisionConflict("revision conflict")
             rev = 0 if cur is None else cur + 1
-            if r is None: self._db.execute("INSERT INTO intent_states VALUES(?,?,?,?,?)", (state.thread_id,state.scope,state.intent,self._json(state.data),rev))
-            else: self._db.execute("UPDATE intent_states SET intent=?,data=?,revision=? WHERE thread_id=? AND scope=?", (state.intent,self._json(state.data),rev,state.thread_id,state.scope))
-            return IntentState(state.thread_id,state.intent,state.scope,dict(state.data),rev)
+            if r is None:
+                self._db.execute(
+                    "INSERT INTO intent_states VALUES(?,?,?,?,?)",
+                    (
+                        state.thread_id,
+                        state.scope,
+                        state.intent,
+                        self._json(state.data),
+                        rev,
+                    ),
+                )
+            else:
+                self._db.execute(
+                    "UPDATE intent_states SET intent=?,data=?,revision=? WHERE thread_id=? AND scope=?",
+                    (
+                        state.intent,
+                        self._json(state.data),
+                        rev,
+                        state.thread_id,
+                        state.scope,
+                    ),
+                )
+            return IntentState(
+                state.thread_id, state.intent, state.scope, dict(state.data), rev
+            )
 
     def get_intent(self, thread_id: str, scope: str = "global") -> IntentState | None:
-        r=self._db.execute("SELECT * FROM intent_states WHERE thread_id=? AND scope=?",(thread_id,scope)).fetchone()
-        return None if r is None else IntentState(r["thread_id"],r["intent"],r["scope"],json.loads(r["data"]),r["revision"])
+        r = self._db.execute(
+            "SELECT * FROM intent_states WHERE thread_id=? AND scope=?",
+            (thread_id, scope),
+        ).fetchone()
+        return (
+            None
+            if r is None
+            else IntentState(
+                r["thread_id"],
+                r["intent"],
+                r["scope"],
+                json.loads(r["data"]),
+                r["revision"],
+            )
+        )
 
-    def bind_channel(self, channel: str, external_id: str, *, scope="global", principal_id=None, thread_id=None, data=None):
-        with self._lock, self._db: self._db.execute("INSERT INTO channel_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(channel,external_id,scope) DO UPDATE SET principal_id=excluded.principal_id,thread_id=excluded.thread_id,data=excluded.data",(channel,str(external_id),scope,principal_id,thread_id,self._json(data)))
+    def bind_channel(
+        self,
+        channel: str,
+        external_id: str,
+        *,
+        scope="global",
+        principal_id=None,
+        thread_id=None,
+        data=None,
+    ):
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO channel_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(channel,external_id,scope) DO UPDATE SET principal_id=excluded.principal_id,thread_id=excluded.thread_id,data=excluded.data",
+                (
+                    channel,
+                    str(external_id),
+                    scope,
+                    principal_id,
+                    thread_id,
+                    self._json(data),
+                ),
+            )
 
     def resolve_binding(self, channel: str, external_id: str, scope="global"):
-        r=self._db.execute("SELECT * FROM channel_bindings WHERE channel=? AND external_id=? AND scope=?",(channel,str(external_id),scope)).fetchone()
+        r = self._db.execute(
+            "SELECT * FROM channel_bindings WHERE channel=? AND external_id=? AND scope=?",
+            (channel, str(external_id), scope),
+        ).fetchone()
         return None if r is None else dict(r)
 
     def snapshot(self, *, limit: int = 100, scope: str | None = None) -> dict[str, Any]:
@@ -151,12 +271,24 @@ class ContextRegistry:
         with self._lock:
             params: tuple[Any, ...] = () if scope is None else (scope,)
             clause = "" if scope is None else " WHERE scope=?"
-            principals = self._db.execute(f"SELECT id,scope,data,revision FROM principals{clause} ORDER BY id LIMIT ?", (*params, n)).fetchall()
-            threads = self._db.execute(f"SELECT id,scope,principal_id,data,revision FROM conversation_threads{clause} ORDER BY id LIMIT ?", (*params, n)).fetchall()
-            intents = self._db.execute(f"SELECT thread_id,scope,intent,data,revision FROM intent_states{clause} ORDER BY thread_id LIMIT ?", (*params, n)).fetchall()
+            principals = self._db.execute(
+                f"SELECT id,scope,data,revision FROM principals{clause} ORDER BY id LIMIT ?",
+                (*params, n),
+            ).fetchall()
+            threads = self._db.execute(
+                f"SELECT id,scope,principal_id,data,revision FROM conversation_threads{clause} ORDER BY id LIMIT ?",
+                (*params, n),
+            ).fetchall()
+            intents = self._db.execute(
+                f"SELECT thread_id,scope,intent,data,revision FROM intent_states{clause} ORDER BY thread_id LIMIT ?",
+                (*params, n),
+            ).fetchall()
             bparams: tuple[Any, ...] = () if scope is None else (scope,)
             bclause = "" if scope is None else " WHERE scope=?"
-            bindings = self._db.execute(f"SELECT channel,external_id,scope,principal_id,thread_id,data FROM channel_bindings{bclause} ORDER BY channel,external_id LIMIT ?", (*bparams, n)).fetchall()
+            bindings = self._db.execute(
+                f"SELECT channel,external_id,scope,principal_id,thread_id,data FROM channel_bindings{bclause} ORDER BY channel,external_id LIMIT ?",
+                (*bparams, n),
+            ).fetchall()
 
         def payload(row: sqlite3.Row) -> dict[str, Any]:
             result = dict(row)
@@ -175,4 +307,10 @@ class ContextRegistry:
         }
 
 
-__all__ = ["ContextRegistry","Principal","ConversationThread","IntentState","RevisionConflict"]
+__all__ = [
+    "ContextRegistry",
+    "Principal",
+    "ConversationThread",
+    "IntentState",
+    "RevisionConflict",
+]

@@ -25,6 +25,15 @@ def test_retrieval_is_relevance_ranked_and_bounded():
         store.close()
 
 
+def test_nonempty_query_does_not_return_zero_relevance_memory():
+    store = MemoryStore()
+    try:
+        store.put("SSH rotation is scheduled Friday", namespace="u")
+        assert store.search("banana quantum zebra", namespace="u") == []
+    finally:
+        store.close()
+
+
 def test_assertions_and_forget_query():
     store = MemoryStore()
     try:

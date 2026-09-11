@@ -29,9 +29,15 @@ def _telegram_update(update_id=1, *, message_id=30, thread_id=None, text="hello"
 def test_duplicate_incoming_message_is_enqueued_once(tmp_path):
     adapter = TelegramAdapter("token", allowed_chat_ids=[10], offset_path=str(tmp_path / "offset"))
     updates = [_telegram_update(1), _telegram_update(2)]
-    adapter._api = lambda method, payload: {"ok": True, "result": updates} if method == "getUpdates" else {"ok": True}
+    def api(method, payload):
+        if method == "getUpdates":
+            adapter._stop_requested.set()
+            return {"ok": True, "result": updates}
+        return {"ok": True}
+
+    adapter._api = api
     adapter._on_message = lambda message: None
-    adapter._stop_requested.set()
+    adapter._stop_requested.clear()
     adapter._run()
     queued = []
     while not adapter._queue.empty():

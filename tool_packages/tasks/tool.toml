@@ -1,0 +1,34 @@
+id = "orion.tasks"
+name = "Tasks & Scheduler"
+version = "1.0.0"
+kind = "module"
+description = "Active les taches durables et le scheduler de reveils d'Orion."
+api_version = 1
+
+[policy]
+classification = "side_effect"
+explicit_enable = true
+
+[guidance]
+summary = "Ajoute le pilotage de taches persistantes et les reveils planifies."
+instructions = "Utilise les capacites de tache seulement pour un objectif qui merite un etat durable, un plan, une attente d'evenement ou un reveil futur. Une demande simple doit rester directe."
+constraints = [
+  "Ne cree pas de tache ou de schedule sans necessite operationnelle.",
+  "Preserve l'idempotence des actions et evite le polling lorsqu'une attente ou un reveil suffit."
+]
+
+[configuration]
+section = "scheduler"
+table = "scheduler"
+
+[[configuration.fields]]
+key = "poll_interval"
+label = "Intervalle du scheduler (secondes)"
+type = "number"
+default = 1.0
+
+[[configuration.fields]]
+key = "schedules_path"
+label = "Fichier durable des schedules"
+type = "string"
+default = "data/schedules.json"

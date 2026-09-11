@@ -1,6 +1,7 @@
 """Runtime context contracts: retrieval, durable state and bounded assembly."""
 
 import json
+from types import SimpleNamespace
 
 from context_assembler import ContextAssembler, ContextComponent
 from context_os import ThreadStateStore
@@ -29,6 +30,22 @@ def test_injected_memory_keeps_provenance_in_runtime_evidence():
     assert values[0]["provenance"] == "user:alice#42"
 
 
+def test_retrieval_augments_existing_persistent_memories_instead_of_overwriting_them():
+    memories = MemoryStore()
+    try:
+        memories.put("Launch date is 12 June", provenance="retrieval")
+        assembler = ContextAssembler(memory_store=memories, total_max_chars=4000)
+        rendered = assembler.assemble([
+            ContextComponent("memories", ["Persistent user preference"], max_chars=1000, priority=35),
+            ContextComponent("memory_query", "launch date", max_chars=1000, priority=75),
+        ])
+        values = json.loads(rendered["memories"])
+        assert "Persistent user preference" in values
+        assert any(isinstance(item, dict) and item.get("content") == "Launch date is 12 June" for item in values)
+    finally:
+        memories.close()
+
+
 def test_thread_state_is_loaded_and_represented_in_initial_messages(tmp_path):
     path = tmp_path / "thread.json"
     ThreadStateStore(path, thread_id="thread-7").update(step="approval", cursor="c9")
@@ -39,6 +56,84 @@ def test_thread_state_is_loaded_and_represented_in_initial_messages(tmp_path):
     assert "thread_state" in evidence
     assert "approval" in evidence
     assert "c9" in evidence
+
+
+def test_contract_context_contains_fresh_current_subagent_inventory():
+    class Manager:
+        def list_agents(self):
+            return [
+                SimpleNamespace(
+                    id="agent-a",
+                    name="toml-recenseur",
+                    model="openai/gpt-4o-mini",
+                    status=SimpleNamespace(value="active"),
+                ),
+                SimpleNamespace(
+                    id="agent-b",
+                    name="noan-herbeth-presse",
+                    model="openai/gpt-4o-mini",
+                    status=SimpleNamespace(value="active"),
+                ),
+            ]
+
+        def list_jobs(self, **_kwargs):
+            return []
+
+    runtime = AgentRuntime(
+        llm_client=None,
+        subagent_manager=Manager(),
+        context_mode="contract",
+        action_ledger_path=":memory:",
+    )
+
+    messages = runtime._contract_initial_run_messages(_context("il reste des sous agents ?"))
+    evidence = next(
+        message["content"]
+        for message in messages
+        if str(message.get("content", "")).startswith("BEGIN_ORION_EVIDENCE")
+    )
+    payload = json.loads(
+        evidence.removeprefix("BEGIN_ORION_EVIDENCE\n").removesuffix("\nEND_ORION_EVIDENCE")
+    )
+
+    inventory = payload["data"]["current_subagents"]
+    assert inventory["available"] is True
+    assert inventory["count"] == 2
+    assert [item["id"] for item in inventory["agents"]] == ["agent-a", "agent-b"]
+
+
+def test_legacy_context_marks_live_subagent_inventory_as_newer_than_history():
+    class Manager:
+        def list_agents(self):
+            return [
+                SimpleNamespace(
+                    id="live-id",
+                    name="live-agent",
+                    model="openai/gpt-4o-mini",
+                    status=SimpleNamespace(value="active"),
+                )
+            ]
+
+        def list_jobs(self, **_kwargs):
+            return []
+
+    runtime = AgentRuntime(
+        llm_client=None,
+        subagent_manager=Manager(),
+        context_mode="legacy",
+        history_enabled=False,
+        action_ledger_path=":memory:",
+    )
+
+    messages = runtime._initial_run_messages(_context("combien de sous agents ?"))
+    live_message = next(
+        message["content"]
+        for message in messages
+        if "Inventaire live des sous-agents" in str(message.get("content", ""))
+    )
+    assert "live-id" in live_message
+    assert "live-agent" in live_message
+    assert "prévaut sur toute mention historique" in live_message
 
 
 def test_completed_event_is_answered_without_a_second_llm_call():

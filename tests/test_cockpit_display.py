@@ -3,9 +3,9 @@
 These tests intentionally assert readable output rather than implementation
 details of prompt-toolkit widgets.
 """
+
 import asyncio
 import io
-from types import SimpleNamespace
 
 from cli_cockpit import CockpitCLIAdapter
 from channels import AgentOutput
@@ -36,6 +36,7 @@ def _enter(app):
         app.key_processor.feed(KeyPress(Keys.Enter))
         app.key_processor.process_keys()
         await asyncio.sleep(0)
+
     asyncio.run(drive())
 
 
@@ -51,9 +52,12 @@ def test_dashboard_has_compact_banner_and_readable_sections():
     assert "state: online" in text.lower()
 
 
-def test_three_assistant_messages_remain_in_transcript_after_returning_from_dashboard(monkeypatch):
+def test_three_assistant_messages_remain_in_transcript_after_returning_from_dashboard(
+    monkeypatch,
+):
     import cli_cockpit
     from prompt_toolkit.output import DummyOutput
+
     real_application = cli_cockpit.Application
     monkeypatch.setattr(
         cli_cockpit,
@@ -93,3 +97,41 @@ def test_dashboard_command_is_explicit_and_watch_refreshes_snapshot():
     rendered = out.getvalue()
     assert "DASHBOARD" in rendered and "WATCH" in rendered
     assert backend.refreshes >= 2
+
+
+def test_help_dashboard_clear_transitions_preserve_history_and_clean_view(monkeypatch):
+    import cli_cockpit
+    from prompt_toolkit.output import DummyOutput
+
+    real_application = cli_cockpit.Application
+    monkeypatch.setattr(
+        cli_cockpit,
+        "Application",
+        lambda *args, **kwargs: real_application(*args, output=DummyOutput(), **kwargs),
+    )
+    cli = CockpitCLIAdapter(DisplayBackend(), output=io.StringIO())
+    app = cli.build_application()
+    cli.start(lambda _: None)
+    cli.send(AgentOutput(content="réponse — unicode ✅"))
+    editor = app.layout.current_control.buffer
+
+    editor.text = "/help"
+    _enter(app)
+    assert cli._view_mode == "help"
+    assert cli._view.text.startswith("ORION COMMAND PALETTE")
+
+    editor.text = "/dashboard"
+    _enter(app)
+    assert cli._view_mode == "dashboard"
+    assert "RUNTIME" in cli._view.text
+
+    editor.text = "/clear"
+    _enter(app)
+    assert cli._view_mode == "chat"
+    assert cli._view.text == ""
+    assert cli._follow_tail is True
+    assert any(event.text == "réponse — unicode ✅" for event in cli.transcript_events)
+
+    cli.send(AgentOutput(content="after-clear"))
+    assert "after-clear" in cli._view.text
+    assert "réponse — unicode ✅" not in cli._view.text

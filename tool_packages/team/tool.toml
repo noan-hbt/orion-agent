@@ -1,0 +1,46 @@
+id = "orion.team"
+name = "Team Bus"
+version = "1.0.0"
+kind = "module"
+description = "Active le bus durable entre plusieurs instances Orion."
+api_version = 1
+
+[policy]
+classification = "side_effect"
+explicit_enable = true
+
+[guidance]
+summary = "Ajoute la communication durable et la delegation entre instances Orion d'une meme equipe."
+instructions = "Utilise le bus d'equipe pour transmettre un message ou deleguer un job a une autre instance connue. Conserve les identifiants de correlation lorsqu'ils existent."
+constraints = [
+  "N'envoie pas de message a une instance hors de l'equipe configuree.",
+  "Evite les boucles de delegation et les duplications de jobs deja correles."
+]
+
+[configuration]
+section = "teams"
+table = "teams"
+
+[[configuration.fields]]
+key = "instance_id"
+label = "Identifiant de cette instance"
+type = "string"
+default = "orion"
+
+[[configuration.fields]]
+key = "team"
+label = "Nom de l'equipe"
+type = "string"
+default = "default"
+
+[[configuration.fields]]
+key = "poll_interval"
+label = "Intervalle de lecture du bus (secondes)"
+type = "number"
+default = 1.0
+
+[[configuration.fields]]
+key = "max_message_chars"
+label = "Taille maximale d'un message"
+type = "integer"
+default = 12000

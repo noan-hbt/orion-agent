@@ -5,8 +5,10 @@ one concurrent producer), rather than asserting implementation details or
 using a mocked renderer.
 """
 import io
+import os
 import threading
 import time
+from types import SimpleNamespace
 import pytest
 
 from cli_cockpit import CockpitCLIAdapter
@@ -87,6 +89,153 @@ def test_natural_language_is_delivered_as_inbound_message():
     assert received == [message]
     assert message.channel == "cli"
     assert message.correlation_id == "cli-1"
+
+
+def test_help_is_a_recognized_user_command_not_an_unknown_command():
+    """The interactive cockpit must expose a functional help entry point."""
+    cli, out = _adapter("/help\n/exit\n")
+
+    cli.loop()
+
+    rendered = out.getvalue()
+    assert "Commande inconnue" not in rendered
+    # Help content may be redesigned, but it must at least advertise useful
+    # commands rather than silently succeeding with an empty response.
+    assert "/status" in rendered
+    assert "/tools" in rendered
+
+
+def test_help_command_argument_uses_targeted_backend_help():
+    class HelpBackend:
+        def __init__(self):
+            self.executed = []
+
+        def commands(self):
+            return ("status", "tools")
+
+        def execute(self, command):
+            self.executed.append(command)
+            assert command == "/help tools"
+            return {
+                "title": "help",
+                "data": {
+                    "command": "tools",
+                    "usage": "/tools",
+                    "description": "TARGETED TOOLS HELP",
+                    "available": True,
+                },
+            }
+
+    backend = HelpBackend()
+    out = io.StringIO()
+    cli = CockpitCLIAdapter(
+        backend,
+        input=io.StringIO("/help tools\n/exit\n"),
+        output=out,
+    )
+
+    cli.loop()
+
+    assert backend.executed == ["/help tools"]
+    assert "TARGETED TOOLS HELP" in out.getvalue()
+
+
+def test_tools_lists_tools_available_to_runtime_even_if_package_scan_is_empty():
+    """/tools describes callable runtime tools, not merely packages on disk."""
+
+    class RuntimeWithTools(_Runtime):
+        def _tool_definitions(self):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "search the web",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+
+    class EmptyPackageScan:
+        def installed(self):
+            return []
+
+    application = SimpleNamespace(
+        runtime=RuntimeWithTools(),
+        tool_manager=EmptyPackageScan(),
+    )
+    out = io.StringIO()
+    cli = CockpitCLIAdapter(
+        CockpitBackend(application),
+        input=io.StringIO("/tools\n/exit\n"),
+        output=out,
+    )
+
+    cli.loop()
+
+    rendered = out.getvalue()
+    assert "Commande inconnue" not in rendered
+    assert "Provider indisponible" not in rendered
+    assert "web_search" in rendered
+
+
+def test_natural_language_is_not_reparsed_as_a_backend_command():
+    """Plain text is conversation input and must not emit command-parser noise."""
+    class BackendProbe:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, command):
+            self.executed.append(command)
+            raise AssertionError("natural text reached command backend")
+
+    out = io.StringIO()
+    received = []
+    backend = BackendProbe()
+    cli = CockpitCLIAdapter(
+        backend,
+        input=io.StringIO("analyse le repo\n/exit\n"),
+        output=out,
+    )
+    cli.start(received.append)
+
+    cli.loop()
+
+    assert [message.text for message in received] == ["analyse le repo"]
+    assert backend.executed == []
+    rendered = out.getvalue()
+    assert "Commande inconnue" not in rendered
+    assert "/analyse" not in rendered
+
+
+def test_clear_is_presentation_only_and_non_tty_safe(monkeypatch):
+    class BackendProbe:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, command):
+            self.executed.append(command)
+            raise AssertionError("/clear reached command backend")
+
+    shell_calls = []
+    monkeypatch.setattr(os, "system", lambda command: shell_calls.append(command) or 0)
+    backend = BackendProbe()
+    out = io.StringIO()
+    cli = CockpitCLIAdapter(
+        backend,
+        input=io.StringIO("/clear\n/exit\n"),
+        output=out,
+    )
+    cli.start(lambda _message: None)
+    cli.submit("conversation history stays durable")
+    before = tuple(cli.transcript_events)
+
+    cli.loop()
+
+    assert tuple(cli.transcript_events) == before
+    assert backend.executed == []
+    assert shell_calls == []
+    assert "\x1b[" not in out.getvalue()
 
 
 def test_output_can_arrive_while_input_loop_is_blocked():

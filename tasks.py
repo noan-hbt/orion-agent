@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import os
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -28,6 +31,15 @@ class TaskPriority(IntEnum):
     NORMAL = 20
     HIGH = 30
     CRITICAL = 40
+
+
+_SUBAGENT_TERMINAL_EVENT_TYPES = frozenset(
+    {
+        "subagent.completed",
+        "subagent.failed",
+        "subagent.cancelled",
+    }
+)
 
 
 def _bounded_value(value: Any, *, max_chars: int = 4000) -> Any:
@@ -102,8 +114,24 @@ class WaitCondition:
             if isinstance(self.event_type, Enum)
             else self.event_type
         )
-        if expected_type is not None and event.type != expected_type:
-            return False
+        if expected_type is not None:
+            event_type = str(event.type)
+            if expected_type == "subagent.terminal":
+                if event_type not in _SUBAGENT_TERMINAL_EVENT_TYPES:
+                    return False
+            elif (
+                expected_type == "subagent.completed"
+                and "job_id" in self.payload_equals
+            ):
+                # Backward compatibility for durable waits created before the
+                # terminal alias existed. A job-scoped completion wait is
+                # really waiting for that delegated job to terminate, whether
+                # it succeeds, fails or is cancelled. Keep the job_id filter
+                # below so another parent's terminal event cannot wake it.
+                if event_type not in _SUBAGENT_TERMINAL_EVENT_TYPES:
+                    return False
+            elif event_type != expected_type:
+                return False
         if self.source is not None and event.source != self.source:
             return False
         if any(event.payload.get(key) != value for key, value in self.payload_equals.items()):
@@ -545,6 +573,64 @@ class TaskStore(Protocol):
         ...
 
 
+class TaskStoreConflict(RuntimeError):
+    """A stale task snapshot tried to overwrite a newer durable version."""
+
+
+class _InterprocessFileLock:
+    """Crash-safe advisory lock for one JSON task file (Windows and POSIX)."""
+
+    def __init__(self, path: Path, *, timeout: float = 30.0) -> None:
+        self.path = path
+        self.timeout = float(timeout)
+        self._handle: Any | None = None
+
+    def __enter__(self) -> _InterprocessFileLock:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self.path.open("a+b")
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + self.timeout
+        while True:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self._handle = handle
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    handle.close()
+                    raise TimeoutError(f"timed out acquiring file lock: {self.path}")
+                time.sleep(0.01)
+
+    def __exit__(self, *_: Any) -> None:
+        handle = self._handle
+        self._handle = None
+        if handle is None:
+            return
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 class InMemoryTaskStore:
     """Stockage thread-safe par défaut, remplaçable sans modifier le runtime."""
 
@@ -601,34 +687,186 @@ class JsonTaskStore(InMemoryTaskStore):
     def __init__(self, path: str | Path) -> None:
         super().__init__()
         self.path = Path(path)
+        self._process_lock_path = self.path.with_name(f".{self.path.name}.write.lock")
+        self._last_serialized: str | None = None
         self._load()
 
     def _load(self) -> None:
-        if not self.path.exists():
-            return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
-        tasks = [Task.from_dict(item) for item in data.get("tasks", [])]
         with self._lock:
-            self._tasks = {task.id: task for task in tasks}
-            self._next_id = max(self._tasks, default=0) + 1
+            with _InterprocessFileLock(self._process_lock_path):
+                tasks = self._read_disk_tasks()
+                self._install_snapshot(tasks)
 
-    def _flush(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"tasks": [task.to_dict() for task in self.list()]}
-        self.path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
+    def _read_disk_tasks(self) -> dict[int, Task]:
+        if not self.path.exists():
+            return {}
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not isinstance(data.get("tasks", []), list):
+            raise ValueError("Le fichier de tâches doit contenir une liste 'tasks'.")
+        tasks = [Task.from_dict(item) for item in data.get("tasks", [])]
+        return {task.id: task for task in tasks}
+
+    @staticmethod
+    def _task_revision(task: Task) -> str:
+        encoded = json.dumps(
+            task.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
         )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _tagged_copy(cls, task: Task) -> Task:
+        result = copy.deepcopy(task)
+        setattr(result, "_store_revision", cls._task_revision(task))
+        return result
+
+    @staticmethod
+    def _plain_copy(task: Task) -> Task:
+        result = copy.deepcopy(task)
+        try:
+            delattr(result, "_store_revision")
+        except AttributeError:
+            pass
+        return result
+
+    @classmethod
+    def _serialize_tasks(cls, tasks: dict[int, Task]) -> str:
+        payload = {
+            "tasks": [
+                task.to_dict()
+                for task in sorted(tasks.values(), key=lambda item: item.id)
+            ]
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+    def _install_snapshot(
+        self, tasks: dict[int, Task], *, serialized: str | None = None
+    ) -> None:
+        self._tasks = {
+            int(task_id): self._plain_copy(task) for task_id, task in tasks.items()
+        }
+        self._next_id = max(self._tasks, default=0) + 1
+        self._last_serialized = serialized or self._serialize_tasks(self._tasks)
+
+    def _serialize_snapshot(self) -> str:
+        return self._serialize_tasks(self._tasks)
+
+    def _persist_serialized(self, serialized: str) -> None:
+        """Atomically persist a candidate snapshot without mutating RAM state."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.write(serialized)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+
+            # Best effort only: fsyncing a directory is unsupported on some
+            # platforms (notably Windows), while POSIX can use it to make the
+            # rename durable across a sudden power loss.
+            directory_fd: int | None = None
+            try:
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                directory_fd = os.open(str(self.path.parent), flags)
+                os.fsync(directory_fd)
+            except (AttributeError, OSError):
+                pass
+            finally:
+                if directory_fd is not None:
+                    os.close(directory_fd)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _refresh_for_read(self) -> dict[int, Task]:
+        with self._lock:
+            with _InterprocessFileLock(self._process_lock_path):
+                tasks = self._read_disk_tasks()
+                self._install_snapshot(tasks)
+                return {task_id: self._plain_copy(task) for task_id, task in tasks.items()}
 
     def create(self, objective: str, *, priority: int = int(TaskPriority.NORMAL)) -> Task:
-        task = super().create(objective, priority=priority)
-        self._flush()
-        return task
+        with self._lock:
+            with _InterprocessFileLock(self._process_lock_path):
+                current = self._read_disk_tasks()
+                task_id = max(current, default=0) + 1
+                task = Task(id=task_id, objective=objective, priority=priority)
+                task.add_history("task_created")
+                candidate = dict(current)
+                candidate[task_id] = self._plain_copy(task)
+                serialized = self._serialize_tasks(candidate)
+                # Copy-on-write: RAM is installed only after durable replace.
+                self._persist_serialized(serialized)
+                self._install_snapshot(candidate, serialized=serialized)
+                tagged = self._tagged_copy(task)
+                setattr(task, "_store_revision", getattr(tagged, "_store_revision"))
+                return tagged
 
     def save(self, task: Task) -> Task:
-        saved = super().save(task)
-        self._flush()
-        return saved
+        with self._lock:
+            with _InterprocessFileLock(self._process_lock_path):
+                current = self._read_disk_tasks()
+                task_id = int(task.id)
+                durable = current.get(task_id)
+                expected_revision = getattr(task, "_store_revision", None)
+                if durable is not None:
+                    durable_revision = self._task_revision(durable)
+                    if expected_revision is None:
+                        local = self._tasks.get(task_id)
+                        if local is None:
+                            raise TaskStoreConflict(
+                                f"task {task_id} exists durably but this store has no base revision"
+                            )
+                        expected_revision = self._task_revision(local)
+                    if expected_revision != durable_revision:
+                        raise TaskStoreConflict(
+                            f"task {task_id} changed in another store instance"
+                        )
+                elif expected_revision is not None:
+                    raise TaskStoreConflict(
+                        f"task {task_id} no longer exists in durable storage"
+                    )
+
+                candidate = dict(current)
+                candidate[task_id] = self._plain_copy(task)
+                serialized = self._serialize_tasks(candidate)
+                current_serialized = self._serialize_tasks(current)
+                if serialized != current_serialized:
+                    self._persist_serialized(serialized)
+                self._install_snapshot(candidate, serialized=serialized)
+                new_revision = self._task_revision(candidate[task_id])
+                setattr(task, "_store_revision", new_revision)
+                return self._tagged_copy(candidate[task_id])
+
+    def get(self, task_id: int) -> Task | None:
+        tasks = self._refresh_for_read()
+        task = tasks.get(int(task_id))
+        return self._tagged_copy(task) if task is not None else None
+
+    def list(self, *, status: TaskStatus | None = None) -> list[Task]:
+        tasks = list(self._refresh_for_read().values())
+        if status is not None:
+            tasks = [task for task in tasks if task.status == status]
+        return [self._tagged_copy(task) for task in sorted(tasks, key=lambda item: item.id)]
+
+    def find_waiting_task(self, event: Any) -> Task | None:
+        tasks = self._refresh_for_read().values()
+        candidates = [
+            task
+            for task in tasks
+            if task.status == TaskStatus.WAITING
+            and any(condition.matches(event) for condition in task.waiting_for)
+        ]
+        if not candidates:
+            return None
+        task = sorted(candidates, key=lambda item: (-item.priority, item.id))[0]
+        return self._tagged_copy(task)
 
 
 __all__ = [
@@ -645,4 +883,5 @@ __all__ = [
     "TaskRun",
     "TaskStatus",
     "TaskStore",
+    "TaskStoreConflict",
 ]

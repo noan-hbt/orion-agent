@@ -11,6 +11,7 @@ constructeur.
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextvars
 import inspect
 import json
@@ -121,7 +122,9 @@ class LLMUsageRecord:
                 "provider_request_id": self.provider_request_id,
                 "attempt": self.attempt,
                 "started_at": self.started_at.isoformat(),
-                "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+                "finished_at": self.finished_at.isoformat()
+                if self.finished_at
+                else None,
                 "latency_ms": self.latency_ms,
                 "status": self.status,
                 "streamed": self.streamed,
@@ -131,8 +134,12 @@ class LLMUsageRecord:
                 "total_tokens": self.total_tokens,
                 "cost_usd": str(self.cost_usd) if self.cost_usd is not None else None,
                 "cost_source": self.cost_source,
-                "prompt_details": dict(self.prompt_details) if self.prompt_details else None,
-                "completion_details": dict(self.completion_details) if self.completion_details else None,
+                "prompt_details": dict(self.prompt_details)
+                if self.prompt_details
+                else None,
+                "completion_details": dict(self.completion_details)
+                if self.completion_details
+                else None,
                 "cost_details": dict(self.cost_details) if self.cost_details else None,
                 "error_type": self.error_type,
             }.items()
@@ -149,7 +156,9 @@ class UsageLedger:
         self._subscribers: list[Callable[[dict[str, Any]], Any]] = []
         self._last_update_at: datetime | None = None
 
-    def subscribe(self, callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
+    def subscribe(
+        self, callback: Callable[[dict[str, Any]], Any]
+    ) -> Callable[[], None]:
         with self._lock:
             if callback not in self._subscribers:
                 self._subscribers.append(callback)
@@ -164,6 +173,7 @@ class UsageLedger:
     def _snapshot_locked(self) -> dict[str, Any]:
         records = list(self._records.values())
         completed = [item for item in records if item.status == "succeeded"]
+
         def totals(items: list[LLMUsageRecord]) -> tuple[int, int, int]:
             return (
                 sum(item.prompt_tokens or 0 for item in items),
@@ -173,11 +183,19 @@ class UsageLedger:
 
         prompt, completion, total = totals(completed)
         known = sum(
-            (item.cost_usd for item in completed if item.cost_usd is not None and item.cost_source == "openrouter"),
+            (
+                item.cost_usd
+                for item in completed
+                if item.cost_usd is not None and item.cost_source == "openrouter"
+            ),
             Decimal("0"),
         )
         estimated = sum(
-            (item.cost_usd for item in completed if item.cost_usd is not None and item.cost_source == "catalog_estimate"),
+            (
+                item.cost_usd
+                for item in completed
+                if item.cost_usd is not None and item.cost_source == "catalog_estimate"
+            ),
             Decimal("0"),
         )
         by_model: dict[str, dict[str, Any]] = {}
@@ -185,7 +203,16 @@ class UsageLedger:
         for item in completed:
             model = item.model or "unknown"
             for target, key in ((by_model, model), (by_stage, item.stage or "other")):
-                row = target.setdefault(key, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "known_cost_usd": Decimal("0")})
+                row = target.setdefault(
+                    key,
+                    {
+                        "calls": 0,
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "known_cost_usd": Decimal("0"),
+                    },
+                )
                 row["calls"] += 1
                 row["prompt_tokens"] += item.prompt_tokens or 0
                 row["completion_tokens"] += item.completion_tokens or 0
@@ -196,16 +223,22 @@ class UsageLedger:
             "started_calls": len(records),
             "inflight_calls": sum(item.status == "inflight" for item in records),
             "completed_calls": len(completed),
-            "failed_calls": sum(item.status in {"failed", "canceled"} for item in records),
+            "failed_calls": sum(
+                item.status in {"failed", "canceled"} for item in records
+            ),
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "total_tokens": total,
             "known_cost_usd": known,
             "estimated_cost_usd": estimated,
-            "usage_missing_calls": sum(not item.usage_complete or item.cost_usd is None for item in completed),
+            "usage_missing_calls": sum(
+                not item.usage_complete or item.cost_usd is None for item in completed
+            ),
             "by_model": by_model,
             "by_stage": by_stage,
-            "last_update_at": self._last_update_at.isoformat() if self._last_update_at else None,
+            "last_update_at": self._last_update_at.isoformat()
+            if self._last_update_at
+            else None,
         }
 
     def snapshot(self) -> dict[str, Any]:
@@ -221,16 +254,26 @@ class UsageLedger:
         with self._lock:
             stored = replace(
                 record,
-                prompt_details=dict(record.prompt_details) if record.prompt_details else None,
-                completion_details=dict(record.completion_details) if record.completion_details else None,
+                prompt_details=dict(record.prompt_details)
+                if record.prompt_details
+                else None,
+                completion_details=dict(record.completion_details)
+                if record.completion_details
+                else None,
                 cost_details=dict(record.cost_details) if record.cost_details else None,
             )
             existing = self._records.get(stored.call_id)
-            if existing is not None and existing.status != "inflight" and stored.status == "inflight":
+            if (
+                existing is not None
+                and existing.status != "inflight"
+                and stored.status == "inflight"
+            ):
                 return
             self._records[stored.call_id] = stored
             self._last_update_at = datetime.now(timezone.utc)
-            event_name = event or ("usage.started" if stored.status == "inflight" else "usage.updated")
+            event_name = event or (
+                "usage.started" if stored.status == "inflight" else "usage.updated"
+            )
             payload = {
                 "type": event_name,
                 "call_id": stored.call_id,
@@ -246,8 +289,6 @@ class UsageLedger:
                 continue
 
     record = ingest
-
-
 
 
 class OpenRouterError(Exception):
@@ -359,7 +400,9 @@ class OpenRouterClient:
         if max_retries < 0:
             raise OpenRouterConfigurationError("max_retries doit être positif ou nul.")
         if retry_backoff < 0:
-            raise OpenRouterConfigurationError("retry_backoff doit être positif ou nul.")
+            raise OpenRouterConfigurationError(
+                "retry_backoff doit être positif ou nul."
+            )
 
         self.api_key = resolved_key
         self.model = model
@@ -390,6 +433,8 @@ class OpenRouterClient:
         self._async_client: Any = None
         self._messages: list[Message] = []
         self._tools: dict[str, RegisteredTool] = {}
+        self._tools_lock = threading.RLock()
+        self._tool_definitions_json: str | None = None
         self._last_response: dict[str, Any] | None = None
 
         if system_prompt:
@@ -400,7 +445,9 @@ class OpenRouterClient:
         """Records observed by this client, in call creation order."""
         return self.usage_ledger.records
 
-    def subscribe_usage(self, callback: Callable[[dict[str, Any]], Any]) -> Callable[[], None]:
+    def subscribe_usage(
+        self, callback: Callable[[dict[str, Any]], Any]
+    ) -> Callable[[], None]:
         return self.usage_ledger.subscribe(callback)
 
     def usage_snapshot(self) -> dict[str, Any]:
@@ -409,7 +456,9 @@ class OpenRouterClient:
     def usage_context(self, **kwargs: Any):
         return usage_context(**kwargs)
 
-    def _start_usage(self, *, model: str | None, streamed: bool = False) -> LLMUsageRecord:
+    def _start_usage(
+        self, *, model: str | None, streamed: bool = False
+    ) -> LLMUsageRecord:
         context = _usage_context.get()
         record = LLMUsageRecord(
             call_id=uuid.uuid4().hex,
@@ -452,7 +501,9 @@ class OpenRouterClient:
         if record.status != "inflight":
             return
         record.finished_at = datetime.now(timezone.utc)
-        record.latency_ms = max(0.0, (record.finished_at - record.started_at).total_seconds() * 1000)
+        record.latency_ms = max(
+            0.0, (record.finished_at - record.started_at).total_seconds() * 1000
+        )
         if record.attempt < 1:
             record.attempt = 1
         if error is not None:
@@ -466,7 +517,9 @@ class OpenRouterClient:
             usage = body.get("usage") if isinstance(body, Mapping) else None
             if not isinstance(usage, Mapping):
                 usage = {}
-            record.provider_id = str(body.get("id")) if body.get("id") is not None else None
+            record.provider_id = (
+                str(body.get("id")) if body.get("id") is not None else None
+            )
             effective_model = body.get("model")
             if effective_model:
                 record.model = str(effective_model)
@@ -476,7 +529,9 @@ class OpenRouterClient:
             record.prompt_tokens = prompt
             record.completion_tokens = completion
             record.total_tokens = total
-            record.usage_complete = bool(usage) and any(value is not None for value in (prompt, completion, total))
+            record.usage_complete = bool(usage) and any(
+                value is not None for value in (prompt, completion, total)
+            )
             for key, attr in (
                 ("prompt_tokens_details", "prompt_details"),
                 ("completion_tokens_details", "completion_details"),
@@ -491,8 +546,14 @@ class OpenRouterClient:
                 record.cost_source = "openrouter"
             if headers:
                 record.provider_request_id = (
-                    str(headers.get("x-request-id") or headers.get("x-openrouter-request-id"))
-                    if (headers.get("x-request-id") or headers.get("x-openrouter-request-id"))
+                    str(
+                        headers.get("x-request-id")
+                        or headers.get("x-openrouter-request-id")
+                    )
+                    if (
+                        headers.get("x-request-id")
+                        or headers.get("x-openrouter-request-id")
+                    )
                     else record.provider_request_id
                 )
             record.status = "succeeded"
@@ -506,7 +567,9 @@ class OpenRouterClient:
     # ------------------------------------------------------------------
     def _sync_client(self) -> Any:
         if self._client is None:
-            self._client = httpx.Client(base_url=self.base_url, headers=self._headers, timeout=self.timeout)
+            self._client = httpx.Client(
+                base_url=self.base_url, headers=self._headers, timeout=self.timeout
+            )
         return self._client
 
     def _async_http_client(self) -> Any:
@@ -558,7 +621,9 @@ class OpenRouterClient:
         except Exception:
             payload = response.text
 
-        error_data = payload.get("error", payload) if isinstance(payload, dict) else payload
+        error_data = (
+            payload.get("error", payload) if isinstance(payload, dict) else payload
+        )
         if isinstance(error_data, dict):
             # OpenRouter often wraps the useful provider diagnostic in
             # ``error.metadata.raw`` while keeping ``error.message`` at the
@@ -590,7 +655,9 @@ class OpenRouterClient:
             message = " · ".join(parts) or str(error_data)
         else:
             message = str(error_data)
-        request_id = response.headers.get("x-request-id") or response.headers.get("x-openrouter-request-id")
+        request_id = response.headers.get("x-request-id") or response.headers.get(
+            "x-openrouter-request-id"
+        )
         if request_id:
             message = f"{message} [request_id={request_id}]"
         return OpenRouterAPIError(
@@ -610,7 +677,8 @@ class OpenRouterClient:
         usage_record: LLMUsageRecord | None = None,
     ) -> dict[str, Any]:
         client = self._sync_client()
-        if self.budget is not None: self.budget.check()
+        if self.budget is not None:
+            self.budget.check()
         if not self._circuit.allow():
             raise OpenRouterTransportError("Circuit breaker OpenRouter ouvert.")
         self._rate_limiter.wait()
@@ -624,17 +692,24 @@ class OpenRouterClient:
             except httpx.TimeoutException as exc:
                 self._circuit.failure()
                 if attempt >= self.max_retries:
-                    raise OpenRouterTimeoutError("La requête OpenRouter a expiré.") from exc
+                    raise OpenRouterTimeoutError(
+                        "La requête OpenRouter a expiré."
+                    ) from exc
                 time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
             except httpx.HTTPError as exc:
                 self._circuit.failure()
                 if attempt >= self.max_retries:
-                    raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    raise OpenRouterTransportError(
+                        f"Erreur réseau OpenRouter : {exc}"
+                    ) from exc
                 time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
 
-            if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+            if (
+                response.status_code in RETRYABLE_STATUS_CODES
+                and attempt < self.max_retries
+            ):
                 time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
                 continue
             if response.is_error:
@@ -643,19 +718,23 @@ class OpenRouterClient:
             try:
                 payload = response.json()
             except ValueError as exc:
-                raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
+                raise OpenRouterError(
+                    "OpenRouter a renvoyé une réponse JSON invalide."
+                ) from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
             self._circuit.success()
-            if self.budget is not None: self.budget.record(calls=1)
+            if self.budget is not None:
+                self.budget.record(calls=1)
             if usage_record is not None:
-                usage_record.provider_request_id = (
-                    response.headers.get("x-request-id")
-                    or response.headers.get("x-openrouter-request-id")
-                )
+                usage_record.provider_request_id = response.headers.get(
+                    "x-request-id"
+                ) or response.headers.get("x-openrouter-request-id")
             return payload
 
-        raise OpenRouterTransportError("La requête OpenRouter a échoué après plusieurs tentatives.")
+        raise OpenRouterTransportError(
+            "La requête OpenRouter a échoué après plusieurs tentatives."
+        )
 
     async def _request_json_async(
         self,
@@ -684,18 +763,27 @@ class OpenRouterClient:
             except httpx.TimeoutException as exc:
                 self._circuit.failure()
                 if attempt >= self.max_retries:
-                    raise OpenRouterTimeoutError("La requête OpenRouter a expiré.") from exc
+                    raise OpenRouterTimeoutError(
+                        "La requête OpenRouter a expiré."
+                    ) from exc
                 await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
             except httpx.HTTPError as exc:
                 self._circuit.failure()
                 if attempt >= self.max_retries:
-                    raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    raise OpenRouterTransportError(
+                        f"Erreur réseau OpenRouter : {exc}"
+                    ) from exc
                 await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 continue
 
-            if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
-                await asyncio.sleep(self._retry_delay(response, attempt, self.retry_backoff))
+            if (
+                response.status_code in RETRYABLE_STATUS_CODES
+                and attempt < self.max_retries
+            ):
+                await asyncio.sleep(
+                    self._retry_delay(response, attempt, self.retry_backoff)
+                )
                 continue
             if response.is_error:
                 self._circuit.failure()
@@ -703,20 +791,23 @@ class OpenRouterClient:
             try:
                 payload = response.json()
             except ValueError as exc:
-                raise OpenRouterError("OpenRouter a renvoyé une réponse JSON invalide.") from exc
+                raise OpenRouterError(
+                    "OpenRouter a renvoyé une réponse JSON invalide."
+                ) from exc
             if not isinstance(payload, dict):
                 raise OpenRouterError("OpenRouter a renvoyé un JSON inattendu.")
             self._circuit.success()
             if self.budget is not None:
                 self.budget.record(calls=1)
             if usage_record is not None:
-                usage_record.provider_request_id = (
-                    response.headers.get("x-request-id")
-                    or response.headers.get("x-openrouter-request-id")
-                )
+                usage_record.provider_request_id = response.headers.get(
+                    "x-request-id"
+                ) or response.headers.get("x-openrouter-request-id")
             return payload
 
-        raise OpenRouterTransportError("La requête OpenRouter a échoué après plusieurs tentatives.")
+        raise OpenRouterTransportError(
+            "La requête OpenRouter a échoué après plusieurs tentatives."
+        )
 
     # ------------------------------------------------------------------
     # Appels API bas niveau
@@ -782,7 +873,11 @@ class OpenRouterClient:
             return result
 
         calls = normalized.get("tool_calls")
-        if normalized.get("role") == "assistant" and isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
+        if (
+            normalized.get("role") == "assistant"
+            and isinstance(calls, Sequence)
+            and not isinstance(calls, (str, bytes))
+        ):
             normalized_calls: list[dict[str, Any]] = []
             for call in calls:
                 if not isinstance(call, Mapping):
@@ -865,7 +960,9 @@ class OpenRouterClient:
                     usage_record=record,
                 )
             except OpenRouterAPIError as exc:
-                fallback_payload = self._compatibility_fallback_payload(request_payload, exc)
+                fallback_payload = self._compatibility_fallback_payload(
+                    request_payload, exc
+                )
                 if fallback_payload is None:
                     raise
                 try:
@@ -918,7 +1015,9 @@ class OpenRouterClient:
                     usage_record=record,
                 )
             except OpenRouterAPIError as exc:
-                fallback_payload = self._compatibility_fallback_payload(request_payload, exc)
+                fallback_payload = self._compatibility_fallback_payload(
+                    request_payload, exc
+                )
                 if fallback_payload is None:
                     raise
                 try:
@@ -959,59 +1058,92 @@ class OpenRouterClient:
     ) -> Generator[dict[str, Any], None, None]:
         """Diffuse les événements JSON du flux SSE OpenRouter."""
         record = self._start_usage(model=model, streamed=True)
-        payload = self._payload(
-            messages,
-            model=model,
-            tools=tools,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-            stream=True,
-            **params,
-        )
-        stream_options = payload.get("stream_options")
-        if not isinstance(stream_options, Mapping):
-            stream_options = {}
-        payload["stream_options"] = {**dict(stream_options), "include_usage": True}
-        client = self._sync_client()
-        final_event: Mapping[str, Any] | None = None
         try:
+            payload = self._payload(
+                messages,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                stream=True,
+                **params,
+            )
+            stream_options = payload.get("stream_options")
+            if not isinstance(stream_options, Mapping):
+                stream_options = {}
+            payload["stream_options"] = {**dict(stream_options), "include_usage": True}
+            client = self._sync_client()
+            if self.budget is not None:
+                self.budget.check()
+            if not self._circuit.allow():
+                raise OpenRouterTransportError("Circuit breaker OpenRouter ouvert.")
+            self._rate_limiter.wait()
+
+            final_event: Mapping[str, Any] | None = None
+            emitted = False
             for attempt in range(self.max_retries + 1):
                 record.attempt = attempt + 1
                 try:
-                    with client.stream("POST", "chat/completions", json=payload) as response:
-                        if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
-                            time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
+                    with client.stream(
+                        "POST", "chat/completions", json=payload
+                    ) as response:
+                        if (
+                            response.status_code in RETRYABLE_STATUS_CODES
+                            and attempt < self.max_retries
+                        ):
+                            time.sleep(
+                                self._retry_delay(response, attempt, self.retry_backoff)
+                            )
                             continue
                         if response.is_error:
                             response.read()
+                            self._circuit.failure()
                             raise self._error_from_response(response)
-                        record.provider_request_id = (
-                            response.headers.get("x-request-id")
-                            or response.headers.get("x-openrouter-request-id")
-                        )
+                        record.provider_request_id = response.headers.get(
+                            "x-request-id"
+                        ) or response.headers.get("x-openrouter-request-id")
                         for line in response.iter_lines():
                             if not line or line.startswith(":"):
                                 continue
-                            data = line[5:].strip() if line.startswith("data:") else line.strip()
+                            data = (
+                                line[5:].strip()
+                                if line.startswith("data:")
+                                else line.strip()
+                            )
                             if data == "[DONE]":
+                                self._circuit.success()
+                                if self.budget is not None:
+                                    self.budget.record(calls=1)
                                 self._finish_usage(record, final_event or {})
                                 return
                             try:
                                 event = json.loads(data)
                             except json.JSONDecodeError as exc:
-                                raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
+                                raise OpenRouterError(
+                                    f"Événement SSE OpenRouter invalide : {data}"
+                                ) from exc
                             if isinstance(event, dict):
                                 final_event = event
+                                emitted = True
                                 yield event
+                        self._circuit.success()
+                        if self.budget is not None:
+                            self.budget.record(calls=1)
                         self._finish_usage(record, final_event or {})
                         return
                 except httpx.TimeoutException as exc:
-                    if attempt >= self.max_retries:
-                        raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
+                    self._circuit.failure()
+                    if emitted or attempt >= self.max_retries:
+                        raise OpenRouterTimeoutError(
+                            "Le flux OpenRouter a expiré."
+                        ) from exc
                     time.sleep(jittered_backoff(self.retry_backoff, attempt))
                 except httpx.HTTPError as exc:
-                    if attempt >= self.max_retries:
-                        raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    self._circuit.failure()
+                    if emitted or attempt >= self.max_retries:
+                        raise OpenRouterTransportError(
+                            f"Erreur réseau OpenRouter : {exc}"
+                        ) from exc
                     time.sleep(jittered_backoff(self.retry_backoff, attempt))
         except BaseException as exc:
             self._fail_usage(record, exc)
@@ -1042,59 +1174,92 @@ class OpenRouterClient:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Version asynchrone du flux SSE."""
         record = self._start_usage(model=model, streamed=True)
-        payload = self._payload(
-            messages,
-            model=model,
-            tools=tools,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-            stream=True,
-            **params,
-        )
-        stream_options = payload.get("stream_options")
-        if not isinstance(stream_options, Mapping):
-            stream_options = {}
-        payload["stream_options"] = {**dict(stream_options), "include_usage": True}
-        client = self._async_http_client()
-        final_event: Mapping[str, Any] | None = None
         try:
+            payload = self._payload(
+                messages,
+                model=model,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                stream=True,
+                **params,
+            )
+            stream_options = payload.get("stream_options")
+            if not isinstance(stream_options, Mapping):
+                stream_options = {}
+            payload["stream_options"] = {**dict(stream_options), "include_usage": True}
+            client = self._async_http_client()
+            if self.budget is not None:
+                self.budget.check()
+            if not self._circuit.allow():
+                raise OpenRouterTransportError("Circuit breaker OpenRouter ouvert.")
+            await asyncio.sleep(self._rate_limiter.reserve())
+
+            final_event: Mapping[str, Any] | None = None
+            emitted = False
             for attempt in range(self.max_retries + 1):
                 record.attempt = attempt + 1
                 try:
-                    async with client.stream("POST", "chat/completions", json=payload) as response:
-                        if response.status_code in RETRYABLE_STATUS_CODES and attempt < self.max_retries:
-                            await asyncio.sleep(self._retry_delay(response, attempt, self.retry_backoff))
+                    async with client.stream(
+                        "POST", "chat/completions", json=payload
+                    ) as response:
+                        if (
+                            response.status_code in RETRYABLE_STATUS_CODES
+                            and attempt < self.max_retries
+                        ):
+                            await asyncio.sleep(
+                                self._retry_delay(response, attempt, self.retry_backoff)
+                            )
                             continue
                         if response.is_error:
                             await response.aread()
+                            self._circuit.failure()
                             raise self._error_from_response(response)
-                        record.provider_request_id = (
-                            response.headers.get("x-request-id")
-                            or response.headers.get("x-openrouter-request-id")
-                        )
+                        record.provider_request_id = response.headers.get(
+                            "x-request-id"
+                        ) or response.headers.get("x-openrouter-request-id")
                         async for line in response.aiter_lines():
                             if not line or line.startswith(":"):
                                 continue
-                            data = line[5:].strip() if line.startswith("data:") else line.strip()
+                            data = (
+                                line[5:].strip()
+                                if line.startswith("data:")
+                                else line.strip()
+                            )
                             if data == "[DONE]":
+                                self._circuit.success()
+                                if self.budget is not None:
+                                    self.budget.record(calls=1)
                                 self._finish_usage(record, final_event or {})
                                 return
                             try:
                                 event = json.loads(data)
                             except json.JSONDecodeError as exc:
-                                raise OpenRouterError(f"Événement SSE OpenRouter invalide : {data}") from exc
+                                raise OpenRouterError(
+                                    f"Événement SSE OpenRouter invalide : {data}"
+                                ) from exc
                             if isinstance(event, dict):
                                 final_event = event
+                                emitted = True
                                 yield event
+                        self._circuit.success()
+                        if self.budget is not None:
+                            self.budget.record(calls=1)
                         self._finish_usage(record, final_event or {})
                         return
                 except httpx.TimeoutException as exc:
-                    if attempt >= self.max_retries:
-                        raise OpenRouterTimeoutError("Le flux OpenRouter a expiré.") from exc
+                    self._circuit.failure()
+                    if emitted or attempt >= self.max_retries:
+                        raise OpenRouterTimeoutError(
+                            "Le flux OpenRouter a expiré."
+                        ) from exc
                     await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
                 except httpx.HTTPError as exc:
-                    if attempt >= self.max_retries:
-                        raise OpenRouterTransportError(f"Erreur réseau OpenRouter : {exc}") from exc
+                    self._circuit.failure()
+                    if emitted or attempt >= self.max_retries:
+                        raise OpenRouterTransportError(
+                            f"Erreur réseau OpenRouter : {exc}"
+                        ) from exc
                     await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
         except BaseException as exc:
             self._fail_usage(record, exc)
@@ -1129,7 +1294,9 @@ class OpenRouterClient:
     def add_message(self, role: str, content: Any, **extra: Any) -> None:
         """Ajoute un message à la conversation courante."""
         if not role:
-            raise OpenRouterConfigurationError("Le rôle du message ne peut pas être vide.")
+            raise OpenRouterConfigurationError(
+                "Le rôle du message ne peut pas être vide."
+            )
         message: Message = {"role": role, "content": content}
         message.update(extra)
         self._messages.append(message)
@@ -1160,33 +1327,61 @@ class OpenRouterClient:
         de déduplication avant de l'exécuter.
         """
         if not name or not callable(handler):
-            raise OpenRouterConfigurationError("Un outil doit avoir un nom et un handler appelable.")
+            raise OpenRouterConfigurationError(
+                "Un outil doit avoir un nom et un handler appelable."
+            )
         if dedupe_window < 0:
-            raise OpenRouterConfigurationError("dedupe_window doit être positif ou nul.")
-        schema = dict(parameters or {"type": "object", "properties": {}})
+            raise OpenRouterConfigurationError(
+                "dedupe_window doit être positif ou nul."
+            )
+        schema = copy.deepcopy(dict(parameters or {"type": "object", "properties": {}}))
         if schema.get("type") != "object":
-            raise OpenRouterConfigurationError("Le schéma des paramètres doit être un objet JSON.")
-        self._tools[name] = RegisteredTool(
-            name=name,
-            description=description,
-            parameters=schema,
-            handler=handler,
-            strict=strict,
-            side_effect=side_effect,
-            dedupe_window=float(dedupe_window),
-        )
+            raise OpenRouterConfigurationError(
+                "Le schéma des paramètres doit être un objet JSON."
+            )
+        with self._tools_lock:
+            self._tools[name] = RegisteredTool(
+                name=name,
+                description=description,
+                parameters=schema,
+                handler=handler,
+                strict=strict,
+                side_effect=side_effect,
+                dedupe_window=float(dedupe_window),
+            )
+            self._tool_definitions_json = None
         return self
 
     def unregister_tool(self, name: str) -> None:
-        self._tools.pop(name, None)
+        with self._tools_lock:
+            removed = self._tools.pop(name, None)
+            if removed is not None:
+                self._tool_definitions_json = None
 
     def tool_definitions(self) -> list[dict[str, Any]]:
-        """Retourne les définitions JSON envoyées au modèle."""
-        return [tool.definition for tool in self._tools.values()]
+        """Retourne une copie isolée des définitions JSON envoyées au modèle.
+
+        La représentation sérialisée est construite une seule fois par version
+        du registre puis invalidée à chaque register/unregister. Désérialiser le
+        cache fournit à chaque appel des objets mutables indépendants : un
+        appelant peut modifier son résultat sans corrompre les paramètres des
+        :class:`RegisteredTool` ni les appels suivants.
+        """
+        with self._tools_lock:
+            cached = self._tool_definitions_json
+            if cached is None:
+                cached = json.dumps(
+                    [tool.definition for tool in self._tools.values()],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                self._tool_definitions_json = cached
+            return json.loads(cached)
 
     def get_registered_tool(self, name: str) -> RegisteredTool | None:
         """Retourne les métadonnées locales d'un outil enregistré."""
-        return self._tools.get(name)
+        with self._tools_lock:
+            return self._tools.get(name)
 
     def execute_tool_call(
         self,
@@ -1206,9 +1401,13 @@ class OpenRouterClient:
         try:
             message = response["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise OpenRouterError("Réponse OpenRouter sans message assistant exploitable.") from exc
+            raise OpenRouterError(
+                "Réponse OpenRouter sans message assistant exploitable."
+            ) from exc
         if not isinstance(message, Mapping):
-            raise OpenRouterError("Le message assistant renvoyé par OpenRouter est invalide.")
+            raise OpenRouterError(
+                "Le message assistant renvoyé par OpenRouter est invalide."
+            )
         return dict(message)
 
     @staticmethod
@@ -1217,7 +1416,9 @@ class OpenRouterClient:
         content = message.get("content", "")
         if isinstance(content, str):
             return content
-        if isinstance(content, Sequence) and not isinstance(content, (str, bytes, bytearray)):
+        if isinstance(content, Sequence) and not isinstance(
+            content, (str, bytes, bytearray)
+        ):
             parts = []
             for item in content:
                 if isinstance(item, Mapping) and isinstance(item.get("text"), str):
@@ -1232,7 +1433,11 @@ class OpenRouterClient:
     @staticmethod
     def _tool_calls(message: Mapping[str, Any]) -> list[Mapping[str, Any]]:
         calls = message.get("tool_calls", [])
-        return list(calls) if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)) else []
+        return (
+            list(calls)
+            if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes))
+            else []
+        )
 
     @staticmethod
     def _serialize_tool_result(value: Any) -> str:
@@ -1243,16 +1448,21 @@ class OpenRouterClient:
         except (TypeError, ValueError):
             return str(value)
 
-    def _run_tool_sync(self, call: Mapping[str, Any], *, raise_tool_errors: bool) -> Message:
+    def _run_tool_sync(
+        self, call: Mapping[str, Any], *, raise_tool_errors: bool
+    ) -> Message:
         function = call.get("function", {})
         if not isinstance(function, Mapping):
             function = {}
         name = function.get("name") or call.get("name")
         tool_id = str(call.get("id") or f"call_{uuid.uuid4().hex}")
-        tool = self._tools.get(str(name))
+        with self._tools_lock:
+            tool = self._tools.get(str(name))
         try:
             if tool is None:
-                raise ToolExecutionError(f"Outil inconnu demandé par le modèle : {name}")
+                raise ToolExecutionError(
+                    f"Outil inconnu demandé par le modèle : {name}"
+                )
             raw_arguments = function.get("arguments", call.get("arguments", {}))
             if isinstance(raw_arguments, str):
                 arguments = json.loads(raw_arguments or "{}")
@@ -1272,18 +1482,28 @@ class OpenRouterClient:
                     raise
                 raise ToolExecutionError(f"Échec de l'outil {name}: {exc}") from exc
             content = self._serialize_tool_result({"error": str(exc)})
-        return {"role": "tool", "tool_call_id": tool_id, "name": str(name), "content": content}
+        return {
+            "role": "tool",
+            "tool_call_id": tool_id,
+            "name": str(name),
+            "content": content,
+        }
 
-    async def _run_tool_async(self, call: Mapping[str, Any], *, raise_tool_errors: bool) -> Message:
+    async def _run_tool_async(
+        self, call: Mapping[str, Any], *, raise_tool_errors: bool
+    ) -> Message:
         function = call.get("function", {})
         if not isinstance(function, Mapping):
             function = {}
         name = function.get("name") or call.get("name")
         tool_id = str(call.get("id") or f"call_{uuid.uuid4().hex}")
-        tool = self._tools.get(str(name))
+        with self._tools_lock:
+            tool = self._tools.get(str(name))
         try:
             if tool is None:
-                raise ToolExecutionError(f"Outil inconnu demandé par le modèle : {name}")
+                raise ToolExecutionError(
+                    f"Outil inconnu demandé par le modèle : {name}"
+                )
             raw_arguments = function.get("arguments", call.get("arguments", {}))
             if isinstance(raw_arguments, str):
                 arguments = json.loads(raw_arguments or "{}")
@@ -1301,7 +1521,12 @@ class OpenRouterClient:
                     raise
                 raise ToolExecutionError(f"Échec de l'outil {name}: {exc}") from exc
             content = self._serialize_tool_result({"error": str(exc)})
-        return {"role": "tool", "tool_call_id": tool_id, "name": str(name), "content": content}
+        return {
+            "role": "tool",
+            "tool_call_id": tool_id,
+            "name": str(name),
+            "content": content,
+        }
 
     def run(
         self,
@@ -1316,9 +1541,13 @@ class OpenRouterClient:
     ) -> str:
         """Exécute une conversation agentique et retourne la réponse finale."""
         if not isinstance(prompt, str) or not prompt.strip():
-            raise OpenRouterConfigurationError("Le prompt doit être une chaîne non vide.")
+            raise OpenRouterConfigurationError(
+                "Le prompt doit être une chaîne non vide."
+            )
         if max_tool_rounds < 0:
-            raise OpenRouterConfigurationError("max_tool_rounds doit être positif ou nul.")
+            raise OpenRouterConfigurationError(
+                "max_tool_rounds doit être positif ou nul."
+            )
         self.add_message("user", prompt)
 
         for round_number in range(max_tool_rounds + 1):
@@ -1341,10 +1570,13 @@ class OpenRouterClient:
                     f"Le modèle a dépassé max_tool_rounds={max_tool_rounds}."
                 )
             self._messages.extend(
-                self._run_tool_sync(call, raise_tool_errors=raise_tool_errors) for call in calls
+                self._run_tool_sync(call, raise_tool_errors=raise_tool_errors)
+                for call in calls
             )
 
-        raise AgentLoopLimitError("La boucle agentique s'est terminée sans réponse finale.")
+        raise AgentLoopLimitError(
+            "La boucle agentique s'est terminée sans réponse finale."
+        )
 
     async def run_async(
         self,
@@ -1360,9 +1592,13 @@ class OpenRouterClient:
     ) -> str:
         """Version asynchrone de :meth:`run`, compatible avec des outils async."""
         if not isinstance(prompt, str) or not prompt.strip():
-            raise OpenRouterConfigurationError("Le prompt doit être une chaîne non vide.")
+            raise OpenRouterConfigurationError(
+                "Le prompt doit être une chaîne non vide."
+            )
         if max_tool_rounds < 0:
-            raise OpenRouterConfigurationError("max_tool_rounds doit être positif ou nul.")
+            raise OpenRouterConfigurationError(
+                "max_tool_rounds doit être positif ou nul."
+            )
         self.add_message("user", prompt)
 
         for round_number in range(max_tool_rounds + 1):
@@ -1386,16 +1622,23 @@ class OpenRouterClient:
                 )
             if execute_tools_concurrently:
                 results = await asyncio.gather(
-                    *(self._run_tool_async(call, raise_tool_errors=raise_tool_errors) for call in calls)
+                    *(
+                        self._run_tool_async(call, raise_tool_errors=raise_tool_errors)
+                        for call in calls
+                    )
                 )
                 self._messages.extend(results)
             else:
                 for call in calls:
                     self._messages.append(
-                        await self._run_tool_async(call, raise_tool_errors=raise_tool_errors)
+                        await self._run_tool_async(
+                            call, raise_tool_errors=raise_tool_errors
+                        )
                     )
 
-        raise AgentLoopLimitError("La boucle agentique s'est terminée sans réponse finale.")
+        raise AgentLoopLimitError(
+            "La boucle agentique s'est terminée sans réponse finale."
+        )
 
     def stream_run(self, prompt: str, **kwargs: Any) -> Generator[str, None, None]:
         """Diffuse une réponse texte simple et met à jour l'historique.
@@ -1404,7 +1647,9 @@ class OpenRouterClient:
         flux ; utilisez :meth:`run` ou :meth:`run_async` pour un agent outillé.
         """
         if not isinstance(prompt, str) or not prompt.strip():
-            raise OpenRouterConfigurationError("Le prompt doit être une chaîne non vide.")
+            raise OpenRouterConfigurationError(
+                "Le prompt doit être une chaîne non vide."
+            )
         self.add_message("user", prompt)
         fragments: list[str] = []
         for fragment in self.stream_text(

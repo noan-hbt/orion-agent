@@ -19,6 +19,41 @@ def new_correlation_id() -> str:
     return uuid.uuid4().hex
 
 
+def _get(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def collect_observability(application: Any) -> dict[str, Any]:
+    """Collect safe operational state exposed by core runtime services.
+
+    This deliberately avoids generic object serialization: a service must
+    provide an explicit ``snapshot()`` contract before its data is surfaced.
+    That prevents action arguments/results and other accidental payloads from
+    leaking into observability output.
+    """
+    runtime = _get(application, "runtime")
+    if runtime is None and _get(application, "action_ledger") is not None:
+        runtime = application
+    ledger = _get(runtime, "action_ledger") if runtime is not None else None
+    ledger_snapshot = None
+    snapshot = getattr(ledger, "snapshot", None)
+    if callable(snapshot):
+        try:
+            ledger_snapshot = snapshot()
+        except Exception:
+            ledger_snapshot = {
+                "component": "action_ledger",
+                "available": False,
+                "closed": bool(getattr(ledger, "_closed", False)),
+            }
+    return {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "action_ledger": ledger_snapshot,
+    }
+
+
 class Metrics:
     def __init__(self) -> None:
         self.counters: Counter[str] = Counter()
@@ -71,5 +106,41 @@ def health(config_path: str | os.PathLike[str] = "orion.toml") -> dict[str, Any]
 
 def readiness(config_path: str | os.PathLike[str] = "orion.toml") -> dict[str, Any]:
     result = doctor(config_path)
-    result["ready"] = bool(result["ok"])
+    if not result["ok"]:
+        result["ready"] = False
+        return result
+
+    from orion_config import OrionConfig
+
+    config = OrionConfig.from_file(config_path)
+    failures: list[dict[str, str]] = []
+
+    api_key_env = config.llm.api_key_env.strip()
+    if not os.getenv(api_key_env):
+        failures.append({
+            "code": "missing_env",
+            "name": api_key_env,
+            "component": "llm",
+        })
+
+    core_path = config.path(config.prompt.core_path)
+    if not os.path.isfile(core_path):
+        failures.append({
+            "code": "missing_file",
+            "path": core_path,
+            "component": "prompt_core",
+        })
+
+    if config.reflection.enabled:
+        reflection_path = config.path(config.reflection.prompt_path)
+        if not os.path.isfile(reflection_path):
+            failures.append({
+                "code": "missing_file",
+                "path": reflection_path,
+                "component": "reflection",
+            })
+
+    result["ready"] = not failures
+    if failures:
+        result["failures"] = failures
     return result

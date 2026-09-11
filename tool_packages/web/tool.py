@@ -8,10 +8,12 @@ en bibliothèque standard afin qu'un tool installé soit immédiatement utilisab
 from __future__ import annotations
 
 import copy
+import http.client
 import ipaddress
 import json
 import os
 import socket
+import ssl
 import threading
 import time
 from collections import OrderedDict
@@ -19,8 +21,8 @@ from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, quote, quote_plus, unquote, urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+from urllib.request import Request, build_opener
 from xml.etree import ElementTree
 
 
@@ -212,24 +214,6 @@ class _DuckDuckGoParser(HTMLParser):
             self._snippet_tag = None
 
 
-class _SafeRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, allow_private: bool) -> None:
-        super().__init__()
-        self.allow_private = allow_private
-
-    def redirect_request(
-        self,
-        req: Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> Request | None:
-        _validate_url(newurl, allow_private=self.allow_private)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
 def _settings(context: Any) -> Mapping[str, Any]:
     if context is None:
         return {}
@@ -248,33 +232,214 @@ def _cache_key(kind: str, **values: Any) -> str:
     return kind + ":" + json.dumps(values, ensure_ascii=False, sort_keys=True, default=str)
 
 
+def _public_ip(address: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError as exc:
+        raise ValueError(f"Adresse IP invalide : {address}") from exc
+    if not ip.is_global:
+        raise ValueError("L'accès aux adresses réseau privées est désactivé.")
+    return ip
+
+
+def _validated_addresses(
+    hostname: str,
+    port: int,
+    *,
+    allow_private: bool,
+) -> list[tuple[int, str]]:
+    """Resolve once, validate every result, and return addresses safe to dial.
+
+    The returned IP literals are the exact endpoints used by the transport;
+    callers must not pass ``hostname`` back to a resolver before connecting.
+    """
+    try:
+        literal = ipaddress.ip_address(hostname.split("%", 1)[0])
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not allow_private:
+            _public_ip(hostname)
+        family = socket.AF_INET6 if literal.version == 6 else socket.AF_INET
+        return [(family, hostname)]
+
+    try:
+        infos = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError(f"Domaine introuvable : {hostname}") from exc
+
+    addresses: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    for family, socktype, _proto, _canonname, sockaddr in infos:
+        if socktype not in {0, socket.SOCK_STREAM} or family not in {socket.AF_INET, socket.AF_INET6}:
+            continue
+        address = str(sockaddr[0])
+        if not allow_private:
+            _public_ip(address)
+        item = (family, address)
+        if item not in seen:
+            seen.add(item)
+            addresses.append(item)
+    if not addresses:
+        raise ValueError(f"Domaine introuvable : {hostname}")
+    return addresses
+
+
 def _validate_url(url: str, *, allow_private: bool) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise ValueError("L'URL doit utiliser HTTP ou HTTPS.")
-    if allow_private:
-        return
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Les identifiants intégrés à l'URL sont interdits.")
     try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
-            )
-        }
-    except socket.gaierror as exc:
-        raise ValueError(f"Domaine introuvable : {parsed.hostname}") from exc
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            raise ValueError("L'accès aux adresses réseau privées est désactivé.")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("Port URL invalide.") from exc
+    _validated_addresses(parsed.hostname, port, allow_private=allow_private)
+
+
+def _dial_validated_address(
+    family: int,
+    address: str,
+    port: int,
+    timeout: int,
+) -> socket.socket:
+    """Connect to an already validated numeric IP without DNS resolution."""
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    destination: tuple[Any, ...]
+    if family == socket.AF_INET6:
+        destination = (address, port, 0, 0)
+    else:
+        destination = (address, port)
+    try:
+        sock.connect(destination)
+    except Exception:
+        sock.close()
+        raise
+    return sock
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(
+        self,
+        hostname: str,
+        *,
+        port: int,
+        family: int,
+        address: str,
+        timeout: int,
+    ) -> None:
+        super().__init__(hostname, port=port, timeout=timeout)
+        self._orion_family = family
+        self._orion_address = address
+
+    def connect(self) -> None:
+        self.sock = _dial_validated_address(
+            self._orion_family,
+            self._orion_address,
+            int(self.port),
+            int(self.timeout),
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(
+        self,
+        hostname: str,
+        *,
+        port: int,
+        family: int,
+        address: str,
+        timeout: int,
+    ) -> None:
+        context = ssl.create_default_context()
+        super().__init__(hostname, port=port, timeout=timeout, context=context)
+        self._orion_family = family
+        self._orion_address = address
+
+    def connect(self) -> None:
+        raw = _dial_validated_address(
+            self._orion_family,
+            self._orion_address,
+            int(self.port),
+            int(self.timeout),
+        )
+        try:
+            # ``self.host`` is the original URL hostname, not the pinned IP.
+            # This preserves both TLS SNI and certificate hostname checking.
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+        except Exception:
+            raw.close()
+            raise
+
+
+def _connection_for_address(
+    *,
+    scheme: str,
+    hostname: str,
+    port: int,
+    family: int,
+    address: str,
+    timeout: int,
+) -> http.client.HTTPConnection:
+    cls = _PinnedHTTPSConnection if scheme == "https" else _PinnedHTTPConnection
+    return cls(
+        hostname,
+        port=port,
+        family=family,
+        address=address,
+        timeout=timeout,
+    )
+
+
+def _request_pinned(
+    url: str,
+    *,
+    timeout: int,
+    headers: Mapping[str, str],
+    allow_private: bool,
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("L'URL doit utiliser HTTP ou HTTPS.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Les identifiants intégrés à l'URL sont interdits.")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("Port URL invalide.") from exc
+
+    addresses = _validated_addresses(parsed.hostname, port, allow_private=allow_private)
+    target = parsed.path or "/"
+    if parsed.params:
+        target += ";" + parsed.params
+    if parsed.query:
+        target += "?" + parsed.query
+
+    last_error: BaseException | None = None
+    for family, address in addresses:
+        connection = _connection_for_address(
+            scheme=parsed.scheme,
+            hostname=parsed.hostname,
+            port=port,
+            family=family,
+            address=address,
+            timeout=timeout,
+        )
+        try:
+            connection.request("GET", target, headers=dict(headers))
+            return connection, connection.getresponse()
+        except (OSError, TimeoutError, ssl.SSLError, http.client.HTTPException) as exc:
+            last_error = exc
+            connection.close()
+    if last_error is not None:
+        raise last_error
+    raise OSError("Aucune adresse réseau utilisable.")
 
 
 def _open_url(
@@ -286,32 +451,49 @@ def _open_url(
     allow_private: bool,
     accept: str,
 ) -> tuple[str, str, str | None, bytes, bool]:
-    _validate_url(url, allow_private=allow_private)
-    opener = build_opener(_SafeRedirectHandler(allow_private))
-    request = Request(
-        url,
-        headers={
-            "User-Agent": user_agent,
-            "Accept": accept,
-            "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-            "Accept-Encoding": "identity",
-        },
-    )
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": accept,
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Accept-Encoding": "identity",
+    }
+    current_url = url
     try:
-        with opener.open(request, timeout=timeout) as response:
-            final_url = response.geturl()
-            _validate_url(final_url, allow_private=allow_private)
-            body = response.read(max_bytes + 1)
-            return (
-                final_url,
-                response.headers.get_content_type(),
-                response.headers.get_content_charset(),
-                body[:max_bytes],
-                len(body) > max_bytes,
+        for _redirect_count in range(11):
+            connection, response = _request_pinned(
+                current_url,
+                timeout=timeout,
+                headers=headers,
+                allow_private=allow_private,
             )
-    except HTTPError as exc:
-        raise RuntimeError(f"Le site a répondu HTTP {exc.code}.") from exc
-    except (URLError, TimeoutError, OSError) as exc:
+            try:
+                if response.status in {301, 302, 303, 307, 308}:
+                    location = response.getheader("Location")
+                    if not location:
+                        raise RuntimeError(
+                            f"Le site a répondu HTTP {response.status} sans destination de redirection."
+                        )
+                    # The next loop iteration resolves, validates, and pins the
+                    # redirect target before any bytes are sent to it.
+                    current_url = urljoin(current_url, location)
+                    continue
+                if response.status >= 400:
+                    raise RuntimeError(f"Le site a répondu HTTP {response.status}.")
+                body = response.read(max_bytes + 1)
+                return (
+                    current_url,
+                    response.headers.get_content_type(),
+                    response.headers.get_content_charset(),
+                    body[:max_bytes],
+                    len(body) > max_bytes,
+                )
+            finally:
+                response.close()
+                connection.close()
+        raise RuntimeError("Trop de redirections HTTP.")
+    except RuntimeError:
+        raise
+    except (URLError, TimeoutError, OSError, ssl.SSLError, http.client.HTTPException) as exc:
         reason = getattr(exc, "reason", exc)
         raise RuntimeError(f"Site inaccessible : {reason}") from exc
 
@@ -562,7 +744,7 @@ def web_search(
                         "engine": "tavily",
                         "results": results,
                         "cached": False,
-                        "message": "Résultats web trouvés via Tavily. Lis les sources pertinentes avec web_fetch avant d'affirmer un fait important.",
+                        "message": "Résultats web trouvés via Tavily. Lis les sources pertinentes avec web(action='fetch', ...) avant d'affirmer un fait important.",
                     }
                     _SEARCH_CACHE.put(cache_key, payload, ttl=cache_ttl, size=cache_size)
                     return payload
@@ -603,7 +785,7 @@ def web_search(
                         "engine": engine,
                         "results": results,
                         "cached": False,
-                        "message": "Résultats publics trouvés. Lis les sources pertinentes avec web_fetch avant d'affirmer un fait important.",
+                        "message": "Résultats publics trouvés. Lis les sources pertinentes avec web(action='fetch', ...) avant d'affirmer un fait important.",
                     }
                     _SEARCH_CACHE.put(cache_key, payload, ttl=cache_ttl, size=cache_size)
                     return payload
@@ -619,7 +801,7 @@ def web_search(
         "results": [],
         "cached": False,
         "errors": errors,
-        "message": "Aucun moteur n'a fourni de résultat exploitable. Essaie une requête plus précise ou une source connue avec web_fetch.",
+        "message": "Aucun moteur n'a fourni de résultat exploitable. Essaie une requête plus précise ou une source connue avec web(action='fetch', ...).",
     }
     _SEARCH_CACHE.put(cache_key, payload, ttl=min(cache_ttl, 60), size=cache_size)
     return payload
@@ -748,105 +930,107 @@ def fetch_json_api(url: str, *, _context: Any = None) -> str:
     return text
 
 
-def shorten_url(url: str, *, _context: Any = None) -> str:
-    """Crée un lien court via TinyURL, comme dans l'ancien tool."""
-    target = url.strip()
-    settings = _settings(_context)
-    _validate_url(target, allow_private=bool(settings.get("allow_private", False)))
-    timeout = _as_int(settings.get("timeout", 20), 20, minimum=1, maximum=120)
-    user_agent = str(settings.get("user_agent", DEFAULT_USER_AGENT))
-    endpoint = f"https://tinyurl.com/api-create.php?url={quote(target, safe='')}"
-    _, _, charset, body, _ = _open_url(
-        endpoint,
-        timeout=timeout,
-        user_agent=user_agent,
-        max_bytes=10_000,
-        allow_private=False,
-        accept="text/plain,*/*;q=0.5",
-    )
-    result = _decode(body, charset).strip()
-    if not result.startswith(("https://", "http://")):
-        raise RuntimeError("Le service de raccourcissement n'a pas renvoyé de lien valide.")
-    return result
+def web(
+    action: str,
+    *,
+    query: str | None = None,
+    url: str | None = None,
+    max_results: int = 5,
+    domain: str | None = None,
+    max_chars: int = 12000,
+    _context: Any = None,
+) -> dict[str, Any] | str:
+    """Single model-facing entrypoint for public web read operations."""
+    selected = str(action or "").strip().lower()
+    if selected == "search":
+        if query is None or not str(query).strip():
+            raise ValueError("L'action 'search' exige une requête non vide.")
+        return web_search(
+            str(query),
+            max_results=max_results,
+            domain=domain,
+            _context=_context,
+        )
+    if selected == "fetch":
+        if url is None or not str(url).strip():
+            raise ValueError("L'action 'fetch' exige une URL non vide.")
+        return web_fetch(str(url), max_chars=max_chars, _context=_context)
+    if selected == "json":
+        if url is None or not str(url).strip():
+            raise ValueError("L'action 'json' exige une URL non vide.")
+        return fetch_json_api(str(url), _context=_context)
+    raise ValueError("Action web inconnue. Valeurs autorisées : search, fetch, json.")
 
 
-TOOLS = [web_search, fetch_url, fetch_json_api, shorten_url]
+TOOLS = [web]
 
 
 def register(client: Any, context: Any = None) -> None:
     client.register_tool(
-        "web_search",
-        lambda query, max_results=5, domain=None: web_search(
-            query,
-            max_results,
-            domain,
+        "web",
+        lambda action, query=None, url=None, max_results=5, domain=None, max_chars=12000: web(
+            action,
+            query=query,
+            url=url,
+            max_results=max_results,
+            domain=domain,
+            max_chars=max_chars,
             _context=context,
         ),
         description=(
-            "Rechercher des sources web publiques, avec titre, URL et extrait. "
-            "Utilise ensuite web_fetch sur les sources importantes avant de conclure."
+            "Accéder au web public en lecture seule avec un seul point d'entrée. "
+            "Contrats exacts : web(action='search', query=<texte>[, max_results, domain]); "
+            "web(action='fetch', url=<https://...>[, max_chars]); "
+            "web(action='json', url=<https://...>). "
+            "N'utilise pas query avec fetch/json et n'invente pas d'autres actions."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Question ou mots-clés précis."},
-                "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "fetch", "json"],
+                    "description": (
+                        "Choisir exactement une action. search exige query; fetch/json exigent url."
+                    ),
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Requis pour action='search' : question ou mots-clés précis.",
+                },
+                "url": {
+                    "type": "string",
+                    "description": "Requis pour action='fetch' ou action='json' : URL HTTP(S) publique.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Optionnel, uniquement pour action='search'.",
+                },
                 "domain": {"type": "string", "description": "Optionnel : limiter à un domaine, ex. who.int."},
+                "max_chars": {
+                    "type": "integer",
+                    "minimum": 500,
+                    "maximum": 100000,
+                    "description": "Limite de texte pour action='fetch'.",
+                },
             },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-    )
-    client.register_tool(
-        "web_fetch",
-        lambda url, max_chars=12000: web_fetch(url, max_chars, _context=context),
-        description=(
-            "Lire le texte utile d'une page HTTP ou HTTPS publique. "
-            "Retourne le titre, la description, l'URL finale et le texte extrait."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "url": {"type": "string"},
-                "max_chars": {"type": "integer", "minimum": 500, "maximum": 100000},
-            },
-            "required": ["url"],
-            "additionalProperties": False,
-        },
-    )
-    client.register_tool(
-        "fetch_url",
-        lambda url: fetch_url(url, _context=context),
-        description=(
-            "Lire une page web publique et retourner directement son texte utile. "
-            "Alias de compatibilité de l'ancien tool web."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
-            "additionalProperties": False,
-        },
-    )
-    client.register_tool(
-        "fetch_json_api",
-        lambda url: fetch_json_api(url, _context=context),
-        description="Récupérer et formater la réponse JSON d'une API publique HTTP ou HTTPS.",
-        parameters={
-            "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
-            "additionalProperties": False,
-        },
-    )
-    client.register_tool(
-        "shorten_url",
-        lambda url: shorten_url(url, _context=context),
-        description="Créer un lien court public via TinyURL.",
-        parameters={
-            "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
+            "required": ["action"],
+            "allOf": [
+                {
+                    "if": {"properties": {"action": {"const": "search"}}, "required": ["action"]},
+                    "then": {"required": ["action", "query"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "fetch"}}, "required": ["action"]},
+                    "then": {"required": ["action", "url"]},
+                },
+                {
+                    "if": {"properties": {"action": {"const": "json"}}, "required": ["action"]},
+                    "then": {"required": ["action", "url"]},
+                },
+            ],
             "additionalProperties": False,
         },
     )

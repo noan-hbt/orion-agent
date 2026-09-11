@@ -5,11 +5,12 @@ sub-agent notifications may arrive on different worker threads.  This module
 keeps that transport concern out of the terminal UI: outputs are correlated,
 deduplicated, and projected into a stable transcript.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
-from typing import Any, Iterable
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -48,23 +49,52 @@ class Transcript:
         if explicit_key:
             key = f"idempotency:{explicit_key}"
         else:
-            key = repr((oid, getattr(output, "correlation_id", None),
-                        meta.get("event_type", meta.get("type", meta.get("kind", "message"))),
-                        getattr(output, "text", None) or getattr(output, "content", ""),
-                        meta.get("state_version"), meta.get("sequence")))
+            key = repr(
+                (
+                    oid,
+                    getattr(output, "correlation_id", None),
+                    meta.get(
+                        "event_type", meta.get("type", meta.get("kind", "message"))
+                    ),
+                    getattr(output, "text", None) or getattr(output, "content", ""),
+                    meta.get("state_version"),
+                    meta.get("sequence"),
+                )
+            )
         with self._lock:
             if key in self._seen:
                 return None
             self._seen.add(key)
-            raw_kind = meta.get("event_type", meta.get("type", meta.get("kind", "message")))
+            raw_kind = meta.get(
+                "event_type", meta.get("type", meta.get("kind", "message"))
+            )
             kind = str(raw_kind)
             state = meta.get("state", meta.get("status"))
             text = str(getattr(output, "text", None) or getattr(output, "content", ""))
-            progress = bool(meta.get("progress")) or kind.endswith(".progress") or kind == "progress"
-            delta = bool(meta.get("delta")) or kind in {"delta", "message.delta", "output.delta"}
-            final = bool(meta.get("final")) or kind.endswith((".completed", ".failed", ".cancelled", ".final"))
-            event = CockpitEvent(text, getattr(output, "correlation_id", None), str(oid) if oid else None,
-                                 kind, str(state) if state is not None else None, progress, delta, final, meta)
+            progress = (
+                bool(meta.get("progress"))
+                or kind.endswith(".progress")
+                or kind == "progress"
+            )
+            delta = bool(meta.get("delta")) or kind in {
+                "delta",
+                "message.delta",
+                "output.delta",
+            }
+            final = bool(meta.get("final")) or kind.endswith(
+                (".completed", ".failed", ".cancelled", ".final")
+            )
+            event = CockpitEvent(
+                text,
+                getattr(output, "correlation_id", None),
+                str(oid) if oid else None,
+                kind,
+                str(state) if state is not None else None,
+                progress,
+                delta,
+                final,
+                meta,
+            )
             if progress:
                 self.progress.append(event)
             else:

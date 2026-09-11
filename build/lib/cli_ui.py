@@ -22,13 +22,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 try:
-    from rich.console import Console, Group
+    from rich.console import Console
     from rich.cells import cell_len as _rich_cell_len
     from rich.markdown import Markdown
     from rich.padding import Padding
-    # Panels are intentionally not used by the transcript renderer.  Keep
-    # the import for backwards-compatible status/item integrations below.
-    from rich.panel import Panel
+
     from rich.table import Table
     from rich.text import Text
 
@@ -38,6 +36,7 @@ except ImportError:  # pragma: no cover - repli pour installation incomplète
 
     def _rich_cell_len(value: str) -> int:
         return len(value)
+
 
 try:
     from prompt_toolkit import PromptSession
@@ -83,7 +82,9 @@ _COMMANDS = (
 REQUEST_STATES = ("queued", "running", "streaming", "succeeded", "failed", "canceled")
 _TERMINAL_STATES = frozenset({"succeeded", "failed", "canceled"})
 _REQUEST_TRANSITIONS = {
-    "queued": frozenset({"queued", "running", "streaming", "succeeded", "failed", "canceled"}),
+    "queued": frozenset(
+        {"queued", "running", "streaming", "succeeded", "failed", "canceled"}
+    ),
     "running": frozenset({"running", "streaming", "succeeded", "failed", "canceled"}),
     "streaming": frozenset({"streaming", "succeeded", "failed", "canceled"}),
     "succeeded": frozenset({"succeeded"}),
@@ -137,11 +138,21 @@ class CLIEvent:
     text: str | None = None
     error: str | None = None
     meta: Mapping[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: datetime.now().astimezone().isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now().astimezone().isoformat()
+    )
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"kind": self.kind}
-        for key in ("request_id", "correlation_id", "state", "seq", "text", "error", "timestamp"):
+        for key in (
+            "request_id",
+            "correlation_id",
+            "state",
+            "seq",
+            "text",
+            "error",
+            "timestamp",
+        ):
             value = getattr(self, key)
             if value is not None:
                 result[key] = value
@@ -166,7 +177,12 @@ _COMMAND_SPECS: dict[str, tuple[int, int, frozenset[str]]] = {
     "clear": (0, 0, frozenset({"help"})),
     "exit": (0, 0, frozenset({"help", "force"})),
 }
-_COMMAND_ALIASES = {"commands": "help", "history": "requests", "events": "requests", "quit": "exit"}
+_COMMAND_ALIASES = {
+    "commands": "help",
+    "history": "requests",
+    "events": "requests",
+    "quit": "exit",
+}
 
 # Keep the help catalogue next to the parser contract.  The old help text was
 # maintained separately and silently drifted: ``/requests``, ``/retry`` and
@@ -263,10 +279,16 @@ class CLIEventRenderer:
     def render(self, event: CLIEvent | Mapping[str, Any]) -> str:
         payload = self._mapping(event)
         if self.mode == "jsonl":
-            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+            line = json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":"), default=str
+            )
         else:
             kind = str(payload.get("kind", "event"))
-            fields = [f"{key}={payload[key]}" for key in ("request_id", "correlation_id", "state", "seq") if key in payload]
+            fields = [
+                f"{key}={payload[key]}"
+                for key in ("request_id", "correlation_id", "state", "seq")
+                if key in payload
+            ]
             text = payload.get("text")
             if text:
                 fields.append(str(text))
@@ -279,7 +301,15 @@ class CLIEventRenderer:
             # Les mises à jour de jobs restent utiles en mode pipe sans
             # exposer le payload interne complet ni des secrets éventuels.
             if kind.startswith("job.") and isinstance(payload.get("meta"), Mapping):
-                safe_job_fields = ("owner", "instance", "team", "objective", "attempt", "result_summary", "summary")
+                safe_job_fields = (
+                    "owner",
+                    "instance",
+                    "team",
+                    "objective",
+                    "attempt",
+                    "result_summary",
+                    "summary",
+                )
                 fields.extend(
                     f"{key}={payload['meta'][key]}"
                     for key in safe_job_fields
@@ -357,8 +387,15 @@ class CLIRequestTracker:
         self._active: str | None = None
         self._stopped = False
 
-    def create(self, text: str = "", *, request_id: str | None = None, correlation_id: str | None = None,
-               parent_request_id: str | None = None, context: Mapping[str, Any] | None = None) -> CLIRequest:
+    def create(
+        self,
+        text: str = "",
+        *,
+        request_id: str | None = None,
+        correlation_id: str | None = None,
+        parent_request_id: str | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> CLIRequest:
         with self._lock:
             if self._stopped:
                 raise RuntimeError("Le tracker CLI est arrete.")
@@ -366,9 +403,15 @@ class CLIRequestTracker:
             if identifier in self._items:
                 return self._items[identifier]
             now = datetime.now().astimezone()
-            item = CLIRequest(identifier, str(correlation_id or identifier), text=str(text),
-                              parent_request_id=str(parent_request_id) if parent_request_id else None,
-                              context=dict(context or {}), created_at=now, updated_at=now)
+            item = CLIRequest(
+                identifier,
+                str(correlation_id or identifier),
+                text=str(text),
+                parent_request_id=str(parent_request_id) if parent_request_id else None,
+                context=dict(context or {}),
+                created_at=now,
+                updated_at=now,
+            )
             self._items[identifier] = item
             self._active = identifier
             while len(self._items) > self.max_items:
@@ -407,13 +450,20 @@ class CLIRequestTracker:
             item.state = state
             item.error = None if error is None else str(error)
             item.updated_at = datetime.now().astimezone()
-            if state in {"succeeded", "failed", "canceled"} and self._active == item.request_id:
+            if (
+                state in {"succeeded", "failed", "canceled"}
+                and self._active == item.request_id
+            ):
                 self._active = None
             return item
 
     def cancel(self, request_id: str | None = None) -> CLIRequest | None:
         with self._lock:
-            identifier = str(request_id or self._active) if (request_id or self._active) else None
+            identifier = (
+                str(request_id or self._active)
+                if (request_id or self._active)
+                else None
+            )
             if identifier is None:
                 return None
             item = self._items.get(identifier)
@@ -431,7 +481,11 @@ class CLIRequestTracker:
             return self._items.get(str(request_id))
 
     def status(self, request_id: str | None = None) -> dict[str, Any] | None:
-        item = self.get(request_id or self._active) if (request_id or self._active) else None
+        item = (
+            self.get(request_id or self._active)
+            if (request_id or self._active)
+            else None
+        )
         if item is None:
             return None
         return {
@@ -646,7 +700,11 @@ class CLIConsole:
             if self._session is None:
                 self._interactive = False
         initial_usage = next(
-            (candidate for candidate in (usage_provider, usage_ledger, cost_provider) if candidate is not None),
+            (
+                candidate
+                for candidate in (usage_provider, usage_ledger, cost_provider)
+                if candidate is not None
+            ),
             None,
         )
         if initial_usage is not None:
@@ -703,23 +761,49 @@ class CLIConsole:
         except Exception:
             return default
 
-    def threads(self, items: Sequence[Any] | None = None, *, json_output: bool = False) -> list[Any]:
+    def threads(
+        self, items: Sequence[Any] | None = None, *, json_output: bool = False
+    ) -> list[Any]:
         """Retourne et affiche les conversations (thread, intent, contexte)."""
-        values = list(items if items is not None else (self._provider_value(self._threads_provider, []) or []))
-        self.items("Conversations persistantes", values, empty="Aucune conversation persistante.", json_output=json_output)
+        values = list(
+            items
+            if items is not None
+            else (self._provider_value(self._threads_provider, []) or [])
+        )
+        self.items(
+            "Conversations persistantes",
+            values,
+            empty="Aucune conversation persistante.",
+            json_output=json_output,
+        )
         return values
 
-    def trace(self, items: Sequence[Any] | None = None, *, json_output: bool = False) -> list[Any]:
+    def trace(
+        self, items: Sequence[Any] | None = None, *, json_output: bool = False
+    ) -> list[Any]:
         """Retourne et affiche la trace de contexte, sans doublonner les entrées."""
-        values = list(items if items is not None else (self._provider_value(self._trace_provider, []) or []))
+        values = list(
+            items
+            if items is not None
+            else (self._provider_value(self._trace_provider, []) or [])
+        )
         seen: set[str] = set()
         unique: list[Any] = []
         for value in values:
-            key = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str) if isinstance(value, Mapping) else str(value)
+            key = (
+                json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+                if isinstance(value, Mapping)
+                else str(value)
+            )
             if key not in seen:
                 seen.add(key)
                 unique.append(value)
-        self.items("Trace de contexte", unique, empty="Aucune trace de contexte.", json_output=json_output)
+        self.items(
+            "Trace de contexte",
+            unique,
+            empty="Aucune trace de contexte.",
+            json_output=json_output,
+        )
         return unique
 
     # Naming used by a few integrations before UsageLedger had a public name.
@@ -757,7 +841,11 @@ class CLIConsole:
             cache_age = time.monotonic() - self._usage_cache_at
         if provider is None:
             return None
-        if cached is not None and not force and cache_age < self._usage_refresh_interval:
+        if (
+            cached is not None
+            and not force
+            and cache_age < self._usage_refresh_interval
+        ):
             return cached
         value: Any = provider
         try:
@@ -845,7 +933,9 @@ class CLIConsole:
             return ""
         calls = snapshot.get("started_calls")
         if calls is None:
-            calls = (snapshot.get("completed_calls") or 0) + (snapshot.get("inflight_calls") or 0)
+            calls = (snapshot.get("completed_calls") or 0) + (
+                snapshot.get("inflight_calls") or 0
+            )
         try:
             call_count = int(calls or 0)
         except (TypeError, ValueError):
@@ -856,13 +946,21 @@ class CLIConsole:
         estimated_value = snapshot.get("estimated_cost_usd")
         # A single record is also a useful provider contract, even when a
         # full UsageLedger snapshot is not available.
-        if known_value is None and estimated_value is None and snapshot.get("cost_usd") is not None:
+        if (
+            known_value is None
+            and estimated_value is None
+            and snapshot.get("cost_usd") is not None
+        ):
             source = str(snapshot.get("cost_source") or "openrouter").lower()
             if source in {"catalog_estimate", "estimate", "estimated"}:
                 estimated_value = snapshot.get("cost_usd")
             else:
                 known_value = snapshot.get("cost_usd")
-        if known_value is None and estimated_value is None and snapshot.get("cost") is not None:
+        if (
+            known_value is None
+            and estimated_value is None
+            and snapshot.get("cost") is not None
+        ):
             known_value = snapshot.get("cost")
         # Empty ledgers expose Decimal(0) for both buckets.  That value is not
         # evidence of a free call and should use the unknown fallback.
@@ -888,11 +986,19 @@ class CLIConsole:
             costs.append("cost ?")
         total_tokens = snapshot.get("total_tokens")
         if total_tokens is None:
-            total_tokens = (snapshot.get("prompt_tokens") or 0) + (snapshot.get("completion_tokens") or 0)
+            total_tokens = (snapshot.get("prompt_tokens") or 0) + (
+                snapshot.get("completion_tokens") or 0
+            )
         calls = snapshot.get("started_calls")
         if calls is None:
-            calls = (snapshot.get("completed_calls") or 0) + (snapshot.get("inflight_calls") or 0)
-        parts = [" / ".join(costs), f"{self._format_usage_tokens(total_tokens)} tok", f"{call_count} calls"]
+            calls = (snapshot.get("completed_calls") or 0) + (
+                snapshot.get("inflight_calls") or 0
+            )
+        parts = [
+            " / ".join(costs),
+            f"{self._format_usage_tokens(total_tokens)} tok",
+            f"{call_count} calls",
+        ]
         model = self._usage_model(snapshot)
         if include_model and model:
             parts.insert(0, str(model))
@@ -908,8 +1014,15 @@ class CLIConsole:
         if model:
             details["Modèle"] = model
         details["Coût session"] = self.usage_summary(include_model=False)
-        details["Tokens"] = snapshot.get("total_tokens", (snapshot.get("prompt_tokens") or 0) + (snapshot.get("completion_tokens") or 0))
-        details["Appels"] = snapshot.get("started_calls", snapshot.get("completed_calls", 1 if snapshot.get("call_id") else 0))
+        details["Tokens"] = snapshot.get(
+            "total_tokens",
+            (snapshot.get("prompt_tokens") or 0)
+            + (snapshot.get("completion_tokens") or 0),
+        )
+        details["Appels"] = snapshot.get(
+            "started_calls",
+            snapshot.get("completed_calls", 1 if snapshot.get("call_id") else 0),
+        )
         details["En cours"] = snapshot.get("inflight_calls", 0)
         details["Appels sans usage"] = snapshot.get("usage_missing_calls", 0)
         return details
@@ -1029,7 +1142,9 @@ class CLIConsole:
     def _state_style(self, state: str | None) -> str:
         return self._STATE_STYLES.get(self._canonical_state(state), self._MUTED)
 
-    def _print_tty_line(self, console: Any, value: str, *, style: str | None = None) -> None:
+    def _print_tty_line(
+        self, console: Any, value: str, *, style: str | None = None
+    ) -> None:
         width = self._width(console)
         clipped = self._clip(value, width, marker="..." if self._ascii else "…")
         console.print(Text(clipped, style=style) if _RICH_AVAILABLE else clipped)
@@ -1075,18 +1190,28 @@ class CLIConsole:
 
     def _glyph(self, utf8: str, ascii_value: str) -> str:
         if not self._ascii and ascii_value == ">":
-            return chr(0x276f)
+            return chr(0x276F)
         return ascii_value if self._ascii else utf8
 
-    def _activity_line(self, console: Any, text: str, *, key: str = "global", style: str | None = None) -> None:
+    def _activity_line(
+        self, console: Any, text: str, *, key: str = "global", style: str | None = None
+    ) -> None:
         """Emit one deduplicated, low prominence activity annotation."""
         normalized = " ".join(str(text).split())
         if not normalized or self._last_activity.get(key) == normalized:
             return
         self._last_activity[key] = normalized
-        self._print_tty_wrapped(console, f"{self._glyph(chr(0x25c7), '-') } {normalized}", style=style or self._MUTED)
+        self._print_tty_wrapped(
+            console,
+            f"{self._glyph(chr(0x25C7), '-')} {normalized}",
+            style=style or self._MUTED,
+        )
         return
-        self._print_tty_wrapped(console, f"  {self._glyph('·', '-')} {normalized}", style=style or self._MUTED)
+        self._print_tty_wrapped(
+            console,
+            f"  {self._glyph('·', '-')} {normalized}",
+            style=style or self._MUTED,
+        )
 
     def _conversation_prompt(self, text: str) -> None:
         # prompt-toolkit already echoes the submitted buffer; request events
@@ -1102,7 +1227,7 @@ class CLIConsole:
         with self._lock:
             self._print_tty_wrapped(
                 console,
-                f"Vous  {self._glyph(chr(0x276f), '>')}  {value}",
+                f"Vous  {self._glyph(chr(0x276F), '>')}  {value}",
                 style=self._MUTED,
             )
             return
@@ -1124,7 +1249,9 @@ class CLIConsole:
         self._active_stream = request_id
         self._stream_text.setdefault(request_id, "")
         self._stream_pending.setdefault(request_id, "")
-        self._print_tty_wrapped(console, self._assistant_heading(), style=f"bold {self._ACCENT}")
+        self._print_tty_wrapped(
+            console, self._assistant_heading(), style=f"bold {self._ACCENT}"
+        )
         return
         header = Text(self.name, style=f"bold {self._ACCENT}")
         console.print(header)
@@ -1133,7 +1260,7 @@ class CLIConsole:
         """Compact transcript heading, independent of Rich panels."""
         time_label = self._time_label(timestamp)
         suffix = f" {time_label}" if time_label else ""
-        return f"{self._glyph(chr(0x25cf), '*')} {self.name}{suffix}"
+        return f"{self._glyph(chr(0x25CF), '*')} {self.name}{suffix}"
 
     def _append_stream(self, console: Any, request_id: str, text: str) -> None:
         """Append stream fragments to one Orion block.
@@ -1189,13 +1316,17 @@ class CLIConsole:
         if self._active_stream == request_id:
             self._active_stream = None
 
-    def _close_active_stream(self, console: Any, *, except_request: str | None = None) -> None:
+    def _close_active_stream(
+        self, console: Any, *, except_request: str | None = None
+    ) -> None:
         """Close the inline stream before writing another terminal block."""
         active = self._active_stream
         if active and active != except_request and active in self._stream_open:
             self._close_stream(console, active)
 
-    def _print_response_content(self, console: Any, content: str, *, style: str | None = None) -> None:
+    def _print_response_content(
+        self, console: Any, content: str, *, style: str | None = None
+    ) -> None:
         """Render a final response as Markdown when the option is enabled."""
         if self.render_markdown and _RICH_AVAILABLE and style is None:
             # Padding gives the conversation text the same visual inset as the
@@ -1215,7 +1346,9 @@ class CLIConsole:
         timestamp: str | None = None,
     ) -> None:
         self._close_active_stream(console, except_request=request_id)
-        stream_id = request_id if request_id and request_id in self._stream_open else "stream"
+        stream_id = (
+            request_id if request_id and request_id in self._stream_open else "stream"
+        )
         had_stream = stream_id in self._stream_open
         if had_stream:
             self._close_stream(console, stream_id)
@@ -1249,14 +1382,27 @@ class CLIConsole:
             )
             return
         if waiting:
-            self._activity_line(console, normalized, key=f"request:{request_id}:wait", style=self._RUN)
+            self._activity_line(
+                console, normalized, key=f"request:{request_id}:wait", style=self._RUN
+            )
 
     def _job_line(self, console: Any, item: Any, index: int, total: int) -> None:
         if isinstance(item, Mapping):
-            identifier = item.get("id") or item.get("job_id") or item.get("request_id") or "job"
-            state = self._state_label(item.get("status") or item.get("state") or "queued")
-            owner = item.get("owner") or item.get("instance") or item.get("team") or "worker"
-            objective = item.get("objective") or item.get("label") or item.get("name") or ""
+            identifier = (
+                item.get("id") or item.get("job_id") or item.get("request_id") or "job"
+            )
+            state = self._state_label(
+                item.get("status") or item.get("state") or "queued"
+            )
+            owner = (
+                item.get("owner")
+                or item.get("instance")
+                or item.get("team")
+                or "worker"
+            )
+            objective = (
+                item.get("objective") or item.get("label") or item.get("name") or ""
+            )
         else:
             identifier, state, owner, objective = "job", "WAIT", "worker", str(item)
         width = self._width(console)
@@ -1278,7 +1424,10 @@ class CLIConsole:
         )
         self._print_tty_line(
             console,
-            prefix + self._clip(objective, max(1, width - _rich_cell_len(prefix)), marker=marker),
+            prefix
+            + self._clip(
+                objective, max(1, width - _rich_cell_len(prefix)), marker=marker
+            ),
             style=self._MUTED,
         )
 
@@ -1338,15 +1487,43 @@ class CLIConsole:
     def _toolbar(self) -> FormattedText:
         if self._screen_reader:
             return FormattedText([])
-        dot = chr(0x00b7)
-        toolbar = ('  ' + chr(0x25c7) + ' travail en cours  ' + dot + ' /status ' + dot + ' /stop  ') if self._busy else ('  Entree envoyer  ' + dot + ' Alt+Entree nouvelle ligne  ' + dot + ' /help aide  ')
+        dot = chr(0x00B7)
+        toolbar = (
+            (
+                "  "
+                + chr(0x25C7)
+                + " travail en cours  "
+                + dot
+                + " /status "
+                + dot
+                + " /stop  "
+            )
+            if self._busy
+            else (
+                "  Entree envoyer  "
+                + dot
+                + " Alt+Entree nouvelle ligne  "
+                + dot
+                + " /help aide  "
+            )
+        )
         width = 80
         try:
             if self._prompt_output is not None:
                 width = max(1, int(self._prompt_output.get_size().columns))
         except Exception:
             pass
-        return FormattedText([('class:bottom-toolbar', self._clip(toolbar, width, marker='...' if self._ascii else chr(0x2026)))])
+        return FormattedText(
+            [
+                (
+                    "class:bottom-toolbar",
+                    self._clip(
+                        toolbar, width, marker="..." if self._ascii else chr(0x2026)
+                    ),
+                )
+            ]
+        )
+
     def _print_plain(self, content: str = "", *, end: str = "\n") -> None:
         with self._lock:
             print(content, file=self.output, end=end, flush=True)
@@ -1356,27 +1533,36 @@ class CLIConsole:
             return
         self._banner_shown = True
         console = self._console()
-        model = self.model or 'unknown-model'
-        ready = 'busy' if self._busy else 'ready'
+        model = self.model or "unknown-model"
+        ready = "busy" if self._busy else "ready"
         usage = self.usage_summary(include_model=False)
         width = self._width(console) if console is not None else 72
         inner = max(24, min(width - 2, 72))
-        title = ' ' + self.name + ' '
-        top = chr(0x256d) + chr(0x2500) + title + chr(0x2500) * max(0, inner - len(title) - 2) + chr(0x256e)
-        rows = [model + ' ' + chr(0x00b7) + ' ' + ready]
+        title = " " + self.name + " "
+        top = (
+            chr(0x256D)
+            + chr(0x2500)
+            + title
+            + chr(0x2500) * max(0, inner - len(title) - 2)
+            + chr(0x256E)
+        )
+        rows = [model + " " + chr(0x00B7) + " " + ready]
         if usage:
             rows.append(usage)
         lines = [top]
         for row in rows:
-            clipped = self._clip(row, inner - 2, marker='...')
-            lines.append(chr(0x2502) + ' ' + clipped.ljust(inner - 2) + ' ' + chr(0x2502))
-        lines.append(chr(0x2570) + chr(0x2500) * inner + chr(0x256f))
-        text = '\n'.join(lines)
+            clipped = self._clip(row, inner - 2, marker="...")
+            lines.append(
+                chr(0x2502) + " " + clipped.ljust(inner - 2) + " " + chr(0x2502)
+            )
+        lines.append(chr(0x2570) + chr(0x2500) * inner + chr(0x256F))
+        text = "\n".join(lines)
         if console is None:
-            self._print_plain(text + '\n')
+            self._print_plain(text + "\n")
         else:
             with self._lock:
                 console.print(Text(text) if _RICH_AVAILABLE else text)
+
     def read(self, prompt: str = "> ") -> str:
         if self._stop_requested.is_set():
             raise EOFError
@@ -1405,7 +1591,9 @@ class CLIConsole:
                     # réponde. Le thread daemon ne doit jamais rester bloqué.
                     pass
 
-            threading.Thread(target=read_line, name=f"orion-cli-read-{generation}", daemon=True).start()
+            threading.Thread(
+                target=read_line, name=f"orion-cli-read-{generation}", daemon=True
+            ).start()
             while not self._stop_requested.is_set():
                 try:
                     kind, value = result.get(timeout=0.05)
@@ -1425,11 +1613,11 @@ class CLIConsole:
         # worker emits an activity/error message.  ``raw=True`` left the
         # cursor and typed text interleaved with asynchronous Orion output.
         with patch_stdout(raw=False):
-            display_prompt = f"{self._glyph(chr(0x276f), '>')} "
+            display_prompt = f"{self._glyph(chr(0x276F), '>')} "
             return self._session.prompt(
                 FormattedText([("class:prompt", display_prompt)]),
                 prompt_continuation=lambda *_: FormattedText(
-                    [("class:continuation", self._glyph("│", "|" ) + " ")]
+                    [("class:continuation", self._glyph("│", "|") + " ")]
                 ),
                 bottom_toolbar=self._toolbar,
                 reserve_space_for_menu=4,
@@ -1466,8 +1654,13 @@ class CLIConsole:
         parent_request_id: str | None = None,
         context: Mapping[str, Any] | None = None,
     ) -> CLIRequest:
-        item = self.requests.create(text, request_id=request_id, correlation_id=correlation_id,
-                                    parent_request_id=parent_request_id, context=context)
+        item = self.requests.create(
+            text,
+            request_id=request_id,
+            correlation_id=correlation_id,
+            parent_request_id=parent_request_id,
+            context=context,
+        )
         self._short_id(item.request_id)
         self._last_request_id = item.request_id
         return item
@@ -1477,8 +1670,12 @@ class CLIConsole:
         item = self.requests.get(request_id or self._last_request_id or "")
         if item is None or not item.text:
             return None
-        return {"text": item.text, "parent_request_id": item.request_id,
-                "context": dict(item.context), "request_id": item.request_id}
+        return {
+            "text": item.text,
+            "parent_request_id": item.request_id,
+            "context": dict(item.context),
+            "request_id": item.request_id,
+        }
 
     def update_request(
         self,
@@ -1504,7 +1701,9 @@ class CLIConsole:
             raise RuntimeError("Requête CLI introuvable après mise à jour.")
         return snapshot
 
-    def record_fragment(self, request_id: str, text: str, *, seq: int) -> dict[str, Any]:
+    def record_fragment(
+        self, request_id: str, text: str, *, seq: int
+    ) -> dict[str, Any]:
         item = self.requests.record_fragment(request_id, text, seq=seq)
         snapshot = self.requests.status(item.request_id)
         if snapshot is None:  # pragma: no cover
@@ -1567,17 +1766,30 @@ class CLIConsole:
                 self.banner()
                 return kind
             if kind.startswith("request.") and request_id:
-                state = self._canonical_state(payload.get("state") or kind.split(".", 1)[1])
+                state = self._canonical_state(
+                    payload.get("state") or kind.split(".", 1)[1]
+                )
                 text = str(payload.get("text") or payload.get("error") or "")
                 if request_id not in self._conversation_requests:
                     self._conversation_requests.add(request_id)
                     if text and state in {"queued", "running"}:
                         self._conversation_prompt(text)
-                meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else {}
+                meta = (
+                    payload.get("meta")
+                    if isinstance(payload.get("meta"), Mapping)
+                    else {}
+                )
                 if state in {"queued", "running"}:
                     activity = meta.get("activity") or meta.get("summary")
                     if self._screen_reader:
-                        detail = str(activity or ("en attente" if state == "queued" else "travail en cours"))
+                        detail = str(
+                            activity
+                            or (
+                                "en attente"
+                                if state == "queued"
+                                else "travail en cours"
+                            )
+                        )
                         self._activity_line(
                             console,
                             f"{self._state_label(state)} req {self._short_id(request_id)} - {detail}",
@@ -1585,7 +1797,9 @@ class CLIConsole:
                             style=self._RUN if state == "running" else self._PROGRESS,
                         )
                     elif activity:
-                        self._activity_line(console, str(activity), key=f"request:{request_id}:activity")
+                        self._activity_line(
+                            console, str(activity), key=f"request:{request_id}:activity"
+                        )
                 elif state == "streaming":
                     if self._screen_reader:
                         self._print_tty_wrapped(
@@ -1598,13 +1812,22 @@ class CLIConsole:
                         self._append_stream(console, request_id, text)
                 elif state == "succeeded":
                     had_stream = request_id in self._stream_open
-                    streamed_text = self._stream_text.get(request_id, "") if had_stream else ""
+                    streamed_text = (
+                        self._stream_text.get(request_id, "") if had_stream else ""
+                    )
                     # Some transports send a final recomposed answer after
                     # delta events.  Emit only the missing suffix before
                     # closing the stream; otherwise the tail is lost, while
                     # printing the whole final answer duplicates the stream.
-                    if had_stream and text and text.startswith(streamed_text) and len(text) > len(streamed_text):
-                        self._append_stream(console, request_id, text[len(streamed_text):])
+                    if (
+                        had_stream
+                        and text
+                        and text.startswith(streamed_text)
+                        and len(text) > len(streamed_text)
+                    ):
+                        self._append_stream(
+                            console, request_id, text[len(streamed_text) :]
+                        )
                     self._close_stream(console, request_id)
                     if self._screen_reader:
                         self._print_tty_wrapped(
@@ -1628,10 +1851,19 @@ class CLIConsole:
                         if self._screen_reader
                         else f"{self.name} {self._glyph('·', '-')} erreur"
                     )
-                    self._print_tty_wrapped(console, failure_heading, style=f"bold {self._ERROR}")
-                    self._print_tty_wrapped(console, text or "La demande a échoué.", indent="  ", style=self._ERROR)
+                    self._print_tty_wrapped(
+                        console, failure_heading, style=f"bold {self._ERROR}"
+                    )
+                    self._print_tty_wrapped(
+                        console,
+                        text or "La demande a échoué.",
+                        indent="  ",
+                        style=self._ERROR,
+                    )
                     details = f"demande req {self._short_id(request_id)} {self._glyph('·', '-')} /retry {self._short_id(request_id)} {self._glyph('·', '-')} /debug"
-                    self._print_tty_wrapped(console, details, indent="  ", style=self._MUTED)
+                    self._print_tty_wrapped(
+                        console, details, indent="  ", style=self._MUTED
+                    )
                 elif state == "canceled":
                     self._close_active_stream(console, except_request=request_id)
                     self._close_stream(console, request_id)
@@ -1640,15 +1872,25 @@ class CLIConsole:
                         if self._screen_reader
                         else f"annulation demandée pour req {self._short_id(request_id)}"
                     )
-                    self._activity_line(console, canceled_text, key=f"request:{request_id}:canceled")
+                    self._activity_line(
+                        console, canceled_text, key=f"request:{request_id}:canceled"
+                    )
                 return f"{kind} req {self._short_id(request_id)}"
             if kind.startswith("job."):
-                meta = payload.get("meta") if isinstance(payload.get("meta"), Mapping) else payload
+                meta = (
+                    payload.get("meta")
+                    if isinstance(payload.get("meta"), Mapping)
+                    else payload
+                )
                 # Job updates stay quiet in the normal conversation.  An
                 # explicit summary may still be supplied by a controller.
                 summary = meta.get("summary") or meta.get("activity")
                 if summary:
-                    self._activity_line(console, str(summary), key=f"job:{meta.get('id') or meta.get('job_id')}")
+                    self._activity_line(
+                        console,
+                        str(summary),
+                        key=f"job:{meta.get('id') or meta.get('job_id')}",
+                    )
                 return f"{kind} job"
             text = payload.get("text") or payload.get("error") or kind
             self._activity_line(console, str(text), key=f"event:{kind}:{text}")
@@ -1678,7 +1920,11 @@ class CLIConsole:
         if not self.show_timestamps:
             return ""
         try:
-            moment = datetime.fromisoformat(timestamp) if timestamp else datetime.now().astimezone()
+            moment = (
+                datetime.fromisoformat(timestamp)
+                if timestamp
+                else datetime.now().astimezone()
+            )
             return moment.astimezone().strftime("%H:%M")
         except (TypeError, ValueError):
             return ""
@@ -1698,8 +1944,11 @@ class CLIConsole:
             return
         console = self._console()
         if console is None:
-            heading = (f"{self._glyph(chr(0x25c7), '-')} travail en cours"
-                       if intermediate else self._assistant_heading(timestamp))
+            heading = (
+                f"{self._glyph(chr(0x25C7), '-')} travail en cours"
+                if intermediate
+                else self._assistant_heading(timestamp)
+            )
             self._print_plain(f"\n{heading}\n  {content}\n")
             return
             label = "progression" if intermediate else self.name
@@ -1731,10 +1980,16 @@ class CLIConsole:
                 )
             else:
                 selected_id = str(request_id or "")
-                active = self.requests.status(selected_id) if selected_id else self.requests.status()
+                active = (
+                    self.requests.status(selected_id)
+                    if selected_id
+                    else self.requests.status()
+                )
                 if not selected_id and active is None and self._last_request_id:
                     active = self.requests.status(self._last_request_id)
-                selected_id = selected_id or (str(active["request_id"]) if active else "")
+                selected_id = selected_id or (
+                    str(active["request_id"]) if active else ""
+                )
                 self._response_block(
                     console,
                     content,
@@ -1756,7 +2011,9 @@ class CLIConsole:
             self._print_plain(content)
             return
         with self._lock:
-            self._print_tty_wrapped(console, f"Système {self._glyph('·', '-')} {content}", style=self._MUTED)
+            self._print_tty_wrapped(
+                console, f"Système {self._glyph('·', '-')} {content}", style=self._MUTED
+            )
 
     def warning(self, content: str) -> None:
         console = self._console()
@@ -1764,7 +2021,9 @@ class CLIConsole:
             self._print_plain(f"Attention : {content}")
             return
         with self._lock:
-            self._activity_line(console, content, key=f"warning:{content}", style=self._RUN)
+            self._activity_line(
+                console, content, key=f"warning:{content}", style=self._RUN
+            )
 
     def error(self, content: str) -> None:
         console = self._console()
@@ -1803,11 +2062,15 @@ class CLIConsole:
         if min_args == max_args == 0:
             arguments = ""
         elif min_args:
-            arguments = " <argument>" if min_args == max_args == 1 else " <arguments...>"
+            arguments = (
+                " <argument>" if min_args == max_args == 1 else " <arguments...>"
+            )
         else:
             arguments = " [argument]"
         options = sorted(spec[2])
-        suffix = "" if not options else " " + " ".join(f"[--{option}]" for option in options)
+        suffix = (
+            "" if not options else " " + " ".join(f"[--{option}]" for option in options)
+        )
         return f"/{name}{arguments}{suffix}"
 
     @classmethod
@@ -1826,7 +2089,9 @@ class CLIConsole:
         return rows
 
     @staticmethod
-    def _help_lines(rows: Sequence[tuple[str, str, str]], width: int | None = None) -> list[str]:
+    def _help_lines(
+        rows: Sequence[tuple[str, str, str]], width: int | None = None
+    ) -> list[str]:
         """Wrap descriptions while preserving every command on narrow TTYs."""
         max_usage = max((len(usage) for usage, _, _ in rows), default=0)
         if width is None:
@@ -1863,7 +2128,11 @@ class CLIConsole:
         if command:
             requested = str(command).lstrip("/").lower()
             requested = _COMMAND_ALIASES.get(requested, requested)
-            rows = [row for row in rows if row[0].split()[0].lstrip("/").lower() == requested]
+            rows = [
+                row
+                for row in rows
+                if row[0].split()[0].lstrip("/").lower() == requested
+            ]
             if not rows:
                 self.error(f"Commande inconnue : /{requested}")
                 return
@@ -1872,7 +2141,9 @@ class CLIConsole:
                 {"usage": usage, "description": description, "aliases": aliases}
                 for usage, description, aliases in rows
             ]
-            self._print_plain(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            self._print_plain(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            )
             return
         console = self._console()
         if console is None:
@@ -1883,9 +2154,14 @@ class CLIConsole:
             "Observation": {"status", "requests", "jobs", "agents", "tasks", "tools"},
             "Contrôle": {"stop", "retry", "debug"},
         }
-        by_name = {usage.split()[0].lstrip("/"): (usage, description, aliases) for usage, description, aliases in rows}
+        by_name = {
+            usage.split()[0].lstrip("/"): (usage, description, aliases)
+            for usage, description, aliases in rows
+        }
         with self._lock:
-            self._print_tty_line(console, "Commandes Orion", style=f"bold {self._ACCENT}")
+            self._print_tty_line(
+                console, "Commandes Orion", style=f"bold {self._ACCENT}"
+            )
             for group, names in groups.items():
                 self._print_tty_line(console, group, style=self._MUTED)
                 selected = [by_name[name] for name in _COMMAND_SPECS if name in names]
@@ -1899,7 +2175,11 @@ class CLIConsole:
                 self._print_tty_line(console, "Autres", style=self._MUTED)
                 for line in self._help_lines(extras, self._width(console)):
                     self._print_tty_line(console, line)
-            self._print_tty_line(console, "Astuce : /help <commande> affiche l’usage et les options.", style=self._MUTED)
+            self._print_tty_line(
+                console,
+                "Astuce : /help <commande> affiche l’usage et les options.",
+                style=self._MUTED,
+            )
 
     def _legacy_help(self) -> None:
         rows = [
@@ -1915,7 +2195,10 @@ class CLIConsole:
         ]
         console = self._console()
         if console is None:
-            self._print_plain("\n" + "\n".join(f"{name:10} {description}" for name, description in rows))
+            self._print_plain(
+                "\n"
+                + "\n".join(f"{name:10} {description}" for name, description in rows)
+            )
             return
         with self._lock:
             self._print_tty_line(console, " COMMANDES", style=f"bold {self._ACCENT}")
@@ -1928,13 +2211,31 @@ class CLIConsole:
         if usage:
             # Keep provider-owned status keys intact while making usage visible
             # to /status and /debug without requiring a particular ledger type.
-            self._runtime_values.update({key: value for key, value in usage.items() if key not in self._runtime_values})
+            self._runtime_values.update(
+                {
+                    key: value
+                    for key, value in usage.items()
+                    if key not in self._runtime_values
+                }
+            )
         console = self._console()
         if json_output:
-            self._print_plain(json.dumps(self._runtime_values, ensure_ascii=False, default=str, separators=(",", ":")))
+            self._print_plain(
+                json.dumps(
+                    self._runtime_values,
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+            )
             return
         if console is None:
-            self._print_plain("\n" + "\n".join(f"{key}: {value}" for key, value in self._runtime_values.items()))
+            self._print_plain(
+                "\n"
+                + "\n".join(
+                    f"{key}: {value}" for key, value in self._runtime_values.items()
+                )
+            )
             return
         with self._lock:
             grid = Table.grid(padding=(0, 2), expand=False)
@@ -2001,32 +2302,103 @@ class CLIConsole:
         )
         for item in items:
             if isinstance(item, Mapping):
-                identifier = item.get("request_id") or item.get("id") or item.get("job_id") or item.get("thread_id") or "-"
+                identifier = (
+                    item.get("request_id")
+                    or item.get("id")
+                    or item.get("job_id")
+                    or item.get("thread_id")
+                    or "-"
+                )
                 state = self._state_label(item.get("status") or item.get("state"))
                 if view == "tools":
-                    row = (str(item.get("name") or item.get("id") or "tool"), str(item.get("description") or item.get("label") or ""))
+                    row = (
+                        str(item.get("name") or item.get("id") or "tool"),
+                        str(item.get("description") or item.get("label") or ""),
+                    )
                 elif view == "agents":
-                    row = (str(identifier), str(item.get("name") or item.get("model") or "agent"), state)
+                    row = (
+                        str(identifier),
+                        str(item.get("name") or item.get("model") or "agent"),
+                        state,
+                    )
                 elif view in {"tasks", "jobs"}:
-                    row = (self._short_id(str(identifier)), state, str(item.get("objective") or item.get("label") or item.get("name") or ""))
+                    row = (
+                        self._short_id(str(identifier)),
+                        state,
+                        str(
+                            item.get("objective")
+                            or item.get("label")
+                            or item.get("name")
+                            or ""
+                        ),
+                    )
                 elif view == "requests":
-                    row = (self._short_id(str(identifier)), state, str(item.get("text") or item.get("last_fragment") or item.get("error") or ""))
+                    row = (
+                        self._short_id(str(identifier)),
+                        state,
+                        str(
+                            item.get("text")
+                            or item.get("last_fragment")
+                            or item.get("error")
+                            or ""
+                        ),
+                    )
                 elif view == "threads":
-                    row = (str(item.get("thread_id") or item.get("id") or "-"), str(item.get("channel") or item.get("conversation_id") or "-"), str(item.get("intent") or item.get("goal") or item.get("objective") or item.get("state") or ""))
+                    row = (
+                        str(item.get("thread_id") or item.get("id") or "-"),
+                        str(item.get("channel") or item.get("conversation_id") or "-"),
+                        str(
+                            item.get("intent")
+                            or item.get("goal")
+                            or item.get("objective")
+                            or item.get("state")
+                            or ""
+                        ),
+                    )
                 elif view == "trace":
-                    row = (self._time_label(str(item.get("timestamp") or "")), str(item.get("kind") or item.get("event") or item.get("type") or "event"), str(item.get("summary") or item.get("text") or item.get("detail") or ""))
+                    row = (
+                        self._time_label(str(item.get("timestamp") or "")),
+                        str(
+                            item.get("kind")
+                            or item.get("event")
+                            or item.get("type")
+                            or "event"
+                        ),
+                        str(
+                            item.get("summary")
+                            or item.get("text")
+                            or item.get("detail")
+                            or ""
+                        ),
+                    )
                 else:
-                    row = (str(identifier), str(item.get("value") or item.get("label") or item))
+                    row = (
+                        str(identifier),
+                        str(item.get("value") or item.get("label") or item),
+                    )
             else:
                 value = str(item)
                 row = ("-", value) if len(headers) == 2 else ("-", "-", value)
             table.add_row(*(str(value) for value in row))
         return table
 
-    def items(self, title: str, items: Sequence[Any], *, empty: str, json_output: bool = False) -> None:
-        self._job_items = list(items) if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0 else self._job_items
+    def items(
+        self, title: str, items: Sequence[Any], *, empty: str, json_output: bool = False
+    ) -> None:
+        self._job_items = (
+            list(items)
+            if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0
+            else self._job_items
+        )
         if json_output:
-            self._print_plain(json.dumps({"title": title, "items": list(items)}, ensure_ascii=False, default=str, separators=(",", ":")))
+            self._print_plain(
+                json.dumps(
+                    {"title": title, "items": list(items)},
+                    ensure_ascii=False,
+                    default=str,
+                    separators=(",", ":"),
+                )
+            )
             return
         console = self._console()
         if not items:
@@ -2038,7 +2410,11 @@ class CLIConsole:
                 self._print_plain(f"- {item}")
             return
         with self._lock:
-            heading = "Jobs" if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0 else title
+            heading = (
+                "Jobs"
+                if title.lower().find("travaux") >= 0 or title.lower().find("jobs") >= 0
+                else title
+            )
             view = self._items_view(title)
             console.print(
                 _panel_content(

@@ -24,3 +24,35 @@ def test_sqlite_append_deduplicates_event(tmp_path):
     second = journal.append(event_id="x", task_id=None, messages=[{"role": "user", "content": "again"}])
     assert first.id == second.id
     assert journal.recent_messages(limit=5)[0]["content"] == "ok"
+
+
+def test_sqlite_duplicate_append_closes_transaction_for_other_writer(tmp_path):
+    path = tmp_path / "journal.db"
+    first = SQLiteConversationJournal(path)
+    second = SQLiteConversationJournal(path)
+    try:
+        first.append(
+            event_id="same",
+            task_id=None,
+            messages=[{"role": "user", "content": "first"}],
+        )
+        duplicate = first.append(
+            event_id="same",
+            task_id=None,
+            messages=[{"role": "user", "content": "retry"}],
+        )
+        assert duplicate.messages[0]["content"] == "first"
+        assert first._db.in_transaction is False
+
+        # A short timeout makes a leaked write transaction fail deterministically
+        # instead of hiding behind SQLite's default multi-second busy wait.
+        second._db.execute("PRAGMA busy_timeout=100")
+        other = second.append(
+            event_id="other",
+            task_id=None,
+            messages=[{"role": "user", "content": "other writer"}],
+        )
+        assert other.id > duplicate.id
+    finally:
+        first.close()
+        second.close()

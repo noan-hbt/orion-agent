@@ -46,6 +46,11 @@ class CommunicationLedger:
 
     def _initialize(self) -> None:
         with self._lock:
+            # Create tables first, then run additive column migrations, and
+            # only then create indexes that reference migrated columns.  Older
+            # ledgers can legitimately lack lease/retry columns; creating the
+            # ready index before ALTER TABLE would make those databases
+            # impossible to open and therefore impossible to migrate.
             self._connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS communication_events (
@@ -69,11 +74,6 @@ class CommunicationLedger:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
-                CREATE UNIQUE INDEX IF NOT EXISTS communication_events_idempotency
-                    ON communication_events(idempotency_key)
-                    WHERE idempotency_key IS NOT NULL;
-                CREATE INDEX IF NOT EXISTS communication_events_ready
-                    ON communication_events(kind, status, next_attempt_at, lease_until);
                 CREATE TABLE IF NOT EXISTS communication_metrics (
                     name TEXT PRIMARY KEY,
                     value INTEGER NOT NULL DEFAULT 0
@@ -82,6 +82,13 @@ class CommunicationLedger:
                     name TEXT PRIMARY KEY,
                     value INTEGER NOT NULL DEFAULT 0,
                     updated_at REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS communication_nonces (
+                    namespace TEXT NOT NULL,
+                    nonce_hash TEXT NOT NULL,
+                    expires_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY(namespace, nonce_hash)
                 );
                 """
             )
@@ -100,11 +107,22 @@ class CommunicationLedger:
             for name, statement in migrations.items():
                 if name not in columns:
                     self._connection.execute(statement)
+            self._connection.executescript(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS communication_events_idempotency
+                    ON communication_events(idempotency_key)
+                    WHERE idempotency_key IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS communication_events_ready
+                    ON communication_events(kind, status, next_attempt_at, lease_until);
+                CREATE INDEX IF NOT EXISTS communication_nonces_expiry
+                    ON communication_nonces(expires_at);
+                """
+            )
             # Versioned, additive migrations.  ``user_version`` is SQLite's
             # durable migration marker and keeps old databases compatible.
             version = int(self._connection.execute("PRAGMA user_version").fetchone()[0])
-            if version < 1:
-                self._connection.execute("PRAGMA user_version = 1")
+            if version < 2:
+                self._connection.execute("PRAGMA user_version = 2")
 
     def _write(self, sql: str, args: tuple[Any, ...] = ()) -> sqlite3.Cursor:
         """Execute a write with a short SQLITE_BUSY retry window."""
@@ -137,18 +155,33 @@ class CommunicationLedger:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _scoped_external_key(prefix: str, *, kind: str, channel: str, value: str) -> str:
+        """Namespace externally supplied ids without relying on delimiter escaping."""
+        kind = str(kind)
+        channel = str(channel)
+        value = str(value)
+        return f"{prefix}:{len(kind)}:{kind}:{len(channel)}:{channel}:{value}"
+
+    @classmethod
     def _dedupe_key(
-        *, event_id: str | None, idempotency_key: str | None, message_id: str | None,
-        payload: Mapping[str, Any],
+        cls, *, event_id: str | None, idempotency_key: str | None,
+        message_id: str | None, payload: Mapping[str, Any], kind: str, channel: str,
     ) -> str:
         if idempotency_key:
             return "key:" + str(idempotency_key)
         if event_id:
-            return "event:" + str(event_id)
+            return cls._scoped_external_key(
+                "event", kind=kind, channel=channel, value=str(event_id)
+            )
         if message_id:
-            return "message:" + str(message_id)
+            return cls._scoped_external_key(
+                "message", kind=kind, channel=channel, value=str(message_id)
+            )
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode()
-        return "hash:" + hashlib.sha256(raw).hexdigest()
+        digest = hashlib.sha256(raw).hexdigest()
+        return cls._scoped_external_key(
+            "hash", kind=kind, channel=channel, value=digest
+        )
 
     def _metric(self, name: str, amount: int = 1) -> None:
         self._connection.execute(
@@ -158,24 +191,51 @@ class CommunicationLedger:
         )
 
     def _existing_or_conflict(
-        self, *, dedupe_key: str, event_id: str | None, idempotency_key: str | None,
-        fingerprint: str,
+        self, *, dedupe_key: str, stored_event_id: str, external_event_id: str,
+        idempotency_key: str | None, fingerprint: str, kind: str, channel: str,
     ) -> sqlite3.Row | None:
+        # New rows use channel/kind-scoped external ids.  The raw event-id
+        # branch is retained only inside the same channel/kind so databases
+        # written by older releases still dedupe instead of redelivering.
         row = self._connection.execute(
             "SELECT * FROM communication_events WHERE dedupe_key=? OR "
-            "(? IS NOT NULL AND event_id=?) OR "
+            "(channel=? AND kind=? AND event_id IN (?,?)) OR "
             "(? IS NOT NULL AND idempotency_key=?) LIMIT 1",
-            (dedupe_key, event_id, event_id, idempotency_key, idempotency_key),
+            (
+                dedupe_key,
+                channel,
+                kind,
+                stored_event_id,
+                external_event_id,
+                idempotency_key,
+                idempotency_key,
+            ),
         ).fetchone()
         if row is not None and row["fingerprint"] and row["fingerprint"] != fingerprint:
             raise IdempotencyConflict("event or idempotency key reused with different content")
         return row
+
+    def _row_id_for_insert(self, preferred: str, *, kind: str, channel: str) -> str:
+        """Keep historical raw ids when free; scope only when another row owns one."""
+        if self._connection.execute(
+            "SELECT 1 FROM communication_events WHERE id=?", (preferred,)
+        ).fetchone() is None:
+            return preferred
+        scoped = self._scoped_external_key(
+            "row", kind=kind, channel=channel, value=preferred
+        )
+        if self._connection.execute(
+            "SELECT 1 FROM communication_events WHERE id=?", (scoped,)
+        ).fetchone() is None:
+            return scoped
+        return f"{scoped}:{uuid.uuid4().hex}"
 
     def record(
         self, *, channel: str, payload: Mapping[str, Any], message_id: str | None = None,
         event_id: str | None = None, idempotency_key: str | None = None,
         correlation_id: str | None = None, reply_to: str | None = None,
         kind: str = "message", max_attempts: int = 3,
+        fingerprint_payload: Mapping[str, Any] | None = None,
     ) -> tuple[str, bool]:
         """Durably enqueue one event and return ``(row_id, is_new)``."""
         if not channel:
@@ -183,34 +243,47 @@ class CommunicationLedger:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
         event_id = str(event_id or message_id or uuid.uuid4().hex)
-        row_id = str(message_id or event_id)
+        preferred_row_id = str(message_id or event_id)
         kind, channel, payload = str(kind), str(channel), dict(payload)
+        stored_event_id = self._scoped_external_key(
+            "event", kind=kind, channel=channel, value=event_id
+        )
         fingerprint = self._fingerprint(
-            kind=kind, channel=channel, payload=payload,
+            kind=kind,
+            channel=channel,
+            payload=dict(fingerprint_payload) if fingerprint_payload is not None else payload,
             correlation_id=correlation_id, reply_to=reply_to,
         )
         dedupe_key = self._dedupe_key(
             event_id=event_id, idempotency_key=idempotency_key,
-            message_id=message_id, payload=payload,
+            message_id=message_id, payload=payload, kind=kind, channel=channel,
         )
         encoded, now = self._json(payload), time.time()
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 existing = self._existing_or_conflict(
-                    dedupe_key=dedupe_key, event_id=event_id,
-                    idempotency_key=idempotency_key, fingerprint=fingerprint,
+                    dedupe_key=dedupe_key,
+                    stored_event_id=stored_event_id,
+                    external_event_id=event_id,
+                    idempotency_key=idempotency_key,
+                    fingerprint=fingerprint,
+                    kind=kind,
+                    channel=channel,
                 )
                 if existing is not None:
                     self._metric("duplicates")
                     self._connection.execute("COMMIT")
                     return str(existing["id"]), False
+                row_id = self._row_id_for_insert(
+                    preferred_row_id, kind=kind, channel=channel
+                )
                 self._connection.execute(
                     """INSERT INTO communication_events
                     (id,event_id,kind,channel,idempotency_key,dedupe_key,fingerprint,
-                     payload,correlation_id,reply_to,status,max_attempts,created_at,updated_at)
+                    payload,correlation_id,reply_to,status,max_attempts,created_at,updated_at)
                     VALUES (?,?,?,?,?,?,?,?,?,?, 'queued',?,?,?)""",
-                    (row_id, event_id, kind, channel, idempotency_key, dedupe_key,
+                    (row_id, stored_event_id, kind, channel, idempotency_key, dedupe_key,
                      fingerprint, encoded, correlation_id, reply_to, max_attempts, now, now),
                 )
                 self._metric("accepted")
@@ -249,6 +322,7 @@ class CommunicationLedger:
         idempotency_key: str | None = None, correlation_id: str | None = None,
         reply_to: str | None = None, text: str | None = None,
         content: str | None = None, max_attempts: int = 3,
+        fingerprint_payload: Mapping[str, Any] | None = None,
     ) -> tuple[str, bool]:
         data = dict(payload or {})
         if text is not None:
@@ -259,6 +333,7 @@ class CommunicationLedger:
             channel=channel, payload=data, event_id=event_id or output_id,
             idempotency_key=idempotency_key, correlation_id=correlation_id,
             reply_to=reply_to, kind="outbound", max_attempts=max_attempts,
+            fingerprint_payload=fingerprint_payload,
         )
 
     enqueue_outbound = record_outbound
@@ -422,11 +497,31 @@ class CommunicationLedger:
             dead = attempts >= limit
             status = "dead_letter" if dead else "failed"
             delay = 0.0 if dead else max(0.0, float(backoff)) * (2 ** max(0, attempts - 1))
-            self._connection.execute(
+            # Fence the state transition in the UPDATE itself.  The SELECT is
+            # only used to compute retry policy; another connection may reclaim
+            # an expired lease before this write.  Matching the exact owner,
+            # status, attempt generation and lease value turns the write into a
+            # CAS so a stale worker can never clear a newer worker's claim.
+            changed = self._connection.execute(
                 "UPDATE communication_events SET status=?,last_error=?,lease_owner=NULL,"
-                "lease_until=NULL,next_attempt_at=?,updated_at=? WHERE id=?",
-                (status, str(error), now + delay, now, row_id),
-            )
+                "lease_until=NULL,next_attempt_at=?,updated_at=? WHERE id=? "
+                "AND status=? AND attempts=? AND lease_owner IS ? "
+                "AND lease_until=? "
+                "AND lease_until>((julianday('now') - 2440587.5) * 86400.0)",
+                (
+                    status,
+                    str(error),
+                    now + delay,
+                    now,
+                    row_id,
+                    row["status"],
+                    attempts,
+                    row["lease_owner"],
+                    row["lease_until"],
+                ),
+            ).rowcount
+            if not changed:
+                return None
             self._metric("dead_letter" if dead else "retries")
             return status
 
@@ -465,11 +560,46 @@ class CommunicationLedger:
             ).fetchone()
         return self._decode(row)
 
-    def get_by_event_id(self, event_id: str) -> dict[str, Any] | None:
+    def get_by_event_id(
+        self,
+        event_id: str,
+        *,
+        channel: str | None = None,
+        kind: str | None = None,
+    ) -> dict[str, Any] | None:
         with self._lock:
+            # Old databases stored the raw external event id. Prefer that
+            # exact lookup first so their behavior is unchanged.
             row = self._connection.execute(
                 "SELECT * FROM communication_events WHERE event_id=?", (event_id,)
             ).fetchone()
+            if row is None and channel is not None and kind is not None:
+                scoped = self._scoped_external_key(
+                    "event", kind=str(kind), channel=str(channel), value=str(event_id)
+                )
+                row = self._connection.execute(
+                    "SELECT * FROM communication_events WHERE event_id=?", (scoped,)
+                ).fetchone()
+            elif row is None:
+                # Preserve the historical unscoped helper for callers that do
+                # not yet pass channel/kind. Return a row only when the raw id
+                # identifies exactly one new scoped event; ambiguity across
+                # channels intentionally yields no result.
+                candidates = self._connection.execute(
+                    "SELECT * FROM communication_events WHERE event_id LIKE 'event:%'"
+                ).fetchall()
+                matches = [
+                    candidate
+                    for candidate in candidates
+                    if candidate["event_id"]
+                    == self._scoped_external_key(
+                        "event",
+                        kind=str(candidate["kind"]),
+                        channel=str(candidate["channel"]),
+                        value=str(event_id),
+                    )
+                ]
+                row = matches[0] if len(matches) == 1 else None
         return self._decode(row)
 
     @staticmethod
@@ -543,6 +673,46 @@ class CommunicationLedger:
                 "SELECT value FROM communication_cursors WHERE name=?", (name,)
             ).fetchone()
         return int(row["value"])
+
+    def remember_nonce(
+        self,
+        namespace: str,
+        nonce: str,
+        *,
+        expires_at: float,
+    ) -> bool:
+        """Atomically remember one replay nonce until ``expires_at``.
+
+        Only a SHA-256 digest is stored.  The unique primary key provides
+        cross-thread and cross-process replay exclusion, unlike an in-memory
+        cache which is reset on application restart.
+        """
+        namespace = str(namespace).strip()
+        nonce = str(nonce)
+        expires_at = float(expires_at)
+        if not namespace or not nonce:
+            raise ValueError("namespace and nonce are required")
+        now = time.time()
+        if expires_at <= now:
+            return False
+        nonce_hash = hashlib.sha256(nonce.encode("utf-8", "replace")).hexdigest()
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._connection.execute(
+                    "DELETE FROM communication_nonces WHERE expires_at<=?",
+                    (now,),
+                )
+                changed = self._connection.execute(
+                    "INSERT OR IGNORE INTO communication_nonces"
+                    "(namespace,nonce_hash,expires_at,created_at) VALUES (?,?,?,?)",
+                    (namespace, nonce_hash, expires_at, now),
+                ).rowcount
+                self._connection.execute("COMMIT")
+                return bool(changed)
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
 
     def metrics(self) -> dict[str, int | float]:
         with self._lock:
