@@ -12,7 +12,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
 @dataclass(frozen=True)
@@ -52,8 +52,14 @@ class RevisionConflict(ValueError):
 
 
 class ContextRegistry:
-    def __init__(self, path: str | Path = ":memory:") -> None:
+    def __init__(
+        self,
+        path: str | Path = ":memory:",
+        *,
+        scope_resolver: Callable[[], Mapping[str, Any] | None] | None = None,
+    ) -> None:
         self.path = str(path)
+        self.scope_resolver = scope_resolver
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
@@ -257,38 +263,161 @@ class ContextRegistry:
         ).fetchone()
         return None if r is None else dict(r)
 
-    def snapshot(self, *, limit: int = 100, scope: str | None = None) -> dict[str, Any]:
-        """Return a bounded, JSON-serializable view for prompt/runtime context.
+    def snapshot(
+        self,
+        *,
+        limit: int | None = None,
+        scope: str | None = None,
+        thread_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a JSON-serializable registry view scoped to one conversation.
 
-        The registry connection and dataclass instances intentionally never
-        cross this boundary.  ``limit`` applies independently to each table;
-        invalid or negative values are normalized to a small safe default.
+        When explicit filters are omitted, an optional ``scope_resolver`` can
+        provide the active runtime conversation/thread.  A truly unscoped call
+        returns the complete registry by default instead of silently taking an
+        arbitrary first 100 rows; administrative callers can still pass an
+        explicit ``limit``.
         """
-        try:
-            n = max(1, min(int(limit), 1000))
-        except (TypeError, ValueError):
-            n = 100
+        resolved: Mapping[str, Any] = {}
+        if self.scope_resolver is not None:
+            try:
+                candidate = self.scope_resolver()
+                if isinstance(candidate, Mapping):
+                    resolved = candidate
+            except Exception:
+                resolved = {}
+        selected_scope = scope or resolved.get("scope")
+        selected_thread = thread_id or resolved.get("thread_id")
+        selected_conversation = conversation_id or resolved.get("conversation_id")
+        target_ids = {
+            str(value)
+            for value in (selected_thread, selected_conversation)
+            if value is not None and str(value).strip()
+        }
+        n: int | None
+        if limit is None:
+            n = None
+        else:
+            try:
+                n = max(1, min(int(limit), 1000))
+            except (TypeError, ValueError):
+                n = 100
+
+        def limited(sql: str) -> tuple[str, tuple[Any, ...]]:
+            return (sql, ()) if n is None else (sql + " LIMIT ?", (n,))
+
         with self._lock:
-            params: tuple[Any, ...] = () if scope is None else (scope,)
-            clause = "" if scope is None else " WHERE scope=?"
-            principals = self._db.execute(
-                f"SELECT id,scope,data,revision FROM principals{clause} ORDER BY id LIMIT ?",
-                (*params, n),
-            ).fetchall()
-            threads = self._db.execute(
-                f"SELECT id,scope,principal_id,data,revision FROM conversation_threads{clause} ORDER BY id LIMIT ?",
-                (*params, n),
-            ).fetchall()
-            intents = self._db.execute(
-                f"SELECT thread_id,scope,intent,data,revision FROM intent_states{clause} ORDER BY thread_id LIMIT ?",
-                (*params, n),
-            ).fetchall()
-            bparams: tuple[Any, ...] = () if scope is None else (scope,)
-            bclause = "" if scope is None else " WHERE scope=?"
-            bindings = self._db.execute(
-                f"SELECT channel,external_id,scope,principal_id,thread_id,data FROM channel_bindings{bclause} ORDER BY channel,external_id LIMIT ?",
-                (*bparams, n),
-            ).fetchall()
+            bindings: list[sqlite3.Row]
+            thread_ids = set(target_ids)
+            if target_ids:
+                placeholders = ",".join("?" for _ in target_ids)
+                where = (
+                    f"(thread_id IN ({placeholders}) OR external_id IN ({placeholders}))"
+                )
+                params: list[Any] = [*target_ids, *target_ids]
+                if selected_scope is not None:
+                    where += " AND scope=?"
+                    params.append(str(selected_scope))
+                sql = (
+                    "SELECT channel,external_id,scope,principal_id,thread_id,data "
+                    f"FROM channel_bindings WHERE {where} ORDER BY channel,external_id"
+                )
+                if n is not None:
+                    sql += " LIMIT ?"
+                    params.append(n)
+                bindings = self._db.execute(sql, tuple(params)).fetchall()
+                thread_ids.update(
+                    str(row["thread_id"])
+                    for row in bindings
+                    if row["thread_id"] is not None and str(row["thread_id"]).strip()
+                )
+            else:
+                where = "" if selected_scope is None else " WHERE scope=?"
+                sql, extra = limited(
+                    "SELECT channel,external_id,scope,principal_id,thread_id,data "
+                    f"FROM channel_bindings{where} ORDER BY channel,external_id"
+                )
+                params = (() if selected_scope is None else (str(selected_scope),)) + extra
+                bindings = self._db.execute(sql, params).fetchall()
+
+            if thread_ids:
+                placeholders = ",".join("?" for _ in thread_ids)
+                thread_params: list[Any] = list(thread_ids)
+                thread_where = f"id IN ({placeholders})"
+                intent_where = f"thread_id IN ({placeholders})"
+                if selected_scope is not None:
+                    thread_where += " AND scope=?"
+                    intent_where += " AND scope=?"
+                    thread_params.append(str(selected_scope))
+                thread_sql = (
+                    "SELECT id,scope,principal_id,data,revision FROM conversation_threads "
+                    f"WHERE {thread_where} ORDER BY id"
+                )
+                intent_sql = (
+                    "SELECT thread_id,scope,intent,data,revision FROM intent_states "
+                    f"WHERE {intent_where} ORDER BY thread_id"
+                )
+                if n is not None:
+                    thread_sql += " LIMIT ?"
+                    intent_sql += " LIMIT ?"
+                    query_params = (*thread_params, n)
+                else:
+                    query_params = tuple(thread_params)
+                threads = self._db.execute(thread_sql, query_params).fetchall()
+                intents = self._db.execute(intent_sql, query_params).fetchall()
+            else:
+                where = "" if selected_scope is None else " WHERE scope=?"
+                scope_params = () if selected_scope is None else (str(selected_scope),)
+                thread_sql, thread_extra = limited(
+                    "SELECT id,scope,principal_id,data,revision FROM conversation_threads"
+                    f"{where} ORDER BY id"
+                )
+                intent_sql, intent_extra = limited(
+                    "SELECT thread_id,scope,intent,data,revision FROM intent_states"
+                    f"{where} ORDER BY thread_id"
+                )
+                threads = self._db.execute(
+                    thread_sql, scope_params + thread_extra
+                ).fetchall()
+                intents = self._db.execute(
+                    intent_sql, scope_params + intent_extra
+                ).fetchall()
+
+            if target_ids:
+                principal_ids = {
+                    str(row["principal_id"])
+                    for row in [*threads, *bindings]
+                    if row["principal_id"] is not None
+                    and str(row["principal_id"]).strip()
+                }
+                if principal_ids:
+                    placeholders = ",".join("?" for _ in principal_ids)
+                    principal_where = f"id IN ({placeholders})"
+                    principal_params: list[Any] = list(principal_ids)
+                    if selected_scope is not None:
+                        principal_where += " AND scope=?"
+                        principal_params.append(str(selected_scope))
+                    principal_sql = (
+                        "SELECT id,scope,data,revision FROM principals "
+                        f"WHERE {principal_where} ORDER BY id"
+                    )
+                    if n is not None:
+                        principal_sql += " LIMIT ?"
+                        principal_params.append(n)
+                    principals = self._db.execute(
+                        principal_sql, tuple(principal_params)
+                    ).fetchall()
+                else:
+                    principals = []
+            else:
+                where = "" if selected_scope is None else " WHERE scope=?"
+                principal_sql, principal_extra = limited(
+                    "SELECT id,scope,data,revision FROM principals"
+                    f"{where} ORDER BY id"
+                )
+                params = (() if selected_scope is None else (str(selected_scope),)) + principal_extra
+                principals = self._db.execute(principal_sql, params).fetchall()
 
         def payload(row: sqlite3.Row) -> dict[str, Any]:
             result = dict(row)
@@ -300,6 +429,11 @@ class ContextRegistry:
             return result
 
         return {
+            "scope": None if selected_scope is None else str(selected_scope),
+            "thread_id": None if selected_thread is None else str(selected_thread),
+            "conversation_id": (
+                None if selected_conversation is None else str(selected_conversation)
+            ),
             "principals": [payload(r) for r in principals],
             "threads": [payload(r) for r in threads],
             "intents": [payload(r) for r in intents],

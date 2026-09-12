@@ -142,3 +142,54 @@ def test_final_call_without_tools_does_not_pay_tool_schema_cost():
     encoded = _payload(assembler, guarded)
     assert len(encoded) <= assembler.total_max_chars
     assert assembler.count_tokens(encoded) <= assembler.total_max_tokens
+
+
+def test_guard_preserves_contract_request_and_structurally_compacts_large_evidence():
+    assembler = ContextAssembler(
+        total_max_chars=1400,
+        total_max_tokens=500,
+        output_reserve_tokens=50,
+    )
+    request_payload = {"schema": "orion.request.v1", "data": {"text": "current request"}}
+    evidence = assembler.evidence_envelope(
+        {
+            "request": {"text": "current request"},
+            "event": {"type": "message", "payload": {"text": "current request"}},
+            "history": [
+                {"role": "user", "content": "old " + "x" * 500},
+                {"role": "assistant", "content": "answer " + "y" * 500},
+            ]
+            * 8,
+            "profile": {"notes": "z" * 3000},
+        },
+        max_chars=20_000,
+    )
+    messages = [
+        {"role": "system", "content": "policy"},
+        {
+            "role": "user",
+            "content": "ORION_REQUEST_V1\nBEGIN_ORION_REQUEST\n"
+            + json.dumps(request_payload, separators=(",", ":"))
+            + "\nEND_ORION_REQUEST",
+        },
+        {
+            "role": "user",
+            "content": "BEGIN_ORION_EVIDENCE\n" + evidence + "\nEND_ORION_EVIDENCE",
+        },
+    ]
+
+    guarded = assembler.guard_messages(messages, stage="initial")
+
+    assert len(guarded) == 3
+    assert guarded[1]["content"].startswith("ORION_REQUEST_V1\nBEGIN_ORION_REQUEST")
+    assert "current request" in guarded[1]["content"]
+    assert guarded[2]["content"].startswith("BEGIN_ORION_EVIDENCE\n")
+    inner = guarded[2]["content"].removeprefix("BEGIN_ORION_EVIDENCE\n").removesuffix(
+        "\nEND_ORION_EVIDENCE"
+    )
+    parsed = json.loads(inner)
+    assert parsed["data"]
+    assert "request" in parsed["data"] or "event" in parsed["data"]
+    payload = _payload(assembler, guarded)
+    assert len(payload) <= assembler.total_max_chars
+    assert assembler.count_tokens(payload) <= assembler.total_max_tokens

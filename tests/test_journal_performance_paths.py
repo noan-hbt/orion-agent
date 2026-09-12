@@ -118,6 +118,58 @@ def test_jsonl_multi_instance_writers_allocate_unique_cursor_ids(tmp_path):
     assert [entry.id for entry in second_page] == [2]
 
 
+def test_jsonl_after_streams_until_limit_without_read_text_full_scan(tmp_path, monkeypatch):
+    path = tmp_path / "conversation.jsonl"
+    journal = ConversationJournal(path)
+    for i in range(20):
+        journal.append(
+            event_id=f"e-{i}", task_id=None, conversation_id="chat", messages=_message(str(i))
+        )
+
+    def fail_read_text(*_args, **_kwargs):
+        raise AssertionError("after() must stream instead of materializing the whole JSONL")
+
+    monkeypatch.setattr(type(path), "read_text", fail_read_text)
+    assert [entry.id for entry in journal.after(0, limit=3)] == [1, 2, 3]
+
+
+def test_jsonl_default_recent_cache_covers_large_runtime_history_limit(tmp_path, monkeypatch):
+    path = tmp_path / "conversation.jsonl"
+    journal = ConversationJournal(path)
+    for i in range(50):
+        journal.append(
+            event_id=f"e-{i}", task_id=None, conversation_id="chat", messages=_message(str(i))
+        )
+
+    def fail_read_text(*_args, **_kwargs):
+        raise AssertionError("default hot cache should cover history limits up to 2048 messages")
+
+    monkeypatch.setattr(type(path), "read_text", fail_read_text)
+    recent = journal.recent_messages(conversation_id="chat", limit=2000)
+    assert len(recent) == 50
+    assert recent[-1]["content"] == "49"
+
+
+def test_jsonl_recent_fallback_keeps_all_messages_when_limit_exceeds_cache(tmp_path):
+    path = tmp_path / "conversation.jsonl"
+    journal = ConversationJournal(path, recent_cache_messages=2)
+    journal.append(
+        event_id="e-1",
+        task_id=None,
+        conversation_id="chat",
+        messages=[
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+        ],
+    )
+
+    assert [
+        message["content"]
+        for message in journal.recent_messages(conversation_id="chat", limit=3)
+    ] == ["one", "two", "three"]
+
+
 def test_sqlite_recent_is_bounded_and_preserves_last_message_order(tmp_path):
     journal = SQLiteConversationJournal(tmp_path / "conversation.sqlite3")
     try:

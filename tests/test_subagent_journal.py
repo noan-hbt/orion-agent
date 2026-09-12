@@ -8,8 +8,6 @@ not conversation history.
 
 import json
 
-import pytest
-
 from event_handler import Event
 from prompt_context import ConversationJournal, SQLiteConversationJournal
 from runtime import AgentRuntime, RunContext
@@ -81,11 +79,10 @@ def test_completion_does_not_inject_internal_worker_envelope(tmp_path):
     assert "internal_event" not in raw
 
 
-@pytest.mark.parametrize("event_type", ["subagent.waiting", "subagent.progress"])
-def test_non_terminal_subagent_notifications_are_not_journaled(tmp_path, event_type):
+def test_progress_subagent_notification_is_not_journaled(tmp_path):
     journal = ConversationJournal(tmp_path / "conversation.jsonl")
     event = Event(
-        event_type,
+        "subagent.progress",
         {"job_id": "job-1", "result": "intermediate/internal text"},
         source="runtime",
         metadata={"conversation_id": "telegram:20", "internal_event": True},
@@ -97,6 +94,30 @@ def test_non_terminal_subagent_notifications_are_not_journaled(tmp_path, event_t
     )
 
     assert not (tmp_path / "conversation.jsonl").exists()
+
+
+def test_taskless_waiting_subagent_notification_is_journaled_when_conversational(tmp_path):
+    journal = ConversationJournal(tmp_path / "conversation.jsonl")
+    event = Event(
+        "subagent.waiting",
+        {"job_id": "job-1", "result": "J'ai besoin du numéro de compte."},
+        source="runtime",
+        metadata={
+            "conversation_id": "telegram:20",
+            "internal_event": True,
+            "resume_orchestrator": True,
+        },
+        id="waiting-1",
+    )
+    context = RunContext(event=event, task=None, run_id=None, loaded_state={})
+    context.answer = "Le worker attend ton numéro de compte."
+
+    _journal_runtime(journal)._journal_context(context)
+
+    messages = journal.recent_messages(conversation_id="telegram:20")
+    assert [item["content"] for item in messages] == [
+        "Le worker attend ton numéro de compte."
+    ]
 
 
 def test_jsonl_completion_journaling_is_idempotent(tmp_path):

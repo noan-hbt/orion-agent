@@ -52,7 +52,7 @@ def test_dashboard_has_compact_banner_and_readable_sections():
     assert "state: online" in text.lower()
 
 
-def test_three_assistant_messages_remain_in_transcript_after_returning_from_dashboard(
+def test_dashboard_opens_on_dashboard_without_losing_conversation_history(
     monkeypatch,
 ):
     import cli_cockpit
@@ -73,7 +73,13 @@ def test_three_assistant_messages_remain_in_transcript_after_returning_from_dash
     editor.text = "/dashboard"
     _enter(app)
     rendered = cli._view.text
-    assert all(f"answer-{n}" in rendered for n in range(1, 4))
+    assert rendered.startswith("ORION")
+    assert "RUNTIME" in rendered
+    assert all(f"answer-{n}" not in rendered for n in range(1, 4))
+    assert all(
+        any(event.text == f"answer-{n}" for event in cli.transcript_events)
+        for n in range(1, 4)
+    )
 
 
 def test_assistant_outputs_are_distinct_rendered_entries():

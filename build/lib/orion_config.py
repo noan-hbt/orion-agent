@@ -196,6 +196,11 @@ class MemoryConfig:
     run_at: str = "23:00"
     batch_size: int = 20
     min_entries: int = 20
+    # Keep these defaults aligned with prompt_context.MemoryMaintenance.  A
+    # bounded tail age prevents sub-threshold entries from being stranded and
+    # multiple batches let one maintenance pass catch up after a backlog.
+    max_batches_per_run: int = 8
+    tail_max_age: float = 3600.0
     poll_interval: float = 30.0
     max_input_chars: int = 30000
 
@@ -597,6 +602,8 @@ class OrionConfig:
         integer(self.memory.min_entries, "memory.min_entries", 1)
         if self.memory.min_entries > self.memory.batch_size:
             raise ValueError("memory.min_entries ne peut pas depasser memory.batch_size.")
+        integer(self.memory.max_batches_per_run, "memory.max_batches_per_run", 1)
+        number(self.memory.tail_max_age, "memory.tail_max_age")
         integer(self.memory.max_input_chars, "memory.max_input_chars", 1)
         integer(self.runtime.max_deferred_events, "runtime.max_deferred_events", 1)
         self._run_time()
@@ -1005,7 +1012,14 @@ class OrionConfig:
         from context_os import ThreadStateStore
         from context_registry import ContextRegistry
         from memory_store import MemoryStore
-        from prompt_context import ConversationJournal, SQLiteConversationJournal, MemoryExtractor, MemoryMaintenance, PromptContextStore
+        from prompt_context import (
+            ConversationJournal,
+            MemoryExtractor,
+            MemoryMaintenance,
+            PromptComposer,
+            PromptContextStore,
+            SQLiteConversationJournal,
+        )
         from reflection_engine import ReflectionEngine
         from runtime import AgentRuntime
         from scheduler import JsonScheduleStore, Scheduler
@@ -1048,17 +1062,68 @@ class OrionConfig:
                 "additional": self.prompt.additional,
             }.items() if value is not None},
         )
+        prompt_composer = PromptComposer(
+            prompt_store,
+            context_mode=self.context.context_mode,
+            max_chars=self.context.policy_max_chars,
+            max_tokens=self.context.policy_max_tokens,
+        )
         # Context OS is opt-in.  Existing deployments retain JSONL and
         # in-memory runtime state unless the new section is explicitly enabled.
         context_registry = None
         thread_state_store = None
         retrieval_store = None
+        runtime_holder: dict[str, Any] = {}
+
+        def active_context_scope() -> dict[str, str] | None:
+            runtime_instance = runtime_holder.get("runtime")
+            run_context = getattr(runtime_instance, "_run_context", None)
+            event = getattr(run_context, "event", None)
+            if event is None:
+                return None
+            metadata = event.metadata if isinstance(getattr(event, "metadata", None), dict) else {}
+            payload = event.payload if isinstance(getattr(event, "payload", None), dict) else {}
+            conversation_fn = getattr(runtime_instance, "_conversation_id", None)
+            if callable(conversation_fn):
+                conversation_id = str(conversation_fn(event))
+            else:
+                conversation_id = str(
+                    metadata.get("conversation_id")
+                    or payload.get("conversation_id")
+                    or getattr(event, "id", "default")
+                )
+            thread_id = str(
+                metadata.get("message_thread_id")
+                or metadata.get("thread_id")
+                or payload.get("message_thread_id")
+                or payload.get("thread_id")
+                or conversation_id
+            )
+            scope = str(
+                metadata.get("context_scope")
+                or payload.get("context_scope")
+                or metadata.get("scope")
+                or payload.get("scope")
+                or "global"
+            )
+            return {
+                "scope": scope,
+                "conversation_id": conversation_id,
+                "thread_id": thread_id,
+            }
+
         if self.context_os.enabled:
             for backend_path in (self.context_os.registry_path, self.context_os.journal_path,
                                  self.context_os.memory_path, self.context_os.state_path):
                 self.path(backend_path) and Path(self.path(backend_path)).parent.mkdir(parents=True, exist_ok=True)
-            context_registry = ContextRegistry(self.path(self.context_os.registry_path))
-            thread_state_store = ThreadStateStore(self.path(self.context_os.state_path))
+            context_registry = ContextRegistry(
+                self.path(self.context_os.registry_path),
+                scope_resolver=active_context_scope,
+            )
+            thread_state_store = ThreadStateStore(
+                self.path(self.context_os.state_path),
+                scope_resolver=active_context_scope,
+            )
             retrieval_store = MemoryStore(self.path(self.context_os.memory_path))
         journal = (SQLiteConversationJournal(self.path(self.context_os.journal_path))
                    if self.context_os.enabled and self.context_os.journal_enabled
@@ -1229,14 +1294,43 @@ class OrionConfig:
                 model=self.memory.model,
                 max_input_chars=self.memory.max_input_chars,
             )
-            maintenance = MemoryMaintenance(
-                journal,
-                extractor,
-                batch_size=self.memory.batch_size,
-                min_entries=self.memory.min_entries,
-                run_at=self._run_time(),
-                poll_interval=self.memory.poll_interval,
-            )
+            maintenance_kwargs = {
+                "batch_size": self.memory.batch_size,
+                "min_entries": self.memory.min_entries,
+                "run_at": self._run_time(),
+                "poll_interval": self.memory.poll_interval,
+            }
+            maintenance_parameters = inspect.signature(MemoryMaintenance).parameters
+            if "max_batches_per_run" in maintenance_parameters:
+                maintenance_kwargs["max_batches_per_run"] = self.memory.max_batches_per_run
+            if "tail_max_age" in maintenance_parameters:
+                maintenance_kwargs["tail_max_age"] = self.memory.tail_max_age
+            if "max_batches_per_run" not in maintenance_parameters and self.memory.max_batches_per_run > 1:
+                # Compatibility adapter for an older worker API.  The
+                # inherited scheduler calls self.run_once(), so overriding only
+                # this method drains several bounded batches per scheduled pass.
+                max_batches = self.memory.max_batches_per_run
+
+                class _DrainingMemoryMaintenance(MemoryMaintenance):
+                    def run_once(self) -> int:
+                        total = 0
+                        for _ in range(max_batches):
+                            processed = super().run_once()
+                            total += processed
+                            if processed < self.batch_size:
+                                break
+                        return total
+
+                maintenance = _DrainingMemoryMaintenance(
+                    journal,
+                    extractor,
+                    **maintenance_kwargs,
+                )
+            else:
+                maintenance = MemoryMaintenance(journal, extractor, **maintenance_kwargs)
+            # Keep the effective drain limit observable across both the current
+            # compatibility adapter and a future native implementation.
+            maintenance.max_batches_per_run = self.memory.max_batches_per_run
         reflection_engine = None
         if self.reflection.enabled:
             reflection_engine = ReflectionEngine(
@@ -1300,6 +1394,7 @@ class OrionConfig:
                 response_concise=self.response.concise,
                 reflection_engine=reflection_engine if self.context.reflection_enabled else None,
                 prompt_store=prompt_store,
+                prompt_composer=prompt_composer,
                 conversation_journal=journal,
                 history_enabled=self.prompt.history_enabled,
                 history_limit=self.prompt.history_limit,
@@ -1316,6 +1411,7 @@ class OrionConfig:
                 memory_maintenance=maintenance,
                 on_output=channel_router.route,
             ).attach(events)
+            runtime_holder["runtime"] = runtime
             if subagent_manager is not None and self.approvals.enabled:
                 # Optional strict mode: privileged worker calls are brokered by
                 # the parent Orion runtime and require an operator decision.

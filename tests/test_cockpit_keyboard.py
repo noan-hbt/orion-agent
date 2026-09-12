@@ -72,12 +72,27 @@ def test_alt_enter_inserts_newline_without_submitting(monkeypatch):
     received = []
     cli.start(received.append)
     editor.text = "line one"
+    editor.cursor_position = len(editor.text)
     # Control-J is the portable PTK representation of Alt+Enter/linefeed.
     # (Escape+Enter is terminal-dependent and is not synthesized by PTK's
     # key processor on Windows.)
     _process(app, Keys.ControlJ)
     assert received == []
     assert editor.text == "line one\n"
+
+
+def test_ctrl_j_inserts_newline_at_caret(monkeypatch):
+    cli, app, editor = _app(monkeypatch)
+    received = []
+    cli.start(received.append)
+    editor.text = "abc\ndef"
+    editor.cursor_position = 2
+
+    _process(app, Keys.ControlJ)
+
+    assert received == []
+    assert editor.text == "ab\nc\ndef"
+    assert editor.cursor_position == 3
 
 
 def test_dashboard_is_a_view_and_enter_returns_to_conversation(monkeypatch):
@@ -98,6 +113,17 @@ def test_ctrl_d_exits_cleanly_and_does_not_submit_draft(monkeypatch):
     editor.text = "draft preserved until explicit submit"
     _process(app, Keys.ControlD)
     assert cli._stop.is_set()
+
+
+def test_ctrl_c_exits_cleanly_and_does_not_submit_draft(monkeypatch):
+    cli, app, editor = _app(monkeypatch)
+    cli.start(lambda _: pytest.fail("Ctrl+C must not submit"))
+    editor.text = "draft preserved until explicit submit"
+
+    _process(app, Keys.ControlC)
+
+    assert cli._stop.is_set()
+    assert editor.text == "draft preserved until explicit submit"
 
 
 def test_scrolling_keeps_composer_focus_and_async_output_does_not_snap(monkeypatch):

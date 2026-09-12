@@ -82,3 +82,83 @@ def test_state_survives_registry_restart(tmp_path):
     restarted = ContextRegistry(path)
     assert restarted.get_principal("p", "scope").data == {"name": "Noah"}
     assert restarted.get_intent("t", "scope").data["version"] == 3
+
+
+def test_snapshot_filters_to_requested_conversation_instead_of_first_rows(tmp_path):
+    registry = ContextRegistry(tmp_path / "context.sqlite")
+    for index in range(125):
+        principal_id = f"p-{index:03d}"
+        thread_id = f"thread-{index:03d}"
+        registry.upsert_principal(
+            Principal(principal_id, "tenant", {"index": index})
+        )
+        registry.upsert_thread(
+            ConversationThread(
+                thread_id,
+                principal_id=principal_id,
+                scope="tenant",
+                data={"index": index},
+            )
+        )
+        registry.upsert_intent(
+            IntentState(thread_id, f"intent-{index}", "tenant", {"index": index})
+        )
+
+    snapshot = registry.snapshot(scope="tenant", thread_id="thread-124")
+
+    assert [item["id"] for item in snapshot["threads"]] == ["thread-124"]
+    assert [item["thread_id"] for item in snapshot["intents"]] == ["thread-124"]
+    assert [item["id"] for item in snapshot["principals"]] == ["p-124"]
+
+
+def test_snapshot_resolves_conversation_binding_and_dynamic_scope(tmp_path):
+    current = {
+        "scope": "tenant-a",
+        "conversation_id": "conversation-a",
+        "thread_id": "thread-a",
+    }
+    registry = ContextRegistry(
+        tmp_path / "context.sqlite",
+        scope_resolver=lambda: dict(current),
+    )
+    for suffix in ("a", "b"):
+        scope = f"tenant-{suffix}"
+        principal_id = f"principal-{suffix}"
+        thread_id = f"thread-{suffix}"
+        conversation_id = f"conversation-{suffix}"
+        registry.upsert_principal(Principal(principal_id, scope, {"owner": suffix}))
+        registry.upsert_thread(
+            ConversationThread(thread_id, principal_id=principal_id, scope=scope)
+        )
+        registry.upsert_intent(IntentState(thread_id, f"intent-{suffix}", scope))
+        registry.bind_channel(
+            "telegram",
+            conversation_id,
+            scope=scope,
+            principal_id=principal_id,
+            thread_id=thread_id,
+        )
+
+    first = registry.snapshot()
+    assert first["scope"] == "tenant-a"
+    assert [item["id"] for item in first["threads"]] == ["thread-a"]
+    assert [item["external_id"] for item in first["bindings"]] == ["conversation-a"]
+
+    current.update(
+        scope="tenant-b",
+        conversation_id="conversation-b",
+        thread_id="thread-b",
+    )
+    second = registry.snapshot()
+    assert second["scope"] == "tenant-b"
+    assert [item["id"] for item in second["threads"]] == ["thread-b"]
+    assert [item["external_id"] for item in second["bindings"]] == ["conversation-b"]
+
+
+def test_unscoped_snapshot_is_not_silently_truncated_to_100_rows(tmp_path):
+    registry = ContextRegistry(tmp_path / "context.sqlite")
+    for index in range(105):
+        registry.upsert_thread(ConversationThread(f"thread-{index:03d}"))
+
+    assert len(registry.snapshot()["threads"]) == 105
+    assert len(registry.snapshot(limit=100)["threads"]) == 100

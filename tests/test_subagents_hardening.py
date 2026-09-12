@@ -166,6 +166,94 @@ def test_session_compaction_keeps_tool_exchange_atomic(tmp_path):
             }
 
 
+def test_session_compaction_bounds_cumulative_history_and_keeps_current_request(tmp_path):
+    manager = _manager(
+        tmp_path,
+        max_session_messages=100,
+        max_session_chars=4000,
+        max_session_tokens=1000,
+    )
+    messages = [
+        {"role": "system", "content": "system contract " + "s" * 500},
+        {"role": "user", "content": "delegated objective " + "o" * 500},
+    ]
+    for index in range(40):
+        messages.append(
+            {
+                "role": "assistant",
+                "content": f"old-history-{index} " + "x" * 1800,
+            }
+        )
+    messages.append(
+        {
+            "role": "user",
+            "content": "CURRENT-REQUEST-SENTINEL " + "c" * 600,
+        }
+    )
+
+    compacted = manager._bounded_messages(messages)
+    chars, tokens = manager._session_usage(compacted)
+
+    assert chars <= manager.max_session_chars
+    assert tokens <= manager.max_session_tokens
+    assert compacted[0]["role"] == "system"
+    assert any(
+        item.get("role") == "user"
+        and "CURRENT-REQUEST-SENTINEL" in str(item.get("content", ""))
+        for item in compacted
+    )
+    assert len(compacted) < len(messages)
+
+
+def test_session_compaction_shrinks_oversized_latest_tool_exchange_atomically(tmp_path):
+    manager = _manager(
+        tmp_path,
+        max_session_chars=3000,
+        max_session_tokens=750,
+    )
+    messages = [
+        {"role": "system", "content": "system " + "s" * 300},
+        {"role": "user", "content": "objective " + "o" * 300},
+        {"role": "user", "content": "CURRENT-TOOL-REQUEST " + "q" * 600},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call-large",
+                    "function": {
+                        "name": "web",
+                        "arguments": "a" * 8000,
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-large",
+            "content": "r" * 8000,
+        },
+    ]
+
+    compacted = manager._bounded_messages(messages)
+    chars, tokens = manager._session_usage(compacted)
+
+    assert chars <= manager.max_session_chars
+    assert tokens <= manager.max_session_tokens
+    assert any(
+        item.get("role") == "user"
+        and "CURRENT-TOOL-REQUEST" in str(item.get("content", ""))
+        for item in compacted
+    )
+    assistant_index = next(
+        index
+        for index, item in enumerate(compacted)
+        if item.get("role") == "assistant" and item.get("tool_calls")
+    )
+    tool = compacted[assistant_index + 1]
+    assert tool["role"] == "tool"
+    assert tool["tool_call_id"] == "call-large"
+
+
 def test_corrupt_state_is_reported(tmp_path):
     state = tmp_path / "subagents.json"
     state.write_text("not-json", encoding="utf-8")
@@ -355,3 +443,76 @@ def test_completed_handoff_carries_acknowledged_terminal_state(tmp_path):
     assert payload["handoff_context"]["state"]["status"] == "completed"
     assert payload["handoff_context"]["output"]["result"] == "verified result"
     assert payload["handoff_id"] == job.handoff_context.handoff_id
+    assert payload["provenance"] == {
+        "kind": "subagent",
+        "agent_id": agent.id,
+        "agent_name": "worker",
+        "job_id": job.id,
+        "session_id": job.session_id,
+        "handoff_id": job.handoff_context.handoff_id,
+        "correlation_id": job.handoff_context.correlation_id,
+        "parent_event_id": None,
+    }
+    assert payload["outcome"] == {
+        "status": "completed",
+        "terminal": True,
+        "result": "verified result",
+        "error": None,
+        "waiting_for": None,
+    }
+    assert payload["delivery"] == {
+        "mode": "standalone",
+        "resume_orchestrator": False,
+        "parent_task_id": None,
+    }
+
+
+def test_waiting_event_exposes_structured_nonterminal_outcome(tmp_path):
+    manager = _manager(tmp_path)
+    agent = manager.create_agent("worker", "does work")
+    job = manager.submit("needs clarification", agent_id=agent.id)
+    with manager._lock:
+        current = manager._jobs[job.id]
+        current.status = SubAgentJobStatus.WAITING
+        current.waiting_for = "Which branch?"
+        current.state_version += 1
+        current.handoff_context = current.handoff_context.with_state(
+            "waiting", waiting_for=current.waiting_for
+        )
+        payload = manager._event_payload(current, "subagent.waiting", current.waiting_for)
+
+    assert payload["status"] == "waiting"
+    assert payload["message"] == "Which branch?"
+    assert payload["result"] is None
+    assert payload["outcome"] == {
+        "status": "waiting",
+        "terminal": False,
+        "result": None,
+        "error": None,
+        "waiting_for": "Which branch?",
+    }
+
+
+def test_taskless_conversational_event_declares_resume_delivery_mode(tmp_path):
+    manager = _manager(tmp_path)
+    agent = manager.create_agent("worker", "does work")
+    job = manager.submit(
+        "conversation delegation",
+        agent_id=agent.id,
+        route_metadata={"resume_orchestrator": True, "conversation_id": "cli:main"},
+    )
+    with manager._lock:
+        current = manager._jobs[job.id]
+        current.status = SubAgentJobStatus.COMPLETED
+        current.result = "done"
+        current.state_version += 1
+        current.handoff_context = current.handoff_context.with_state(
+            "completed", result=current.result
+        )
+        payload = manager._event_payload(current, "subagent.completed", current.result)
+
+    assert payload["delivery"] == {
+        "mode": "taskless_conversational",
+        "resume_orchestrator": True,
+        "parent_task_id": None,
+    }

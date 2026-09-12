@@ -77,6 +77,7 @@ try:
     from prompt_toolkit.keys import Keys
     from prompt_toolkit.layout import HSplit, Layout, Window
     from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.layout.dimension import Dimension
     from prompt_toolkit.mouse_events import MouseEventType
     from prompt_toolkit.styles import Style
     from prompt_toolkit.output import Output as PromptToolkitOutput
@@ -202,26 +203,42 @@ class CockpitCLIAdapter:
         elif direction in {"page_up", "page_down"}:
             info = self._view.window.render_info
             if info is not None and info.visible_line_to_row_col:
-                visible_rows = sorted(info.visible_line_to_row_col)
-                visible_row = visible_rows[0] if direction == "page_up" else visible_rows[-1]
-                row, column = info.visible_line_to_row_col[visible_row]
-                target = buffer.document.translate_row_col_to_index(row, column)
                 if direction == "page_up":
-                    target = min(target, max(0, buffer.cursor_position - 1))
-                    buffer.cursor_position = target
-                    # Match prompt-toolkit's own page-up strategy: let Window
-                    # place the new cursor near the bottom of the next render.
+                    # Mirror prompt-toolkit's page-up semantics, but operate on
+                    # the transcript buffer while focus remains in the composer.
+                    line_index = max(
+                        0,
+                        min(
+                            info.first_visible_line(),
+                            buffer.document.cursor_position_row - 1,
+                        ),
+                    )
+                    buffer.cursor_position = buffer.document.translate_row_col_to_index(
+                        line_index, 0
+                    )
                     self._view.window.vertical_scroll = 0
                     self._view.window.vertical_scroll_2 = 0
                     if self._view_mode == "chat":
                         self._follow_tail = False
-                elif info.bottom_visible:
+                elif info.bottom_visible or info.last_visible_line() >= buffer.document.line_count - 1:
                     buffer.cursor_position = len(text)
                     if self._view_mode == "chat":
                         self._follow_tail = True
                 else:
-                    buffer.cursor_position = min(
-                        len(text), max(target, buffer.cursor_position + 1)
+                    # Move by the rendered page, not by one character.  The
+                    # previous implementation mixed screen-row coordinates and
+                    # buffer offsets, so PgDn often advanced a single character.
+                    line_index = min(
+                        buffer.document.line_count - 1,
+                        max(
+                            info.last_visible_line(),
+                            self._view.window.vertical_scroll + 1,
+                        ),
+                    )
+                    self._view.window.vertical_scroll = line_index
+                    self._view.window.vertical_scroll_2 = 0
+                    buffer.cursor_position = buffer.document.translate_row_col_to_index(
+                        line_index, 0
                     )
                     if self._view_mode == "chat":
                         self._follow_tail = False
@@ -519,39 +536,75 @@ class CockpitCLIAdapter:
         mode = self._view_mode.upper()
         with self._write_lock:
             count = len(self.transcript_events)
-        details: list[tuple[str, str]] = [("class:header.state", self._compact(state, 16))]
+        details: list[tuple[str, str]] = [
+            ("class:header.mode", mode),
+            ("class:header.state", self._compact(state, 16)),
+            ("class:header.meta", f"{count} event{'s' if count != 1 else ''}"),
+        ]
         model = self._model_label(snapshot)
         events = self._event_label(snapshot)
         cost = self._cost_label(snapshot)
-        if model:
-            details.append(("class:header.meta", self._compact(model, 28)))
-        if events:
-            details.append(("class:header.meta", f"events:{self._compact(events, 18)}"))
         if self._pending_approvals_count is not None:
             details.append(("class:header.meta", f"approvals:{self._pending_approvals_count}"))
+        if events:
+            details.append(("class:header.meta", f"events:{self._compact(events, 18)}"))
+        if model:
+            details.append(("class:header.meta", self._compact(model, 28)))
         if cost:
             details.append(("class:header.meta", self._compact(cost, 16)))
-        details.append(("class:header.mode", mode))
-        details.append(("class:header.meta", f"{count} event{'s' if count != 1 else ''}"))
         fragments: list[tuple[str, str]] = [("class:header.brand", " ORION ")]
+        used = len(" ORION ")
+        width = self._terminal_columns()
         for style, text in details:
-            fragments.append(("class:header.sep", "  |  "))
+            separator = " | "
+            if used + len(separator) + len(text) > width:
+                continue
+            fragments.append(("class:header.sep", separator))
             fragments.append((style, text))
+            used += len(separator) + len(text)
         return FormattedText(fragments)
 
     def _footer_fragments(self):
-        return FormattedText(
-            [
-                ("class:footer.key", " Enter "),
-                ("class:footer", "send  "),
-                ("class:footer.key", " PgUp/PgDn "),
-                ("class:footer", "scroll  "),
-                ("class:footer.key", " End "),
-                ("class:footer", "tail  "),
-                ("class:footer.key", " /help "),
-                ("class:footer", "help"),
-            ]
+        groups = (
+            (("class:footer.key", " PgUp/Dn "), ("class:footer", "scroll")),
+            (("class:footer.key", " Enter "), ("class:footer", "send")),
+            (("class:footer.key", " End "), ("class:footer", "tail")),
+            (("class:footer.key", " /help "), ("class:footer", "help")),
         )
+        width = self._terminal_columns()
+        fragments: list[tuple[str, str]] = []
+        used = 0
+        for group in groups:
+            group_width = sum(len(text) for _, text in group)
+            spacer = 2 if fragments else 0
+            if used + spacer + group_width > width:
+                continue
+            if spacer:
+                fragments.append(("class:footer", "  "))
+                used += spacer
+            fragments.extend(group)
+            used += group_width
+        return FormattedText(fragments)
+
+    def _terminal_columns(self, default: int = 80) -> int:
+        output = getattr(self._app, "output", None) or self.output
+        get_size = getattr(output, "get_size", None)
+        if callable(get_size):
+            try:
+                return max(1, int(get_size().columns))
+            except Exception:
+                pass
+        return default
+
+    def _terminal_rows(self, default: int = 24) -> int:
+        output = getattr(self._app, "output", None) or self.output
+        get_size = getattr(output, "get_size", None)
+        if callable(get_size):
+            try:
+                return max(1, int(get_size().rows))
+            except Exception:
+                pass
+        return default
 
     def _append_transcript(
         self,
@@ -978,7 +1031,7 @@ class CockpitCLIAdapter:
         # Preserve order while removing aliases duplicated by the backend.
         command_words = list(dict.fromkeys(command_words))
         editor = TextArea(
-            height=3,
+            height=Dimension(min=1, preferred=3, max=3),
             prompt=self.prompt,
             multiline=True,
             wrap_lines=True,
@@ -1007,9 +1060,8 @@ class CockpitCLIAdapter:
         @bindings.add(Keys.ControlJ, eager=True)
         def _insert_newline(event):
             # Keep this portable on Windows terminals where Alt+Enter is not a
-            # stable key sequence.  Appending also preserves the long-standing
-            # cockpit contract used by synthetic PTK inputs.
-            editor.buffer.text = editor.buffer.text + "\n"
+            # stable key sequence, and respect the current caret position.
+            editor.buffer.insert_text("\n")
 
         @bindings.add("f1")
         def _help(event):
@@ -1061,14 +1113,14 @@ class CockpitCLIAdapter:
         conversation_label = Window(
             FormattedTextControl(text=[("class:section.label", " Conversation ")]),
             char="-",
-            height=1,
+            height=lambda: 1 if self._terminal_rows() >= 8 else 0,
             dont_extend_height=True,
             wrap_lines=False,
         )
         message_label = Window(
             FormattedTextControl(text=[("class:section.label", " Message ")]),
             char="-",
-            height=1,
+            height=lambda: 1 if self._terminal_rows() >= 8 else 0,
             dont_extend_height=True,
             wrap_lines=False,
         )
@@ -1111,7 +1163,12 @@ class CockpitCLIAdapter:
         self.start(self._on_message or (lambda _: None))
         try:
             with _suppress_native_stderr():
-                app.run()
+                try:
+                    app.run()
+                except (EOFError, KeyboardInterrupt):
+                    # Real terminal/pipe hangup can surface as EOFError before
+                    # a key binding is dispatched. Treat it like Ctrl+D/C.
+                    pass
         finally:
             self.stop()
 
@@ -1135,11 +1192,8 @@ class CockpitCLIAdapter:
         if command in {"/status", "/dashboard", "/watch"}:
             snap = self._refresh_overview()
             if self._view is not None:
-                chat = self._transcript_text()
                 dashboard = self._dashboard_text(snap)
-                self._set_view(
-                    f"{chat}\n\n{dashboard}" if chat else dashboard, mode="dashboard"
-                )
+                self._set_view(dashboard, mode=command[1:])
             else:
                 # Keep machine-friendly JSON for pipes/non-TTY callers.
                 self._render_result({"title": command[1:].upper(), "data": snap})

@@ -40,8 +40,19 @@ def execute_action(application: Any, command: str, args: Any = None) -> dict[str
         name = name[7:].strip()
     raw = args if isinstance(args, Mapping) else {}
     positional = list(args or []) if not isinstance(args, Mapping) and args is not None else []
-    def val(key: str, index: int = 0, default: Any = None):
-        return raw.get(key, positional[index] if len(positional) > index else default)
+
+    def val(key: str, index: int | None = None, default: Any = None):
+        if key in raw:
+            return raw[key]
+        if index is not None and len(positional) > index:
+            return positional[index]
+        return default
+
+    def required(key: str, index: int, usage: str) -> tuple[Any, dict[str, Any] | None]:
+        value = val(key, index)
+        if value is None or not str(value).strip():
+            return None, _result(name, error=f"Usage: {usage}")
+        return value, None
     try:
         manager = _service(application, "subagent_manager", "subagents", "agent_manager")
         teams = _service(application, "team_bus", "teams")
@@ -49,21 +60,71 @@ def execute_action(application: Any, command: str, args: Any = None) -> dict[str
         if name == "spawn":
             if manager is None or not callable(getattr(manager, "create_agent", None)):
                 return _result(name, error="Service sous-agents indisponible")
+            agent_name, error = required("name", 0, "/spawn <name>")
+            if error is not None:
+                return error
             requested_tools = val("allowed_tools", default=None)
-            data = manager.create_agent(name=str(val("name", 0, val("role", 0, "agent"))), description=str(val("description", 1, "")), model=val("model", 2), system_prompt=str(val("system_prompt", 3, "")), allowed_tools=None if requested_tools is None else list(requested_tools), capabilities=list(val("capabilities", default=[])), max_turns=int(val("max_turns", default=8)))
+            capabilities = val("capabilities", default=[])
+            data = manager.create_agent(
+                name=str(agent_name),
+                description=str(val("description", 1, "")),
+                model=val("model", 2),
+                system_prompt=str(val("system_prompt", 3, "")),
+                allowed_tools=None if requested_tools is None else list(requested_tools),
+                capabilities=list(capabilities or []),
+                max_turns=int(val("max_turns", default=8)),
+            )
         elif name == "kill":
             if manager is None or not callable(getattr(manager, "delete_agent", None)):
                 return _result(name, error="Service sous-agents indisponible")
-            data = manager.delete_agent(str(val("agent_id", 0)))
+            agent_id, error = required("agent_id", 0, "/kill <agent_id>")
+            if error is not None:
+                return error
+            data = manager.delete_agent(str(agent_id))
         elif name == "delegate":
             if manager is None or not callable(getattr(manager, "submit", None)):
                 return _result(name, error="Service sous-agents indisponible")
-            data = manager.submit(str(val("objective", 1, val("objective", 0, ""))), agent_id=val("agent_id", 0, None), context=str(val("context", 2, "")), priority=int(val("priority", default=20)))
+            if isinstance(args, Mapping):
+                objective = raw.get("objective")
+                agent_id = raw.get("agent_id")
+            elif len(positional) >= 2:
+                agent_id = positional[0]
+                objective = " ".join(str(item) for item in positional[1:])
+            else:
+                agent_id = None
+                objective = positional[0] if positional else None
+            if objective is None or not str(objective).strip():
+                return _result(name, error="Usage: /delegate [agent_id] <objective>")
+            data = manager.submit(
+                str(objective),
+                agent_id=agent_id,
+                context=str(val("context", default="")),
+                priority=int(val("priority", default=20)),
+            )
         elif name == "send":
             if teams is not None and callable(getattr(teams, "send", None)):
-                data = teams.send(recipient=str(val("recipient", 0)), body=str(val("body", 1, val("message", 1, ""))), subject=val("subject", default=""), priority=int(val("priority", default=20)))
+                recipient = val("recipient", 0)
+                if isinstance(args, Mapping):
+                    body = raw.get("body", raw.get("message"))
+                else:
+                    body = " ".join(str(item) for item in positional[1:]) if len(positional) > 1 else None
+                if recipient is None or not str(recipient).strip() or body is None or not str(body).strip():
+                    return _result(name, error="Usage: /send <recipient> <message>")
+                data = teams.send(
+                    recipient=str(recipient),
+                    body=str(body),
+                    subject=val("subject", default=""),
+                    priority=int(val("priority", default=20)),
+                )
             elif manager is not None and callable(getattr(manager, "send_message", None)):
-                data = manager.send_message(str(val("job_id", 0)), str(val("message", 1)))
+                job_id = val("job_id", 0)
+                if isinstance(args, Mapping):
+                    message = raw.get("message")
+                else:
+                    message = " ".join(str(item) for item in positional[1:]) if len(positional) > 1 else None
+                if job_id is None or not str(job_id).strip() or message is None or not str(message).strip():
+                    return _result(name, error="Usage: /send <job_id> <message>")
+                data = manager.send_message(str(job_id), str(message))
             else:
                 return _result(name, error="Service de communication indisponible")
         elif name in {"approve", "reject"}:

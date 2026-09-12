@@ -6,6 +6,7 @@ from channels import ChannelRouter
 from communication_ledger import CommunicationLedger
 from event_handler import Event, EventHandler
 from handoff_context import HandoffContext
+from prompt_context import ConversationJournal
 from runtime import AgentRuntime, RunContext
 from tasks import InMemoryTaskStore, TaskStatus
 from teams import TeamBus
@@ -186,6 +187,42 @@ def test_taskless_completed_subagent_keeps_direct_result_shortcut():
     assert outputs[-1].metadata["output_origin"] == "subagent"
 
 
+def test_direct_subagent_result_is_journaled_before_channel_delivery(tmp_path):
+    journal = ConversationJournal(tmp_path / "conversation.jsonl")
+    observed_history = []
+
+    def on_output(_output):
+        observed_history.append(
+            [
+                item["content"]
+                for item in journal.recent_messages(
+                    conversation_id="cli:journal-before-output", limit=10
+                )
+            ]
+        )
+
+    runtime = AgentRuntime(
+        llm_client=CompletingParentLLM(),
+        task_store=InMemoryTaskStore(),
+        conversation_journal=journal,
+        action_ledger_path=":memory:",
+        on_output=on_output,
+    )
+
+    runtime._wake(
+        Event(
+            "subagent.completed",
+            {"job_id": "job-taskless", "status": "completed", "result": "direct result"},
+            metadata={
+                "channel": "cli",
+                "conversation_id": "cli:journal-before-output",
+            },
+        )
+    )
+
+    assert observed_history == [["direct result"]]
+
+
 def test_conversational_taskless_subagent_result_wakes_orion_and_keeps_worker_output():
     store = InMemoryTaskStore()
     client = TasklessSynthesisLLM()
@@ -212,6 +249,7 @@ def test_conversational_taskless_subagent_result_wakes_orion_and_keeps_worker_ou
 
     assert len(client.calls) == 1
     assert "worker result" in json.dumps(client.calls[0]["messages"])
+    assert "worker_artifact_already_delivered" in json.dumps(client.calls[0]["messages"])
     assert [item.content for item in outputs] == [
         "worker result",
         "Orion a repris le résultat du worker.",

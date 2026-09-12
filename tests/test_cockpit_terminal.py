@@ -47,9 +47,14 @@ def _render(app):
             await asyncio.sleep(0)
 
     asyncio.run(render())
+    return app.renderer.last_rendered_screen
 
 
-@pytest.mark.parametrize("columns", [24, 40, 80, 120, 160])
+def _screen_line(screen, row, columns):
+    return "".join(screen.data_buffer[row][column].char for column in range(columns)).rstrip()
+
+
+@pytest.mark.parametrize("columns", [20, 24, 40, 80, 120, 160])
 def test_cockpit_builds_ptk_screen_at_terminal_width(columns):
     pytest.importorskip("prompt_toolkit")
     global _active_output
@@ -60,6 +65,41 @@ def test_cockpit_builds_ptk_screen_at_terminal_width(columns):
     assert app.full_screen
     assert _active_output.get_size().columns == columns
     assert cli._view is not None
+
+
+@pytest.mark.parametrize("rows", [5, 6, 7])
+@pytest.mark.parametrize("columns", [20, 24, 40, 80, 120, 160])
+def test_low_terminal_heights_use_compact_layout_without_window_too_small(columns, rows):
+    global _active_output
+    _active_output = _SizeOutput(columns, rows)
+    cli = CockpitCLIAdapter(_Backend(), output=_active_output)
+    app = cli.build_application()
+
+    screen = _render(app)
+    first_line = _screen_line(screen, 0, columns)
+
+    assert "Window too small" not in first_line
+    assert "ORION" in first_line
+    assert app.layout.current_control is not cli._view.control
+
+
+@pytest.mark.parametrize("columns", [20, 24, 40, 80, 120, 160])
+def test_header_footer_adapt_to_width_without_partial_tokens(columns):
+    global _active_output
+    _active_output = _SizeOutput(columns, 12)
+    cli = CockpitCLIAdapter(_Backend(), output=_active_output)
+    app = cli.build_application()
+
+    screen = _render(app)
+    header = _screen_line(screen, 0, columns)
+    footer = _screen_line(screen, 11, columns)
+
+    assert len(header) <= columns
+    assert len(footer) <= columns
+    assert "ORION" in header
+    assert "CHAT" in header
+    assert "PgUp/Dn" in footer
+    assert not footer.endswith(("PgUp/", "PgUp/D", "PgUp/Dn sc", "/hel"))
 
 
 def test_async_output_during_focused_edit_preserves_unicode_and_single_prompt():
@@ -114,6 +154,36 @@ def test_build_application_reuses_injected_prompt_toolkit_output():
     app = cli.build_application()
 
     assert app.output is injected
+
+
+def test_real_prompt_toolkit_eof_exits_tui_cleanly():
+    from prompt_toolkit.input import create_pipe_input
+
+    with create_pipe_input() as pipe:
+        cli = CockpitCLIAdapter(_Backend(), input=pipe, output=DummyOutput())
+        pipe.close()
+
+        cli.run_tui()
+
+    assert cli._stop.is_set()
+    assert not cli.running
+
+
+def test_resize_across_compact_and_wide_layout_preserves_focus_and_draft():
+    global _active_output
+    _active_output = _SizeOutput(80, 12)
+    cli = CockpitCLIAdapter(_Backend(), output=_active_output)
+    app = cli.build_application()
+    editor = app.layout.current_control
+    editor.text = "draft café"
+    editor.cursor_position = len(editor.text)
+
+    for columns, rows in ((20, 5), (160, 24), (24, 7), (80, 12)):
+        _active_output._size = (columns, rows)
+        screen = _render(app)
+        assert "Window too small" not in _screen_line(screen, 0, columns)
+        assert app.layout.current_control is editor
+        assert editor.text == "draft café"
 
 
 def test_non_tty_output_degrades_safely_on_strict_cp1252_stream():
@@ -182,6 +252,58 @@ def test_rendered_scroll_stays_put_across_async_append_then_end_follows_tail():
     _render(app)
     assert cli._follow_tail is True
     assert cli._view.window.render_info.bottom_visible
+
+
+def test_page_down_moves_a_rendered_page_and_can_return_toward_tail():
+    global _active_output
+    _active_output = _SizeOutput(40, 12)
+    cli = CockpitCLIAdapter(_Backend(), output=_active_output)
+    app = cli.build_application()
+    for index in range(100):
+        cli.send(AgentOutput(f"message-{index}: " + ("wrapped text " * 4)))
+
+    _render(app)
+    cli._scroll_view("page_up")
+    _render(app)
+    cli._scroll_view("page_up")
+    _render(app)
+    first_before = cli._view.window.render_info.first_visible_line()
+
+    cli._scroll_view("page_down")
+    _render(app)
+    first_after = cli._view.window.render_info.first_visible_line()
+
+    assert first_after >= first_before + 2
+    assert cli._follow_tail is False
+
+    for _ in range(50):
+        cli._scroll_view("page_down")
+        _render(app)
+        if cli._follow_tail:
+            break
+    assert cli._follow_tail is True
+    assert cli._view.window.render_info.bottom_visible
+
+
+@pytest.mark.parametrize("command", ["/status", "/dashboard", "/watch"])
+def test_dashboard_views_with_long_history_open_on_recent_content(command):
+    global _active_output
+    _active_output = _SizeOutput(40, 12)
+    cli = CockpitCLIAdapter(_Backend(), output=_active_output)
+    app = cli.build_application()
+    for index in range(60):
+        cli.send(AgentOutput(f"old-message-{index:02d}"))
+
+    assert cli._command(command)
+    screen = _render(app)
+    visible = "\n".join(_screen_line(screen, row, 40) for row in range(12))
+
+    assert cli._view_mode == command[1:]
+    assert cli._view.text.startswith("ORION")
+    assert "RUNTIME" in cli._view.text
+    assert "old-message-00" not in cli._view.text
+    assert "ORION" in visible
+    assert "old-message-00" not in visible
 
 
 def test_worker_output_while_scrolled_preserves_view_and_worker_heading():

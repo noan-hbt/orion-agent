@@ -43,7 +43,8 @@ def test_active_delivery_heartbeat_prevents_second_instance_reclaim(tmp_path):
         # must still see no recoverable work because the active owner heartbeats.
         time.sleep(0.42)
         assert second.inbox() == []
-        assert first.acknowledge_delivery(message.id) is True
+        completed = first.complete_job(message.id, "done")
+        assert completed.status == "completed"
         assert second.inbox() == []
     finally:
         first.close()
@@ -219,6 +220,44 @@ def test_stale_owner_cannot_complete_job_after_reclaim(tmp_path):
         sender.close()
 
 
+def test_acknowledging_unfinished_team_job_requeues_new_durable_version(tmp_path):
+    path = tmp_path / "teams.sqlite3"
+    sender = _bus(path, instance_id="sender")
+    worker = _bus(path, instance_id="worker", claim_timeout=1.0)
+    try:
+        message = sender.send("worker", "must explicitly complete", kind="job")
+        assert worker._claim_for_poll(message.id) is True
+
+        in_progress = worker.get(message.id)
+        assert in_progress is not None
+        assert in_progress.status == "in_progress"
+        assert in_progress.result is None
+        assert in_progress.handoff_context is not None
+        assert in_progress.handoff_context.state["status"] == "running"
+        snapshot = worker.snapshot()
+        assert snapshot["inflight"] == 1
+        assert snapshot["claimed_inflight"] == 1
+
+        assert worker.acknowledge_delivery(message.id) is True
+
+        requeued = worker.get(message.id)
+        assert requeued is not None
+        assert requeued.status == "queued"
+        assert requeued.result is None
+        assert requeued.state_version == message.state_version + 1
+        assert requeued.handoff_context is not None
+        assert requeued.handoff_context.state["status"] == "queued"
+        assert [item.id for item in worker.inbox()] == [message.id]
+        assert worker._delivery_idempotency_key(requeued).endswith(":v1")
+        snapshot = worker.snapshot()
+        assert snapshot["pending"] == 1
+        assert snapshot["inflight"] == 0
+        assert snapshot["claimed_inflight"] == 0
+    finally:
+        worker.close()
+        sender.close()
+
+
 def test_delivery_replay_reuses_stable_event_idempotency_key(tmp_path):
     path = tmp_path / "teams.sqlite3"
     sender = _bus(path, instance_id="sender")
@@ -278,6 +317,20 @@ def test_completion_notification_replay_reuses_stable_event_identity(tmp_path):
         events.queue.task_done()
         assert original.idempotency_key is not None
         assert original.idempotency_key.startswith("team:completion:")
+        assert original.payload["provenance"] == {
+            "kind": "team_job",
+            "job_id": message.id,
+            "delegated_by_instance_id": "sender",
+            "producer_instance_id": "worker",
+            "handoff_id": completed.handoff_context.handoff_id,
+            "correlation_id": completed.correlation_id,
+        }
+        assert original.payload["outcome"] == {
+            "status": "completed",
+            "terminal": True,
+            "result": "done",
+            "error": None,
+        }
 
         sender.close()
         restarted = _bus(path, instance_id="sender", events=events)

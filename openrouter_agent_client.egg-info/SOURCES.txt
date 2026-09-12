@@ -69,10 +69,12 @@ tests/test_cockpit_keyboard.py
 tests/test_cockpit_observability.py
 tests/test_cockpit_terminal.py
 tests/test_communication_ledger.py
+tests/test_context_assembler_regressions.py
 tests/test_context_assembler_shrink_performance.py
 tests/test_context_assembler_tool_history.py
 tests/test_context_guard_messages.py
 tests/test_context_integration.py
+tests/test_context_os_scoping.py
 tests/test_context_registry_integration.py
 tests/test_context_runtime_integration.py
 tests/test_durable_events.py
@@ -94,6 +96,7 @@ tests/test_openrouter_tool_definition_cache.py
 tests/test_openrouter_tool_protocol.py
 tests/test_operational_snapshots.py
 tests/test_orion_application_lifecycle.py
+tests/test_orion_config_context_wiring.py
 tests/test_orion_run_cockpit_integration.py
 tests/test_orion_toolbox_modules.py
 tests/test_orion_toolbox_ui.py
@@ -104,11 +107,13 @@ tests/test_packaging_install.py
 tests/test_production_durable_pipeline.py
 tests/test_production_wiring_cockpit.py
 tests/test_project_dx.py
+tests/test_prompt_context_memory_persistence.py
 tests/test_reflection_runtime_config.py
 tests/test_reliability_integration.py
 tests/test_runtime_consolidated_tools.py
 tests/test_runtime_durable_inbox.py
 tests/test_runtime_preemption_continuation.py
+tests/test_runtime_prompt_regressions.py
 tests/test_runtime_subagent_tool_validation.py
 tests/test_runtime_tool_approvals.py
 tests/test_runtime_tool_execution_safety.py

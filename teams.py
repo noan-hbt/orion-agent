@@ -301,7 +301,7 @@ class TeamBus:
                 """SELECT COUNT(*) AS count
                      FROM team_messages
                     WHERE team=? AND recipient=? AND claim_owner=?
-                      AND status IN ('delivered', 'in_progress')""",
+                      AND kind='job' AND status='in_progress'""",
                 (self.team, self.instance_id, self._claim_owner),
             ).fetchone()
 
@@ -314,7 +314,15 @@ class TeamBus:
             "heartbeat_running": heartbeat_running,
             "status_counts": counts,
             "pending": counts.get("queued", 0),
-            "inflight": int(owned_claims["count"]) if owned_claims is not None else 0,
+            # ``in_progress`` is the durable job lifecycle state.  A runtime
+            # delivery claim is only transport ownership and may be released
+            # before the worker explicitly calls complete_job().  Reporting
+            # only owned claims made an unfinished job disappear from cockpit
+            # snapshots after delivery acknowledgement.
+            "inflight": counts.get("in_progress", 0),
+            "claimed_inflight": (
+                int(owned_claims["count"]) if owned_claims is not None else 0
+            ),
             "failed": counts.get("failed", 0),
             "retry_pending": int(completion_row["count"])
             if completion_row is not None
@@ -549,7 +557,31 @@ class TeamBus:
                 item = self._row(self._connection.execute("SELECT * FROM team_messages WHERE id=?", (str(message_id),)).fetchone())
                 if context is not None:
                     key = f"{context.handoff_id}:{next_version}"
-                    payload = {"event_type": "handoff.completed" if success else "handoff.failed", "message": item.to_dict(), "handoff_context": context.to_dict(), "handoff_id": context.handoff_id, "correlation_id": context.correlation_id, "parent_event_id": context.parent.get("event_id"), "state_version": next_version, "completion_key": key, "internal_event": True}
+                    payload = {
+                        "event_type": "handoff.completed" if success else "handoff.failed",
+                        "message": item.to_dict(),
+                        "handoff_context": context.to_dict(),
+                        "handoff_id": context.handoff_id,
+                        "correlation_id": context.correlation_id,
+                        "parent_event_id": context.parent.get("event_id"),
+                        "state_version": next_version,
+                        "completion_key": key,
+                        "internal_event": True,
+                        "provenance": {
+                            "kind": "team_job",
+                            "job_id": item.id,
+                            "delegated_by_instance_id": item.sender,
+                            "producer_instance_id": item.recipient,
+                            "handoff_id": context.handoff_id,
+                            "correlation_id": context.correlation_id,
+                        },
+                        "outcome": {
+                            "status": item.status,
+                            "terminal": item.status in {"completed", "failed"},
+                            "result": item.result,
+                            "error": item.error,
+                        },
+                    }
                     self._connection.execute(
                         "INSERT OR IGNORE INTO completion_notifications(key, team, sender, recipient, message_id, state_version, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (key, self.team, item.sender, self.instance_id, item.id, next_version, __import__("json").dumps(payload, ensure_ascii=False), time.time()),
@@ -567,6 +599,7 @@ class TeamBus:
                 # Runtime retries may repeat a completion after a crash.
                 return item
             self._claim_fences.pop(str(message_id), None)
+            self._published_ids.discard(str(message_id))
         item = self.get(message_id)
         assert item is not None
         self._replay_completion_notifications()
@@ -720,13 +753,39 @@ class TeamBus:
 
         Enqueue acceptance alone keeps the lease until this point, so a
         process crash after enqueue can recover the row after expiration.
+
+        A team job is different from a plain message: consuming its runtime
+        event is not the same thing as completing the delegated work.  If the
+        runtime returns without ``complete_job()``, put that job back in the
+        durable queue under a new state version so it cannot silently remain
+        ``in_progress`` forever.
         """
         self._ensure_open()
         with self._lock:
-            changed = self._connection.execute(
-                "UPDATE team_messages SET claim_owner=NULL, claim_expires_at=NULL WHERE id=? AND team=? AND recipient=? AND claim_owner=? AND status IN ('delivered', 'in_progress')",
+            row = self._connection.execute(
+                "SELECT kind, status, result FROM team_messages WHERE id=? AND team=? AND recipient=? AND claim_owner=?",
                 (str(message_id), self.team, self.instance_id, self._claim_owner),
-            )
+            ).fetchone()
+            if (
+                row is not None
+                and str(row["kind"]) == "job"
+                and str(row["status"]) == "in_progress"
+                and row["result"] is None
+            ):
+                changed = self._connection.execute(
+                    """UPDATE team_messages
+                          SET delivered_at=NULL, status='queued',
+                              claim_owner=NULL, claim_expires_at=NULL,
+                              state_version=state_version+1
+                        WHERE id=? AND team=? AND recipient=? AND claim_owner=?
+                          AND kind='job' AND status='in_progress' AND result IS NULL""",
+                    (str(message_id), self.team, self.instance_id, self._claim_owner),
+                )
+            else:
+                changed = self._connection.execute(
+                    "UPDATE team_messages SET claim_owner=NULL, claim_expires_at=NULL WHERE id=? AND team=? AND recipient=? AND claim_owner=? AND status IN ('delivered', 'in_progress')",
+                    (str(message_id), self.team, self.instance_id, self._claim_owner),
+                )
             self._connection.commit()
             acknowledged = changed.rowcount > 0
             if acknowledged:
@@ -1097,14 +1156,48 @@ class TeamBus:
     def _row(row: sqlite3.Row) -> TeamMessage:
         import json
         raw_context = row["handoff_context"] if "handoff_context" in row.keys() else None
+        status = str(row["status"] or "queued")
+        handoff_context = HandoffContext.from_dict(json.loads(raw_context)) if raw_context else None
+        # The SQL row is authoritative for transport/job lifecycle.  Older
+        # rows (and the claim fast path) can still contain a handoff envelope
+        # whose state says ``queued`` while the durable row is already
+        # ``in_progress``.  Normalize the model-facing envelope on read so one
+        # payload never presents contradictory states.
+        if handoff_context is not None and str(row["kind"]) == "job":
+            mapped_status = {
+                "queued": "queued",
+                "in_progress": "running",
+                "completed": "completed",
+                "failed": "failed",
+            }.get(status)
+            if mapped_status is not None and handoff_context.state.get("status") != mapped_status:
+                try:
+                    normalized = handoff_context.with_state(
+                        mapped_status,
+                        result=row["result"] if mapped_status == "completed" else None,
+                        error=row["error"] if mapped_status == "failed" else None,
+                    )
+                    # Read-time normalization must be pure: changing updated_at
+                    # here would make an identical durable delivery serialize
+                    # differently on replay and defeat stable event identity.
+                    handoff_context = HandoffContext(
+                        **{
+                            **normalized.__dict__,
+                            "updated_at": handoff_context.updated_at,
+                        }
+                    )
+                except ValueError:
+                    # A malformed legacy terminal envelope must not make the
+                    # otherwise readable durable message unavailable.
+                    pass
         return TeamMessage(
             id=str(row["id"]), team=str(row["team"]), sender=str(row["sender"]),
             recipient=str(row["recipient"]), kind=str(row["kind"]), body=str(row["body"]),
             subject=str(row["subject"]), correlation_id=row["correlation_id"],
             priority=int(row["priority"]), created_at=float(row["created_at"]),
             delivered_at=float(row["delivered_at"]) if row["delivered_at"] is not None else None,
-            status=str(row["status"] or "queued"), result=row["result"], error=row["error"],
-            handoff_context=HandoffContext.from_dict(json.loads(raw_context)) if raw_context else None,
+            status=status, result=row["result"], error=row["error"],
+            handoff_context=handoff_context,
             state_version=int(row["state_version"] or 0) if "state_version" in row.keys() else 0,
         )
 

@@ -126,8 +126,11 @@ def test_commands_resolve_application_service_facade():
         "usage_ledger": Usage(),
     })
 
-    assert backend.execute("/tasks")["data"] == [{"id": 1, "status": "running"}]
-    tools = backend.execute("/tools")["data"]
+    tasks_result = backend.execute("/tasks")
+    assert tasks_result["data"] == [{"id": 1, "status": "running"}]
+    assert "#1 [running]" in tasks_result["display"]
+    tools_result = backend.execute("/tools")
+    tools = tools_result["data"]
     assert len(tools) == 1
     assert tools[0]["id"] == "web"
     assert tools[0]["version"] == "1.0"
@@ -135,8 +138,13 @@ def test_commands_resolve_application_service_facade():
     assert tools[0]["enabled"] is False
     assert tools[0]["status"] == "installed_not_enabled"
     assert "tools/web" not in str(tools).replace("\\", "/")
-    assert backend.execute("/memory")["data"] == [{"id": "m1", "content": "remembered"}]
-    assert backend.execute("/context")["data"] == {"threads": 1}
+    assert "web [installed_not_enabled]" in tools_result["display"]
+    memory_result = backend.execute("/memory")
+    assert memory_result["data"] == [{"id": "m1", "content": "remembered"}]
+    assert "remembered" in memory_result["display"]
+    context_result = backend.execute("/context")
+    assert context_result["data"] == {"threads": 1}
+    assert context_result["display"] == "threads: 1"
     assert backend.execute("/cost")["data"] == {"known_cost_usd": "0.25", "total_tokens": 42}
 
 
@@ -153,6 +161,122 @@ def test_tools_projection_requires_explicit_package_enable_after_install():
     assert rows[0]["enabled"] is True
     assert rows[0]["loaded"] is True
     assert rows[0]["status"] == "loaded"
+
+
+def test_command_display_contract_is_compact_human_text_while_data_stays_structured():
+    class Agents:
+        def list_agents(self):
+            return [
+                {
+                    "id": "agent-1",
+                    "name": "reviewer",
+                    "status": "active",
+                    "model": "provider/model",
+                    "allowed_tools": ["web"],
+                    "capabilities": ["audit"],
+                }
+            ]
+
+        def list_jobs(self):
+            return [
+                {
+                    "id": "job-1",
+                    "agent_id": "agent-1",
+                    "status": "running",
+                    "objective": "inspect the repository",
+                    "result": {"must": "not render"},
+                }
+            ]
+
+    class Events:
+        running = True
+        workers = 2
+        queue = None
+        dead_letters = []
+        callback_errors = []
+
+    backend = CockpitBackend(
+        {
+            "runtime": Runtime(),
+            "task_store": Tasks(),
+            "subagents": Agents(),
+            "events": Events(),
+            "context_registry": Context(),
+        }
+    )
+
+    agents = backend.execute("/agents")
+    assert isinstance(agents["data"], list)
+    assert "reviewer [active]" in agents["display"]
+    assert "model=provider/model" in agents["display"]
+
+    jobs = backend.execute("/jobs")
+    assert jobs["data"] == [
+        {
+            "id": "job-1",
+            "status": "running",
+            "agent_id": "agent-1",
+            "objective": "inspect the repository",
+        }
+    ]
+    assert "job-1 [running] inspect the repository" in jobs["display"]
+    assert "must" not in jobs["display"]
+
+    events = backend.execute("/events")
+    assert isinstance(events["data"], dict)
+    assert "state: running=yes" in events["display"]
+    assert "queue: queued=-" in events["display"]
+    assert "{" not in events["display"]
+
+    status = backend.execute("/status")
+    assert isinstance(status["data"], dict)
+    assert "RUNTIME" in status["display"]
+    assert "TASKS" in status["display"]
+    assert "AGENTS" in status["display"]
+    assert "EVENTS" in status["display"]
+
+
+def test_empty_collection_commands_have_explicit_empty_states():
+    class EmptyTasks:
+        def list(self):
+            return []
+
+    class EmptyAgents:
+        def list_agents(self):
+            return []
+
+        def list_jobs(self):
+            return []
+
+    backend = CockpitBackend({"task_store": EmptyTasks(), "subagents": EmptyAgents()})
+
+    assert backend.execute("/tasks")["display"] == "Aucune tâche."
+    assert backend.execute("/agents")["display"] == "Aucun sous-agent."
+    assert backend.execute("/jobs")["display"] == "Aucun travail délégué."
+
+
+def test_empty_context_is_available_and_not_reported_as_missing_provider():
+    class EmptyContext:
+        def snapshot(self, limit=100):
+            assert limit == 100
+            return {"threads": [], "bindings": []}
+
+    result = CockpitBackend({"context_registry": EmptyContext()}).execute("/context")
+
+    assert result.get("error") is None
+    assert result["data"] == {"threads": 0, "bindings": 0}
+    assert "threads: 0" in result["display"]
+
+
+def test_help_display_groups_available_and_unavailable_commands():
+    result = CockpitBackend({"runtime": Runtime()}).execute("/help")
+
+    assert result.get("error") is None
+    assert "AVAILABLE" in result["display"]
+    assert "/status" in result["display"]
+    assert "UNAVAILABLE" in result["display"]
+    assert "/tasks" in result["display"]
+    assert "ALIASES" in result["display"]
 
 
 def test_snapshot_falls_back_to_exposed_context_memory_and_usage_services():

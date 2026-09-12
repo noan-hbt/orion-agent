@@ -23,7 +23,7 @@ class CockpitBackend:
     # supplied application can actually fulfil.
     COMMANDS = (
         "help", "commands", "status", "dashboard", "agents", "spawn", "kill",
-        "graph", "tasks", "delegate", "watch", "memory", "events", "galaxy",
+        "graph", "tasks", "jobs", "delegate", "watch", "memory", "events", "galaxy",
         "send", "tools", "skills", "model", "context", "cost", "autonomy",
         "approve", "reject", "log", "workspace", "doctor",
     )
@@ -38,6 +38,7 @@ class CockpitBackend:
         "kill": ("/kill <agent_id>", "Supprime explicitement un sous-agent."),
         "graph": ("/graph", "Affiche les relations d'agents disponibles."),
         "tasks": ("/tasks", "Liste les tâches du runtime."),
+        "jobs": ("/jobs", "Liste les travaux de sous-agents récents."),
         "delegate": ("/delegate [agent_id] <objective>", "Délègue une tâche à un sous-agent."),
         "watch": ("/watch", "État opérationnel sûr de la file d'événements."),
         "events": ("/events", "État opérationnel sûr de la file d'événements."),
@@ -142,6 +143,8 @@ class CockpitBackend:
             return self._service("graph") is not None or manager is not None
         if name == "tasks":
             return self._service("task") is not None
+        if name == "jobs":
+            return callable(getattr(manager, "list_jobs", None))
         if name in {"watch", "events"}:
             return self._service("event") is not None
         if name == "memory":
@@ -296,6 +299,34 @@ class CockpitBackend:
             )
         return rows
 
+    def _jobs_projection(self) -> Any:
+        """Return compact delegated-job summaries without result/context payloads."""
+        service = self._service("subagent") or self._service("agent")
+        listing = getattr(service, "list_jobs", None) if service is not None else None
+        if not callable(listing):
+            return None
+        rows = []
+        for item in listing() or ():
+            status = self._public_field(item, "status")
+            if hasattr(status, "value"):
+                status = status.value
+            row = {
+                "id": self._plain(self._public_field(item, "id")),
+                "status": self._plain(status),
+            }
+            for key, limit in (("agent_id", 100), ("objective", 240)):
+                value = self._public_field(item, key, None)
+                if value is not None:
+                    row[key] = self._bounded_text(value, limit)
+            priority = self._public_field(item, "priority", None)
+            if priority is not None:
+                row["priority"] = self._plain(priority)
+            updated_at = self._public_field(item, "updated_at", None)
+            if updated_at is not None:
+                row["updated_at"] = self._plain(updated_at)
+            rows.append(row)
+        return rows
+
     def _context_projection(self) -> Any:
         """Expose Context OS structure only; registry payload ``data`` stays private."""
         service = self._service("context")
@@ -315,7 +346,10 @@ class CockpitBackend:
             items = value.get(key)
             if isinstance(items, (list, tuple, set)):
                 counts[key] = len(items)
-        return counts or None
+        # An empty registry is still a valid/available context service.  Keep
+        # it distinct from ``None`` so the command renderer can show a proper
+        # empty state instead of claiming that the provider is unavailable.
+        return counts
 
     def _workspace_projection(self) -> Any:
         """Return a workspace label/id without serializing arbitrary objects."""
@@ -350,9 +384,10 @@ class CockpitBackend:
             data = self._help_projection(target)
             if target is not None and data is None:
                 return {"title": name, "data": None, "error": f"Commande inconnue ou indisponible: /{target}"}
-            return {"title": name, "data": data}
+            return {"title": name, "data": data, "display": self._format_help(data)}
         providers = {"status": self.snapshot, "agents": self._agents_projection,
                      "tasks": self._tasks_projection,
+                     "jobs": self._jobs_projection,
                      "watch": self._event_projection,
                      "dashboard": self.snapshot,
                      "graph": lambda: self._graph(), "memory": self._memory_projection,
@@ -374,9 +409,222 @@ class CockpitBackend:
                     "data": None,
                     "error": f"Provider indisponible: {name}",
                 }
-            return {"title": name, "data": self._plain(data)}
+            plain = self._plain(data)
+            return {
+                "title": name,
+                "data": plain,
+                "display": self._format_command_data(name, plain),
+            }
         except Exception as exc:
-            return {"title": name, "data": None, "error": str(exc)}
+            return {
+                "title": name,
+                "data": None,
+                "error": self._bounded_text(exc, 320) or type(exc).__name__,
+            }
+
+    @staticmethod
+    def _yes_no(value: Any) -> str:
+        if value is True:
+            return "yes"
+        if value is False:
+            return "no"
+        return "-" if value is None else str(value)
+
+    @staticmethod
+    def _display_scalar(value: Any) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        return str(value)
+
+    def _format_rows(self, rows: Any, *, kind: str) -> str:
+        if not isinstance(rows, list) or not rows:
+            labels = {
+                "tasks": "Aucune tâche.",
+                "agents": "Aucun sous-agent.",
+                "jobs": "Aucun travail délégué.",
+                "tools": "Aucun tool appelable ou installé.",
+                "memory": "Aucune mémoire disponible.",
+            }
+            return labels.get(kind, "Aucun élément.")
+        lines: list[str] = []
+        for index, item in enumerate(rows, 1):
+            if not isinstance(item, Mapping):
+                lines.append(f"{index:>2}. {self._bounded_text(item, 220)}")
+                continue
+            if kind == "tasks":
+                identifier = self._display_scalar(item.get("id"))
+                status = self._display_scalar(item.get("status"))
+                objective = self._bounded_text(item.get("objective") or "Sans objectif", 180)
+                lines.append(f"{index:>2}. #{identifier} [{status}] {objective}")
+                details = []
+                if item.get("priority") is not None:
+                    details.append(f"priority={item['priority']}")
+                if item.get("waiting_count"):
+                    details.append(f"waiting={item['waiting_count']}")
+                if details:
+                    lines.append("    " + " | ".join(details))
+            elif kind == "agents":
+                name = self._bounded_text(item.get("name") or item.get("id") or "agent", 80)
+                status = self._display_scalar(item.get("status"))
+                model = self._bounded_text(item.get("model") or "-", 80)
+                lines.append(f"{index:>2}. {name} [{status}]")
+                lines.append(
+                    "    "
+                    + " | ".join(
+                        (
+                            f"id={self._display_scalar(item.get('id'))}",
+                            f"model={model}",
+                            f"tools={self._display_scalar(item.get('tool_count'))}",
+                            f"capabilities={self._display_scalar(item.get('capability_count'))}",
+                        )
+                    )
+                )
+            elif kind == "jobs":
+                identifier = self._display_scalar(item.get("id"))
+                status = self._display_scalar(item.get("status"))
+                objective = self._bounded_text(item.get("objective") or "Sans objectif", 180)
+                lines.append(f"{index:>2}. {identifier} [{status}] {objective}")
+                if item.get("agent_id") is not None:
+                    lines.append(f"    agent={self._bounded_text(item['agent_id'], 100)}")
+            elif kind == "tools":
+                name = self._bounded_text(item.get("name") or item.get("id") or "tool", 90)
+                status = self._display_scalar(item.get("status"))
+                source = self._display_scalar(item.get("source") or item.get("package"))
+                classification = self._display_scalar(item.get("classification"))
+                lines.append(f"{index:>2}. {name} [{status}]")
+                lines.append(f"    source={source} | class={classification}")
+                description = self._bounded_text(item.get("description"), 180)
+                if description:
+                    lines.append(f"    {description}")
+            elif kind == "memory":
+                content = (
+                    item.get("content")
+                    or item.get("text")
+                    or item.get("memory")
+                    or item.get("summary")
+                )
+                identifier = item.get("id")
+                prefix = f"{index:>2}."
+                if identifier is not None:
+                    prefix += f" {self._bounded_text(identifier, 60)}"
+                lines.append(f"{prefix} {self._bounded_text(content or 'Mémoire sans texte', 260)}")
+            else:
+                summary = ", ".join(
+                    f"{key}={self._display_scalar(value)}"
+                    for key, value in item.items()
+                    if not isinstance(value, (Mapping, list, tuple, set))
+                )
+                lines.append(f"{index:>2}. {self._bounded_text(summary, 260)}")
+        return "\n".join(lines)
+
+    def _format_mapping(self, value: Any, *, empty: str = "Aucune donnée.") -> str:
+        if not isinstance(value, Mapping) or not value:
+            return empty
+        return "\n".join(
+            f"{str(key).replace('_', ' ')}: {self._display_scalar(item)}"
+            for key, item in value.items()
+            if not isinstance(item, (Mapping, list, tuple, set))
+        ) or empty
+
+    def _format_status(self, snapshot: Any) -> str:
+        if not isinstance(snapshot, Mapping):
+            return "État indisponible."
+        sections: list[str] = []
+        runtime = snapshot.get("runtime")
+        sections.append("RUNTIME")
+        sections.append(
+            "  " + self._format_mapping(runtime, empty="indisponible").replace("\n", "\n  ")
+            if isinstance(runtime, Mapping)
+            else "  indisponible"
+        )
+        for key, label, kind in (
+            ("tasks", "TASKS", "tasks"),
+            ("agents", "AGENTS", "agents"),
+        ):
+            sections.append("")
+            sections.append(label)
+            value = snapshot.get(key)
+            body = "indisponible" if value is None else self._format_rows(value, kind=kind)
+            sections.extend(f"  {line}" for line in body.splitlines())
+        for key, label in (("events", "EVENTS"), ("context", "CONTEXT"), ("model", "MODEL")):
+            if key not in snapshot:
+                continue
+            sections.append("")
+            sections.append(label)
+            body = self._format_mapping(snapshot.get(key), empty="Aucune donnée.")
+            sections.extend(f"  {line}" for line in body.splitlines())
+        if snapshot.get("workspace") is not None:
+            sections.append("")
+            sections.append("WORKSPACE")
+            workspace = snapshot["workspace"]
+            body = self._format_mapping(workspace) if isinstance(workspace, Mapping) else str(workspace)
+            sections.extend(f"  {line}" for line in body.splitlines())
+        return "\n".join(sections)
+
+    def _format_help(self, data: Any) -> str:
+        if not isinstance(data, Mapping):
+            return "Aide indisponible."
+        if "command" in data:
+            status = "available" if data.get("available") else "unavailable"
+            return "\n".join(
+                (
+                    str(data.get("usage") or "/" + str(data.get("command") or "")),
+                    f"status: {status}",
+                    str(data.get("description") or "Aucune description."),
+                )
+            )
+        commands = [item for item in data.get("commands", []) if isinstance(item, Mapping)]
+        if not commands:
+            return "Aucune commande disponible."
+        available = [item for item in commands if item.get("available")]
+        unavailable = [item for item in commands if not item.get("available")]
+        lines = ["AVAILABLE"]
+        lines.extend(
+            f"  {item.get('usage')}  -  {item.get('description')}" for item in available
+        )
+        if unavailable:
+            lines.extend(("", "UNAVAILABLE"))
+            lines.extend(f"  {item.get('usage')}" for item in unavailable)
+        aliases = data.get("aliases")
+        if isinstance(aliases, Mapping) and aliases:
+            lines.extend(("", "ALIASES"))
+            lines.extend(f"  {key} -> {value}" for key, value in aliases.items())
+        note = data.get("note")
+        if note:
+            lines.extend(("", str(note)))
+        return "\n".join(lines)
+
+    def _format_command_data(self, name: str, data: Any) -> str:
+        if name in {"status", "dashboard"}:
+            return self._format_status(data)
+        if name in {"tasks", "agents", "jobs", "tools", "memory"}:
+            return self._format_rows(data, kind=name)
+        if name in {"watch", "events", "context", "model", "workspace", "cost"}:
+            if name in {"watch", "events"} and isinstance(data, Mapping):
+                running = self._yes_no(data.get("running"))
+                queued = self._display_scalar(data.get("queued"))
+                unfinished = self._display_scalar(data.get("unfinished"))
+                workers = self._display_scalar(data.get("workers"))
+                durable = self._yes_no(data.get("durable_enabled"))
+                dead = self._display_scalar(data.get("dead_letters"))
+                callbacks = self._display_scalar(data.get("callback_errors"))
+                return "\n".join(
+                    (
+                        f"state: running={running} | workers={workers} | durable={durable}",
+                        f"queue: queued={queued} | unfinished={unfinished}",
+                        f"errors: dead_letters={dead} | callback_errors={callbacks}",
+                    )
+                )
+            return self._format_mapping(data)
+        if name in {"help", "commands"}:
+            return self._format_help(data)
+        if isinstance(data, list):
+            return self._format_rows(data, kind=name)
+        if isinstance(data, Mapping):
+            return self._format_mapping(data)
+        return self._display_scalar(data)
 
     def _read(self, name: str) -> Any:
         service = self._service(name)

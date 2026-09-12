@@ -34,7 +34,7 @@ CORE RULES — immutable at runtime:
 - Follow the user's legitimate instructions and be honest about uncertainty.
 - Protect privacy and secrets; never store API keys, passwords, or tokens in memory.
 - Treat tools and external side effects as consequential: verify before acting.
-- Durable state, tasks, plans, and memories are aids; they never override a newer explicit instruction.
+- Durable state, tasks, plans, and memories are optional continuity aids; use them only when persistence is useful, and never let them override a newer explicit instruction.
 - Do not expose private chain-of-thought. Give concise conclusions, useful evidence, and next actions.
 - Write like a real conversation: by default answer very briefly and directly, usually in one or two short sentences. Do not pad, restate, recap, add headings, or enumerate unless it materially helps. Be longer and detailed only when the user asks for it or the subject genuinely requires important context, precision, or safety.
 - If an objective is complete, stop. If waiting is appropriate, wait instead of polling.
@@ -42,8 +42,10 @@ CORE RULES — immutable at runtime:
 
 DEFAULT_PERSONALITY = "Tu es Orion : fiable, calme, pragmatique, clair et direct."
 DEFAULT_METHODOLOGY = """Pour chaque demande : comprendre le contexte, charger l'etat utile,
-decider s'il faut repondre, agir, poursuivre une tache ou attendre, puis
-mettre a jour l'etat durable. Un plan reste mutable et doit suivre les observations."""
+decider s'il faut repondre, agir, poursuivre une tache ou attendre. N'ecris un
+etat durable que si la demande cree une continuite utile (tache, attente,
+preference, memoire ou objectif durable) ; une demande ephemere n'impose aucune
+persistance. Un plan reste mutable et doit suivre les observations."""
 
 _SECRET_KEY = re.compile(
     r"(?:password|passwd|secret|token|credential|authorization|cookie|"
@@ -178,6 +180,11 @@ class PromptContextStore:
             "user_profile": {},
             "preferences": [],
             "memories": [],
+            "memory_metadata": {
+                "user_profile": {},
+                "preferences": {},
+                "memories": {},
+            },
             "journal_cursor": 0,
             "updated_at": None,
         }
@@ -205,6 +212,28 @@ class PromptContextStore:
                     self._state[key] = [
                         str(item)[:1200] for item in raw[key] if str(item).strip()
                     ][-limit:]
+            metadata = raw.get("memory_metadata")
+            if isinstance(metadata, Mapping):
+                for key in ("user_profile", "preferences", "memories"):
+                    value = metadata.get(key)
+                    if isinstance(value, Mapping):
+                        self._state["memory_metadata"][key] = {
+                            str(meta_key): dict(meta_value)
+                            for meta_key, meta_value in value.items()
+                            if isinstance(meta_value, Mapping)
+                        }
+                self._state["memory_metadata"]["user_profile"] = {
+                    key: value
+                    for key, value in self._state["memory_metadata"]["user_profile"].items()
+                    if key in self._state["user_profile"]
+                }
+                for key in ("preferences", "memories"):
+                    retained = {item.casefold() for item in self._state[key]}
+                    self._state["memory_metadata"][key] = {
+                        meta_key: meta_value
+                        for meta_key, meta_value in self._state["memory_metadata"][key].items()
+                        if meta_key in retained
+                    }
             self._state["journal_cursor"] = int(raw.get("journal_cursor", 0) or 0)
             self._state["updated_at"] = raw.get("updated_at")
 
@@ -242,12 +271,89 @@ class PromptContextStore:
     ) -> None:
         """Applique uniquement des donnees apprises autorisees."""
         with self._lock:
+            metadata = self._state.setdefault(
+                "memory_metadata",
+                {"user_profile": {}, "preferences": {}, "memories": {}},
+            )
+            observed_at = str(extraction.get("_observed_at") or _now().isoformat())
+            provenance = str(extraction.get("_provenance") or "memory_extractor")
+
+            def meta_for(item: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                item = item or {}
+                result = {
+                    "observed_at": str(item.get("observed_at") or observed_at),
+                    "provenance": str(item.get("provenance") or provenance),
+                }
+                semantic_key = item.get("key")
+                if semantic_key is not None and str(semantic_key).strip():
+                    result["key"] = str(semantic_key).strip()[:160]
+                return result
+
+            def forget_terms(value: Any) -> list[str]:
+                if isinstance(value, str):
+                    value = [value]
+                if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+                    return []
+                return [
+                    str(item).casefold().strip()
+                    for item in value
+                    if str(item).casefold().strip()
+                ]
+
+            raw_forget = extraction.get("forget", [])
+            category_forget: dict[str, list[str]] = {
+                "user_profile": [],
+                "preferences": [],
+                "memories": [],
+            }
+            if isinstance(raw_forget, Mapping):
+                for key in category_forget:
+                    category_forget[key] = forget_terms(raw_forget.get(key, []))
+            else:
+                shared = forget_terms(raw_forget)
+                for key in category_forget:
+                    category_forget[key] = list(shared)
+
+            profile_meta = metadata.setdefault("user_profile", {})
+            for key in list(self._state["user_profile"]):
+                value = self._state["user_profile"][key]
+                searchable = f"{key} {json.dumps(value, ensure_ascii=False, default=str)}".casefold()
+                if any(term in searchable for term in category_forget["user_profile"]):
+                    self._state["user_profile"].pop(key, None)
+                    profile_meta.pop(str(key), None)
+
+            def remove_list_matches(bucket: str, terms: Sequence[str]) -> None:
+                bucket_meta = metadata.setdefault(bucket, {})
+                retained: list[str] = []
+                for item in self._state[bucket]:
+                    item_key = item.casefold()
+                    semantic_key = str(bucket_meta.get(item_key, {}).get("key") or "").casefold()
+                    if any(term in item_key or (semantic_key and term in semantic_key) for term in terms):
+                        bucket_meta.pop(item_key, None)
+                        continue
+                    retained.append(item)
+                self._state[bucket] = retained
+
+            remove_list_matches("preferences", category_forget["preferences"])
+            remove_list_matches("memories", category_forget["memories"])
+
             profile = extraction.get("user_profile")
             if isinstance(profile, Mapping):
                 for key, value in profile.items():
-                    if _SECRET_KEY.search(str(key)) or value in (None, ""):
+                    if _SECRET_KEY.search(str(key)):
                         continue
-                    self._state["user_profile"][str(key)] = _safe(value)
+                    profile_key = str(key)
+                    item_meta: Mapping[str, Any] | None = None
+                    actual_value = value
+                    if isinstance(value, Mapping) and "value" in value:
+                        item_meta = value
+                        actual_value = value.get("value")
+                    if actual_value in (None, ""):
+                        self._state["user_profile"].pop(profile_key, None)
+                        profile_meta.pop(profile_key, None)
+                        continue
+                    self._state["user_profile"][profile_key] = _safe(actual_value)
+                    profile_meta[profile_key] = meta_for(item_meta)
 
             for key, limit in (
                 ("preferences", self.max_preferences),
@@ -258,32 +364,56 @@ class PromptContextStore:
                     values = [values]
                 if isinstance(values, list):
                     existing = list(self._state[key])
+                    bucket_meta = metadata.setdefault(key, {})
                     for value in values:
-                        cleaned = str(value).strip()[:1200]
+                        item_meta: Mapping[str, Any] | None = value if isinstance(value, Mapping) else None
+                        raw_value = (
+                            value.get("value", value.get("content", value.get("fact", "")))
+                            if isinstance(value, Mapping)
+                            else value
+                        )
+                        cleaned = str(raw_value).strip()[:1200]
+                        if not cleaned:
+                            continue
+                        semantic_key = (
+                            str(value.get("key") or "").strip().casefold()
+                            if isinstance(value, Mapping)
+                            else ""
+                        )
+                        explicit_supersedes: list[str] = []
+                        if isinstance(value, Mapping):
+                            for relation in ("supersedes", "contradicts"):
+                                explicit_supersedes.extend(forget_terms(value.get(relation, [])))
+
+                        retained: list[str] = []
+                        for old in existing:
+                            old_key = old.casefold()
+                            old_semantic_key = str(
+                                bucket_meta.get(old_key, {}).get("key") or ""
+                            ).casefold()
+                            replace = bool(
+                                semantic_key
+                                and old_semantic_key
+                                and semantic_key == old_semantic_key
+                                and old_key != cleaned.casefold()
+                            ) or any(term in old_key for term in explicit_supersedes)
+                            if replace:
+                                bucket_meta.pop(old_key, None)
+                            else:
+                                retained.append(old)
+                        existing = retained
                         if cleaned and cleaned.casefold() not in {
                             item.casefold() for item in existing
                         }:
                             existing.append(cleaned)
+                        bucket_meta[cleaned.casefold()] = meta_for(item_meta)
                     self._state[key] = existing[-limit:]
-
-            forget = extraction.get("forget", [])
-            if isinstance(forget, list):
-                terms = [
-                    str(item).casefold().strip()
-                    for item in forget
-                    if str(item).casefold().strip()
-                ]
-                if terms:
-                    self._state["memories"] = [
-                        item
-                        for item in self._state["memories"]
-                        if not any(term in item.casefold() for term in terms)
-                    ]
-                    self._state["preferences"] = [
-                        item
-                        for item in self._state["preferences"]
-                        if not any(term in item.casefold() for term in terms)
-                    ]
+                    retained_keys = {item.casefold() for item in self._state[key]}
+                    metadata[key] = {
+                        meta_key: meta_value
+                        for meta_key, meta_value in bucket_meta.items()
+                        if meta_key in retained_keys
+                    }
             if journal_cursor is not None:
                 self._state["journal_cursor"] = int(journal_cursor)
             self._state["updated_at"] = _now().isoformat()
@@ -413,7 +543,7 @@ class ConversationJournal:
         path: str | Path = "data/conversations.jsonl",
         *,
         max_message_chars: int = 4000,
-        recent_cache_messages: int = 256,
+        recent_cache_messages: int = 2048,
     ) -> None:
         self.path = Path(path)
         self.max_message_chars = max_message_chars
@@ -504,6 +634,114 @@ class ConversationJournal:
             item.setdefault("at", entry.created_at)
             cache.append(item)
 
+    @classmethod
+    def _compact_messages(
+        cls,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        max_message_chars: int,
+        source: str | None,
+        channel: str | None,
+        timestamp: str,
+    ) -> list[dict[str, Any]]:
+        """Persist conversational content while keeping tool protocol links usable."""
+        compact: list[dict[str, Any]] = []
+        for message in messages:
+            sender = " ".join(
+                str(message.get("sender") or cls._sender_label(message.get("role"))).split()
+            )[:80]
+            item: dict[str, Any] = {
+                "role": str(message.get("role", "")),
+                "sender": sender or cls._sender_label(message.get("role")),
+                "source": source or channel or "unknown",
+                "at": str(message.get("at") or timestamp),
+            }
+            if channel:
+                item["channel"] = channel
+            if isinstance(message.get("content"), str):
+                item["content"] = message["content"][:max_message_chars]
+            elif message.get("content") is not None:
+                item["content"] = _safe(message["content"], max_chars=max_message_chars)
+            if message.get("tool_calls"):
+                calls: list[dict[str, Any]] = []
+                for call in message["tool_calls"]:
+                    if not isinstance(call, Mapping):
+                        continue
+                    function = call.get("function")
+                    function = function if isinstance(function, Mapping) else {}
+                    normalized_call: dict[str, Any] = {
+                        "id": str(call.get("id") or ""),
+                        "type": str(call.get("type") or "function"),
+                        "function": {
+                            "name": str(function.get("name") or call.get("name") or "")[:160],
+                            "arguments": str(function.get("arguments") or "")[:1200],
+                        },
+                    }
+                    calls.append(normalized_call)
+                    if len(calls) >= 20:
+                        break
+                if calls:
+                    item["tool_calls"] = calls
+            if message.get("tool_call_id") is not None:
+                item["tool_call_id"] = str(message.get("tool_call_id"))[:200]
+            if message.get("name") is not None:
+                item["name"] = str(message.get("name"))[:160]
+            compact.append(item)
+        return compact
+
+    @staticmethod
+    def _messages_are_incomplete(messages: Sequence[Mapping[str, Any]]) -> bool:
+        interrupted = False
+        has_final_assistant = False
+        for message in messages:
+            role = str(message.get("role") or "")
+            content = str(message.get("content") or "")
+            if "RUN a été interrompu avant sa réponse finale" in content:
+                interrupted = True
+            if role == "assistant" and content.strip():
+                has_final_assistant = True
+        return interrupted or not has_final_assistant
+
+    @classmethod
+    def _should_supersede(
+        cls,
+        existing: Sequence[Mapping[str, Any]],
+        incoming: Sequence[Mapping[str, Any]],
+    ) -> bool:
+        return cls._messages_are_incomplete(existing) and not cls._messages_are_incomplete(incoming)
+
+    def _replace_jsonl_entry(self, old: JournalEntry, new: JournalEntry) -> None:
+        """Atomically replace one incomplete attempt with a later successful attempt."""
+        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with self.path.open("r", encoding="utf-8") as source_handle, temporary.open(
+                "w", encoding="utf-8"
+            ) as target_handle:
+                for line in source_handle:
+                    keep = True
+                    try:
+                        raw = json.loads(line)
+                        keep = not (
+                            int(raw.get("id", 0) or 0) == old.id
+                            and str(raw.get("conversation_id") or "default")
+                            == old.conversation_id
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                    if keep:
+                        target_handle.write(line if line.endswith("\n") else line + "\n")
+                target_handle.write(
+                    json.dumps(new.__dict__, ensure_ascii=False, default=str) + "\n"
+                )
+                target_handle.flush()
+                os.fsync(target_handle.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
     def append(
         self,
         *,
@@ -515,33 +753,14 @@ class ConversationJournal:
         conversation_id: str = "default",
         timestamp: str | None = None,
     ) -> JournalEntry:
-        compact: list[dict[str, Any]] = []
         message_timestamp = timestamp or _now().isoformat()
-        for message in messages:
-            sender = " ".join(
-                str(message.get("sender") or self._sender_label(message.get("role"))).split()
-            )[:80]
-            item: dict[str, Any] = {
-                "role": str(message.get("role", "")),
-                "sender": sender or self._sender_label(message.get("role")),
-                "source": source or channel or "unknown",
-                "at": str(message.get("at") or message_timestamp),
-            }
-            if channel:
-                item["channel"] = channel
-            if isinstance(message.get("content"), str):
-                item["content"] = message["content"][: self.max_message_chars]
-            elif message.get("content") is not None:
-                item["content"] = _safe(
-                    message["content"], max_chars=self.max_message_chars
-                )
-            if message.get("tool_calls"):
-                item["tool_calls"] = [
-                    str(call.get("function", {}).get("name", ""))
-                    for call in message["tool_calls"]
-                    if isinstance(call, Mapping)
-                ][:20]
-            compact.append(item)
+        compact = self._compact_messages(
+            messages,
+            max_message_chars=self.max_message_chars,
+            source=source,
+            channel=channel,
+            timestamp=message_timestamp,
+        )
         with self._lock:
             # ID allocation, event de-duplication and the append itself are one
             # interprocess critical section.  Every writer refreshes its local
@@ -558,6 +777,20 @@ class ConversationJournal:
                         (normalized_conversation, str(event_id))
                     )
                     if existing is not None:
+                        if self._should_supersede(existing.messages, compact):
+                            entry = JournalEntry(
+                                self._next_id,
+                                event_id,
+                                task_id,
+                                compact,
+                                _now().isoformat(),
+                                source=source,
+                                channel=channel,
+                                conversation_id=normalized_conversation,
+                            )
+                            self._replace_jsonl_entry(existing, entry)
+                            self._rebuild_indexes()
+                            return entry
                         return existing
                 entry = JournalEntry(
                     self._next_id,
@@ -610,27 +843,28 @@ class ConversationJournal:
         entries: list[JournalEntry] = []
         with self._lock:
             with _InterprocessFileLock(self._process_lock_path):
-                for line in self.path.read_text(encoding="utf-8").splitlines():
-                    if len(entries) >= limit:
-                        break
-                    try:
-                        raw = json.loads(line)
-                        if int(raw["id"]) <= cursor:
-                            continue
-                        entries.append(
-                            JournalEntry(
-                                int(raw["id"]),
-                                raw.get("event_id"),
-                                raw.get("task_id"),
-                                list(raw.get("messages", [])),
-                                raw["created_at"],
-                                raw.get("source"),
-                                raw.get("channel"),
-                                str(raw.get("conversation_id") or "default"),
+                with self.path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        if len(entries) >= limit:
+                            break
+                        try:
+                            raw = json.loads(line)
+                            if int(raw["id"]) <= cursor:
+                                continue
+                            entries.append(
+                                JournalEntry(
+                                    int(raw["id"]),
+                                    raw.get("event_id"),
+                                    raw.get("task_id"),
+                                    list(raw.get("messages", [])),
+                                    raw["created_at"],
+                                    raw.get("source"),
+                                    raw.get("channel"),
+                                    str(raw.get("conversation_id") or "default"),
+                                )
                             )
-                        )
-                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                        continue
+                        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                            continue
         return entries
 
     def recent_messages(
@@ -643,7 +877,7 @@ class ConversationJournal:
         if limit < 1:
             return []
         wanted = str(conversation_id or "default")
-        messages: list[dict[str, Any]] = []
+        messages: deque[dict[str, Any]] = deque(maxlen=limit)
         with self._lock:
             with _InterprocessFileLock(self._process_lock_path):
                 self._refresh_indexes_if_changed()
@@ -651,7 +885,7 @@ class ConversationJournal:
                 if cached is not None and limit <= self.recent_cache_messages:
                     return [dict(item) for item in list(cached)[-limit:]]
                 if not self.path.exists():
-                    return messages
+                    return []
                 for line in self.path.read_text(encoding="utf-8").splitlines():
                     try:
                         raw = json.loads(line)
@@ -687,7 +921,7 @@ class ConversationJournal:
                             messages.append(item)
                     except (TypeError, ValueError, json.JSONDecodeError):
                         continue
-        return messages[-limit:]
+        return list(messages)
 
 
 class SQLiteConversationJournal(ConversationJournal):
@@ -750,30 +984,14 @@ class SQLiteConversationJournal(ConversationJournal):
         conversation_id: str = "default",
         timestamp: str | None = None,
     ) -> JournalEntry:
-        # Réutilise la normalisation et la déduplication du backend historique.
         normalized = str(conversation_id or "default")
-        dummy = object.__new__(ConversationJournal)
-        dummy.max_message_chars = self.max_message_chars
-        items = []
-        for message in messages:
-            sender = " ".join(
-                str(message.get("sender") or self._sender_label(message.get("role"))).split()
-            )[:80]
-            item = {
-                "role": str(message.get("role", "")),
-                "sender": sender or self._sender_label(message.get("role")),
-                "source": source or channel or "unknown",
-                "at": str(message.get("at") or timestamp or _now().isoformat()),
-            }
-            if channel:
-                item["channel"] = channel
-            if message.get("content") is not None:
-                item["content"] = (
-                    str(message["content"])[: self.max_message_chars]
-                    if isinstance(message.get("content"), str)
-                    else _safe(message["content"], max_chars=self.max_message_chars)
-                )
-            items.append(item)
+        items = self._compact_messages(
+            messages,
+            max_message_chars=self.max_message_chars,
+            source=source,
+            channel=channel,
+            timestamp=timestamp or _now().isoformat(),
+        )
         with self._lock:
             created_at = _now().isoformat()
             # The connection context commits even when returning early from the
@@ -800,7 +1018,43 @@ class SQLiteConversationJournal(ConversationJournal):
                         (str(event_id), normalized),
                     ).fetchone()
                     if row:
-                        return self._entry(row)
+                        existing = self._entry(row)
+                        if not self._should_supersede(existing.messages, items):
+                            return existing
+                        # Give a recovered successful attempt a fresh cursor id.
+                        # Consumers that already advanced past the failed attempt
+                        # will therefore still observe the successful state.
+                        highest = int(
+                            self._db.execute(
+                                "SELECT COALESCE(MAX(id), 0) FROM journal"
+                            ).fetchone()[0]
+                        )
+                        replacement_id = max(highest, existing.id) + 1
+                        self._db.execute("DELETE FROM journal WHERE id=?", (existing.id,))
+                        self._db.execute(
+                            "INSERT INTO journal(id,event_id,task_id,messages,created_at,source,channel,conversation_id) "
+                            "VALUES(?,?,?,?,?,?,?,?)",
+                            (
+                                replacement_id,
+                                event_id,
+                                task_id,
+                                json.dumps(items, ensure_ascii=False),
+                                created_at,
+                                source,
+                                channel,
+                                normalized,
+                            ),
+                        )
+                        return JournalEntry(
+                            replacement_id,
+                            event_id,
+                            task_id,
+                            items,
+                            created_at,
+                            source,
+                            channel,
+                            normalized,
+                        )
                 return JournalEntry(
                     cur.lastrowid,
                     event_id,
@@ -944,19 +1198,65 @@ class MemoryExtractor:
         self.model = model
         self.max_input_chars = max_input_chars
 
-    def extract(self, entries: Sequence[JournalEntry]) -> dict[str, Any]:
-        payload = json.dumps(
-            ContextAssembler.compact_value(
-                [entry.__dict__ for entry in entries], max_chars=self.max_input_chars
-            ),
-            ensure_ascii=False,
-            default=str,
+    def _prepare_batch(
+        self, entries: Sequence[JournalEntry]
+    ) -> tuple[str, int, Sequence[JournalEntry]]:
+        """Serialize the largest *prefix* that fits; never silently skip old entries."""
+        selected: list[JournalEntry] = []
+        values: list[Any] = []
+        for entry in entries:
+            raw = entry.__dict__
+            candidate = [*values, raw]
+            encoded = json.dumps(candidate, ensure_ascii=False, default=str)
+            if len(encoded) <= self.max_input_chars:
+                selected.append(entry)
+                values.append(raw)
+                continue
+            if selected:
+                break
+
+            # One journal entry can itself exceed the extractor budget. Process
+            # that entry atomically with a bounded representation so the cursor
+            # advances by exactly one entry rather than jumping over a prefix.
+            allowance = max(1, self.max_input_chars - 2)
+            compacted = ContextAssembler.compact_value(raw, max_chars=allowance)
+            encoded = json.dumps([compacted], ensure_ascii=False, default=str)
+            while len(encoded) > self.max_input_chars and allowance > 1:
+                allowance = max(1, allowance - max(1, allowance // 8))
+                compacted = ContextAssembler.compact_value(raw, max_chars=allowance)
+                encoded = json.dumps([compacted], ensure_ascii=False, default=str)
+            if len(encoded) > self.max_input_chars:
+                raise ValueError("max_input_chars is too small for one journal entry")
+            selected.append(entry)
+            values.append(compacted)
+            break
+
+        return (
+            json.dumps(values, ensure_ascii=False, default=str),
+            len(selected),
+            selected,
         )
+
+    def extract_batch(
+        self, entries: Sequence[JournalEntry]
+    ) -> tuple[dict[str, Any], int]:
+        payload, processed_count, selected = self._prepare_batch(entries)
+        if processed_count < 1:
+            return {}, 0
         response = self.client.complete(
             [
                 {
                     "role": "system",
-                    "content": "Extract durable user facts only. Never extract secrets, credentials, transient details, or guesses. Return JSON only with keys user_profile (object), preferences (array of strings), memories (array of strings), forget (array of strings).",
+                    "content": (
+                        "Extract durable user facts only. Never extract secrets, credentials, "
+                        "transient details, or guesses. "
+                        "Return JSON only with keys user_profile, preferences, memories, forget. "
+                        "preferences/memories may contain strings or objects {value,key,supersedes,contradicts}; "
+                        "use key when a newer fact deterministically replaces an older fact, and "
+                        "list the exact older text in supersedes when replacing a legacy string fact. "
+                        "forget may be an array applying globally or an object keyed by "
+                        "user_profile/preferences/memories."
+                    ),
                 },
                 {"role": "user", "content": payload},
             ],
@@ -975,7 +1275,20 @@ class MemoryExtractor:
             ) from exc
         if not isinstance(data, Mapping):
             raise ValueError("L'extraction de memoire doit etre un objet JSON.")
-        return dict(data)
+        result = dict(data)
+        first = selected[0]
+        last = selected[-1]
+        result.setdefault(
+            "_provenance",
+            f"journal:{first.id}-{last.id}",
+        )
+        result.setdefault("_observed_at", last.created_at)
+        return result, processed_count
+
+    def extract(self, entries: Sequence[JournalEntry]) -> dict[str, Any]:
+        """Backward-compatible single extraction call."""
+        result, _ = self.extract_batch(entries)
+        return result
 
 
 class MemoryMaintenance:
@@ -990,6 +1303,8 @@ class MemoryMaintenance:
         min_entries: int | None = None,
         run_at: day_time = day_time(23, 0),
         poll_interval: float = 30.0,
+        max_batches_per_run: int = 8,
+        tail_max_age: float = 3600.0,
     ) -> None:
         selected_min_entries = batch_size if min_entries is None else int(min_entries)
         if (
@@ -997,9 +1312,11 @@ class MemoryMaintenance:
             or selected_min_entries < 1
             or selected_min_entries > batch_size
             or poll_interval <= 0
+            or max_batches_per_run < 1
+            or tail_max_age < 0
         ):
             raise ValueError(
-                "min_entries/batch_size doivent etre positifs et min_entries <= batch_size."
+                "memory maintenance limits must be positive and min_entries <= batch_size."
             )
         self.journal = journal
         self.extractor = extractor
@@ -1007,6 +1324,8 @@ class MemoryMaintenance:
         self.min_entries = selected_min_entries
         self.run_at = run_at
         self.poll_interval = poll_interval
+        self.max_batches_per_run = int(max_batches_per_run)
+        self.tail_max_age = float(tail_max_age)
         self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._run_lock = threading.Lock()
@@ -1057,6 +1376,22 @@ class MemoryMaintenance:
                 except FileNotFoundError:
                     pass
 
+    def _tail_is_due(self, entries: Sequence[JournalEntry]) -> bool:
+        if not entries:
+            return False
+        if self.tail_max_age <= 0:
+            return True
+        try:
+            created = datetime.fromisoformat(str(entries[0].created_at).replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age = (_now() - created.astimezone(timezone.utc)).total_seconds()
+            return age >= self.tail_max_age
+        except (TypeError, ValueError):
+            # Legacy rows without a parseable timestamp must not be stranded
+            # forever merely because they cannot satisfy an age comparison.
+            return True
+
     def run_once(self) -> int:
         if not self._run_lock.acquire(blocking=False):
             return 0
@@ -1065,16 +1400,31 @@ class MemoryMaintenance:
             descriptor = self._acquire_process_lock()
             if descriptor is None:
                 return 0
-            entries = self.journal.after(
-                self.extractor.store.journal_cursor, limit=self.batch_size
-            )
-            if len(entries) < self.min_entries:
-                return 0
-            extraction = self.extractor.extract(entries)
-            self.extractor.store.apply_extraction(
-                extraction, journal_cursor=entries[-1].id
-            )
-            return len(entries)
+            processed_total = 0
+            for _ in range(self.max_batches_per_run):
+                entries = self.journal.after(
+                    self.extractor.store.journal_cursor, limit=self.batch_size
+                )
+                if not entries:
+                    break
+                if len(entries) < self.min_entries and not self._tail_is_due(entries):
+                    break
+
+                extract_batch = getattr(self.extractor, "extract_batch", None)
+                if callable(extract_batch):
+                    extraction, processed_count = extract_batch(entries)
+                else:
+                    extraction = self.extractor.extract(entries)
+                    processed_count = len(entries)
+                processed_count = int(processed_count)
+                if processed_count < 1 or processed_count > len(entries):
+                    raise ValueError("memory extractor returned an invalid processed count")
+                last_processed = entries[processed_count - 1]
+                self.extractor.store.apply_extraction(
+                    extraction, journal_cursor=last_processed.id
+                )
+                processed_total += processed_count
+            return processed_total
         finally:
             self._release_process_lock(descriptor)
             self._run_lock.release()

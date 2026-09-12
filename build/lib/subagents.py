@@ -378,6 +378,8 @@ class SubAgentManager:
         max_tool_output_chars: int = 12000,
         max_runtime_seconds: float = 900.0,
         max_session_messages: int = 100,
+        max_session_chars: int | None = None,
+        max_session_tokens: int | None = None,
         history_limit: int = 200,
         emit_progress_events: bool = True,
         scope: str = "default",
@@ -395,6 +397,10 @@ class SubAgentManager:
             raise ValueError("workers et default_max_turns doivent être positifs.")
         if any(int(value) < 1 for value in (max_context_chars, max_result_chars, max_tool_output_chars, max_session_messages, history_limit)):
             raise ValueError("Les limites de contexte, résultats et historique doivent être positives.")
+        if max_session_chars is not None and int(max_session_chars) < 1:
+            raise ValueError("max_session_chars doit être positif.")
+        if max_session_tokens is not None and int(max_session_tokens) < 1:
+            raise ValueError("max_session_tokens doit être positif.")
         if float(max_runtime_seconds) <= 0:
             raise ValueError("La durée maximale d'un job doit être positive.")
         self.llm_client = llm_client
@@ -426,6 +432,21 @@ class SubAgentManager:
         self.max_tool_output_chars = int(max_tool_output_chars)
         self.max_runtime_seconds = float(max_runtime_seconds)
         self.max_session_messages = max(20, int(max_session_messages))
+        # Message-count bounding alone still allowed 100 individually bounded
+        # messages to exceed a provider context by an order of magnitude.  Use
+        # a cumulative budget as well.  Four times the delegated-context cap is
+        # deliberately conservative for backwards compatibility while turning
+        # the previous ~1.6M-character worst case into a bounded request.
+        self.max_session_chars = int(
+            max_session_chars
+            if max_session_chars is not None
+            else max(1, self.max_context_chars * 4)
+        )
+        self.max_session_tokens = int(
+            max_session_tokens
+            if max_session_tokens is not None
+            else max(1, self.max_session_chars // 4)
+        )
         self.history_limit = max(10, int(history_limit))
         self.emit_progress_events = bool(emit_progress_events)
         self.scope = str(scope).strip() or "default"
@@ -735,19 +756,58 @@ class SubAgentManager:
 
     def _event_payload(self, job: SubAgentJob, event_type: str, message: str | None) -> dict[str, Any]:
         agent = self._agents.get(job.agent_id)
+        agent_name = agent.name if agent else job.agent_id
+        result = _redact(job.result) if event_type == "subagent.completed" and job.result else None
+        error = _redact(job.error) if event_type == "subagent.failed" and job.error else None
+        waiting_for = _redact(job.waiting_for) if event_type == "subagent.waiting" and job.waiting_for else None
+        correlation_id = job.handoff_context.correlation_id if job.handoff_context else None
+        handoff_id = job.handoff_context.handoff_id if job.handoff_context else None
+        resume_orchestrator = bool(job.route_metadata.get("resume_orchestrator"))
+        delivery_mode = (
+            "durable_task"
+            if job.parent_task_id is not None
+            else "taskless_conversational"
+            if resume_orchestrator
+            else "standalone"
+        )
         return {
             "internal_event": True, "event_type": event_type, "job_id": job.id,
             "session_id": job.session_id, "agent_id": job.agent_id,
-            "agent_name": agent.name if agent else job.agent_id, "status": job.status.value,
+            "agent_name": agent_name, "status": job.status.value,
             "objective": _redact(job.objective), "message": _redact(message) if message else message,
-            "result": _redact(job.result) if event_type == "subagent.completed" and job.result else None,
-            "error": _redact(job.error) if event_type == "subagent.failed" and job.error else None,
-            "waiting_for": _redact(job.waiting_for) if event_type == "subagent.waiting" and job.waiting_for else None,
+            # Legacy flat fields stay intact.  The structured outcome/provenance
+            # contract removes the old ambiguity where ``message`` meant a
+            # result, an error, or a waiting question depending on event_type.
+            "result": result,
+            "error": error,
+            "waiting_for": waiting_for,
             "parent_task_id": job.parent_task_id,
-            "handoff_id": job.handoff_context.handoff_id if job.handoff_context else None,
-            "correlation_id": job.handoff_context.correlation_id if job.handoff_context else None,
+            "handoff_id": handoff_id,
+            "correlation_id": correlation_id,
             "parent_event_id": job.parent_event_id,
             "state_version": job.state_version,
+            "provenance": {
+                "kind": "subagent",
+                "agent_id": job.agent_id,
+                "agent_name": agent_name,
+                "job_id": job.id,
+                "session_id": job.session_id,
+                "handoff_id": handoff_id,
+                "correlation_id": correlation_id,
+                "parent_event_id": job.parent_event_id,
+            },
+            "outcome": {
+                "status": job.status.value,
+                "terminal": job.status in self.TERMINAL_JOB_STATUSES,
+                "result": result,
+                "error": error,
+                "waiting_for": waiting_for,
+            },
+            "delivery": {
+                "mode": delivery_mode,
+                "resume_orchestrator": resume_orchestrator,
+                "parent_task_id": job.parent_task_id,
+            },
             "handoff_context": _redact_structure(job.handoff_context.to_dict()) if job.handoff_context else None,
         }
 
@@ -2342,13 +2402,99 @@ class SubAgentManager:
         session.updated_at = _now()
         return self._prepare_save_locked()
 
+    @staticmethod
+    def _session_usage(messages: list[dict[str, Any]]) -> tuple[int, int]:
+        """Return deterministic cumulative char/token estimates for one request."""
+        encoded = json.dumps(
+            messages,
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+        chars = len(encoded)
+        # No tokenizer dependency is required by SubAgentManager.  UTF-8 bytes
+        # divided by four is a conservative, deterministic approximation that
+        # is sufficient to enforce a second independent cumulative budget.
+        tokens = max(1, (len(encoded.encode("utf-8")) + 3) // 4)
+        return chars, tokens
+
+    @classmethod
+    def _shrink_messages_to_budget(
+        cls,
+        messages: list[dict[str, Any]],
+        *,
+        max_chars: int,
+        max_tokens: int,
+    ) -> list[dict[str, Any]]:
+        """Shrink textual leaves while preserving message/tool-call structure."""
+        bounded = copy.deepcopy(messages)
+
+        def fits() -> bool:
+            chars, tokens = cls._session_usage(bounded)
+            return chars <= max_chars and tokens <= max_tokens
+
+        if fits():
+            return bounded
+
+        latest_user = max(
+            (index for index, item in enumerate(bounded) if item.get("role") == "user"),
+            default=-1,
+        )
+        while not fits():
+            candidates: list[tuple[int, int, str, int | None, int]] = []
+            for index, message in enumerate(bounded):
+                role = str(message.get("role") or "")
+                # System instructions and the current/latest user request are
+                # the last textual leaves we sacrifice under extreme pressure.
+                importance = 3 if role == "system" or index == latest_user else 2 if role == "user" else 1
+                content = message.get("content")
+                if isinstance(content, str) and content:
+                    candidates.append((importance, index, "content", None, len(content)))
+                calls = message.get("tool_calls")
+                if isinstance(calls, list):
+                    for call_index, call in enumerate(calls):
+                        if not isinstance(call, Mapping):
+                            continue
+                        function = call.get("function")
+                        if not isinstance(function, Mapping):
+                            continue
+                        arguments = function.get("arguments")
+                        if isinstance(arguments, str) and arguments:
+                            candidates.append(
+                                (importance, index, "arguments", call_index, len(arguments))
+                            )
+            if not candidates:
+                break
+            importance, index, field, call_index, length = min(
+                candidates,
+                key=lambda item: (item[0], -item[4]),
+            )
+            del importance
+            current_chars, current_tokens = cls._session_usage(bounded)
+            excess_chars = max(0, current_chars - max_chars)
+            excess_tokens = max(0, current_tokens - max_tokens) * 4
+            reduction = max(1, excess_chars, excess_tokens, length // 8)
+            target = max(0, length - reduction)
+            marker = "…" if target > 0 else ""
+            keep = max(0, target - len(marker))
+            if field == "content":
+                original = str(bounded[index].get("content") or "")
+                bounded[index]["content"] = original[:keep].rstrip() + marker
+            else:
+                assert call_index is not None
+                function = bounded[index]["tool_calls"][call_index]["function"]
+                original = str(function.get("arguments") or "")
+                function["arguments"] = original[:keep].rstrip() + marker
+        return bounded
+
     def _bounded_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Compacte une session sans laisser de tool call orphelin.
 
         Les anciens messages restent résumés par le couple system/user initial;
         la queue commence toujours sur une frontière user ou assistant textuel.
-        Cela réduit le contexte tout en gardant une séquence acceptée par les
-        APIs OpenAI compatibles après redémarrage.
+        Le nombre de messages *et* le volume cumulé caractères/tokens sont
+        bornés, tout en gardant une séquence acceptée par les APIs OpenAI
+        compatibles après redémarrage.
         """
         limit = self.max_session_messages
         if not messages:
@@ -2417,10 +2563,80 @@ class SubAgentManager:
                 # request; this is the only intentional overrun.
                 retained_reversed.append(block)
             break
-        retained: list[dict[str, Any]] = []
-        for block in reversed(retained_reversed):
-            retained.extend(block)
-        return prefix + retained
+        retained_blocks = list(reversed(retained_reversed))
+        protected_ids: set[int] = set()
+        if blocks:
+            # The newest block can be the tool exchange that produced the
+            # observation for the next turn, so it is protocol-critical.
+            protected_ids.add(id(blocks[-1]))
+        latest_user_block = next(
+            (
+                block
+                for block in reversed(blocks)
+                if any(item.get("role") == "user" for item in block)
+            ),
+            None,
+        )
+        if latest_user_block is not None:
+            # On a resumed worker this is Orion's newest answer/input.  Keeping
+            # only the latest assistant/tool block while dropping this request
+            # makes the continuation semantically detached from its cause.
+            protected_ids.add(id(latest_user_block))
+
+        retained_ids = {id(block) for block in retained_blocks}
+        for block in blocks:
+            if id(block) in protected_ids and id(block) not in retained_ids:
+                retained_blocks.append(block)
+                retained_ids.add(id(block))
+        block_order = {id(block): index for index, block in enumerate(blocks)}
+        retained_blocks.sort(key=lambda block: block_order[id(block)])
+
+        # Re-apply the count budget after restoring protected blocks.  Drop old
+        # unprotected blocks first; atomic/protected blocks may intentionally
+        # exceed a tiny message-count limit rather than corrupt the protocol.
+        while sum(len(block) for block in retained_blocks) > budget:
+            removable = next(
+                (
+                    index
+                    for index, block in enumerate(retained_blocks)
+                    if id(block) not in protected_ids
+                ),
+                None,
+            )
+            if removable is None:
+                break
+            retained_blocks.pop(removable)
+
+        # Drop oldest unprotected history blocks until the cumulative budget
+        # fits.  The latest user request and newest protocol block are retained
+        # and, if necessary, text-shrunk below without breaking atomicity.
+        while True:
+            result = prefix + [item for block in retained_blocks for item in block]
+            chars, tokens = self._session_usage(result)
+            if chars <= self.max_session_chars and tokens <= self.max_session_tokens:
+                return result
+            removable = next(
+                (
+                    index
+                    for index, block in enumerate(retained_blocks)
+                    if id(block) not in protected_ids
+                ),
+                None,
+            )
+            if removable is None:
+                break
+            retained_blocks.pop(removable)
+
+        result = prefix + [item for block in retained_blocks for item in block]
+
+        # Extreme case: system/current request or the newest atomic tool block
+        # alone exceeds the configured budget.  Shrink textual leaves without
+        # deleting protocol structure or orphaning tool results.
+        return self._shrink_messages_to_budget(
+            result,
+            max_chars=self.max_session_chars,
+            max_tokens=self.max_session_tokens,
+        )
 
     def _save_session(
         self,
