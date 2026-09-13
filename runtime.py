@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -577,6 +578,13 @@ class AgentRuntime:
         self._last_error: Exception | None = None
         self._wake_count = 0
         self._run_in_progress = False
+        # Set by an explicit operator cancel (/cancel); cleared when the next
+        # run is admitted so one cancel cannot wedge every future run.
+        self._cancel_requested = threading.Event()
+        # Bounded record of runtime-loop failures.  This loop used to fail
+        # silently; keeping the last few errors makes a dead or degraded loop
+        # visible to the operator instead of looking like an idle agent.
+        self._runtime_errors: deque[BaseException] = deque(maxlen=50)
 
     @property
     def state(self) -> RuntimeState:
@@ -4501,7 +4509,31 @@ class AgentRuntime:
 
     def _stop_interrupts_active_run(self) -> bool:
         """Only a non-draining stop is allowed to abort admitted work."""
-        return self._stop_requested.is_set() and not self._drain_on_stop
+        if self._stop_requested.is_set() and not self._drain_on_stop:
+            return True
+        # An explicit operator cancel (/cancel).  It reuses the same interrupt
+        # points as preemption, so the run aborts between tool calls and model
+        # turns rather than being killed mid-effect.
+        return self._cancel_requested.is_set()
+
+    def request_cancel(self) -> bool:
+        """Ask the active RUN to stop at its next interrupt point.
+
+        Returns True when there was something to cancel.  The run is not torn
+        down mid-call: the flag is observed between turns and tool calls, which
+        is the only place a safe stop is possible.  Callers must be prepared
+        for the current model/tool call to keep running until it returns.
+        """
+        with self._execution_lock:
+            self._cancel_requested.set()
+            active = self._run_in_progress
+            context = self._run_context
+        if context is not None:
+            context.interrupted = True
+        return active
+
+    def clear_cancel(self) -> None:
+        self._cancel_requested.clear()
 
     def _execute_tool(self, call: Mapping[str, Any]) -> dict[str, Any]:
         if self.llm_client is None:
@@ -4878,7 +4910,7 @@ class AgentRuntime:
         ) as pool:
             futures = [pool.submit(self._execute_tool, call) for call in calls]
             results: list[dict[str, Any]] = []
-            for call, future in zip(calls, futures):
+            for call, future in zip(calls, futures, strict=False):
                 try:
                     results.append(future.result())
                 except Exception as exc:
@@ -5110,7 +5142,7 @@ class AgentRuntime:
                 context.phase = RunPhase.TOOL
                 self._transition(RuntimeState.ACTION, context.event)
                 results = self._execute_tools(calls)
-                for call, result in zip(calls, results):
+                for call, result in zip(calls, results, strict=False):
                     context.tool_calls.append(dict(call))
                     context.messages.append(result)
                 context.phase = RunPhase.SMALL_OUTPUT
@@ -5501,14 +5533,59 @@ class AgentRuntime:
         )
 
     def _run(self) -> None:
+        """Runtime daemon loop, supervised so it cannot die silently.
+
+        This was the only worker loop in the codebase without an exception
+        guard.  An out-of-band failure -- a SQLite/OS error on the first query
+        after a machine resume, a malformed durable row, or a BaseException
+        escaping a tool call -- terminated the thread for good.  Because
+        ``receive_event`` keeps accepting work (deferring it while
+        ``_run_in_progress`` is set, or queueing it on ``wake_queue``), the UI
+        carried on accepting input while nothing was ever processed again.
+        """
+        try:
+            self._run_loop()
+        except BaseException as exc:  # noqa: BLE001 - last-resort supervision
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            self._record_runtime_failure(exc)
+        finally:
+            # Whatever happened, a dead loop must not leave the runtime
+            # claiming a run is in progress: that permanently parks every
+            # future message in the deferred queue, which is only promoted when
+            # ``_run_in_progress`` is false.
+            with self._execution_lock:
+                self._run_in_progress = False
+
+    def _record_runtime_failure(self, error: BaseException) -> None:
+        """Surface a runtime-loop failure instead of dying quietly."""
+        self._runtime_errors.append(error)
+        callback = self.on_error
+        if callback is None:
+            return
+        try:
+            event = self._last_event or Event(
+                "runtime.failure", {"error": type(error).__name__}
+            )
+            callback(event, error if isinstance(error, Exception) else Exception(str(error)))
+        except Exception:
+            pass
+
+    def _run_loop(self) -> None:
         owner_id = f"{self._durable_owner_prefix}:{threading.get_ident()}"
         while True:
-            with self._execution_lock:
-                if not self._run_in_progress and not self._deferred_events.empty():
-                    self._promote_deferred_events()
-            if self._durable_store is not None:
-                self._recover_durable_inbox()
-                self._hydrate_durable_inbox()
+            try:
+                with self._execution_lock:
+                    if not self._run_in_progress and not self._deferred_events.empty():
+                        self._promote_deferred_events()
+                if self._durable_store is not None:
+                    self._recover_durable_inbox()
+                    self._hydrate_durable_inbox()
+            except BaseException as exc:  # noqa: BLE001 - per-iteration guard
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                # Maintenance failures must not end the loop.
+                self._record_runtime_failure(exc)
             if self._stop_requested.is_set() and (
                 not self._drain_on_stop
                 or (self.wake_queue.empty() and self._deferred_events.empty())
@@ -5522,6 +5599,11 @@ class AgentRuntime:
                 self._queued_event_ids.discard(event.id)
             try:
                 self._process_runtime_event(event, owner_id=owner_id)
+            except BaseException as exc:  # noqa: BLE001 - per-iteration guard
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                # One poisoned event must not take the whole agent down.
+                self._record_runtime_failure(exc)
             finally:
                 self.wake_queue.task_done()
 
@@ -5857,6 +5939,9 @@ class AgentRuntime:
                 )
                 self._run_context = context
             with self._execution_lock:
+                # A cancel applies to the run it was aimed at; clear it as the
+                # next run is admitted so it cannot wedge every future run.
+                self._cancel_requested.clear()
                 self._run_in_progress = True
             self._transition(RuntimeState.RUN, run_event)
 
@@ -5900,6 +5985,13 @@ class AgentRuntime:
                         output_text,
                         output_origin="subagent",
                         sender_name=self._subagent_sender_name(context.event),
+                        # Tag it exactly like the early standalone-delivery
+                        # path above.  Without these flags the cockpit cannot
+                        # recognise the artifact as a worker result, so it
+                        # rendered the whole subagent report as a chat message
+                        # instead of the compact "resultat recu" notification.
+                        intermediate=True,
+                        phase="subagent_result",
                     )
                 else:
                     self._emit_output(context, output_text)
@@ -5916,7 +6008,16 @@ class AgentRuntime:
                 self._transition(RuntimeState.ANSWER, run_event)
                 self._finish_context_run(context)
             self.sleep()
-        except Exception as exc:
+        except BaseException as exc:
+            # ``BaseException`` and not ``Exception``: a KeyboardInterrupt or
+            # SystemExit escaping a tool/model call would otherwise bypass this
+            # handler and leave ``_run_in_progress`` set forever, which parks
+            # every future message in the deferred queue (promotion is gated on
+            # that flag being clear) and looks exactly like a frozen agent.
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                with self._execution_lock:
+                    self._run_in_progress = False
+                raise
             team_error = str(exc)
             with self._execution_lock:
                 self._run_in_progress = False

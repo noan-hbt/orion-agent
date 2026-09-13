@@ -66,8 +66,10 @@ def test_parallel_tool_compatibility_fallback_drops_only_optional_control():
         ],
         parallel_tool_calls=True,
     )
+    # Only a 400 that actually points at the optional control may trigger the
+    # fallback, because the fallback replays the whole generation.
     error = OpenRouterAPIError(
-        "OpenRouter HTTP 400: Provider returned error",
+        "OpenRouter HTTP 400: unknown field parallel_tool_calls",
         status_code=400,
     )
 
@@ -76,3 +78,30 @@ def test_parallel_tool_compatibility_fallback_drops_only_optional_control():
     assert fallback is not None
     assert "tools" in fallback
     assert "parallel_tool_calls" not in fallback
+
+
+def test_generic_provider_400_does_not_trigger_generation_replay():
+    """A generic upstream 400 must not be treated as a compatibility problem.
+
+    OpenRouter reports arbitrary upstream failures as "Provider returned
+    error".  Accepting that as a hint silently dropped ``parallel_tool_calls``
+    and re-sent the whole request, so the generation was billed twice for an
+    unrelated cause that was then masked.
+    """
+    client = _client()
+    payload = client._payload(
+        [{"role": "user", "content": "cherche"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "web_search", "parameters": {"type": "object"}},
+            }
+        ],
+        parallel_tool_calls=True,
+    )
+    error = OpenRouterAPIError(
+        "OpenRouter HTTP 400: Provider returned error",
+        status_code=400,
+    )
+
+    assert client._compatibility_fallback_payload(payload, error) is None

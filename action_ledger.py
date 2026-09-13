@@ -91,6 +91,9 @@ class ActionDecision:
 
 
 class ActionLedger:
+    # Terminal rows older than this are eligible for automatic pruning.  Kept
+    # far above the default 24h dedupe window so idempotency is unaffected.
+    _PRUNE_RETENTION_SECONDS = 604800.0
     """Ledger SQLite thread-safe pour réserver et dédupliquer des actions."""
 
     def __init__(
@@ -116,6 +119,10 @@ class ActionLedger:
         self._lock = threading.RLock()
         self._owned_reservations: dict[str, tuple[str, int]] = {}
         self._closed = False
+        # Retention housekeeping is throttled: the DELETE is indexed, but it
+        # should not run on every reservation.
+        self._prune_interval = 3600.0
+        self._last_prune_at = time.time()
         self._connection = sqlite3.connect(self.path, check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA busy_timeout = 5000")
@@ -272,6 +279,17 @@ class ActionLedger:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
                 self._mark_stale_running_locked(now)
+                if now - self._last_prune_at >= self._prune_interval:
+                    self._last_prune_at = now
+                    try:
+                        self._connection.execute(
+                            "DELETE FROM actions WHERE status IN "
+                            "('succeeded', 'failed') AND updated_at < ?",
+                            (now - self._PRUNE_RETENTION_SECONDS,),
+                        )
+                    except sqlite3.Error:
+                        # Housekeeping must never fail a reservation.
+                        pass
                 row = self._connection.execute(
                     "SELECT * FROM actions WHERE action_key = ?", (key,)
                 ).fetchone()
@@ -503,6 +521,36 @@ class ActionLedger:
             except Exception:
                 self._connection.rollback()
                 raise
+
+    def prune(self, *, retention_seconds: float = 604800.0) -> int:
+        """Delete terminal action rows older than ``retention_seconds``.
+
+        Nothing ever removed rows from ``actions``, so the table (and the
+        near-duplicate scan in ``reserve``, which reads every row of an
+        operation inside the dedupe window) grew for the life of the
+        installation.  Only ``succeeded``/``failed`` rows are eligible and only
+        once they are older than the retention window, which is far longer than
+        the default 24h dedupe window, so idempotency semantics are unchanged.
+        ``running`` and ``uncertain`` rows are never touched: the first is live
+        and the second still needs reconciliation.
+        """
+        if (
+            isinstance(retention_seconds, bool)
+            or not isinstance(retention_seconds, (int, float))
+            or retention_seconds <= 0
+        ):
+            raise ValueError("retention_seconds must be > 0")
+        cutoff = time.time() - float(retention_seconds)
+        with self._lock:
+            if self._closed:
+                return 0
+            cursor = self._connection.execute(
+                "DELETE FROM actions WHERE status IN ('succeeded', 'failed') "
+                "AND updated_at < ?",
+                (cutoff,),
+            )
+            self._connection.commit()
+            return int(cursor.rowcount or 0)
 
     def get(self, key: str) -> ActionRecord | None:
         with self._lock:

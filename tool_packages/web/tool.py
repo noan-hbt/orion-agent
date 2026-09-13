@@ -922,9 +922,11 @@ def fetch_json_api(url: str, *, _context: Any = None) -> str:
     text = _decode(body, charset)
     try:
         text = json.dumps(json.loads(text), ensure_ascii=False, indent=2)
-    except ValueError:
+    except ValueError as exc:
         if "json" not in content_type and not text.lstrip().startswith(("{", "[")):
-            raise ValueError(f"La réponse n'est pas du JSON (type : {content_type}).")
+            raise ValueError(
+                f"La réponse n'est pas du JSON (type : {content_type})."
+            ) from exc
     if truncated:
         text += "\n[Réponse tronquée selon la limite configurée.]"
     return text

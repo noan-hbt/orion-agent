@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from decimal import Decimal
+from enum import Enum
 from pathlib import Path
 import shlex
 from typing import Any, Mapping
@@ -75,6 +76,11 @@ class CockpitBackend:
                 return CockpitBackend._plain(value.to_dict())
             except Exception:
                 pass
+        # ``Enum`` before the ``str`` bail-out: a str-valued enum is an instance
+        # of str, so it used to pass through here unchanged and rendered as
+        # "RuntimeState.EVALUATING" wherever the value was interpolated.
+        if isinstance(value, Enum):
+            return CockpitBackend._plain(value.value)
         if hasattr(value, "value") and not isinstance(value, (str, bytes)):
             return value.value
         if isinstance(value, (list, tuple, set)):
@@ -396,7 +402,8 @@ class CockpitBackend:
                      "model": self._model_projection, "context": self._context_projection,
                      "cost": lambda: self._read("cost"), "autonomy": lambda: self._read("autonomy"),
                      "approve": self._pending_approvals, "log": lambda: self._read("log"),
-                     "workspace": self._workspace_projection, "doctor": self._doctor_projection}
+                     "workspace": self._workspace_projection, "doctor": self._doctor_projection,
+                     "cancel": self._cancel_projection}
         if name in {"spawn", "kill", "delegate", "send", "reject"} or (name in {"approve", "autonomy", "workspace"} and args):
             return self._action(name, args)
         if name not in providers:
@@ -937,6 +944,30 @@ class CockpitBackend:
                 }
             )
         return result
+
+    def _cancel_projection(self) -> dict:
+        """Request cancellation of the active RUN.
+
+        The runtime aborts at its next interrupt point (between model turns and
+        tool calls), so the currently executing call still finishes. Reporting
+        that explicitly avoids implying the stop was instantaneous.
+        """
+        runtime = self._get("runtime")
+        request = getattr(runtime, "request_cancel", None)
+        if not callable(request):
+            return {"cancelled": False, "reason": "runtime_unavailable"}
+        try:
+            active = bool(request())
+        except Exception as exc:  # noqa: BLE001 - surfaced to the operator
+            return {"cancelled": False, "reason": type(exc).__name__}
+        if active:
+            return {
+                "cancelled": True,
+                "reason": "requested",
+                "note": "Le run s'arretera a la prochaine etape sure; "
+                "l'appel en cours doit d'abord se terminer.",
+            }
+        return {"cancelled": False, "reason": "no_active_run"}
 
     def _event_projection(self) -> Any:
         """Project EventHandler operational state without event payloads/errors."""

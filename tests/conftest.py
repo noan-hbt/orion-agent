@@ -5,6 +5,7 @@ import os
 import socket
 import sqlite3
 import threading
+from pathlib import Path
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -98,6 +99,21 @@ def _offline_network_guard(monkeypatch: pytest.MonkeyPatch, request: pytest.Fixt
     monkeypatch.setattr(socket, "socket", GuardedSocket)
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
     monkeypatch.setattr(socket, "create_connection", guarded_create_connection)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run every test from a private cwd.
+
+    ``AgentRuntime`` and the persistence helpers resolve their default paths
+    relative to the working directory (``data/action_ledger.sqlite3``,
+    ``data/conversations.jsonl``, ``data/prompt_context.json``, ...).  Without
+    isolation the first test to construct a runtime created a real ``data/``
+    directory inside the checkout, and every later test then shared that state
+    with each other and with the developer's own runs.
+    """
+    monkeypatch.chdir(tmp_path)
     yield
 
 

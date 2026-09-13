@@ -160,6 +160,23 @@ def _datetime_to_string(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _parse_utc(value: Any) -> datetime | None:
+    """Coerce an ISO string or datetime to an aware UTC datetime.
+
+    ``run_at`` is validated by ``__post_init__`` (a naive value raises), but the
+    other stamps were stored with a plain ``fromisoformat`` and could come back
+    naive.  ``snapshot()`` then compared a naive ``created_at`` against an aware
+    ``run_at`` and raised ``TypeError`` into the health surface.  Normalising
+    every stamp keeps comparisons total.
+    """
+    if value is None or value == "":
+        return None
+    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 @dataclass
 class Schedule:
     """Réveil planifié et lié à une tâche existante."""
@@ -217,7 +234,7 @@ class Schedule:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Schedule:
-        run_at = datetime.fromisoformat(data["run_at"])
+        run_at = _parse_utc(data["run_at"])
         return cls(
             id=str(data.get("id") or f"schedule_{uuid.uuid4().hex[:12]}"),
             version=int(data.get("version", 1)),
@@ -226,16 +243,10 @@ class Schedule:
             payload=dict(data.get("payload") or {}),
             priority=int(data.get("priority", EventPriority.NORMAL)),
             status=ScheduleStatus(data.get("status", ScheduleStatus.ACTIVE.value)),
-            created_at=datetime.fromisoformat(data["created_at"])
-            if data.get("created_at")
-            else _now(),
-            fired_at=datetime.fromisoformat(data["fired_at"])
-            if data.get("fired_at")
-            else None,
+            created_at=_parse_utc(data.get("created_at")) or _now(),
+            fired_at=_parse_utc(data.get("fired_at")),
             publish_attempts=int(data.get("publish_attempts", 0)),
-            last_attempt_at=datetime.fromisoformat(data["last_attempt_at"])
-            if data.get("last_attempt_at")
-            else None,
+            last_attempt_at=_parse_utc(data.get("last_attempt_at")),
             last_error=str(data["last_error"])
             if data.get("last_error") is not None
             else None,
@@ -354,24 +365,55 @@ class JsonScheduleStore(InMemoryScheduleStore):
         self._writer_lock.release()
 
     def _load(self) -> None:
+        """Load schedules, tolerant of individual malformed records.
+
+        A single bad row previously quarantined the *entire* file: the whole
+        list comprehension ran inside one ``except`` that renamed
+        ``schedules.json`` to ``.corrupt`` and continued with an empty store,
+        silently destroying every schedule.  Now each record is decoded
+        independently, the survivors are kept, and the rejected payloads are
+        recorded so they can be reported instead of vanishing.
+        """
+        self.load_errors: list[str] = []
         if not self.path.exists():
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict) or not isinstance(
-                raw.get("schedules", []), list
-            ):
-                raise ValueError("format JSON invalide")
-            schedules = [Schedule.from_dict(data) for data in raw.get("schedules", [])]
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
-            try:
-                os.replace(self.path, self.path.with_name(self.path.name + ".corrupt"))
-            except OSError:
-                pass
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            # Unreadable/unparseable file: nothing can be salvaged.
+            self.load_errors.append(f"{type(exc).__name__}: {exc}")
+            self._quarantine()
             return
+        if not isinstance(raw, dict) or not isinstance(raw.get("schedules", []), list):
+            self.load_errors.append("format JSON invalide: 'schedules' doit etre une liste")
+            self._quarantine()
+            return
+
+        schedules: list[Schedule] = []
+        rejected: list[Any] = []
+        for data in raw.get("schedules", []):
+            try:
+                schedules.append(Schedule.from_dict(data))
+            except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                # Keep every valid schedule rather than losing the whole file.
+                self.load_errors.append(f"{type(exc).__name__}: {exc}")
+                rejected.append(data)
         with self._lock:
             self._schedules = {item.id: item for item in schedules}
             self._rebuild_pending_index_locked()
+        if rejected and not schedules:
+            # Nothing survived, so preserve the original bytes for recovery.
+            self._quarantine()
+
+    def _quarantine(self) -> None:
+        try:
+            os.replace(self.path, self.path.with_name(self.path.name + ".corrupt"))
+        except OSError:
+            pass
+
+    def rejected_schedule_count(self) -> int:
+        """Number of records skipped as malformed during the last load."""
+        return len(getattr(self, "load_errors", ()))
 
     def _snapshot_locked(self) -> dict[str, Any]:
         return {
@@ -484,7 +526,10 @@ class Scheduler:
         for schedule in schedules:
             counts[schedule.status.value] = counts.get(schedule.status.value, 0) + 1
             if schedule.status in {ScheduleStatus.ACTIVE, ScheduleStatus.RETRYING}:
-                candidate = min(schedule.created_at, schedule.run_at)
+                candidate = min(
+                    _parse_utc(schedule.created_at) or schedule.created_at,
+                    _parse_utc(schedule.run_at) or schedule.run_at,
+                )
                 oldest_pending = (
                     candidate
                     if oldest_pending is None or candidate < oldest_pending
@@ -566,12 +611,27 @@ class Scheduler:
         return text[:1000]
 
     def _recover_failed_deliveries(self) -> int:
-        """Recover EventHandler failures without minting a new scheduler key."""
+        """Recover EventHandler failures without minting a new scheduler key.
+
+        Only receipts whose idempotency key belongs to this scheduler are
+        relevant, so the scan is pushed into SQL.  It previously fetched every
+        failed receipt in the namespace (up to 10k rows) on every poll and
+        filtered them in Python, so an idle 1 Hz scheduler paid an
+        O(failed x 10000) cost forever.
+        """
         durable_store = getattr(self.event_handler, "_durable_store", None)
         if durable_store is None:
             return 0
         try:
-            failed = durable_store.list_events(status="failed", limit=10000)
+            failed = durable_store.list_events(
+                status="failed", limit=10000, idempotency_key_prefix="scheduler:"
+            )
+        except TypeError:
+            # Older store without the prefix filter: fall back to the full scan.
+            try:
+                failed = durable_store.list_events(status="failed", limit=10000)
+            except Exception:
+                return 0
         except Exception:
             return 0
         recovered = 0

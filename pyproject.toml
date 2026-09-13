@@ -13,6 +13,10 @@ dependencies = [
     "python-dotenv>=1.0,<2",
     "prompt-toolkit>=3.0.48,<4",
     "rich>=13.7,<15",
+    # Used directly by the cockpit transcript to render Markdown. Rich already
+    # depends on it, so declaring it costs nothing at install time and stops the
+    # cockpit silently losing formatting if Rich ever drops it.
+    "markdown-it-py>=2.2",
     "tomli>=2.0; python_version < '3.11'",
 ]
 
@@ -69,3 +73,15 @@ testpaths = ["tests"]
 markers = [
     "allow_network: explicitly allow real network access when ORION_TEST_OFFLINE=1",
 ]
+
+[tool.ruff]
+# ``build/`` holds stale tracked artifacts from older releases; ``.gitignore``
+# now excludes it, but keep it out of lint explicitly for checkouts that still
+# have the old tree on disk.
+exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# Gate on correctness rules only: pyflakes (undefined names, unused imports),
+# syntax errors, and flake8-bugbear's real-bug patterns.  The wider default set
+# is dominated by stylistic preferences and is not enforced.
+select = ["F", "E9", "B"]

@@ -1672,6 +1672,49 @@ class SubAgentManager:
         self._drain_outbox()
         return snapshot
 
+    def _fail_job(self, job_id: str, error: BaseException) -> None:
+        """Mark a job FAILED and publish the terminal event.
+
+        Called both from ``_execute_job``'s own handler and from ``_worker``
+        when an out-of-band failure (typically ``_persist_snapshot`` raising
+        ``OSError`` on a full disk or a Windows file lock) escaped that
+        handler.  Without this the job would stay RUNNING forever and the
+        parent's ``subagent.terminal`` wait would never resolve.  Persistence
+        failures are swallowed here: this path already runs during a failure
+        and must not raise a second, masking exception.
+        """
+        try:
+            with self._lock:
+                job = self._jobs.get(job_id)
+                if job is None:
+                    return
+                if job.status in self.TERMINAL_JOB_STATUSES:
+                    return
+                job.status = SubAgentJobStatus.FAILED
+                job.error = _redact(f"{type(error).__name__}: {error}")
+                job.completed_at = _now()
+                job.updated_at = _now()
+                job.state_version += 1
+                session = self._sessions.get(job.session_id)
+                if session is not None:
+                    session.status = "failed"
+                    session.updated_at = _now()
+                if job.handoff_context is not None:
+                    job.handoff_context = job.handoff_context.with_state(
+                        "failed", error=job.error
+                    )
+                self._queue_outbox_locked(
+                    job, "subagent.failed", job.error, EventPriority.NORMAL
+                )
+                pending_save = self._prepare_save_locked()
+        except Exception:
+            return
+        try:
+            self._persist_snapshot(pending_save)
+            self._drain_outbox()
+        except Exception:
+            pass
+
     def _worker(self) -> None:
         while not self._stop_requested.is_set():
             try:
@@ -1680,6 +1723,13 @@ class SubAgentManager:
                 continue
             try:
                 self._execute_job(job_id)
+            except BaseException as exc:  # noqa: BLE001 - worker supervision
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                # A worker thread must never die from an out-of-band error:
+                # the pool would silently shrink to zero while ``_running``
+                # stayed True, so nothing would restart it.
+                self._fail_job(job_id, exc)
             finally:
                 self._queue.task_done()
 
@@ -1771,27 +1821,7 @@ class SubAgentManager:
             self._persist_snapshot(pending_save)
             self._drain_outbox()
         except Exception as exc:
-            with self._lock:
-                job = self._jobs.get(job_id)
-                if job is None:
-                    return
-                if job.status in self.TERMINAL_JOB_STATUSES:
-                    return
-                job.status = SubAgentJobStatus.FAILED
-                job.error = _redact(f"{type(exc).__name__}: {exc}")
-                job.completed_at = _now()
-                job.updated_at = _now()
-                job.state_version += 1
-                session = self._sessions.get(job.session_id)
-                if session is not None:
-                    session.status = "failed"
-                    session.updated_at = _now()
-                if job.handoff_context is not None:
-                    job.handoff_context = job.handoff_context.with_state("failed", error=job.error)
-                self._queue_outbox_locked(job, "subagent.failed", job.error, EventPriority.NORMAL)
-                pending_save = self._prepare_save_locked()
-            self._persist_snapshot(pending_save)
-            self._drain_outbox()
+            self._fail_job(job_id, exc)
 
     def _allowed_tool_definitions(self, agent: SubAgent) -> list[dict[str, Any]]:
         # Keep the operator ceiling enforced at the execution boundary too.
@@ -2238,7 +2268,7 @@ class SubAgentManager:
                 pending_session_save = self._save_session_locked(session, messages)
         self._persist_snapshot(pending_session_save)
         tools = self._allowed_tool_definitions(agent)
-        for turn in range(agent.max_turns):
+        for turn in range(agent.max_turns):  # noqa: B007 - iteration budget only
             if time.monotonic() - started_monotonic >= self.max_runtime_seconds:
                 raise TimeoutError("Durée maximale du job de sous-agent atteinte.")
             if self._is_cancel_requested(job_id):
@@ -2253,9 +2283,13 @@ class SubAgentManager:
             stage = handoff.task.get("phase", "delegation") if handoff is not None else "delegation"
             scope = usage(request_id=handoff_id, correlation_id=correlation_id, stage=stage, parent_call_id=job.parent_event_id) if callable(usage) else nullcontext()
             with scope:
+                # Bind the current history explicitly: a bare closure over
+                # ``messages`` reads the variable at call time, so any retry or
+                # deferral that outlives this iteration would send a different
+                # (already extended) history than the one just bounded here.
                 response = self._external_call(
-                    lambda: self.llm_client.complete(
-                        messages,
+                    lambda outgoing=messages: self.llm_client.complete(
+                        outgoing,
                         model=agent.model,
                         tools=tools or None,
                         parallel_tool_calls=True if tools else None,

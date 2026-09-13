@@ -12,13 +12,22 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import concurrent.futures
 import contextvars
 import inspect
 import json
 import os
-import time
 import uuid
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -44,14 +53,68 @@ if load_dotenv is not None:
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "~openai/gpt-latest"
 RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+# Upper bound applied to every retry wait, including a provider-supplied
+# ``Retry-After`` header.  Matches the cap ``jittered_backoff`` already used.
+MAX_RETRY_DELAY = 60.0
 
 Message = dict[str, Any]
 ToolHandler = Callable[..., Any]
 
 
-_usage_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "orion_llm_usage_context", default={}
+class _SseFrameAccumulator:
+    """Incrementally reassemble SSE frames from a stream of text lines.
+
+    Shared by the synchronous and asynchronous stream parsers so both apply the
+    same rules: only ``data`` fields contribute to the payload, several
+    ``data`` lines in one frame are joined with newlines, comments (``:``) and
+    other fields (``event``, ``id``, ``retry``) are ignored, and a blank line
+    dispatches the frame.
+    """
+
+    __slots__ = ("_data_lines",)
+
+    def __init__(self) -> None:
+        self._data_lines: list[str] = []
+
+    def feed(self, raw: str | None) -> str | None:
+        """Consume one line; return the dispatched payload, if any."""
+        if raw is None:
+            return None
+        line = raw.rstrip("\r\n")
+        if not line:
+            return self.flush()
+        if line.startswith(":"):
+            return None  # comment / keep-alive
+        field, separator, value = line.partition(":")
+        if not separator:
+            return None  # bare field name: legal, empty value, not payload
+        if value.startswith(" "):
+            value = value[1:]
+        if field.strip() == "data":
+            self._data_lines.append(value)
+        return None
+
+    def flush(self) -> str | None:
+        """Dispatch the accumulated frame, if it holds any data."""
+        if not self._data_lines:
+            return None
+        payload = "\n".join(self._data_lines)
+        self._data_lines = []
+        return payload
+
+
+# ``default=None`` rather than ``{}``: a mutable default is shared by every
+# context, so any in-place mutation of ``.get()`` would leak correlation
+# metadata between independent calls.  All readers normalise None to an empty
+# mapping instead.
+_usage_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "orion_llm_usage_context", default=None
 )
+
+
+def _usage_context_values() -> dict[str, Any]:
+    """Current correlation metadata, never a shared mutable default."""
+    return dict(_usage_context.get() or {})
 
 
 @contextmanager
@@ -63,7 +126,7 @@ def usage_context(
     parent_call_id: str | None = None,
 ):
     """Attach Orion correlation metadata to calls made in this context."""
-    values = dict(_usage_context.get())
+    values = _usage_context_values()
     for key, value in {
         "request_id": request_id,
         "correlation_id": correlation_id,
@@ -106,6 +169,8 @@ class LLMUsageRecord:
     prompt_details: dict[str, Any] | None = None
     completion_details: dict[str, Any] | None = None
     cost_details: dict[str, Any] | None = None
+    # Number of earlier attempts whose usage was folded into this record.
+    retried_attempts: int = 0
     error_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -134,6 +199,7 @@ class LLMUsageRecord:
                 "total_tokens": self.total_tokens,
                 "cost_usd": str(self.cost_usd) if self.cost_usd is not None else None,
                 "cost_source": self.cost_source,
+                "retried_attempts": self.retried_attempts,
                 "prompt_details": dict(self.prompt_details)
                 if self.prompt_details
                 else None,
@@ -173,6 +239,16 @@ class UsageLedger:
     def _snapshot_locked(self) -> dict[str, Any]:
         records = list(self._records.values())
         completed = [item for item in records if item.status == "succeeded"]
+        # A failed or canceled call can still have been billed upstream (a
+        # timeout, a 5xx, or a partially consumed stream).  Those records carry
+        # whatever usage was recovered, so their cost must be reported even
+        # though their tokens are not attributed to a successful answer.
+        billed = [
+            item
+            for item in records
+            if item.status in {"succeeded", "failed", "canceled"}
+            and item.cost_usd is not None
+        ]
 
         def totals(items: list[LLMUsageRecord]) -> tuple[int, int, int]:
             return (
@@ -185,8 +261,18 @@ class UsageLedger:
         known = sum(
             (
                 item.cost_usd
-                for item in completed
-                if item.cost_usd is not None and item.cost_source == "openrouter"
+                for item in billed
+                if item.cost_source == "openrouter"
+            ),
+            Decimal("0"),
+        )
+        abandoned_cost = sum(
+            (
+                item.cost_usd
+                for item in records
+                if item.status in {"failed", "canceled"}
+                and item.cost_usd is not None
+                and item.cost_source == "openrouter"
             ),
             Decimal("0"),
         )
@@ -231,6 +317,10 @@ class UsageLedger:
             "total_tokens": total,
             "known_cost_usd": known,
             "estimated_cost_usd": estimated,
+            # Spend on calls that did not produce a usable answer, included in
+            # ``known_cost_usd`` but surfaced separately so an operator can see
+            # why the total moved without a successful reply.
+            "abandoned_cost_usd": abandoned_cost,
             "usage_missing_calls": sum(
                 not item.usage_complete or item.cost_usd is None for item in completed
             ),
@@ -378,6 +468,8 @@ class OpenRouterClient:
         timeout: float | Any = 60.0,
         max_retries: int = 2,
         retry_backoff: float = 0.5,
+        retry_max_delay: float | None = None,
+        request_deadline: float | None = None,
         headers: Mapping[str, str] | None = None,
         default_params: Mapping[str, Any] | None = None,
         usage_observer: Callable[[dict[str, Any]], Any] | None = None,
@@ -403,6 +495,10 @@ class OpenRouterClient:
             raise OpenRouterConfigurationError(
                 "retry_backoff doit être positif ou nul."
             )
+        if retry_max_delay is not None and retry_max_delay < 0:
+            raise OpenRouterConfigurationError(
+                "retry_max_delay doit être positif ou nul."
+            )
 
         self.api_key = resolved_key
         self.model = model
@@ -410,6 +506,24 @@ class OpenRouterClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
+        # A provider may answer with an arbitrarily large ``Retry-After``
+        # (e.g. 3600).  The exponential backoff was always capped at 60s; the
+        # header was not, so a single 429 could block a worker for an hour.
+        self.retry_max_delay = (
+            MAX_RETRY_DELAY if retry_max_delay is None else float(retry_max_delay)
+        )
+        # Hard wall-clock ceiling for a single HTTP attempt.  Without it a
+        # suspended-then-resumed machine can spend a fresh phase timeout on
+        # every retry, and the agent looks permanently stuck.  Derived from the
+        # phase timeout when not set explicitly.
+        if request_deadline is None:
+            base = timeout if isinstance(timeout, (int, float)) else 60.0
+            request_deadline = max(30.0, float(base) * 2.5)
+        if request_deadline <= 0:
+            raise OpenRouterConfigurationError(
+                "request_deadline doit être positif."
+            )
+        self.request_deadline = float(request_deadline)
         self.budget = budget
         self._circuit = CircuitBreaker()
         self._rate_limiter = RateLimiter(rate_limit)
@@ -431,6 +545,10 @@ class OpenRouterClient:
 
         self._client: Any = None
         self._async_client: Any = None
+        # Retry waits are interruptible: ``close()`` sets this event so a
+        # pending backoff (notably a long ``Retry-After``) aborts instead of
+        # holding a worker thread for minutes or hours with no way to stop it.
+        self._stop_event = threading.Event()
         self._messages: list[Message] = []
         self._tools: dict[str, RegisteredTool] = {}
         self._tools_lock = threading.RLock()
@@ -459,7 +577,7 @@ class OpenRouterClient:
     def _start_usage(
         self, *, model: str | None, streamed: bool = False
     ) -> LLMUsageRecord:
-        context = _usage_context.get()
+        context = _usage_context_values()
         record = LLMUsageRecord(
             call_id=uuid.uuid4().hex,
             request_id=context.get("request_id"),
@@ -471,6 +589,70 @@ class OpenRouterClient:
         )
         self.usage_ledger.ingest(record, event="usage.started")
         return record
+
+    @staticmethod
+    def _attempt_usage_payload(response: Any) -> Mapping[str, Any]:
+        """Best-effort usage extraction from a retryable response body.
+
+        Error responses are not guaranteed to be JSON, so this never raises:
+        the goal is to recover billable usage when it happens to be present.
+        """
+        try:
+            payload = response.json()
+        except Exception:
+            return {}
+        return payload if isinstance(payload, Mapping) else {}
+
+    @staticmethod
+    def _payload_usage(
+        payload: Mapping[str, Any] | None,
+    ) -> tuple[tuple[int, int, int] | None, Any]:
+        """Return ``(token_totals_or_None, raw_cost_or_None)`` from a payload.
+
+        OpenRouter reports cost as a decimal string under ``usage.cost``; some
+        routes put it at the top level instead.
+        """
+        body = payload if isinstance(payload, Mapping) else {}
+        usage = body.get("usage")
+        if not isinstance(usage, Mapping):
+            usage = {}
+        prompt = OpenRouterClient._int(usage.get("prompt_tokens"))
+        completion = OpenRouterClient._int(usage.get("completion_tokens"))
+        total = OpenRouterClient._int(usage.get("total_tokens"))
+        totals: tuple[int, int, int] | None = None
+        if prompt is not None or completion is not None or total is not None:
+            totals = (
+                prompt or 0,
+                completion or 0,
+                total if total is not None else (prompt or 0) + (completion or 0),
+            )
+        cost = usage.get("cost")
+        if cost is None:
+            cost = body.get("cost")
+        return totals, cost
+
+    def _accumulate_attempt_usage(
+        self, record: LLMUsageRecord, payload: Mapping[str, Any] | None
+    ) -> None:
+        """Add an attempt's billed usage to whatever the record already holds.
+
+        A retried/timeout/5xx attempt has already produced (and been billed for)
+        a generation upstream.  ``_finish_usage`` must therefore *add* the final
+        attempt's numbers rather than replace them, otherwise every retried
+        generation vanishes from the ledger and spend is under-reported.
+        """
+        totals, raw_cost = self._payload_usage(payload)
+        if totals is not None:
+            prompt, completion, reported_total = totals
+            record.prompt_tokens = (record.prompt_tokens or 0) + prompt
+            record.completion_tokens = (record.completion_tokens or 0) + completion
+            record.total_tokens = (record.total_tokens or 0) + reported_total
+            record.usage_complete = True
+        cost = self._decimal(raw_cost)
+        if cost is not None:
+            record.cost_usd = (record.cost_usd or Decimal("0")) + cost
+            record.cost_source = "openrouter"
+        record.retried_attempts = (record.retried_attempts or 0) + 1
 
     @staticmethod
     def _decimal(value: Any) -> Decimal | None:
@@ -523,15 +705,14 @@ class OpenRouterClient:
             effective_model = body.get("model")
             if effective_model:
                 record.model = str(effective_model)
-            prompt = self._int(usage.get("prompt_tokens"))
-            completion = self._int(usage.get("completion_tokens"))
-            total = self._int(usage.get("total_tokens"))
-            record.prompt_tokens = prompt
-            record.completion_tokens = completion
-            record.total_tokens = total
-            record.usage_complete = bool(usage) and any(
-                value is not None for value in (prompt, completion, total)
-            )
+            # Add this attempt's usage to anything already accrued from earlier
+            # retried attempts.  Assigning here would silently discard them, so
+            # a retried generation would be billed by the provider but missing
+            # from the ledger.
+            self._accumulate_attempt_usage(record, payload)
+            # ``_accumulate_attempt_usage`` also counts the attempt; the final
+            # successful attempt is not a "retry", so take it back out.
+            record.retried_attempts = max(0, (record.retried_attempts or 0) - 1)
             for key, attr in (
                 ("prompt_tokens_details", "prompt_details"),
                 ("completion_tokens_details", "completion_details"),
@@ -540,10 +721,6 @@ class OpenRouterClient:
                 value = usage.get(key)
                 if isinstance(value, Mapping):
                     setattr(record, attr, dict(value))
-            cost = usage.get("cost", body.get("cost"))
-            record.cost_usd = self._decimal(cost)
-            if record.cost_usd is not None:
-                record.cost_source = "openrouter"
             if headers:
                 record.provider_request_id = (
                     str(
@@ -565,25 +742,97 @@ class OpenRouterClient:
     # ------------------------------------------------------------------
     # Gestion du cycle de vie et du transport HTTP
     # ------------------------------------------------------------------
+    def _http_timeout(self) -> Any:
+        """Phase-specific httpx timeout instead of one value for every phase.
+
+        Passing a single float to httpx sets connect, read, write and pool all
+        to that value, so one attempt could spend ``timeout`` in *each* phase
+        (3x the configured budget) before any retry.  Connect/write/pool are
+        inherently quick, so they get a short bound while the read (time to
+        first byte) keeps the configured value.  Callers that already pass an
+        ``httpx.Timeout`` keep full control.
+        """
+        if not isinstance(self.timeout, (int, float)) or isinstance(self.timeout, bool):
+            return self.timeout
+        read = float(self.timeout)
+        short = max(1.0, min(15.0, read))
+        return httpx.Timeout(read, connect=short, write=short, pool=short)
+
     def _sync_client(self) -> Any:
         if self._client is None:
             self._client = httpx.Client(
-                base_url=self.base_url, headers=self._headers, timeout=self.timeout
+                base_url=self.base_url, headers=self._headers, timeout=self._http_timeout()
             )
         return self._client
 
     def _async_http_client(self) -> Any:
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(
-                base_url=self.base_url, headers=self._headers, timeout=self.timeout
+                base_url=self.base_url, headers=self._headers, timeout=self._http_timeout()
             )
         return self._async_client
 
+    def _request_with_deadline(self, client: Any, method: str, path: str, **kwargs: Any) -> Any:
+        """Issue a blocking request under a real wall-clock deadline.
+
+        Per-phase socket timeouts bound each phase but not the whole attempt,
+        and after a laptop suspend a half-open connection can still consume
+        fresh timeout windows on every retry.  This puts a hard ceiling on a
+        single attempt: if the deadline elapses the caller is released even
+        though the underlying socket is (unavoidably) left to drain.
+        """
+        deadline = self.request_deadline
+        if deadline is None or deadline <= 0:
+            return client.request(method, path, **kwargs)
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(client.request, method, path, **kwargs)
+        try:
+            return future.result(timeout=deadline)
+        except concurrent.futures.TimeoutError as exc:
+            raise httpx.TimeoutException(
+                f"Requête OpenRouter au-delà du délai total de {deadline:g}s."
+            ) from exc
+        finally:
+            # Never block returning to the caller on the abandoned socket; the
+            # worker thread exits on its own once the phase timeouts fire.
+            pool.shutdown(wait=False)
+
     def close(self) -> None:
-        """Ferme le client HTTP synchrone."""
+        """Ferme le client HTTP synchrone.
+
+        Also releases any thread currently waiting between retries: the wait is
+        served by ``_stop_event`` so shutdown does not have to sit out a
+        provider-supplied ``Retry-After``.
+        """
+        self._stop_event.set()
         if self._client is not None:
             self._client.close()
             self._client = None
+
+    async def _async_sleep_before_retry(self, delay: float) -> None:
+        """Async wait that wakes as soon as ``close()`` is called."""
+        if delay <= 0:
+            return
+        if self._stop_event.is_set():
+            raise OpenRouterTransportError(
+                "Attente de nouvelle tentative interrompue : client fermé."
+            )
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._stop_event.wait), delay)
+        except asyncio.TimeoutError:
+            return
+        raise OpenRouterTransportError(
+            "Attente de nouvelle tentative interrompue : client fermé."
+        )
+
+    def _sleep_before_retry(self, delay: float) -> None:
+        """Wait ``delay`` seconds, but wake immediately on ``close()``."""
+        if delay <= 0:
+            return
+        if self._stop_event.wait(delay):
+            raise OpenRouterTransportError(
+                "Attente de nouvelle tentative interrompue : client fermé."
+            )
 
     async def aclose(self) -> None:
         """Ferme le client HTTP asynchrone."""
@@ -605,14 +854,65 @@ class OpenRouterClient:
         await self.aclose()
 
     @staticmethod
-    def _retry_delay(response: Any, retry_number: int, backoff: float) -> float:
+    def _iter_sse_data(lines: Iterable[str]) -> Iterator[str]:
+        """Yield the ``data`` payload of each SSE event, spec-correctly.
+
+        SSE frames are composed of ``field: value`` lines dispatched on a blank
+        line, and a payload may be split across several ``data:`` lines which
+        the receiver must join with newlines.  The previous parser treated any
+        non-``data:`` line as JSON, so an SSE-legal ``event:``/``id:``/``retry:``
+        field aborted an otherwise healthy stream.  Other fields and comment
+        lines are ignored here instead.
+        """
+        accumulator = _SseFrameAccumulator()
+        for raw in lines:
+            payload = accumulator.feed(raw)
+            if payload is not None:
+                yield payload
+        final = accumulator.flush()
+        if final is not None:
+            yield final
+
+    @staticmethod
+    async def _aiter_sse_data(lines: AsyncIterable[str]) -> AsyncGenerator[str, None]:
+        """Async counterpart of :meth:`_iter_sse_data`."""
+        accumulator = _SseFrameAccumulator()
+        async for raw in lines:
+            payload = accumulator.feed(raw)
+            if payload is not None:
+                yield payload
+        final = accumulator.flush()
+        if final is not None:
+            yield final
+
+    @staticmethod
+    def _decode_sse_event(data: str) -> dict[str, Any] | None:
+        """Decode one SSE data payload, tolerating keep-alive noise."""
+        text = data.strip()
+        if not text:
+            return None
+        try:
+            event = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise OpenRouterError(
+                f"Événement SSE OpenRouter invalide : {text}"
+            ) from exc
+        return event if isinstance(event, dict) else None
+
+    def _retry_delay(self, response: Any, retry_number: int, backoff: float) -> float:
         retry_after = response.headers.get("Retry-After")
         if retry_after:
             try:
-                return max(0.0, float(retry_after))
+                # A provider may legitimately ask for a long wait, but honouring
+                # an unbounded value (e.g. ``Retry-After: 3600``) blocked the
+                # calling worker for an hour with no cancellation path.  Bound
+                # it like every other retry delay.
+                return min(self.retry_max_delay, max(0.0, float(retry_after)))
             except ValueError:
                 pass
-        return jittered_backoff(backoff, retry_number)
+        return min(
+            self.retry_max_delay, jittered_backoff(backoff, retry_number)
+        )
 
     @staticmethod
     def _error_from_response(response: Any) -> OpenRouterAPIError:
@@ -686,8 +986,8 @@ class OpenRouterClient:
             if usage_record is not None:
                 usage_record.attempt = attempt + 1
             try:
-                response = client.request(
-                    method, path.lstrip("/"), params=params, json=json_body
+                response = self._request_with_deadline(
+                    client, method, path.lstrip("/"), params=params, json=json_body
                 )
             except httpx.TimeoutException as exc:
                 self._circuit.failure()
@@ -695,7 +995,7 @@ class OpenRouterClient:
                     raise OpenRouterTimeoutError(
                         "La requête OpenRouter a expiré."
                     ) from exc
-                time.sleep(jittered_backoff(self.retry_backoff, attempt))
+                self._sleep_before_retry(jittered_backoff(self.retry_backoff, attempt))
                 continue
             except httpx.HTTPError as exc:
                 self._circuit.failure()
@@ -703,17 +1003,34 @@ class OpenRouterClient:
                     raise OpenRouterTransportError(
                         f"Erreur réseau OpenRouter : {exc}"
                     ) from exc
-                time.sleep(jittered_backoff(self.retry_backoff, attempt))
+                self._sleep_before_retry(jittered_backoff(self.retry_backoff, attempt))
                 continue
 
             if (
                 response.status_code in RETRYABLE_STATUS_CODES
                 and attempt < self.max_retries
             ):
-                time.sleep(self._retry_delay(response, attempt, self.retry_backoff))
+                if usage_record is not None:
+                    self._accumulate_attempt_usage(
+                        usage_record, self._attempt_usage_payload(response)
+                    )
+                self._sleep_before_retry(
+                    self._retry_delay(response, attempt, self.retry_backoff)
+                )
                 continue
             if response.is_error:
                 self._circuit.failure()
+                # A retryable failure on the last attempt (or any other error
+                # response) may still have been billed upstream, so keep its
+                # usage before the record is marked failed and the cost would
+                # otherwise be discarded.
+                if (
+                    usage_record is not None
+                    and response.status_code in RETRYABLE_STATUS_CODES
+                ):
+                    self._accumulate_attempt_usage(
+                        usage_record, self._attempt_usage_payload(response)
+                    )
                 raise self._error_from_response(response)
             try:
                 payload = response.json()
@@ -766,7 +1083,9 @@ class OpenRouterClient:
                     raise OpenRouterTimeoutError(
                         "La requête OpenRouter a expiré."
                     ) from exc
-                await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
+                await self._async_sleep_before_retry(
+                    jittered_backoff(self.retry_backoff, attempt)
+                )
                 continue
             except httpx.HTTPError as exc:
                 self._circuit.failure()
@@ -774,19 +1093,32 @@ class OpenRouterClient:
                     raise OpenRouterTransportError(
                         f"Erreur réseau OpenRouter : {exc}"
                     ) from exc
-                await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
+                await self._async_sleep_before_retry(
+                    jittered_backoff(self.retry_backoff, attempt)
+                )
                 continue
 
             if (
                 response.status_code in RETRYABLE_STATUS_CODES
                 and attempt < self.max_retries
             ):
-                await asyncio.sleep(
+                if usage_record is not None:
+                    self._accumulate_attempt_usage(
+                        usage_record, self._attempt_usage_payload(response)
+                    )
+                await self._async_sleep_before_retry(
                     self._retry_delay(response, attempt, self.retry_backoff)
                 )
                 continue
             if response.is_error:
                 self._circuit.failure()
+                if (
+                    usage_record is not None
+                    and response.status_code in RETRYABLE_STATUS_CODES
+                ):
+                    self._accumulate_attempt_usage(
+                        usage_record, self._attempt_usage_payload(response)
+                    )
                 raise self._error_from_response(response)
             try:
                 payload = response.json()
@@ -912,20 +1244,25 @@ class OpenRouterClient:
         if error.status_code != 400 or "parallel_tool_calls" not in payload:
             return None
         detail = str(error).lower()
-        compatibility_hint = any(
-            token in detail
-            for token in (
-                "parallel_tool_calls",
-                "parallel tool",
-                "unsupported",
-                "not support",
-                "unrecognized",
-                "unknown field",
-                "additional propert",
-                "provider returned error",
-            )
+        # The 400 must actually point at an unsupported/unknown field for us to
+        # conclude the optional control is the problem.  OpenRouter returns the
+        # generic ``"Provider returned error"`` for arbitrary upstream 400s;
+        # treating that as a compatibility hint silently dropped
+        # ``parallel_tool_calls`` and replayed the whole (already billed)
+        # generation for unrelated failures, while masking the real cause.
+        names_the_field = any(
+            token in detail for token in ("parallel_tool_calls", "parallel tool")
         )
-        if not compatibility_hint:
+        generic_markers = (
+            "unsupported",
+            "not support",
+            "unrecognized",
+            "unknown field",
+            "additional propert",
+        )
+        if not names_the_field and not any(
+            token in detail for token in generic_markers
+        ):
             return None
         fallback = dict(payload)
         fallback.pop("parallel_tool_calls", None)
@@ -1091,7 +1428,7 @@ class OpenRouterClient:
                             response.status_code in RETRYABLE_STATUS_CODES
                             and attempt < self.max_retries
                         ):
-                            time.sleep(
+                            self._sleep_before_retry(
                                 self._retry_delay(response, attempt, self.retry_backoff)
                             )
                             continue
@@ -1102,30 +1439,24 @@ class OpenRouterClient:
                         record.provider_request_id = response.headers.get(
                             "x-request-id"
                         ) or response.headers.get("x-openrouter-request-id")
-                        for line in response.iter_lines():
-                            if not line or line.startswith(":"):
+                        saw_done = False
+                        for data in self._iter_sse_data(response.iter_lines()):
+                            if data.strip() == "[DONE]":
+                                saw_done = True
+                                break
+                            event = self._decode_sse_event(data)
+                            if event is None:
                                 continue
-                            data = (
-                                line[5:].strip()
-                                if line.startswith("data:")
-                                else line.strip()
+                            final_event = event
+                            emitted = True
+                            yield event
+                        if not saw_done:
+                            # The provider closed the stream without ``[DONE]``:
+                            # the generation is truncated, not complete.  Report
+                            # it instead of counting a partial answer as success.
+                            raise OpenRouterError(
+                                "Flux SSE OpenRouter interrompu avant [DONE]."
                             )
-                            if data == "[DONE]":
-                                self._circuit.success()
-                                if self.budget is not None:
-                                    self.budget.record(calls=1)
-                                self._finish_usage(record, final_event or {})
-                                return
-                            try:
-                                event = json.loads(data)
-                            except json.JSONDecodeError as exc:
-                                raise OpenRouterError(
-                                    f"Événement SSE OpenRouter invalide : {data}"
-                                ) from exc
-                            if isinstance(event, dict):
-                                final_event = event
-                                emitted = True
-                                yield event
                         self._circuit.success()
                         if self.budget is not None:
                             self.budget.record(calls=1)
@@ -1137,14 +1468,18 @@ class OpenRouterClient:
                         raise OpenRouterTimeoutError(
                             "Le flux OpenRouter a expiré."
                         ) from exc
-                    time.sleep(jittered_backoff(self.retry_backoff, attempt))
+                    self._sleep_before_retry(
+                        jittered_backoff(self.retry_backoff, attempt)
+                    )
                 except httpx.HTTPError as exc:
                     self._circuit.failure()
                     if emitted or attempt >= self.max_retries:
                         raise OpenRouterTransportError(
                             f"Erreur réseau OpenRouter : {exc}"
                         ) from exc
-                    time.sleep(jittered_backoff(self.retry_backoff, attempt))
+                    self._sleep_before_retry(
+                        jittered_backoff(self.retry_backoff, attempt)
+                    )
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise
@@ -1207,7 +1542,7 @@ class OpenRouterClient:
                             response.status_code in RETRYABLE_STATUS_CODES
                             and attempt < self.max_retries
                         ):
-                            await asyncio.sleep(
+                            await self._async_sleep_before_retry(
                                 self._retry_delay(response, attempt, self.retry_backoff)
                             )
                             continue
@@ -1218,30 +1553,23 @@ class OpenRouterClient:
                         record.provider_request_id = response.headers.get(
                             "x-request-id"
                         ) or response.headers.get("x-openrouter-request-id")
-                        async for line in response.aiter_lines():
-                            if not line or line.startswith(":"):
+                        saw_done = False
+                        async for data in self._aiter_sse_data(
+                            response.aiter_lines()
+                        ):
+                            if data.strip() == "[DONE]":
+                                saw_done = True
+                                break
+                            event = self._decode_sse_event(data)
+                            if event is None:
                                 continue
-                            data = (
-                                line[5:].strip()
-                                if line.startswith("data:")
-                                else line.strip()
+                            final_event = event
+                            emitted = True
+                            yield event
+                        if not saw_done:
+                            raise OpenRouterError(
+                                "Flux SSE OpenRouter interrompu avant [DONE]."
                             )
-                            if data == "[DONE]":
-                                self._circuit.success()
-                                if self.budget is not None:
-                                    self.budget.record(calls=1)
-                                self._finish_usage(record, final_event or {})
-                                return
-                            try:
-                                event = json.loads(data)
-                            except json.JSONDecodeError as exc:
-                                raise OpenRouterError(
-                                    f"Événement SSE OpenRouter invalide : {data}"
-                                ) from exc
-                            if isinstance(event, dict):
-                                final_event = event
-                                emitted = True
-                                yield event
                         self._circuit.success()
                         if self.budget is not None:
                             self.budget.record(calls=1)
@@ -1253,14 +1581,18 @@ class OpenRouterClient:
                         raise OpenRouterTimeoutError(
                             "Le flux OpenRouter a expiré."
                         ) from exc
-                    await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
+                    await self._async_sleep_before_retry(
+                        jittered_backoff(self.retry_backoff, attempt)
+                    )
                 except httpx.HTTPError as exc:
                     self._circuit.failure()
                     if emitted or attempt >= self.max_retries:
                         raise OpenRouterTransportError(
                             f"Erreur réseau OpenRouter : {exc}"
                         ) from exc
-                    await asyncio.sleep(jittered_backoff(self.retry_backoff, attempt))
+                    await self._async_sleep_before_retry(
+                        jittered_backoff(self.retry_backoff, attempt)
+                    )
         except BaseException as exc:
             self._fail_usage(record, exc)
             raise

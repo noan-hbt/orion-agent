@@ -918,7 +918,7 @@ def _wire_cockpit_compatibility(cockpit: object, backend: _CockpitCompatibilityB
             return original_start(lambda message: backend.forward_submission(message, on_message))
 
         try:
-            setattr(cockpit, "start", MethodType(start_with_tracking, cockpit))
+            cockpit.start = MethodType(start_with_tracking, cockpit)
         except (AttributeError, TypeError):
             pass
 
@@ -930,7 +930,7 @@ def _wire_cockpit_compatibility(cockpit: object, backend: _CockpitCompatibilityB
             return original_send(output)
 
         try:
-            setattr(cockpit, "send", MethodType(send_with_tracking, cockpit))
+            cockpit.send = MethodType(send_with_tracking, cockpit)
         except (AttributeError, TypeError):
             pass
 
@@ -941,7 +941,7 @@ def _wire_cockpit_compatibility(cockpit: object, backend: _CockpitCompatibilityB
             return original_stop()
 
         try:
-            setattr(cockpit, "stop", MethodType(stop_with_tracking, cockpit))
+            cockpit.stop = MethodType(stop_with_tracking, cockpit)
         except (AttributeError, TypeError):
             pass
 
@@ -1366,4 +1366,4 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
-        raise SystemExit(EXIT_INTERRUPTED)
+        raise SystemExit(EXIT_INTERRUPTED) from None

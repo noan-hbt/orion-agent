@@ -29,6 +29,14 @@ base_url = "https://openrouter.ai/api/v1"
 timeout = 60.0
 max_retries = 3
 retry_backoff = 0.5
+# Plafond de toute attente entre deux tentatives, y compris un en-tete
+# Retry-After fourni par le fournisseur (sinon un 429 peut bloquer un worker
+# pendant des heures).
+retry_max_delay = 60.0
+# Plafond absolu pour une tentative HTTP, toutes phases confondues (y compris
+# la resolution DNS). Sans lui, une connexion demi-ouverte apres une veille
+# peut consommer un delai complet par phase et par tentative.
+request_deadline = 150.0
 site_name = "Orion"
 # site_url = "https://example.com"
 

@@ -1,5 +1,0 @@
-[console_scripts]
-orion = orion_run:main
-orion-install = orion_install:main
-orion-toolbox = orion_toolbox:main
-orion-tools = orion_tools:main

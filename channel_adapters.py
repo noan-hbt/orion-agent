@@ -210,6 +210,66 @@ def escape_telegram_markdown_v2(text: str) -> str:
     return re.sub(r"([_\\*\[\]\(\)~`>#+\-=|{}.!])", r"\\\1", str(text))
 
 
+def worker_attribution(output: Any) -> str | None:
+    """Name the sub-agent that produced an output, or None for Orion's own.
+
+    The runtime tags delegated artifacts with ``output_origin="subagent"``.
+    Without this, a worker's report reached non-CLI channels as an unlabelled
+    message and read as if Orion had written it — the same confusion that was
+    fixed in the cockpit by heading worker output with its speaker.
+    """
+    metadata = getattr(output, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return None
+    if metadata.get("output_origin") != "subagent":
+        return None
+    raw_name = (
+        metadata.get("sender_name")
+        or metadata.get("agent_name")
+        or metadata.get("subagent_id")
+        or metadata.get("agent_id")
+        or "sous-agent"
+    )
+    name = " ".join(str(raw_name).split())[:48] or "sous-agent"
+    return name
+
+
+def is_intermediate_worker_artifact(output: Any) -> bool:
+    """True when this is a worker result Orion is about to synthesise.
+
+    The artifact exists so the parent run can immediately resume with the
+    worker's result.  It is useful live (the cockpit shows a one-line notice)
+    but as a chat message it duplicates Orion's own follow-up while looking
+    like Orion wrote it.
+    """
+    metadata = getattr(output, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return False
+    if metadata.get("output_origin") != "subagent":
+        return False
+    if not bool(metadata.get("intermediate", False)):
+        return False
+    return str(metadata.get("phase") or "") == "subagent_result"
+
+
+def outbound_display_text(output: Any, *, label_workers: bool = True) -> str | None:
+    """Return the text to deliver for ``output``, or None to send nothing.
+
+    ``None`` means the output is worker progress that Orion is about to
+    summarise, so sending it would duplicate the answer and misattribute it.
+    """
+    if is_intermediate_worker_artifact(output):
+        return None
+    content = str(getattr(output, "content", "") or "")
+    if not label_workers:
+        return content
+    name = worker_attribution(output)
+    if name is None:
+        return content
+    header = f"🔧 Sous-agent · {name}\n\n"
+    return header + content if content else header.rstrip()
+
+
 def split_telegram_message(text: str, *, max_chars: int = 3500) -> list[str]:
     """Découpe un message en conservant autant que possible ses lignes."""
     if max_chars < 1:
@@ -1438,7 +1498,7 @@ class HttpWebhookAdapter:
                 return True
             if enqueue_only:
                 return False
-            raise RuntimeError(f"La file du channel {self.name} est pleine.")
+            raise RuntimeError(f"La file du channel {self.name} est pleine.") from None
         return True
 
     def send(self, output: AgentOutput) -> None:
@@ -1456,9 +1516,15 @@ class HttpWebhookAdapter:
             if output.idempotency_key
             else None
         )
+        # Label worker output but never suppress it here: an HTTP consumer may
+        # be waiting on a delivery per output, so a silent drop would look like
+        # a missing response rather than a deliberate collapse.
+        display = outbound_display_text(output, label_workers=True)
+        if display is None:  # pragma: no cover - labelling keeps this non-None
+            display = str(output.content or "")
         response = httpx.post(
             url,
-            json={"text": output.content, "content": output.content, "task_id": output.task_id},
+            json={"text": display, "content": display, "task_id": output.task_id},
             headers=headers,
             timeout=self.timeout,
             follow_redirects=False,
@@ -2080,7 +2146,13 @@ class TelegramAdapter:
             )
         if not allowed_outbound:
             raise RuntimeError("La destination Telegram n'est pas dans l'allowlist de sortie.")
-        for chunk in split_telegram_message(output.content, max_chars=self.max_message_chars):
+        # Worker progress that Orion is about to summarise must not be sent as a
+        # standalone message: it duplicates the follow-up and reads as if Orion
+        # wrote the sub-agent's report verbatim.
+        display = outbound_display_text(output)
+        if display is None:
+            return
+        for chunk in split_telegram_message(display, max_chars=self.max_message_chars):
             text = (
                 markdown_to_telegram_html(chunk)
                 if self.parse_mode == "HTML"
@@ -2325,11 +2397,14 @@ class EmailAdapter:
         domain = address.rsplit("@", 1)[1].lower()
         if self.allowed_recipient_domains and domain not in self.allowed_recipient_domains:
             raise RuntimeError("Destinataire email hors allowlist.")
+        display_body = outbound_display_text(output)
+        if display_body is None:
+            return
         message = EmailMessage()
         message["From"] = self.username
         message["To"] = address
         message["Subject"] = str(output.metadata.get("subject") or self.subject)
-        message.set_content(output.content)
+        message.set_content(display_body)
         if self.smtp_starttls:
             with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30) as connection:
                 connection.starttls()
@@ -2390,9 +2465,14 @@ class DiscordWebhookAdapter:
         destination = str(output.recipient or self.webhook_url)
         if destination != self.webhook_url:
             raise RuntimeError("Destination Discord hors allowlist.")
+        display = outbound_display_text(output)
+        if display is None:
+            # Worker progress Orion is about to summarise; sending it would
+            # duplicate the follow-up and misattribute the report.
+            return
         response = httpx.post(
             destination,
-            json={"content": output.content[:2000]},
+            json={"content": display[:2000]},
             timeout=self.timeout,
             follow_redirects=False,
         )

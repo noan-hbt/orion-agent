@@ -106,10 +106,12 @@ class _InterprocessFileLock:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._handle = handle
                 return self
-            except OSError:
+            except OSError as exc:
                 if time.monotonic() >= deadline:
                     handle.close()
-                    raise TimeoutError(f"timed out acquiring file lock: {self.path}")
+                    raise TimeoutError(
+                        f"timed out acquiring file lock: {self.path}"
+                    ) from exc
                 time.sleep(0.01)
 
     def __exit__(self, *_: Any) -> None:

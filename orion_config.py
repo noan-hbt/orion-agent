@@ -52,6 +52,13 @@ class LLMConfig:
     timeout: float = 60.0
     max_retries: int = 2
     retry_backoff: float = 0.5
+    # Upper bound for any single retry wait, including a provider-supplied
+    # ``Retry-After`` header.  Without it a ``Retry-After: 3600`` blocked a
+    # worker thread for an hour with no cancellation path.
+    retry_max_delay: float = 60.0
+    # Hard wall-clock ceiling for one HTTP attempt (all phases, DNS included).
+    # Derived from ``timeout`` when left at zero so existing configs behave.
+    request_deadline: float = 150.0
     site_url: str | None = None
     site_name: str | None = None
     default_params: dict[str, Any] = field(default_factory=dict)
@@ -478,6 +485,8 @@ class OrionConfig:
         number(self.llm.timeout, "llm.timeout", strict=True)
         integer(self.llm.max_retries, "llm.max_retries")
         number(self.llm.retry_backoff, "llm.retry_backoff")
+        number(self.llm.retry_max_delay, "llm.retry_max_delay", 0.0)
+        number(self.llm.request_deadline, "llm.request_deadline", 0.0)
         if not isinstance(self.llm.default_params, dict):
             raise ValueError("llm.default_params doit etre un objet.")
 
@@ -1035,6 +1044,8 @@ class OrionConfig:
             timeout=self.llm.timeout,
             max_retries=self.llm.max_retries,
             retry_backoff=self.llm.retry_backoff,
+            retry_max_delay=self.llm.retry_max_delay,
+            request_deadline=self.llm.request_deadline,
             site_url=self.llm.site_url,
             site_name=self.llm.site_name,
             default_params=self.llm.default_params,

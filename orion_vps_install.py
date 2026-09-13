@@ -4,9 +4,11 @@ Le script est non interactif par defaut : les secrets peuvent venir des
 variables d'environnement, de secrets deja presents dans ``.env`` ou de
 ``--set-secret NAME=VALUE``. Il genere la configuration et, avec
 ``--systemd``, une unite de service a installer par l'administrateur.
-Pour Telegram, la configuration generee active le bootstrap owner : le
-premier message definit l'owner et les chemins de reprise du polling sont
-persistes dans ``data/telegram.owner`` et ``data/telegram.offset``.
+Pour Telegram, la configuration generee active le bootstrap owner et ecrit un
+secret de pairing : l'owner s'appaire en envoyant ``/pair <secret>`` en message
+prive au bot. Le premier message n'accorde jamais l'ownership a lui seul ; les
+chemins de reprise du polling sont persistes dans ``data/telegram.owner`` et
+``data/telegram.offset``.
 
 Exemple :
     python orion_vps_install.py --channels telegram,discord --systemd \
@@ -19,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import secrets as secrets_module
 import shlex
 import shutil
 import subprocess
@@ -28,7 +31,9 @@ from pathlib import Path
 
 from orion_install import (
     CHANNEL_SECRET_DEFAULTS,
+    TELEGRAM_PAIRING_SECRET_ENV,
     _config_text,
+    _dotenv_value,
 )
 
 
@@ -44,6 +49,12 @@ def _env_values(path: Path) -> dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        # ``orion_install._write_env`` preserves an ``export `` prefix when it
+        # rewrites a key.  Without stripping it here the same file would be
+        # read back as an unknown variable name, and a secret that is in fact
+        # present would be reported as missing.
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
         name, value = line.split("=", 1)
         name = name.strip()
         value = value.strip().strip('"').strip("'")
@@ -131,10 +142,29 @@ def _service_text(
     run_script: Path,
     user: str,
 ) -> str:
+    # ``ProtectHome=true`` hides /home, /root and /run/user, which breaks the
+    # documented workflow of running from the repository checkout (typically
+    # under /home/<user>): the unit could not execute its own script.  The
+    # README/DEPLOYMENT_VPS instructions place both the code and ``data/``
+    # there, so the sandbox is scoped to the install directory instead.
+    #
+    # Detection is textual because these are POSIX paths and the installer can
+    # be examined from a non-POSIX host.
+    install_text = str(install_dir).replace("\\", "/").rstrip("/")
+    home_prefixes = ("/home/", "/root/", "/run/user/", "/Users/")
+    install_is_under_home = any(
+        install_text == prefix.rstrip("/") or install_text.startswith(prefix)
+        for prefix in home_prefixes
+    )
+    protect_home = "read-only" if install_is_under_home else "true"
     return f"""[Unit]
 Description=Orion Agent
 After=network-online.target
 Wants=network-online.target
+# Start-limit directives belong to [Unit] since systemd v230; under [Service]
+# they are silently ignored, so the restart-loop protection never applied.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -147,13 +177,11 @@ RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome={protect_home}
 ReadWritePaths={_systemd_quote(str(install_dir / "data"))} {_systemd_quote(str(env_path))}
 UMask=0077
 LimitNOFILE=4096
 LimitNPROC=256
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
@@ -258,6 +286,25 @@ def main() -> None:
         for channel in channels
         if channel in CHANNEL_SECRET_DEFAULTS
     }
+    # A Telegram bot refuses every inbound message until it has an owner.  The
+    # adapter never infers ownership from inbound traffic, so the only way to
+    # claim an unconfigured bot is the authenticated ``/pair <secret>``
+    # command, which requires ``bootstrap_pairing_secret_env`` to name a
+    # variable that holds the secret.  Generating it here keeps the headless
+    # installer in step with ``orion_install`` and prevents the silent total
+    # inbound outage described in ORION_AUDIT_2026-02.md (C2).
+    telegram_pairing_secret_env: str | None = None
+    generated_pairing_secret: str | None = None
+    if "telegram" in channels:
+        telegram_pairing_secret_env = TELEGRAM_PAIRING_SECRET_ENV
+        pairing_secret = str(
+            selected_values.get(TELEGRAM_PAIRING_SECRET_ENV) or ""
+        ).strip()
+        if not pairing_secret:
+            pairing_secret = secrets_module.token_urlsafe(32)
+            generated_pairing_secret = pairing_secret
+        secrets[TELEGRAM_PAIRING_SECRET_ENV] = pairing_secret
+        selected_values[TELEGRAM_PAIRING_SECRET_ENV] = pairing_secret
     email_settings = (
         {
             "imap_host": args.email_imap_host,
@@ -277,29 +324,44 @@ def main() -> None:
         compactor_model=args.compactor_model,
         memory_model=args.memory_model,
         reflection_model=args.reflection_model,
+        telegram_pairing_secret_env=telegram_pairing_secret_env,
     )
     _atomic_write(config_path, config_text, 0o644)
 
     env_to_write = {
         name: value
         for name, value in {**selected_values, **os.environ, **secrets}.items()
-        if name == "OPENROUTER_API_KEY" or name in secret_envs.values()
+        if name == "OPENROUTER_API_KEY"
+        or name in secret_envs.values()
+        or name == TELEGRAM_PAIRING_SECRET_ENV
     }
     existing = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
     lines = existing.splitlines()
     for key, value in env_to_write.items():
         for i, line in enumerate(lines):
-            if line.startswith(key + "="):
-                lines[i] = f"{key}={value}"
+            if re.match(rf"^(?:export\s+)?{re.escape(key)}\s*=", line):
+                lead = "export " if line.lstrip().startswith("export ") else ""
+                # Values must be quoted the same way ``orion_install`` does it:
+                # a raw interpolation corrupts ``.env`` as soon as a secret
+                # contains a space, ``#``, a quote or a newline.
+                lines[i] = f"{lead}{key}={_dotenv_value(str(value))}"
                 break
         else:
-            lines.append(f"{key}={value}")
+            lines.append(f"{key}={_dotenv_value(str(value))}")
     if env_path.exists() and args.force:
         _backup(env_path)
     _atomic_write(env_path, "\n".join(lines) + "\n", 0o600)
 
     print(f"Configuration VPS ecrite dans {config_path}")
     print(f"Secrets ecrits dans {env_path} (permissions restreintes)")
+    if generated_pairing_secret is not None:
+        # Shown once, exactly like ``orion-install``: the secret is only ever
+        # stored in ``.env``, never in ``orion.toml``.
+        print(
+            "Appairage Telegram : envoyez en message prive au bot la commande\n"
+            f"  /pair {generated_pairing_secret}\n"
+            "Ce secret n'est affiche qu'une fois et n'est pas ecrit dans orion.toml."
+        )
 
     if args.systemd:
         service_path = install_dir / f"{args.service_name}.service"

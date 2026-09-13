@@ -632,5 +632,10 @@ def test_subagent_event_context_includes_authoritative_sibling_job_snapshot():
     assert 'job-web' in encoded
     assert 'web done' in encoded
     evidence = messages[-1]["content"]
-    assert '"terminal":2' in evidence.replace(" ", "")
+    # The snapshot is authoritative for *sibling* jobs only: the job carried by
+    # the event itself ("job-web") is deliberately excluded, so only
+    # "job-terminal" is counted here.  This matches
+    # test_related_subagent_snapshot_excludes_current_event_job_but_stays_authoritative
+    # in tests/test_runtime_prompt_regressions.py.
+    assert '"terminal":1' in evidence.replace(" ", "")
     assert '"non_terminal":0' in evidence.replace(" ", "")

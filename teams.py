@@ -12,9 +12,10 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from event_handler import EventHandler, EventPriority
 from handoff_context import HandoffContext
@@ -206,6 +207,10 @@ class TeamBus:
             self.claim_timeout / 3.0,
         )
         self._published_ids: set[str] = set()
+        # Poller failures are recorded here rather than being allowed to kill
+        # the thread (see ``_poll_phase``); bounded so a perpetual fault cannot
+        # itself become a memory leak.
+        self._poll_errors: deque[BaseException] = deque(maxlen=100)
         self._claim_fences: dict[str, int] = {}
         self._published_completion_keys: set[str] = set()
         self._completion_claim_fences: dict[str, int] = {}
@@ -641,50 +646,69 @@ class TeamBus:
                 self._thread = None
 
     def _poll(self) -> None:
+        """Poll the mailbox; a single bad row must not kill the poller.
+
+        ``_row`` deserialises persisted envelopes, so one legacy or corrupt row
+        (a missing field, an unknown version, an over-cap payload) raises
+        ``ValueError``.  Previously that escaped this loop and terminated the
+        poller thread for the lifetime of the process, silently stopping all
+        cross-instance messaging.  Each phase is now isolated and reported.
+        """
         while not self._stop.is_set():
-            self._recover_failed_published_deliveries()
-            self._replay_completion_notifications()
-            for message in self.inbox(limit=20):
-                if message.id in self._published_ids:
-                    continue
-                # Claim before publish. A worker may run the callback as soon
-                # as publish returns, and a second poller must not duplicate it.
-                if not self._claim_for_poll(message.id):
-                    continue
-                claimed = self.get(message.id)
-                if claimed is None:
-                    self._release_delivery(message.id)
-                    continue
-                try:
-                    event_payload = claimed.to_dict()
-                    # Transport claim timestamps/fences are deliberately not
-                    # part of the durable event identity. A replay after a
-                    # crash must be byte-equivalent for EventHandler dedupe.
-                    event_payload["delivered_at"] = None
-                    self.event_handler.publish(
-                        f"team.{message.kind}",
-                        event_payload,
-                        priority=claimed.priority,
-                        source=f"team:{claimed.sender}",
-                        metadata={
-                            "team_message_id": message.id,
-                            "team": message.team,
-                            "internal_event": True,
-                        },
-                        max_attempts=1,
-                        idempotency_key=self._delivery_idempotency_key(claimed),
-                        # Do not let a bounded event queue hold the claim longer
-                        # than its lease before the dedicated heartbeat can help.
-                        timeout=min(self.poll_interval, self.claim_timeout / 2.0, 0.25),
-                    )
-                except Exception:
-                    self._release_delivery(message.id)
-                    continue
-                self._published_ids.add(message.id)
-                # Refresh immediately after enqueue; the dedicated heartbeat
-                # maintains the lease until acknowledge_delivery().
-                self._renew_delivery_claim(message.id)
+            self._poll_phase(self._recover_failed_published_deliveries)
+            self._poll_phase(self._replay_completion_notifications)
+            self._poll_phase(self._poll_inbox_once)
             self._stop.wait(self.poll_interval)
+
+    def _poll_phase(self, phase: Callable[[], Any]) -> None:
+        """Run one poll phase, recording any failure instead of dying."""
+        try:
+            phase()
+        except Exception as exc:  # noqa: BLE001 - poller supervision
+            with self._lifecycle_lock:
+                self._poll_errors.append(exc)
+
+    def _poll_inbox_once(self) -> None:
+        for message in self.inbox(limit=20):
+            if message.id in self._published_ids:
+                continue
+            # Claim before publish. A worker may run the callback as soon
+            # as publish returns, and a second poller must not duplicate it.
+            if not self._claim_for_poll(message.id):
+                continue
+            claimed = self.get(message.id)
+            if claimed is None:
+                self._release_delivery(message.id)
+                continue
+            try:
+                event_payload = claimed.to_dict()
+                # Transport claim timestamps/fences are deliberately not
+                # part of the durable event identity. A replay after a
+                # crash must be byte-equivalent for EventHandler dedupe.
+                event_payload["delivered_at"] = None
+                self.event_handler.publish(
+                    f"team.{message.kind}",
+                    event_payload,
+                    priority=claimed.priority,
+                    source=f"team:{claimed.sender}",
+                    metadata={
+                        "team_message_id": message.id,
+                        "team": message.team,
+                        "internal_event": True,
+                    },
+                    max_attempts=1,
+                    idempotency_key=self._delivery_idempotency_key(claimed),
+                    # Do not let a bounded event queue hold the claim longer
+                    # than its lease before the dedicated heartbeat can help.
+                    timeout=min(self.poll_interval, self.claim_timeout / 2.0, 0.25),
+                )
+            except Exception:
+                self._release_delivery(message.id)
+                continue
+            self._published_ids.add(message.id)
+            # Refresh immediately after enqueue; the dedicated heartbeat
+            # maintains the lease until acknowledge_delivery().
+            self._renew_delivery_claim(message.id)
 
     def _heartbeat(self) -> None:
         """Renew active delivery claims independently from mailbox polling.
@@ -788,9 +812,14 @@ class TeamBus:
                 )
             self._connection.commit()
             acknowledged = changed.rowcount > 0
-            if acknowledged:
-                self._published_ids.discard(str(message_id))
-                self._claim_fences.pop(str(message_id), None)
+            # Always forget the published id, even when the UPDATE matched no
+            # row.  A wall-clock jump (suspend/resume) expires the short claim,
+            # after which the owner no longer matches and the UPDATE is a no-op;
+            # keeping the id would make ``_poll_inbox_once`` skip this message
+            # forever, so the delivery never completes and the parent never
+            # receives ``handoff.completed``.
+            self._published_ids.discard(str(message_id))
+            self._claim_fences.pop(str(message_id), None)
             return acknowledged
 
     @staticmethod

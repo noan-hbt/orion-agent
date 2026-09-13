@@ -8,6 +8,10 @@ jobs:
   tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
+    # Bounds a hung test run.  Several tests use unbounded blocking waits
+    # (bare thread.join(), readline() on a sleeping child), so without this a
+    # single stall could occupy the default 360-minute budget on all 8 jobs.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +27,7 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Compile all Python modules
         shell: bash
-        run: python -m compileall -q -f .
+        run: python -m compileall -q -f . -x '(^|[\\/])(build|dist|\.venv)([\\/]|$)'
       - name: Run offline tests
         env:
           ORION_TEST_OFFLINE: '1'
@@ -33,7 +37,8 @@ jobs:
           python -m build --wheel --no-isolation
           python -m pip install --force-reinstall dist/*.whl
           orion-toolbox --help
-      - name: Optional lint
-        shell: bash
-        run: |
-          python -m ruff check . || true
+      # Lint is a gate, not advice.  It previously ended with `|| true`, so the
+      # job passed regardless of findings.  The rule set is defined in
+      # pyproject.toml ([tool.ruff.lint]).
+      - name: Lint
+        run: python -m ruff check .

@@ -566,24 +566,42 @@ class DurableEventStore:
         *,
         status: str | None = None,
         limit: int = 100,
+        idempotency_key_prefix: str | None = None,
     ) -> list[DurableEventReceipt]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise ValueError("limit must be >= 1")
         if status is not None and status not in self._STATUSES:
             raise ValueError(f"unsupported status: {status}")
+        if idempotency_key_prefix is not None and not isinstance(
+            idempotency_key_prefix, str
+        ):
+            raise ValueError("idempotency_key_prefix must be a string")
+        # ``%`` and ``_`` are LIKE wildcards: escape them so a literal prefix
+        # cannot widen the match unexpectedly.
+        escaped_prefix: str | None = None
+        if idempotency_key_prefix:
+            escaped_prefix = (
+                idempotency_key_prefix.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            escaped_prefix += "%"
         with self._lock:
-            if status is None:
-                rows = self._db.execute(
-                    "SELECT * FROM durable_events WHERE namespace=? "
-                    "ORDER BY created_at, receipt_id LIMIT ?",
-                    (self.namespace, limit),
-                ).fetchall()
-            else:
-                rows = self._db.execute(
-                    "SELECT * FROM durable_events WHERE namespace=? AND status=? "
-                    "ORDER BY created_at, receipt_id LIMIT ?",
-                    (self.namespace, status, limit),
-                ).fetchall()
+            conditions = ["namespace=?"]
+            params: list[Any] = [self.namespace]
+            if status is not None:
+                conditions.append("status=?")
+                params.append(status)
+            if escaped_prefix is not None:
+                conditions.append("idempotency_key LIKE ? ESCAPE '\\'")
+                params.append(escaped_prefix)
+            params.append(limit)
+            rows = self._db.execute(
+                "SELECT * FROM durable_events WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY created_at, receipt_id LIMIT ?",
+                tuple(params),
+            ).fetchall()
             return [receipt for row in rows if (receipt := self._row(row)) is not None]
 
     def list_recoverable(self, *, limit: int = 100) -> list[DurableEventReceipt]:

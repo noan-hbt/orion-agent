@@ -28,6 +28,10 @@ class IdempotencyConflict(CommunicationLedgerError, ValueError):
 
 
 class CommunicationLedger:
+    # Terminal rows older than this are eligible for automatic pruning.
+    # ``delivered``/``dead_letter`` are never re-read once terminal, so
+    # retention does not affect at-least-once delivery semantics.
+    _PRUNE_RETENTION_SECONDS = 604800.0
     """Thread-safe durable queue for inbound messages and outbound outputs."""
 
     def __init__(self, path: str | Path = "data/communication_ledger.sqlite3") -> None:
@@ -35,6 +39,9 @@ class CommunicationLedger:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        # Retention housekeeping is throttled; the DELETE itself is indexed.
+        self._prune_interval = 3600.0
+        self._last_prune_at = time.time()
         self._connection = sqlite3.connect(
             self.path, check_same_thread=False, isolation_level=None
         )
@@ -116,6 +123,8 @@ class CommunicationLedger:
                     ON communication_events(kind, status, next_attempt_at, lease_until);
                 CREATE INDEX IF NOT EXISTS communication_nonces_expiry
                     ON communication_nonces(expires_at);
+                CREATE INDEX IF NOT EXISTS communication_events_retention
+                    ON communication_events(status, updated_at);
                 """
             )
             # Versioned, additive migrations.  ``user_version`` is SQLite's
@@ -262,6 +271,17 @@ class CommunicationLedger:
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
+                if now - self._last_prune_at >= self._prune_interval:
+                    self._last_prune_at = now
+                    try:
+                        self._connection.execute(
+                            "DELETE FROM communication_events WHERE status IN "
+                            "('delivered', 'dead_letter') AND updated_at < ?",
+                            (now - self._PRUNE_RETENTION_SECONDS,),
+                        )
+                    except sqlite3.Error:
+                        # Housekeeping must never fail a durable record.
+                        pass
                 existing = self._existing_or_conflict(
                     dedupe_key=dedupe_key,
                     stored_event_id=stored_event_id,

@@ -606,10 +606,12 @@ class _InterprocessFileLock:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._handle = handle
                 return self
-            except OSError:
+            except OSError as exc:
                 if time.monotonic() >= deadline:
                     handle.close()
-                    raise TimeoutError(f"timed out acquiring file lock: {self.path}")
+                    raise TimeoutError(
+                        f"timed out acquiring file lock: {self.path}"
+                    ) from exc
                 time.sleep(0.01)
 
     def __exit__(self, *_: Any) -> None:
@@ -720,7 +722,7 @@ class JsonTaskStore(InMemoryTaskStore):
     @classmethod
     def _tagged_copy(cls, task: Task) -> Task:
         result = copy.deepcopy(task)
-        setattr(result, "_store_revision", cls._task_revision(task))
+        result._store_revision = cls._task_revision(task)
         return result
 
     @staticmethod
@@ -805,7 +807,7 @@ class JsonTaskStore(InMemoryTaskStore):
                 self._persist_serialized(serialized)
                 self._install_snapshot(candidate, serialized=serialized)
                 tagged = self._tagged_copy(task)
-                setattr(task, "_store_revision", getattr(tagged, "_store_revision"))
+                task._store_revision = tagged._store_revision
                 return tagged
 
     def save(self, task: Task) -> Task:
@@ -841,7 +843,7 @@ class JsonTaskStore(InMemoryTaskStore):
                     self._persist_serialized(serialized)
                 self._install_snapshot(candidate, serialized=serialized)
                 new_revision = self._task_revision(candidate[task_id])
-                setattr(task, "_store_revision", new_revision)
+                task._store_revision = new_revision
                 return self._tagged_copy(candidate[task_id])
 
     def get(self, task_id: int) -> Task | None:

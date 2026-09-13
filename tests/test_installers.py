@@ -317,13 +317,25 @@ def test_context_os_state_is_versioned_and_persistent(tmp_path):
 def test_cli_set_secret_accepts_equals_and_writes_nested_paths(tmp_path):
     config = tmp_path / "a" / "orion.toml"
     env = tmp_path / "b" / ".env"
-    result = subprocess.run([sys.executable, "orion_install.py", "--config", str(config), "--env", str(env), "--model", "m", "--api-key", "k", "--channels", "web", "--set-secret", "ORION_WEBHOOK_TOKEN=a=b=c"], capture_output=True, text=True)
+    # ``orion_install.py`` is invoked as a script, so the repo root must be the
+    # working directory; tests no longer inherit the ambient cwd.
+    result = subprocess.run(
+        [sys.executable, "orion_install.py", "--config", str(config), "--env", str(env), "--model", "m", "--api-key", "k", "--channels", "web", "--set-secret", "ORION_WEBHOOK_TOKEN=a=b=c"],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parents[1]),
+    )
     assert result.returncode == 0, result.stderr
     assert dotenv_values(env)["ORION_WEBHOOK_TOKEN"] == "a=b=c"
 
 
 def test_build_wheel_and_sdist_contain_installer(tmp_path):
-    result = subprocess.run([sys.executable, "-m", "build", "--wheel", "--sdist", "--outdir", str(tmp_path)], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-m", "build", "--wheel", "--sdist", "--outdir", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parents[1]),
+    )
     if result.returncode != 0 and "No module named build" in result.stderr:
         pytest.skip("build package is not installed")
     assert result.returncode == 0, result.stderr

@@ -15,7 +15,7 @@ import math
 import threading
 import time
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -194,6 +194,10 @@ class EventHandler:
     _DURABLE_NAMESPACE = "event_handler"
     _DURABLE_LEASE_SECONDS = 300.0
     _DURABLE_RECOVERY_BATCH = 1000
+    # Diagnostic retention.  Bounded so a long-running daemon cannot leak every
+    # dead-lettered event (with payload) or every callback error.
+    _MAX_DEAD_LETTERS = 500
+    _MAX_CALLBACK_ERRORS = 200
 
     def __init__(
         self,
@@ -241,7 +245,14 @@ class EventHandler:
         self.on_unhandled = on_unhandled
 
         self._handlers: dict[str, list[EventHandlerFunction]] = {}
-        self._dead_letters: list[Event] = []
+        # Dead letters and callback errors are diagnostic surfaces, not an
+        # unbounded audit log: in a long-lived daemon the previous lists grew
+        # for the life of the process.  Keep the most recent entries only.
+        self._dead_letters: deque[Event] = deque(maxlen=self._MAX_DEAD_LETTERS)
+        # Fingerprints of the events currently retained in ``_dead_letters``,
+        # so the duplicate check in ``_dead_letter`` stays O(1) now that the
+        # container is bounded.
+        self._dead_letter_keys: set[str] = set()
         self._dead_letters_lock = threading.Lock()
         self._lifecycle_lock = threading.Lock()
         self._stop_requested = threading.Event()
@@ -251,7 +262,7 @@ class EventHandler:
         self._dedupe: OrderedDict[str, _DedupeRecord] = OrderedDict()
         self._dedupe_next_expiry: float | None = None
         self._dedupe_lock = threading.Lock()
-        self._callback_errors: list[Exception] = []
+        self._callback_errors: deque[Exception] = deque(maxlen=self._MAX_CALLBACK_ERRORS)
         self._durable_store = (
             DurableEventStore(self.durable_path, namespace=self._DURABLE_NAMESPACE)
             if self.durable_path is not None
@@ -521,15 +532,22 @@ class EventHandler:
         )
 
     def _enqueue_ram_once(self, event: Event, *, timeout: float | None = None) -> bool:
+        # Reserve the id and release ``_durable_lock`` *before* the potentially
+        # blocking ``put``.  Holding it across the put (with a caller-supplied
+        # timeout) stalled every worker: ``_queue_get`` and ``_process_event``
+        # need the same lock, so the queue could not even be drained while a
+        # slow producer waited for capacity.
         with self._durable_lock:
             if event.id in self._ram_event_ids:
                 return False
-            try:
-                self.queue.put(event, timeout=timeout)
-            except Full as exc:
-                raise EventQueueFullError(retry_after=0.1) from exc
             self._ram_event_ids.add(event.id)
-            return True
+        try:
+            self.queue.put(event, timeout=timeout)
+        except Full as exc:
+            with self._durable_lock:
+                self._ram_event_ids.discard(event.id)
+            raise EventQueueFullError(retry_after=0.1) from exc
+        return True
 
     def start(self) -> None:
         """Démarre les workers configurés ; sans worker, le dispatch est manuel."""
@@ -629,26 +647,77 @@ class EventHandler:
         return self.queue.empty() and self.queue.unfinished_tasks == 0
 
     def _worker(self) -> None:
+        """Thread entry point: never let the worker loop die silently."""
+        try:
+            self._worker_loop()
+        except BaseException as exc:  # noqa: BLE001 - last-resort supervision
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            with self._dead_letters_lock:
+                self._callback_errors.append(exc)
+
+    def _worker_loop(self) -> None:
         owner_id = f"{self._durable_owner_prefix}:{threading.get_ident()}"
         while True:
             if self._stop_requested.is_set():
                 if not self._drain_on_stop:
                     return
-                self._recover_durable()
-                self._hydrate_durable_queue()
+                self._safe_recover_durable()
+                self._safe_hydrate_durable_queue()
                 if self.queue.empty():
                     return
             try:
                 event = self._queue_get(timeout=0.2)
             except Empty:
-                self._recover_durable()
-                self._hydrate_durable_queue()
+                self._safe_recover_durable()
+                self._safe_hydrate_durable_queue()
                 continue
             try:
                 self._process_event(event, owner_id=owner_id)
+            except BaseException as exc:  # noqa: BLE001 - worker supervision
+                # A worker thread must never die from an out-of-band error.
+                # Previously any non-``_dispatch`` exception (for example a
+                # transient sqlite3.OperationalError from claim_receipt or a
+                # failure inside _hydrate_durable_queue) escaped this loop,
+                # killed the thread while ``_running`` stayed True -- so
+                # ``start()`` refused to restart it -- and silently stopped
+                # the whole event pipeline.  Record, surface and survive.
+                self._report_worker_failure(event, exc)
             finally:
                 self.queue.task_done()
-                self._hydrate_durable_queue()
+                # Releases the per-event receipt mapping.  It was written on
+                # accept/hydrate and read in _process_event but never removed,
+                # so it grew by one entry per accepted event for the life of
+                # the process.  ``runtime.py`` already pops its equivalent.
+                with self._durable_lock:
+                    self._durable_receipts_by_event_id.pop(event.id, None)
+                self._safe_hydrate_durable_queue()
+
+    def _safe_recover_durable(self) -> None:
+        """Requeue expired leases without letting the worker die."""
+        try:
+            self._recover_durable()
+        except Exception as exc:  # noqa: BLE001 - worker supervision
+            with self._dead_letters_lock:
+                self._callback_errors.append(exc)
+
+    def _safe_hydrate_durable_queue(self) -> None:
+        """Hydrate durably queued events without letting the worker die."""
+        try:
+            self._hydrate_durable_queue()
+        except Exception as exc:  # noqa: BLE001 - worker supervision
+            with self._dead_letters_lock:
+                self._callback_errors.append(exc)
+
+    def _report_worker_failure(self, event: Event, error: BaseException) -> None:
+        """Record a worker-loop failure so it is visible instead of fatal."""
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise error
+        with self._dead_letters_lock:
+            self._callback_errors.append(error)
+        self._invoke_error_callback_safely(
+            self.on_error, event, error if isinstance(error, Exception) else Exception(str(error))
+        )
 
     def _queue_get(self, *, timeout: float | None) -> Event:
         event = self.queue.get(timeout=timeout)
@@ -825,7 +894,12 @@ class EventHandler:
         except Exception as exc:
             if event.attempts < event.max_attempts:
                 delay = self.retry_delay * (self.retry_backoff ** (event.attempts - 1))
-                if delay:
+                # Only the in-memory path needs to wait here, because it puts
+                # the event straight back on the queue.  On the durable path the
+                # receipt is re-queued by the store and hydrated on a later
+                # tick, so sleeping merely parked a worker thread -- and grew
+                # geometrically with no cap -- while delaying the stop() drain.
+                if delay and requeue:
                     time.sleep(delay)
                 if requeue:
                     try:
@@ -841,9 +915,18 @@ class EventHandler:
         return _DispatchOutcome("acked")
 
     def _dead_letter(self, event: Event) -> None:
+        key = event.id
         with self._dead_letters_lock:
-            if event not in self._dead_letters:
-                self._dead_letters.append(event)
+            if key in self._dead_letter_keys:
+                return
+            if self._dead_letters.maxlen is not None and len(self._dead_letters) >= self._dead_letters.maxlen:
+                # Evicting the oldest entry must also drop its fingerprint,
+                # otherwise the set would grow without bound and would keep
+                # claiming events that are no longer retained.
+                evicted = self._dead_letters[0]
+                self._dead_letter_keys.discard(evicted.id)
+            self._dead_letters.append(event)
+            self._dead_letter_keys.add(key)
 
     def _invoke_error_callback_safely(
         self,
