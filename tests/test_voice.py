@@ -240,6 +240,23 @@ async def test_reminders_by_call_ring_the_owner(world: World) -> None:
     assert world.imessage.sent == []
 
 
+async def test_a_call_to_the_owner_that_failed_is_reported(world: World) -> None:
+    call_id = await world.voice.call_owner("Rappel : Debout")
+    world.fake.phone_calls[call_id].update(status="failed", hangup_reason="rejected")
+    await world.voice.poll_once()
+    [report] = await world.voice.reports()
+    assert report.key == f"call:{call_id}" and report.trust is Trust.SYSTEM
+    assert "failed, rejected" in report.notice and "Debout" in report.notice
+    assert "Debout" in report.fallback
+
+    answered = await world.voice.call_owner("Point du soir")
+    world.fake.phone_calls[answered].update(status="completed", duration_seconds=30)
+    world.provider.extend(reply("SILENCE"))
+    await world.voice.poll_once()
+    await until_requests(world, 1)
+    assert [r.key for r in await world.voice.reports()] == [f"call:{call_id}"]
+
+
 def test_render_and_brief_helpers() -> None:
     call = Call(
         id="c",
