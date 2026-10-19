@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from orion.core.journal import SqliteJournal
     from orion.core.supervisor import Supervisor
     from orion.guardian.policy import ActionProposal, Approver
-    from orion.initiative.engine import Caller, ReportSource
+    from orion.initiative.engine import AlertSource, Caller, DigestSource, ReportSource
     from orion.initiative.timers import Timers
     from orion.memory.service import MemoryService
     from orion.providers.base import ModelProvider
@@ -151,6 +151,11 @@ class Daemon:
     inbox: OwnerInbox
     supervisor: Supervisor
     reports: list[ReportSource] = field(default_factory=list["ReportSource"])
+    """Outcomes to pass on (always delivered)."""
+    alerts: list[AlertSource] = field(default_factory=list["AlertSource"])
+    """Unrequested messages (quiet hours and the budget apply)."""
+    digests: list[DigestSource] = field(default_factory=list["DigestSource"])
+    """Lines for the daily digests."""
     caller: Caller | None = None
 
     def add_service(self, name: str, run: Service) -> None:

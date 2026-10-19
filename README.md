@@ -42,6 +42,13 @@ d'autres personnes.
   la voix, la délégation et l'apprentissage en arrière-plan sont des modules, et d'autres peuvent
   s'installer comme paquets Python. `orion doctor` liste les modules et leur état.
 
+- **M6 (en cours) — l'agenda** : module `calendar`. Orion lit tes agendas (Google, iCloud,
+  Outlook, autant de comptes que tu veux) par leur adresse iCal secrète. Il te prévient avant
+  chaque événement, met ta journée dans le point du matin et celle du lendemain dans le point du
+  soir, et répond aux questions sur ton emploi du temps (`agenda`). Les invitations d'inconnus
+  restent invisibles, et la description d'une invitation n'est jamais lue (D25). Lecture seule
+  pour l'instant.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -75,6 +82,18 @@ https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 - [`docs/research/`](docs/research/) — études : Claude Code, paysage des agents, ce qui fait un Jarvis
 - [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md) — architecture
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — journal des décisions
+
+### Agenda
+
+Pour chaque agenda, récupère son adresse iCal secrète :
+- **Google** : paramètres de l'agenda, « Adresse secrète au format iCal » ;
+- **iCloud** : partage l'agenda en « Agenda public », puis copie le lien `webcal://` ;
+- **Outlook** : Paramètres, Calendrier, Calendriers partagés, « Publier un calendrier », lien ICS.
+
+Ces liens donnent accès à ton agenda : mets chacun dans une variable d'environnement, puis
+déclare-les dans `[modules.calendar]` (voir `orion.example.toml`). Renseigne aussi
+`owner_emails` : sans tes adresses, Orion ne sait pas distinguer tes événements des
+invitations, et il les masque toutes. `uv run orion doctor` vérifie chaque compte.
 
 ## Écrire un module
 

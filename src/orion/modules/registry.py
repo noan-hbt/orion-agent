@@ -16,11 +16,12 @@ ENTRY_POINT_GROUP = "orion.modules"
 def builtin_modules() -> list[type[Module]]:
     # Imported here: a module's dependencies load only when modules are listed.
     from orion.adaptation.module import AdaptationModule
+    from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
     from orion.delegation.module import DelegationModule
     from orion.voice.module import VoiceModule
 
-    return [IMessageModule, VoiceModule, DelegationModule, AdaptationModule]
+    return [IMessageModule, VoiceModule, DelegationModule, AdaptationModule, CalendarModule]
 
 
 def discover() -> list[type[Module]]:

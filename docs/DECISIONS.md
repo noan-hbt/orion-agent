@@ -473,3 +473,33 @@ leur propre processus viendra avec la séparation du gardien.
 **Hors module, volontairement.** Le manuel et ses outils (`adapt`, `unlearn`…) font partie du
 cœur, car le propriétaire doit toujours pouvoir dire à Orion comment se comporter. Le module
 `adaptation` n'ajoute que la réflexion en arrière-plan.
+
+## D25 — M6, premier module : l'agenda en lecture seule
+
+**Lecture par l'adresse iCal secrète.** Google, iCloud et Outlook publient tous une adresse iCal
+secrète. La lire marche partout de la même façon, sans OAuth ni droit d'écriture, et couvre
+plusieurs comptes à la fois. Écrire dans l'agenda (créer, déplacer) demandera l'API de chaque
+fournisseur. Ce sera une étape suivante, avec approbation.
+
+**Journal.** Chaque synchronisation lit une fenêtre (de la veille à `horizon_days`) et ne
+journalise que les changements (`calendar.event.seen`, `calendar.event.gone`). La projection se
+reconstruit comme les autres. Un flux illisible ne change rien : un agenda injoignable n'est
+jamais pris pour un agenda vide.
+
+**Confiance.** Une invitation est un texte qu'un inconnu peut placer devant Orion, et les
+descriptions d'invitations sont un vecteur connu d'injection d'instructions. Traiter toute
+invitation comme du contenu tiers rendrait l'agenda inutilisable : le gardien refuserait
+`remind_me` juste après la lecture de l'agenda. D'où une règle par auteur :
+- **ses propres événements** (sans organisateur, ou organisés par une de ses `owner_emails`) :
+  tout est lu, confiance `SYSTEM` ;
+- **les invitations qu'il a acceptées** : heure, titre et lieu seulement, en confiance `SYSTEM`.
+  Il les a vues et adoptées. La description, que personne ne relit, n'est jamais conservée ;
+- **les invitations sans réponse ou refusées, et les événements où il n'apparaît pas** : seul le
+  fait qu'elles existent est gardé (pour les compter), sans titre ni texte.
+
+Sans `owner_emails`, toute invitation reste masquée (fail closed).
+
+**Initiative.** Le moteur accepte désormais, en plus des comptes rendus, des alertes de modules
+(soumises aux heures calmes et au budget, et abandonnées une fois expirées) et des lignes pour
+les points du jour. L'agenda fournit une alerte avant chaque événement (`heads_up_minutes`), la
+journée dans le premier point et le lendemain dans le dernier.

@@ -62,6 +62,8 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
             verifier=Verifier(app.provider, app.config.agent.verifier_model),
             reports=daemon.reports,
             caller=daemon.caller,
+            alerts=daemon.alerts,
+            digests=daemon.digests,
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
     log.info(

@@ -78,6 +78,32 @@ class ReportSource(Protocol):
 
 
 @dataclass(frozen=True)
+class Alert:
+    """Something worth an unrequested message (an event about to start…). Unlike a report, it
+    is subject to quiet hours and the daily budget, and it is dropped once `expires_at` is
+    past."""
+
+    key: str
+    notice: str
+    why: str
+    fallback: str
+    trust: Trust = Trust.SYSTEM
+    expires_at: datetime | None = None
+
+
+class AlertSource(Protocol):
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """Alerts due now; the engine's ledger skips those already handled."""
+        ...
+
+
+class DigestSource(Protocol):
+    async def digest(self, now: datetime, first_slot: bool, last_slot: bool) -> list[str]:
+        """Lines to add to the digest due now (e.g. today's agenda in the first one)."""
+        ...
+
+
+@dataclass(frozen=True)
 class InitiativeSettings:
     timezone: str = "Europe/Paris"
     thread_id: str = "owner"
@@ -234,8 +260,12 @@ class InitiativeEngine:
         verifier: Verifier | None = None,
         reports: Sequence[ReportSource] = (),
         caller: Caller | None = None,
+        alerts: Sequence[AlertSource] = (),
+        digests: Sequence[DigestSource] = (),
     ) -> None:
         self._caller = caller
+        self._alerts = list(alerts)
+        self._digest_sources = list(digests)
         self._orion = orion
         self._reports = list(reports)
         self._verifier = verifier
@@ -283,9 +313,21 @@ class InitiativeEngine:
                 )
                 for r in await source.reports()
             )
+        for alerts in self._alerts:
+            found.extend(
+                Candidate(
+                    key=a.key,
+                    notice=a.notice,
+                    why=a.why,
+                    fallback=a.fallback,
+                    trust=a.trust,
+                    expires_at=a.expires_at,
+                )
+                for a in await alerts.alerts(now)
+            )
         commitments = await self._memory.commitments() if self._memory else []
         found.extend(self._heads_up(commitments, now))
-        digest = self._digest(commitments, now)
+        digest = await self._digest(commitments, now)
         if digest is not None:
             found.append(digest)
         return [c for c in found if c.key not in self.ledger.handled]
@@ -336,7 +378,7 @@ class InitiativeEngine:
             )
         return found
 
-    def _digest(self, commitments: list[Commitment], now: datetime) -> Candidate | None:
+    async def _digest(self, commitments: list[Commitment], now: datetime) -> Candidate | None:
         slots = sorted(self._settings.digests)
         for index, slot in reversed(list(enumerate(slots))):
             start = datetime.combine(now.date(), slot, self._zone)
@@ -348,10 +390,15 @@ class InitiativeEngine:
             end = start + self._settings.digest_window
             last_slot = index == len(slots) - 1
             lines = digest_lines(commitments, now.date(), last_slot, self.ledger.last_mention)
-            body = "\n".join(line for _, line in lines)
+            extra = [
+                line
+                for source in self._digest_sources
+                for line in await source.digest(now, index == 0, last_slot)
+            ]
+            body = "\n".join([*(line for _, line in lines), *extra])
             return Candidate(
                 key=key,
-                notice=f"Points à signaler dans ce résumé :\n{body}" if lines else "",
+                notice=f"Points à signaler dans ce résumé :\n{body}" if body else "",
                 why=f"c'est le point de {slot:%H:%M}",
                 fallback=f"Point de {slot:%H:%M} :\n" + _IDS.sub("", body),
                 trust=min(
