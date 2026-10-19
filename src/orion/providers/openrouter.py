@@ -30,6 +30,40 @@ log = structlog.get_logger(__name__)
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
 
+EXPLICIT_CACHE = ("anthropic/",)
+"""Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
+
+
+def cache_marked(messages: list[Message]) -> list[Message]:
+    """Anthropic caches only up to `cache_control` breakpoints: one after the system message
+    (constitution and tools) and one on the last message, so each step reads everything
+    before it from the cache. The markers exist only on the wire: the journaled messages, and
+    so the next request's prefix, stay as they were sent (prompt-cache contract)."""
+    last = max(
+        (
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), str) and m.get("content")
+        ),
+        default=None,
+    )
+    marked: list[Message] = []
+    for i, message in enumerate(messages):
+        content = message.get("content")
+        if (i == 0 or i == last) and isinstance(content, str) and content:
+            message = cast(
+                Message,
+                {
+                    **message,
+                    "content": [
+                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                    ],
+                },
+            )
+        marked.append(message)
+    return marked
+
+
 class OpenRouterProvider:
     name = "openrouter"
 
@@ -114,7 +148,9 @@ class OpenRouterProvider:
     def _body(self, request: ModelRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": request.model,
-            "messages": request.messages,
+            "messages": cache_marked(request.messages)
+            if request.model.startswith(EXPLICIT_CACHE)
+            else request.messages,
             "usage": {"include": True},
         }
         if request.tools:

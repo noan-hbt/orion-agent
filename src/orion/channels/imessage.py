@@ -61,6 +61,66 @@ def normalize_number(number: str) -> str:
     return re.sub(r"[^\d+]", "", number)
 
 
+_TAPBACK_LABELS = {
+    "j\u2019aime": "like",
+    "je n\u2019aime pas": "dislike",
+    "j\u2019adore": "love",
+    "haha": "laugh",
+    "!!": "emphasize",
+    "?": "question",
+}
+_TAPBACK_VERBS = {
+    "a aimé": "like",
+    "n\u2019a pas aimé": "dislike",
+    "a adoré": "love",
+    "a ri de": "laugh",
+    "a mis en évidence": "emphasize",
+    "a posé une question sur": "question",
+    "liked": "like",
+    "disliked": "dislike",
+    "loved": "love",
+    "laughed at": "laugh",
+    "emphasized": "emphasize",
+    "questioned": "question",
+}
+_QUOTED = r"[«“\"]\s*(?P<quoted>.*?)\s*[»”\"]\.?"
+_TAPBACK_PATTERNS = (
+    re.compile(r"a ajouté un\s*«\s*(?P<label>[^»]+?)\s*»\s*à\s*" + _QUOTED, re.S | re.I),
+    re.compile(r"(?:a réagi avec|reacted)\s*(?P<emoji>\S+)\s*(?:à|to)\s*" + _QUOTED, re.S | re.I),
+    re.compile(r"(?P<verb>" + "|".join(_TAPBACK_VERBS) + r")\s*" + _QUOTED, re.S | re.I),
+)
+
+
+@dataclass(frozen=True)
+class TextTapback:
+    reaction: str
+    quoted: str
+    emoji: str | None = None
+
+
+def _plain(text: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", text).replace("'", "\u2019").split())
+
+
+def text_tapback(text: str) -> TextTapback | None:
+    """A tapback that arrived as text ("A ajouté un « J'aime » à « … »"), as iMessage sends
+    them to a line that is not an Apple device. None for an ordinary message."""
+    plain = _plain(text)
+    for pattern in _TAPBACK_PATTERNS:
+        found = pattern.fullmatch(plain)
+        if found is None:
+            continue
+        groups = found.groupdict()
+        quoted = groups["quoted"]
+        if groups.get("label") is not None:
+            reaction = _TAPBACK_LABELS.get(groups["label"].lower())
+            return TextTapback(reaction, quoted) if reaction else None
+        if groups.get("emoji") is not None:
+            return TextTapback("custom", quoted, groups["emoji"])
+        return TextTapback(_TAPBACK_VERBS[groups["verb"].lower()], quoted)
+    return None
+
+
 def answer_word(text: str) -> bool | None:
     """'oui' → True, 'non' → False, anything else → None (not an answer)."""
     word = unicodedata.normalize("NFKC", text).strip().lower().rstrip(" .!")
@@ -144,6 +204,7 @@ class ChannelState:
                 )
         elif event.kind == FEEDBACK_REACTION:
             self.reactions.add(str(payload.get("reaction_id")))
+            self.handled.add(str(payload.get("reaction_id")))  # a tapback sent as text
         elif event.kind in ("message.received", APPROVAL_DECIDED):
             self.handled.update(str(ref) for ref in payload.get("refs", []))
 
@@ -278,9 +339,36 @@ class IMessageChannel:
             log.info("imessage.third_party_ignored", conversation=message.conversation_id)
             return
         inbound = Inbound(message.id, message.conversation_id, text)
+        tapback = text_tapback(text)
+        if tapback is not None:
+            await self._text_tapback(inbound, tapback)
+            return
         if self._approvals and self._resolve_by_word(inbound):
             return
         self._inbox.submit(self._inbound(inbound))
+
+    async def _text_tapback(self, inbound: Inbound, tapback: TextTapback) -> None:
+        """Treated like a real tapback on the message it quotes: an approval answer or a
+        signal for adaptation, never a turn of its own."""
+        quoted = _plain(tapback.quoted).rstrip(".…").strip()  # NFKC: "…" is "..."
+        target: str | None = None
+        for sent in await self._client.recent(
+            inbound.conversation_id, self._settings.identity_id, limit=30
+        ):
+            content = _plain(sent.content or "")
+            if sent.direction == "outbound" and quoted and content.startswith(quoted):
+                target = sent.id
+                break
+        log.info("imessage.text_tapback", reaction=tapback.reaction, matched=target is not None)
+        if target is not None and target in self._approvals:
+            self._resolve_by_reaction(target, tapback.reaction)
+        await self._feedback(
+            target or "unknown",
+            inbound.message_id,
+            tapback.reaction,
+            tapback.emoji,
+            inbound.conversation_id,
+        )
 
     async def receive_reaction(self, reaction: ReactionEvent) -> None:
         if reaction.direction != "inbound":

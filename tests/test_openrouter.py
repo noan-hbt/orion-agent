@@ -140,3 +140,25 @@ async def test_routing_prefers_the_fastest_host_when_asked() -> None:
         await provider.aclose()
     assert seen[0]["provider"] == {"sort": "throughput"}
     assert "provider" not in seen[1]
+
+
+async def test_anthropic_models_get_cache_breakpoints_on_the_wire_only() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=OK_BODY)
+
+    claude = request().model_copy(update={"model": "anthropic/claude-haiku-5.5"})
+    claude.messages.append({"role": "assistant", "content": "", "tool_calls": []})
+    provider = provider_with(handler)
+    await provider.complete(claude)
+    await provider.complete(request())
+    await provider.aclose()
+    system, user, assistant = seen[0]["messages"]
+    breakpoint_ = {"type": "ephemeral"}
+    assert system["content"] == [{"type": "text", "text": "s", "cache_control": breakpoint_}]
+    assert user["content"] == [{"type": "text", "text": "u", "cache_control": breakpoint_}]
+    assert assistant["content"] == ""  # nothing to mark: the last message with text was marked
+    assert claude.messages[0]["content"] == "s"  # what the core journals is untouched
+    assert seen[1]["messages"][0]["content"] == "s"  # other models cache by themselves

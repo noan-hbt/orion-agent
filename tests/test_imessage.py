@@ -261,3 +261,41 @@ async def test_the_turn_does_not_wait_for_the_read_receipt(channel: IMessageChan
     item = InboxItem("imessage", ("m1",), "salut", context=CONVERSATION)
     async with asyncio.timeout(1), channel.working(item):
         pass  # entered and left at once: the receipt goes out beside the turn
+
+
+async def test_a_tapback_sent_as_text_is_feedback_not_a_turn(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider, journal: SqliteJournal
+) -> None:
+    from orion.adaptation.signals import FEEDBACK_REACTION
+
+    await _bind_owner(channel, fake, provider)
+    fake.inbound("A ajouté un «\xa0Je n\u2019aime pas\xa0» à «\xa0yo\xa0».")
+    await channel.poll_once()
+    await asyncio.sleep(0.1)
+    assert len(provider.requests) == 1  # no turn for a tapback
+    [feedback] = [e for e in await journal.read() if e.kind == FEEDBACK_REACTION]
+    assert feedback.payload["reaction"] == "dislike"
+    assert feedback.payload["remote_id"] == fake.sent[0]["id"]
+    assert channel.state.unhandled() == []  # and a restart does not replay it as a message
+
+
+async def test_a_text_tapback_answers_an_approval(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
+) -> None:
+    await _bind_owner(channel, fake, provider)
+    pending = asyncio.create_task(channel.approve(PROPOSAL))
+    await until(lambda: len(fake.sent) == 2)
+    question = fake.texts()[1]
+    fake.inbound(f"A ajouté un « J\u2019aime » à « {question[:40]}… »")
+    await channel.poll_once()
+    assert (await pending).granted is True
+
+
+def test_text_tapbacks_are_recognized_and_ordinary_texts_are_not() -> None:
+    from orion.channels.imessage import text_tapback
+
+    assert text_tapback("Liked “Coucou”") is not None
+    found = text_tapback("A réagi avec 😂 à « Salut »")
+    assert found is not None and found.emoji == "😂"
+    assert text_tapback("Rappelle-moi « ça » demain") is None
+    assert text_tapback("J'aime bien ton idée") is None
