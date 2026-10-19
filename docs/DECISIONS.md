@@ -170,3 +170,71 @@ C'est un axe stratégique, pas une option.
   une notion de confiance/réputation entre instances.
 - Un engagement pris au nom de l'utilisateur (rendez-vous, accord, dépense) suit les mêmes planchers
   d'approbation que toute action à effet externe (D3).
+
+## D9 — iMessage sans Mac (révise P1 de l'étape 3)
+
+*19/10/2026 · acceptée*
+
+**Contexte.** L'utilisateur n'a pas de Mac. Les options « `imsg` sur ton Mac » (lire ton historique,
+écrire en ton nom) sont donc indisponibles.
+
+**Décision.** Phase 1 : Orion a **sa propre ligne iMessage gérée par un fournisseur** (Inkbox pour
+démarrer gratuitement avec son SDK Python ; Sendblue ou Linq si besoin de groupes ou de FaceTime).
+Tu écris en premier une fois, ensuite Orion peut être proactif. Telegram ou SMS en secours si la
+ligne est perdue.
+
+**Conséquences.**
+- Orion ne lit pas ton historique iMessage existant et n'écrit pas « en ton nom » ; il écrit aux
+  autres en tant qu'assistant, depuis son numéro, en se présentant.
+- Pistes à évaluer plus tard, sans Mac : (a) analyser périodiquement une **sauvegarde locale de
+  l'iPhone** (elle contient la base des messages ; lisible sous Windows/Linux, pas en temps réel) ;
+  (b) automatisations **Raccourcis iOS** déclenchées à la réception d'un message, qui transmettent
+  à Orion (capacités à vérifier) ; (c) un Mac mini dédié si le besoin devient fort.
+
+## D10 — Voix (P2)
+
+*19/10/2026 · acceptée*
+
+Twilio + passerelle **Pipecat** (Python) + modèle vocal temps réel interchangeable (GPT-Live 1 en
+premier, Gemini 3.8 Live en comparaison, chaîne STT→LLM→TTS en repli). Numéro américain pour
+développer, puis numéro géographique français (pas de 06/07). Le modèle vocal est une façade : il
+consulte Orion par des outils à deux vitesses. Niveaux d'identité L0–L3 appliqués par le code ;
+aucune action irréversible à la voix seule.
+
+## D11 — Mémoire (P3)
+
+*19/10/2026 · acceptée*
+
+Journal d'épisodes **immuable** comme source de vérité ; faits **bi-temporels** (validité dans le
+monde / connaissance par Orion) avec **provenance** et niveau de confiance ; Markdown lisible pour
+le profil, les personnes et les projets ; SQLite (plein texte + vecteurs + graphe) comme index
+reconstructible ; **registre des engagements** (je dois / on me doit) de premier rang ; oubli par
+source vérifiable ; évaluation maison dès le départ.
+
+## D12 — Proactivité (P4)
+
+*19/10/2026 · acceptée*
+
+Moteur d'initiative dédié, distinct des conversations : règles déterministes → tri par petit
+modèle → arbitre d'utilité (coût du retard vs coût d'interruption, budget, réglages). Silence par
+défaut, 3 résumés par jour, échelle jusqu'à l'appel, « pourquoi maintenant » sur chaque message,
+travail en arrière-plan **en lecture seule par construction**, autonomie par type d'action promue
+uniquement avec l'accord de l'utilisateur.
+
+## D13 — Collaboration entre instances (P5)
+
+*19/10/2026 · acceptée*
+
+A2A v1.0 comme protocole ; chaque instance est un principal cryptographique ; délégation par jetons
+qui ne font que restreindre (Biscuit). Entre personnes : présentation humaine ou par un tiers de
+confiance, relations comme objets de premier rang, négociateur isolé avec enveloppe de divulgation,
+secrets sous forme de prédicats, propositions typées, engagements co-signés, reçus mutuels. Premier
+cas d'usage : organiser un rendez-vous entre deux personnes.
+
+## D14 — Sécurité séparée de l'agent (P6)
+
+*19/10/2026 · acceptée*
+
+Un gardien distinct de l'agent (pare-feu sur les contenus entrants, moniteur d'actions, moteur de
+politiques) que l'agent ne peut ni modifier ni convaincre. Jamais données privées + contenu non
+fiable + canal de sortie dans un même processus.
