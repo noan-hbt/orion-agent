@@ -12,8 +12,9 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -30,12 +31,12 @@ from orion.cognition.loop import (
 )
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, render_user_message
-from orion.context.threads import MESSAGE_KIND, REBASED_KIND, ThreadProjection
+from orion.context.threads import MESSAGE_KIND, REBASED_KIND, Thread, ThreadProjection
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.guardian.policy import Guardian
+from orion.guardian.policy import TRUSTED_FLOOR, Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
@@ -61,6 +62,22 @@ class TurnResult:
     owner_text: str = ""
     origin_event_id: str = ""
     day: date | None = None
+    steps: int = 0
+    tool_seconds: float = 0.0
+    interjections: int = 0
+    """Owner messages that arrived during the turn and were read before it ended."""
+
+
+@dataclass(frozen=True)
+class Interjection:
+    """An owner message that arrived while a turn was running."""
+
+    text: str
+    channel: str
+    refs: tuple[str, ...] = ()
+
+
+Interjections = Callable[[], Awaitable[list[Interjection]]]
 
 
 class Orion:
@@ -103,9 +120,12 @@ class Orion:
         channel: str,
         now: datetime | None = None,
         refs: list[str] | None = None,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
-        `refs` are the channel's own message ids, recorded so a restart knows they were handled."""
+        `refs` are the channel's own message ids, recorded so a restart knows they were handled.
+        `interjections` is asked between steps for messages the owner sent meanwhile: they join
+        the turn, so Orion can change course instead of finishing a plan the owner revoked."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
@@ -119,6 +139,7 @@ class Orion:
             body=text,
             channel=channel,
             now=now,
+            interjections=interjections,
         )
 
     async def handle_initiative(
@@ -163,6 +184,7 @@ class Orion:
         now: datetime | None,
         memory_query: str | None = None,
         owner_text: str | None = None,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -176,6 +198,7 @@ class Orion:
                 now,
                 memory_query if memory_query is not None else body,
                 owner_text if owner_text is not None else body,
+                interjections,
             )
 
     async def _turn_locked(
@@ -190,6 +213,7 @@ class Orion:
         now: datetime | None,
         memory_query: str,
         owner_text: str,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -204,13 +228,23 @@ class Orion:
         thread = self.threads.get(thread_id)
 
         events: list[NewEvent] = [received]
-        new_base = self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
+        stale = self._untrusted_and_idle(thread, when)
+        new_base = (
+            len(thread.messages)
+            if stale
+            else self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
+        )
         window = thread.messages[new_base if new_base is not None else thread.base :]
         user_message = render_user_message(
             body, when, channel, await self._memory_blocks(memory_query, window)
         )
         if new_base is not None:
-            log.info("thread.rebase", thread=thread_id, base=new_base)
+            log.info(
+                "thread.rebase",
+                thread=thread_id,
+                base=new_base,
+                reason="untrusted content, conversation idle" if stale else "window budget",
+            )
             events.append(
                 self._event(
                     REBASED_KIND,
@@ -222,7 +256,13 @@ class Orion:
             )
         events.append(
             self._message_event(
-                thread_id, user_message, trust, correlation_id, received.id, provenance=provenance
+                thread_id,
+                user_message,
+                trust,
+                correlation_id,
+                received.id,
+                provenance=provenance,
+                at=when,
             )
         )
         await self._journal.append(events)
@@ -244,6 +284,55 @@ class Orion:
             ),
         )
 
+        heard: list[str] = []
+
+        async def steer() -> tuple[Message, Trust] | None:
+            if interjections is None:
+                return None
+            items = await interjections()
+            if not items:
+                return None
+            text = "\n".join(item.text for item in items)
+            channel_now = items[0].channel
+            provenance_now = Provenance(source=f"{channel_now}:{thread_id}", actor="owner:main")
+            refs = [ref for item in items for ref in item.refs]
+            payload_now: dict[str, object] = {
+                "thread_id": thread_id,
+                "channel": channel_now,
+                "text": text,
+                "during_turn": True,
+            }
+            if refs:
+                payload_now["refs"] = refs
+            event = self._event(
+                "message.received",
+                payload_now,
+                Trust.OWNER,
+                correlation_id,
+                received.id,
+                provenance=provenance_now,
+            )
+            message = render_user_message(
+                text, now or datetime.now(ZoneInfo(self._agent.timezone)), channel_now
+            )
+            await self._journal.append(
+                [
+                    event,
+                    self._message_event(
+                        thread_id,
+                        message,
+                        Trust.OWNER,
+                        correlation_id,
+                        event.id,
+                        provenance=provenance_now,
+                        at=when,
+                    ),
+                ]
+            )
+            heard.append(text)
+            log.info("turn.interjection", thread=thread_id, messages=len(items))
+            return message, Trust.OWNER
+
         result: TurnResult | None = None
         async for event in run_agent(
             self._provider,
@@ -252,13 +341,14 @@ class Orion:
             messages,
             settings,
             context_trust=thread.window_trust(),
+            steer=steer,
         ):
             match event:
                 case MessageEmitted(message=message, trust=trust):
                     await self._journal.append(
                         [
                             self._message_event(
-                                thread_id, message, trust, correlation_id, received.id
+                                thread_id, message, trust, correlation_id, received.id, at=when
                             )
                         ]
                     )
@@ -299,7 +389,14 @@ class Orion:
                             )
                         ]
                     )
-                case Finished(reason=reason, text=final_text, usage=usage, detail=detail):
+                case Finished(
+                    reason=reason,
+                    text=final_text,
+                    usage=usage,
+                    detail=detail,
+                    steps=steps,
+                    tool_seconds=tool_seconds,
+                ):
                     await self._journal.append(
                         [
                             self._event(
@@ -323,9 +420,12 @@ class Orion:
                         correlation_id,
                         detail,
                         thread_id=thread_id,
-                        owner_text=owner_text,
+                        owner_text="\n".join([owner_text, *heard]) if owner_text else "",
                         origin_event_id=received.id,
                         day=when.date(),
+                        steps=steps,
+                        tool_seconds=tool_seconds,
+                        interjections=len(heard),
                     )
 
         await self._projections.catch_up()
@@ -371,6 +471,19 @@ class Orion:
             turn.owner_text, turn.text, origin, turn.day or date.today(), recorded
         )
 
+    def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:
+        """Untrusted content stays in the window, and everything written after it is tainted
+        too, until the window starts afresh. Do it after a pause in the conversation: the
+        content can no longer steer anything, and memory carries what mattered (D26)."""
+        idle = self._agent.untrusted_idle_minutes
+        return bool(
+            idle
+            and thread.window()
+            and thread.window_trust() < TRUSTED_FLOOR
+            and thread.last_at is not None
+            and when - thread.last_at >= timedelta(minutes=idle)
+        )
+
     async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
         """Memory to attach to this message: core memory and the playbook when a window starts,
         then playbook changes and relevant facts not already visible in the window. Appended to
@@ -395,7 +508,9 @@ class Orion:
         delta = playbook_delta(rules, settings, shown)
         if delta:
             blocks.append(delta)
-        relevant = [f for f in await store.search(text, self._recall_limit) if f.id not in shown]
+        relevant = [
+            f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
+        ]
         recalled = recall_block(relevant)
         if recalled:
             blocks.append(recalled)
@@ -427,10 +542,14 @@ class Orion:
         correlation_id: str,
         causation_id: str,
         provenance: Provenance | None = None,
+        at: datetime | None = None,
     ) -> NewEvent:
+        payload: dict[str, object] = {"thread_id": thread_id, "message": message}
+        if at is not None:
+            payload["at"] = at.isoformat()
         return self._event(
             MESSAGE_KIND,
-            {"thread_id": thread_id, "message": message},
+            payload,
             trust,
             correlation_id,
             causation_id,

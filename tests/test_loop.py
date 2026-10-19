@@ -20,7 +20,7 @@ from orion.guardian.policy import Guardian
 from orion.providers.base import Message
 from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
-from tests.fakes import ScriptedProvider, call_tools, fail, reply
+from tests.fakes import ScriptedProvider, call_tools, echo_tool, fail, reply
 
 SETTINGS = LoopSettings(model="fake/model", session_id="s", thread_id="t", correlation_id="c")
 
@@ -39,7 +39,7 @@ async def collect(
         e
         async for e in run_agent(
             provider,
-            registry or ToolRegistry(builtin_tools()),
+            registry or ToolRegistry([*builtin_tools(), echo_tool()]),
             Guardian(),
             messages,
             settings,
@@ -64,14 +64,14 @@ async def test_plain_answer_completes_in_one_call() -> None:
 
 
 async def test_tool_round_trip_appends_results_and_continues() -> None:
-    provider = ScriptedProvider(call_tools(("calculate", {"expression": "6*7"})), reply("42."))
+    provider = ScriptedProvider(call_tools(("echo", {"text": "42"})), reply("42."))
     events, messages = await collect(provider)
     assert finished(events).text == "42."
     tool_messages = [m for m in messages if m["role"] == "tool"]
     assert tool_messages[0]["content"] == "42"
     # The second request contains the assistant tool call followed by its result.
     second = provider.requests[1].messages
-    assert second[-2]["tool_calls"][0]["function"]["name"] == "calculate"
+    assert second[-2]["tool_calls"][0]["function"]["name"] == "echo"
     assert second[-1]["role"] == "tool"
     assert finished(events).usage.prompt_tokens == 200
 
@@ -110,7 +110,7 @@ async def test_parallel_safe_tools_keep_call_order() -> None:
 
 async def test_unknown_tool_and_bad_arguments_are_reported_to_the_model() -> None:
     provider = ScriptedProvider(
-        call_tools(("nope", {}), ("calculate", {"wrong": 1})),
+        call_tools(("nope", {}), ("echo", {"wrong": 1})),
         reply("désolé"),
     )
     events, _ = await collect(provider)
@@ -132,9 +132,7 @@ async def test_repeated_identical_calls_stall_the_loop() -> None:
 
 
 async def test_max_steps_is_enforced() -> None:
-    provider = ScriptedProvider(
-        *[call_tools(("calculate", {"expression": str(i)})) for i in range(5)]
-    )
+    provider = ScriptedProvider(*[call_tools(("echo", {"text": str(i)})) for i in range(5)])
     settings = LoopSettings(
         model="m", session_id="s", thread_id="t", correlation_id="c", budget=Budget(max_steps=3)
     )

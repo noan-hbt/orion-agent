@@ -320,7 +320,7 @@ class VoiceChannel:
         for c in self.state.ended.values():
             if c.purpose != "owner" or c.ok or c.call_id not in self.state.requested:
                 continue
-            why = c.status + (f", {c.hangup}" if c.hangup else "")
+            why = c.status + (f", {c.hangup}" if c.hangup and c.hangup != c.status else "")
             about = self.state.reasons.get(c.call_id, "")
             reports.append(
                 Report(
@@ -328,7 +328,8 @@ class VoiceChannel:
                     notice=f"L'appel que tu viens de lui passer n'a pas abouti ({why}). Il "
                     f"portait sur : {about}\nDis-le-lui et donne l'essentiel par message.",
                     why="mon appel n'a pas abouti",
-                    fallback=f"Je t'ai appelé, sans succès ({why}). C'était pour : {about}",
+                    fallback=f"Je t'ai appelé mais l'appel n'est pas passé (Inkbox : {why}). "
+                    f"C'était pour : {about}",
                     trust=Trust.SYSTEM,
                 )
             )

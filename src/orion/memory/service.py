@@ -8,6 +8,7 @@ then the memory projection is rebuilt and checked against a fresh replay of the 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel
@@ -21,6 +22,7 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    PERSON_ALIASED,
     RULE_LEARNED,
     RULE_RETIRED,
     SETTING_CHANGED,
@@ -30,6 +32,7 @@ from orion.memory.model import (
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    PersonAliased,
     RuleBasis,
     RuleLearned,
     RuleRetired,
@@ -37,7 +40,10 @@ from orion.memory.model import (
     SettingChanged,
     SettingKey,
 )
-from orion.memory.store import MemoryStore
+from orion.memory.store import Fact, MemoryStore
+
+if TYPE_CHECKING:
+    from orion.memory.semantic import SemanticIndex
 
 log = structlog.get_logger(__name__)
 
@@ -62,10 +68,19 @@ class ForgetReport:
 
 
 class MemoryService:
-    def __init__(self, journal: EventStore, store: MemoryStore) -> None:
+    def __init__(
+        self, journal: EventStore, store: MemoryStore, semantic: SemanticIndex | None = None
+    ) -> None:
         self._journal = journal
         self.store = store
+        self.semantic = semantic
         self._runner = ProjectionRunner(journal, [store])
+
+    async def search(self, text: str, limit: int = 8, include_past: bool = False) -> list[Fact]:
+        """By meaning and by words when semantic search is set up, by words otherwise."""
+        if self.semantic is not None:
+            return await self.semantic.search(text, limit, include_past)
+        return await self.store.search(text, limit, include_past)
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -91,6 +106,11 @@ class MemoryService:
         )
         await self._write(FACT_ASSERTED, payload, origin)
         return fact_id
+
+    async def alias_person(self, alias: str, canonical: str, reason: str, origin: Origin) -> None:
+        await self._write(
+            PERSON_ALIASED, PersonAliased(alias=alias, canonical=canonical, reason=reason), origin
+        )
 
     async def invalidate(
         self, fact_id: str, reason: str, origin: Origin, valid_to: str | None = None
@@ -200,9 +220,10 @@ class MemoryService:
                 include_retired=True
             )
             same_settings = await shadow.setting_changes() == await self.store.setting_changes()
+            same_aliases = await shadow.aliases() == await self.store.aliases()
         finally:
             await shadow.close()
-        return same_facts and same_commitments and same_rules and same_settings
+        return same_facts and same_commitments and same_rules and same_settings and same_aliases
 
     async def _all_events(self) -> list[Event]:
         events: list[Event] = []

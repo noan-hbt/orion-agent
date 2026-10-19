@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    PERSON_ALIASED,
     RULE_LEARNED,
     RULE_RETIRED,
     SETTING_CHANGED,
@@ -31,6 +33,7 @@ from orion.memory.model import (
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    PersonAliased,
     RuleBasis,
     RuleLearned,
     RuleRetired,
@@ -87,6 +90,15 @@ CREATE TABLE IF NOT EXISTS rules (
     event_id        TEXT NOT NULL,
     source          TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS aliases (
+    alias_key   TEXT PRIMARY KEY,
+    alias       TEXT NOT NULL,
+    canonical   TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    trust       INTEGER NOT NULL,
+    event_id    TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS setting_changes (
     id          TEXT PRIMARY KEY,
     key         TEXT NOT NULL,
@@ -100,6 +112,12 @@ CREATE TABLE IF NOT EXISTS setting_changes (
 """
 
 _WORD = re.compile(r"\w{3,}", re.UNICODE)
+
+
+def name_key(name: str) -> str:
+    """How names are compared: case, accents and spacing do not matter."""
+    decomposed = unicodedata.normalize("NFKD", name.casefold())
+    return " ".join("".join(c for c in decomposed if not unicodedata.combining(c)).split())
 
 
 @dataclass(frozen=True)
@@ -280,6 +298,14 @@ class MemoryStore:
     async def rule(self, rule_id: str) -> Rule | None:
         return await self._sql.run(self._rule_sync, rule_id)
 
+    async def aliases(self) -> dict[str, str]:
+        """alias key → canonical name."""
+        return await self._sql.run(self._aliases_sync)
+
+    def _aliases_sync(self) -> dict[str, str]:
+        rows = self._sql.db.execute("SELECT alias_key, canonical FROM aliases ORDER BY seq")
+        return {str(r[0]): str(r[1]) for r in rows}
+
     async def setting_changes(self) -> list[SettingChange]:
         """Every setting change, oldest first. The current value of a key is its last change."""
         return await self._sql.run(self._settings_sync)
@@ -300,6 +326,7 @@ class MemoryStore:
             db.execute("DELETE FROM commitments")
             db.execute("DELETE FROM rules")
             db.execute("DELETE FROM setting_changes")
+            db.execute("DELETE FROM aliases")
             db.execute("DELETE FROM meta")
 
     def _apply_sync(self, event: Event) -> None:
@@ -349,6 +376,21 @@ class MemoryStore:
         elif event.kind == RULE_RETIRED:
             r = RuleRetired.model_validate(event.payload)
             self._retire_rule(db, r.rule_id, r.reason, event.seq)
+        elif event.kind == PERSON_ALIASED:
+            a = PersonAliased.model_validate(event.payload)
+            db.execute(
+                "INSERT OR REPLACE INTO aliases (alias_key, alias, canonical, reason, seq, trust, "
+                "event_id) VALUES (?,?,?,?,?,?,?)",
+                (
+                    name_key(a.alias),
+                    a.alias,
+                    a.canonical,
+                    a.reason,
+                    event.seq,
+                    int(event.trust),
+                    event.id,
+                ),
+            )
         elif event.kind == SETTING_CHANGED:
             c = SettingChanged.model_validate(event.payload)
             db.execute(

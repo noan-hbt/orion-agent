@@ -18,6 +18,7 @@ COMMITMENT_CLOSED = "commitment.closed"
 RULE_LEARNED = "playbook.rule.learned"
 RULE_RETIRED = "playbook.rule.retired"
 SETTING_CHANGED = "settings.changed"
+PERSON_ALIASED = "person.aliased"
 
 MEMORY_KINDS = frozenset(
     {
@@ -28,6 +29,7 @@ MEMORY_KINDS = frozenset(
         RULE_LEARNED,
         RULE_RETIRED,
         SETTING_CHANGED,
+        PERSON_ALIASED,
     }
 )
 
@@ -131,4 +133,15 @@ class SettingChanged(BaseModel):
     change_id: str
     key: SettingKey
     value: str | int | list[str]
+    reason: str = Field(max_length=300)
+
+
+class PersonAliased(BaseModel):
+    """Two names for the same person ("Paul" and "Paul Martin"): facts about either are about
+    `canonical`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str = Field(min_length=1, max_length=120)
+    canonical: str = Field(min_length=1, max_length=120)
     reason: str = Field(max_length=300)

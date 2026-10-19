@@ -121,7 +121,7 @@ class MemoryExtractor:
         today: date,
         recorded_this_turn: list[Fact],
     ) -> ExtractionReport:
-        related = await self._memory.store.search(f"{owner_text} {reply_text}", limit=12)
+        related = await self._memory.search(f"{owner_text} {reply_text}", limit=12)
         known = {f.id: f for f in [*related, *recorded_this_turn]}
         commitments = await self._memory.store.commitments()
         user = "\n".join(

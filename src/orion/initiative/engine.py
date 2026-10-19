@@ -27,6 +27,7 @@ import structlog
 
 from orion.cognition.loop import StopReason
 from orion.cognition.verifier import Verifier
+from orion.context.recent import recent_lines
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -44,6 +45,7 @@ SUPPRESSED = "initiative.suppressed"
 _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
+VERIFIER_CONTEXT_MESSAGES = 8
 
 
 class Notifier(Protocol):
@@ -72,6 +74,40 @@ class Caller(Protocol):
 class ReportSource(Protocol):
     async def reports(self) -> list[Report]:
         """Every finished outcome; the engine's ledger skips those already reported."""
+        ...
+
+
+@dataclass(frozen=True)
+class Alert:
+    """Something worth an unrequested message (an event about to start…). Unlike a report, it
+    is subject to quiet hours and the daily budget, and it is dropped once `expires_at` is
+    past."""
+
+    key: str
+    notice: str
+    why: str
+    fallback: str
+    trust: Trust = Trust.SYSTEM
+    expires_at: datetime | None = None
+
+
+class AlertSource(Protocol):
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """Alerts due now; the engine's ledger skips those already handled."""
+        ...
+
+
+@dataclass(frozen=True)
+class DigestLine:
+    text: str
+    trust: Trust = Trust.SYSTEM
+
+
+class DigestSource(Protocol):
+    async def digest(
+        self, now: datetime, since: datetime, first_slot: bool, last_slot: bool
+    ) -> list[DigestLine]:
+        """Lines for the digest due now. `since` is when the previous digest was due."""
         ...
 
 
@@ -232,8 +268,12 @@ class InitiativeEngine:
         verifier: Verifier | None = None,
         reports: Sequence[ReportSource] = (),
         caller: Caller | None = None,
+        alerts: Sequence[AlertSource] = (),
+        digests: Sequence[DigestSource] = (),
     ) -> None:
         self._caller = caller
+        self._alerts = list(alerts)
+        self._digest_sources = list(digests)
         self._orion = orion
         self._reports = list(reports)
         self._verifier = verifier
@@ -281,9 +321,21 @@ class InitiativeEngine:
                 )
                 for r in await source.reports()
             )
+        for alerts in self._alerts:
+            found.extend(
+                Candidate(
+                    key=a.key,
+                    notice=a.notice,
+                    why=a.why,
+                    fallback=a.fallback,
+                    trust=a.trust,
+                    expires_at=a.expires_at,
+                )
+                for a in await alerts.alerts(now)
+            )
         commitments = await self._memory.commitments() if self._memory else []
         found.extend(self._heads_up(commitments, now))
-        digest = self._digest(commitments, now)
+        digest = await self._digest(commitments, now)
         if digest is not None:
             found.append(digest)
         return [c for c in found if c.key not in self.ledger.handled]
@@ -334,7 +386,7 @@ class InitiativeEngine:
             )
         return found
 
-    def _digest(self, commitments: list[Commitment], now: datetime) -> Candidate | None:
+    async def _digest(self, commitments: list[Commitment], now: datetime) -> Candidate | None:
         slots = sorted(self._settings.digests)
         for index, slot in reversed(list(enumerate(slots))):
             start = datetime.combine(now.date(), slot, self._zone)
@@ -346,14 +398,27 @@ class InitiativeEngine:
             end = start + self._settings.digest_window
             last_slot = index == len(slots) - 1
             lines = digest_lines(commitments, now.date(), last_slot, self.ledger.last_mention)
-            body = "\n".join(line for _, line in lines)
+            previous = (
+                datetime.combine(now.date(), slots[index - 1], self._zone)
+                if index
+                else datetime.combine(now.date() - timedelta(days=1), slots[-1], self._zone)
+            )
+            extra = [
+                line
+                for source in self._digest_sources
+                for line in await source.digest(now, previous, index == 0, last_slot)
+            ]
+            body = "\n".join([*(line for _, line in lines), *(e.text for e in extra)])
             return Candidate(
                 key=key,
-                notice=f"Points à signaler dans ce résumé :\n{body}" if lines else "",
+                notice=f"Points à signaler dans ce résumé :\n{body}" if body else "",
                 why=f"c'est le point de {slot:%H:%M}",
                 fallback=f"Point de {slot:%H:%M} :\n" + _IDS.sub("", body),
                 trust=min(
-                    (c.trust for c in commitments if c.id in {i for i, _ in lines}),
+                    [
+                        *(c.trust for c in commitments if c.id in {i for i, _ in lines}),
+                        *(e.trust for e in extra),
+                    ],
                     default=Trust.SYSTEM,
                 ),
                 mentions=tuple(i for i, _ in lines),
@@ -397,7 +462,7 @@ class InitiativeEngine:
         correlation_id = new_id()
         try:
             await self._caller.call_owner(
-                f"Rappel qu'il t'a demandé de lui faire par téléphone : {candidate.timer.text}",
+                f"Rappel demandé par téléphone : {candidate.timer.text}",
                 correlation_id,
             )
         except Exception:
@@ -424,6 +489,7 @@ class InitiativeEngine:
         """Let Orion write the message in its own voice, then have a different model check it
         against the facts. Any failure falls back to a plain, correct text. Explicit reminders
         are always delivered, even if the model says SILENCE. Returns (text, how)."""
+        earlier = list(self._orion.threads.get(self._settings.thread_id).messages)
         try:
             turn = await self._orion.handle_initiative(
                 self._settings.thread_id, candidate.notice, candidate.why, candidate.trust, now
@@ -445,7 +511,8 @@ class InitiativeEngine:
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
-        verification = await self._verifier.check(draft, facts)
+        conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
+        verification = await self._verifier.check(draft, facts, conversation)
         if not verification.ok:
             log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
             return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]

@@ -11,8 +11,9 @@ and every tool call passes through the guardian before it runs.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -92,7 +93,16 @@ class Finished:
     text: str
     usage: Usage
     detail: str = ""
+    steps: int = 0
+    """Model calls made."""
+    tool_seconds: float = 0.0
+    """Wall time spent running tools (the rest of the turn is the model)."""
 
+
+Steer = Callable[[], Awaitable[tuple[Message, Trust] | None]]
+"""Asked between steps for a message that arrived meanwhile (e.g. the owner wrote again while
+Orion worked). The caller journals the message before returning it; the loop appends it to
+the conversation before the next model call."""
 
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Finished
 
@@ -104,16 +114,23 @@ async def run_agent(
     messages: list[Message],
     settings: LoopSettings,
     context_trust: Trust = Trust.OWNER,
+    steer: Steer | None = None,
 ) -> AsyncIterator[LoopEvent]:
     """Run until the model answers without tool calls, or a limit is reached.
 
-    `messages` is the compiled context; it is extended in place with every emitted message.
+    `messages` is the compiled context; it is extended in place with every emitted message,
+    and with every message `steer` hands over between steps.
     """
     budget = settings.budget
     usage = Usage()
     tool_calls_made = 0
     call_counts: Counter[tuple[str, str]] = Counter()
     last_text = ""
+    steps = 0
+    tool_seconds = 0.0
+
+    def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
+        return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
 
     for _step in range(budget.max_steps):
         request = ModelRequest(
@@ -127,10 +144,11 @@ async def run_agent(
             response = await provider.complete(request)
         except ProviderError as exc:
             log.exception("loop.provider_error", thread=settings.thread_id)
-            yield Finished(StopReason.PROVIDER_ERROR, last_text, usage, detail=str(exc))
+            yield finished(StopReason.PROVIDER_ERROR, last_text, str(exc))
             return
 
         usage = usage + response.usage
+        steps += 1
         yield ModelCalled(response)
         messages.append(response.message)
         # The model's output is only as trustworthy as what it read.
@@ -141,16 +159,16 @@ async def run_agent(
             reason = (
                 StopReason.TRUNCATED if response.finish_reason == "length" else StopReason.COMPLETED
             )
-            yield Finished(reason, response.text, usage)
+            yield finished(reason, response.text)
             return
 
         if usage.cost_usd > budget.max_cost_usd:
-            yield Finished(StopReason.BUDGET_EXHAUSTED, last_text, usage, detail="cost budget")
+            yield finished(StopReason.BUDGET_EXHAUSTED, last_text, "cost budget")
             return
 
         tool_calls_made += len(response.tool_calls)
         if tool_calls_made > budget.max_tool_calls:
-            yield Finished(StopReason.BUDGET_EXHAUSTED, last_text, usage, detail="tool budget")
+            yield finished(StopReason.BUDGET_EXHAUSTED, last_text, "tool budget")
             return
 
         stalled = False
@@ -159,9 +177,11 @@ async def run_agent(
             if call_counts[(call.name, call.arguments)] > budget.max_identical_calls + 1:
                 stalled = True
 
+        started = time.monotonic()
         executions = await _execute_calls(
             response.tool_calls, registry, guardian, settings, context_trust, call_counts, budget
         )
+        tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
             context_trust = min(context_trust, result.trust)
             tool_message: Message = {
@@ -174,10 +194,17 @@ async def run_agent(
             yield MessageEmitted(tool_message, result.trust)
 
         if stalled:
-            yield Finished(StopReason.STALLED, last_text, usage, detail="repeated identical calls")
+            yield finished(StopReason.STALLED, last_text, "repeated identical calls")
             return
 
-    yield Finished(StopReason.MAX_STEPS, last_text, usage)
+        if steer is not None:
+            interjection = await steer()
+            if interjection is not None:
+                message, trust = interjection
+                messages.append(message)
+                context_trust = min(context_trust, trust)
+
+    yield finished(StopReason.MAX_STEPS, last_text)
 
 
 async def _execute_calls(

@@ -20,7 +20,7 @@ from orion.guardian.policy import Guardian
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
-from tests.fakes import ScriptedProvider, call_tools, reply
+from tests.fakes import ScriptedProvider, call_tools, echo_tool, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -33,7 +33,7 @@ def make_orion(journal: SqliteJournal, provider: ScriptedProvider, window: int =
     return Orion(
         journal=journal,
         provider=provider,
-        registry=ToolRegistry(builtin_tools()),
+        registry=ToolRegistry([*builtin_tools(), echo_tool()]),
         guardian=Guardian(),
         compiler=ContextCompiler("CONSTITUTION", max_window_tokens=window),
         agent=AgentConfig(),
@@ -109,7 +109,7 @@ async def test_rebase_happens_in_one_jump_at_a_user_boundary(journal: SqliteJour
 
 
 async def test_turn_is_fully_journaled(journal: SqliteJournal) -> None:
-    provider = ScriptedProvider(call_tools(("calculate", {"expression": "2+2"})), reply("4"))
+    provider = ScriptedProvider(call_tools(("echo", {"text": "4"})), reply("4"))
     orion = make_orion(journal, provider)
     await orion.start()
     result = await orion.handle_owner_message("t1", "2+2 ?", "terminal", now=at(1))
@@ -122,3 +122,26 @@ async def test_turn_is_fully_journaled(journal: SqliteJournal) -> None:
     assert kinds[-1] == "turn.finished"
     assert {e.correlation_id for e in events} == {result.correlation_id}
     assert events[0].provenance.actor == "owner:main"
+
+
+async def test_untrusted_content_leaves_the_window_after_a_pause(journal: SqliteJournal) -> None:
+    from datetime import timedelta
+
+    from orion.core.events import Trust
+
+    provider = ScriptedProvider(reply("Paul t'a écrit."), reply("ok"), reply("ok"), reply("salut"))
+    orion = make_orion(journal, provider)
+    await orion.start()
+    await orion.handle_initiative(
+        "owner", "Mail de Paul : …", "nouveau mail", Trust.THIRD_PARTY, now=at(0)
+    )
+    await orion.handle_owner_message("owner", "merci", "imessage", now=at(30))
+    thread = orion.threads.get("owner")
+    assert thread.window_trust() is Trust.THIRD_PARTY and thread.base == 0  # still talking
+
+    await orion.handle_owner_message("owner", "re", "imessage", now=at(31) + timedelta(hours=2))
+    thread = orion.threads.get("owner")
+    assert thread.window_trust() is Trust.SYSTEM  # started afresh after the pause: clean
+    assert [m["role"] for m in thread.window()] == ["user", "assistant"]
+    rebased = [e for e in await journal.read() if e.kind == "thread.rebased"]
+    assert len(rebased) == 1

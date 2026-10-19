@@ -29,12 +29,43 @@ d'autres personnes.
   modèle pour tout message proactif, délégation des tâches longues au CLI `claude` officiel (en
   arrière-plan, résultat transmis à la fin). Le CLI comme modèle principal reste à faire (D22).
 - **Boîte de réception unifiée** : tous les canaux passent par une seule file vers ton fil
-  (D23).
+  (D23). Un message envoyé pendant qu'Orion travaille rejoint le tour en cours, entre deux
+  étapes : il peut changer de cap au lieu de finir un plan que tu as annulé.
 - **M5 v0 — la voix, par Inkbox** :
   - au téléphone, la voix d'Inkbox est tenue à jour avec un brief tiré de la mémoire d'Orion ;
   - après chaque appel, la transcription revient dans ton fil et Orion fait ce qui a été convenu ;
   - Orion peut t'appeler, te réveiller par un appel, ou appeler un tiers avec ton accord ;
   - la ligne est réservée à ton numéro.
+
+- **Modules** (D24) : Orion est une plaque sur laquelle on branche des modules. Le cœur garde la
+  mémoire, le manuel, le gardien, la boîte de réception, l'initiative et les rappels. iMessage,
+  la voix, la délégation et l'apprentissage en arrière-plan sont des modules, et d'autres peuvent
+  s'installer comme paquets Python. `orion doctor` liste les modules et leur état.
+
+- **M6 (en cours) — l'agenda** : module `calendar`. Orion lit tes agendas (Google, iCloud,
+  Outlook, autant de comptes que tu veux) par leur adresse iCal secrète. Il te prévient avant
+  chaque événement, met ta journée dans le point du matin et celle du lendemain dans le point du
+  soir, et répond aux questions sur ton emploi du temps (`agenda`). Les invitations d'inconnus
+  restent invisibles, et la description d'une invitation n'est jamais lue (D25). Lecture seule
+  pour l'instant.
+
+- **M6 (en cours) — le mail** : module `mail`. Orion lit tes boîtes en IMAP, en lecture seule
+  stricte : rien n'est marqué comme lu. Il ne lit jamais un mail lui-même. Une quarantaine (un
+  modèle à part, sans outils ni mémoire) en tire une fiche bornée : catégorie, importance,
+  réponse attendue, échéance, montant, résumé d'une ligne. Un mail qui essaie de donner des
+  ordres à un assistant est signalé comme suspect. Orion t'alerte pour un mail important, met
+  les mails utiles dans tes points, et répond à tes questions (`mail`). Il ne peut pas encore
+  en envoyer.
+- **Contenu venu d'ailleurs** (D26) : quand une conversation contient un mail, une invitation
+  ou un compte rendu d'appel, Orion ne peut plus agir sur le monde (envoyer, appeler), et il te
+  demande ton accord avant de retenir quelque chose ou de programmer un rappel. Après deux
+  heures sans échange, la conversation repart à neuf ; la mémoire garde l'essentiel.
+
+- **M6 — mémoire v1** : recherche par le sens et par les mots, fusionnées (« combien je paie
+  pour l'appart ? » trouve le loyer). Les personnes de ta vie forment un graphe tiré de la
+  mémoire : `person` dit tout ce qu'Orion sait de quelqu'un et à qui il est lié. Chaque nuit,
+  la mémoire se range : doublons retirés, faits périmés remplacés, noms fusionnés
+  (« Paul » = « Paul Martin »), contradictions posées en question dans le point du matin (D27).
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
@@ -69,3 +100,56 @@ https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 - [`docs/research/`](docs/research/) — études : Claude Code, paysage des agents, ce qui fait un Jarvis
 - [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md) — architecture
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — journal des décisions
+
+### Agenda
+
+Pour chaque agenda, récupère son adresse iCal secrète :
+- **Google** : paramètres de l'agenda, « Adresse secrète au format iCal » ;
+- **iCloud** : partage l'agenda en « Agenda public », puis copie le lien `webcal://` ;
+- **Outlook** : Paramètres, Calendrier, Calendriers partagés, « Publier un calendrier », lien ICS.
+
+Ces liens donnent accès à ton agenda : mets chacun dans une variable d'environnement, puis
+déclare-les dans `[modules.calendar]` (voir `orion.example.toml`). Renseigne aussi
+`owner_emails` : sans tes adresses, Orion ne sait pas distinguer tes événements des
+invitations, et il les masque toutes. `uv run orion doctor` vérifie chaque compte.
+
+### Mail
+
+Pour chaque boîte, crée un mot de passe d'application (jamais ton vrai mot de passe) :
+**Gmail** (`imap.gmail.com`, nécessite la validation en deux étapes) ou **iCloud**
+(`imap.mail.me.com`). Outlook.com impose OAuth pour l'IMAP : pas encore pris en charge.
+Mets chaque mot de passe dans une variable d'environnement et déclare la boîte dans
+`[modules.mail]` (voir `orion.example.toml`). Le journal ne garde que les fiches, jamais le
+contenu des mails ; `orion forget mail:perso` les efface.
+
+## Écrire un module
+
+Un module est une sous-classe de `orion.modules.base.Module`. Chaque crochet est facultatif :
+
+```python
+from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+
+
+class WeatherSettings(ModuleSettings):  # section [modules.weather] d'orion.toml
+    city: str = "Paris"
+
+
+class Weather(Module):
+    name = "weather"
+    settings_model = WeatherSettings
+    requires = ()  # autres modules nécessaires
+
+    def instructions_text(self) -> str:  # ajouté à la constitution
+        return "# La météo\n\nTu connais la météo avec `weather`."
+
+    async def assemble(self, plate: Plate) -> list[Tool]:
+        return [...]  # outils donnés au modèle
+
+    async def serve(self, daemon: Daemon) -> None:
+        daemon.add_service("weather.watch", self.watch)  # service supervisé
+        daemon.reports.append(self)  # comptes rendus pour l'initiative
+```
+
+On le publie comme paquet avec un point d'entrée dans le groupe `orion.modules`
+(`weather = "mon_paquet:Weather"`), puis on l'active avec `[modules.weather] enabled = true`.
+

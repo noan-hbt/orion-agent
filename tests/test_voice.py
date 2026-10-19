@@ -249,12 +249,18 @@ async def test_a_call_to_the_owner_that_failed_is_reported(world: World) -> None
     assert "failed, rejected" in report.notice and "Debout" in report.notice
     assert "Debout" in report.fallback
 
+    same = await world.voice.call_owner("Encore")
+    world.fake.phone_calls[same].update(status="failed", hangup_reason="failed")
+    await world.voice.poll_once()
+    latest = (await world.voice.reports())[-1]
+    assert "(Inkbox : failed)" in latest.fallback  # not "failed, failed"
+
     answered = await world.voice.call_owner("Point du soir")
     world.fake.phone_calls[answered].update(status="completed", duration_seconds=30)
     world.provider.extend(reply("SILENCE"))
     await world.voice.poll_once()
     await until_requests(world, 1)
-    assert [r.key for r in await world.voice.reports()] == [f"call:{call_id}"]
+    assert [r.key for r in await world.voice.reports()] == [f"call:{call_id}", f"call:{same}"]
 
 
 def test_render_and_brief_helpers() -> None:

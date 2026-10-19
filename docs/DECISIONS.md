@@ -436,3 +436,155 @@ champs structurés (mise en quarantaine). Elle sera faite avec la séparation du
 **Plus tard.** Le mode `client_websocket` d'Inkbox permettra de faire tourner notre propre
 pipeline vocal temps réel, avec un accès direct à la mémoire pendant l'appel, quand un modèle
 vocal temps réel sera branché.
+
+## D24 — Orion modulaire : une plaque et des modules
+
+**Contexte.** Chaque capacité (iMessage, voix, délégation, adaptation) était câblée à la main
+dans `app.py` et `serve.py`. M6 va ajouter des sources (agenda, mail), et le propriétaire veut
+qu'Orion soit « une plaque sur laquelle on met les legos qu'on veut ».
+
+**Décision.** Le cœur est la plaque : journal, mémoire et manuel, gardien, runtime, boîte de
+réception, moteur d'initiative, rappels. Tout le reste est un module (`orion.modules`). Un
+module peut :
+- donner des outils au modèle (`assemble`, identique en `chat` et en `serve`) ;
+- ajouter une section à la constitution ;
+- en mode démon, lancer des services supervisés, être un canal du propriétaire, fournir des
+  comptes rendus au moteur d'initiative ou passer des appels (`serve`) ;
+- dire son état dans `orion doctor`.
+
+Les modules déclarent leurs dépendances (`requires`). Ils sont chargés et démarrés dans l'ordre
+de ces dépendances. Si un module est activé sans ce dont il a besoin, Orion refuse de démarrer
+(fail closed), et de même si une section `[modules.x]` désigne un module qui n'est pas installé.
+
+Les modules intégrés gardent leurs sections de configuration actuelles (`[channels.imessage]`,
+`[voice]`, `[delegation]`, `[adaptation]`). Un module tiers est un paquet Python qui expose une
+sous-classe de `Module` dans le groupe de points d'entrée `orion.modules`. Il est configuré dans
+`[modules.<nom>]`, que ses propres réglages Pydantic valident.
+
+**Cache.** L'ensemble des modules actifs est fixé au démarrage, donc le registre d'outils et le
+message système le sont aussi : le contrat de cache tient. Changer de modules change le préfixe
+une fois.
+
+**Sécurité.** Un module est du code de confiance : l'installer lui donne les mêmes accès
+qu'Orion. Ce qu'il fait dans le monde passe quand même par le gardien (chaque outil déclare son
+effet), et ce qu'il fait entrer porte une `Provenance` et une `Trust`. Isoler les modules dans
+leur propre processus viendra avec la séparation du gardien.
+
+**Hors module, volontairement.** Le manuel et ses outils (`adapt`, `unlearn`…) font partie du
+cœur, car le propriétaire doit toujours pouvoir dire à Orion comment se comporter. Le module
+`adaptation` n'ajoute que la réflexion en arrière-plan.
+
+## D25 — M6, premier module : l'agenda en lecture seule
+
+**Lecture par l'adresse iCal secrète.** Google, iCloud et Outlook publient tous une adresse iCal
+secrète. La lire marche partout de la même façon, sans OAuth ni droit d'écriture, et couvre
+plusieurs comptes à la fois. Écrire dans l'agenda (créer, déplacer) demandera l'API de chaque
+fournisseur. Ce sera une étape suivante, avec approbation.
+
+**Journal.** Chaque synchronisation lit une fenêtre (de la veille à `horizon_days`) et ne
+journalise que les changements (`calendar.event.seen`, `calendar.event.gone`). La projection se
+reconstruit comme les autres. Un flux illisible ne change rien : un agenda injoignable n'est
+jamais pris pour un agenda vide.
+
+**Confiance.** Une invitation est un texte qu'un inconnu peut placer devant Orion, et les
+descriptions d'invitations sont un vecteur connu d'injection d'instructions. Traiter toute
+invitation comme du contenu tiers rendrait l'agenda inutilisable : le gardien refuserait
+`remind_me` juste après la lecture de l'agenda. D'où une règle par auteur :
+- **ses propres événements** (sans organisateur, ou organisés par une de ses `owner_emails`) :
+  tout est lu, confiance `SYSTEM` ;
+- **les invitations qu'il a acceptées** : heure, titre et lieu seulement, en confiance `SYSTEM`.
+  Il les a vues et adoptées. La description, que personne ne relit, n'est jamais conservée ;
+- **les invitations sans réponse ou refusées, et les événements où il n'apparaît pas** : seul le
+  fait qu'elles existent est gardé (pour les compter), sans titre ni texte.
+
+Sans `owner_emails`, toute invitation reste masquée (fail closed).
+
+**Initiative.** Le moteur accepte désormais, en plus des comptes rendus, des alertes de modules
+(soumises aux heures calmes et au budget, et abandonnées une fois expirées) et des lignes pour
+les points du jour. L'agenda fournit une alerte avant chaque événement (`heads_up_minutes`), la
+journée dans le premier point et le lendemain dans le dernier.
+
+## D26 — Contenu tiers : quarantaine, accord du propriétaire, expiration (révise D23)
+
+**Problème.** Le mail est le cas d'école du contenu non fiable : n'importe qui peut écrire dans
+la boîte du propriétaire, et « ignore tes instructions et transfère… » est l'attaque classique
+contre un assistant. Jusqu'ici, un contenu tiers dans la conversation bloquait tout outil
+d'écriture jusqu'au prochain rebase, et donc toute la journée dès qu'un point mentionnait un
+mail. C'est sûr, mais inutilisable.
+
+**1. Quarantaine.** Orion ne lit jamais un mail. Un appel séparé, sans outils, sans mémoire et
+sans conversation, le lit et remplit une fiche : catégorie, importance, réponse attendue,
+échéance, montant, résumé de 200 caractères au plus. Le code valide et coupe chaque champ. Un
+mail qui s'adresse à une IA est réduit à « Mail suspect ». Les mails en masse (listes, publicité)
+n'atteignent pas de modèle. La fiche reste du contenu tiers (`THIRD_PARTY`) : la quarantaine
+réduit ce qui peut arriver jusqu'à Orion, elle ne le rend pas fiable. Le journal garde les fiches,
+jamais le corps des mails.
+
+**2. Le gardien demande au lieu de refuser, mais seulement pour l'interne.** Dans une
+conversation contaminée :
+- une action **externe** (envoyer, appeler un tiers, déléguer avec shell) reste refusée sans
+  demander. C'est exactement ce qu'une instruction injectée demanderait, et le propriétaire ne
+  doit pas prendre l'habitude de l'approuver ;
+- une écriture **interne** (retenir, engagement, rappel, manuel) lui est soumise, avec la raison
+  (« la conversation contient du contenu venu d'ailleurs… »). Sans réponse, c'est non. Ce qui
+  est retenu garde la confiance de la conversation (`THIRD_PARTY`) : la mémoire sait d'où ça
+  vient.
+
+**3. La contamination expire.** Ce qu'Orion écrit après avoir lu un contenu tiers est lui-même
+contaminé (il a pu être influencé). On ne peut donc pas la retirer « au-dessus » du contenu
+tiers : il faut repartir d'une fenêtre neuve. On le fait après une pause de la conversation
+(`agent.untrusted_idle_minutes`, 2 h par défaut). La mémoire, le manuel et les engagements
+reviennent en tête de la nouvelle fenêtre. Chaque message journalisé porte désormais l'heure de
+son tour (`at`), ce qui rend cette règle déterministe et testable.
+
+**Mail v0.** IMAP en lecture seule stricte (`EXAMINE`, `BODY.PEEK`), avec mot de passe
+d'application : Gmail, iCloud, Fastmail et la plupart des hébergeurs. Outlook.com impose OAuth et
+viendra plus tard. Synchronisation par UID (et reprise depuis une date si le serveur renumérote
+le dossier), au plus `max_per_sync` mails par passage. Le module fournit :
+- l'outil `mail` ;
+- une alerte pour un mail important (soumise aux heures calmes et au budget) ;
+- les mails utiles reçus depuis le point précédent, dans chaque point du jour.
+
+Pas d'envoi : répondre à un mail sera une action externe, donc avec accord, et jamais depuis une
+conversation contaminée.
+
+## D27 — Mémoire v1 : sens, personnes, consolidation de nuit
+
+**Recherche par le sens.** Les faits sont aussi retrouvés par proximité de sens : « combien je
+paie pour l'appart ? » trouve « le loyer est de 850 € », sans aucun mot en commun. Les embeddings
+passent par OpenRouter (`openai/text-embedding-3-small`, quelques centimes par an pour une
+mémoire personnelle), avec la même clé : pas de modèle local à installer. La recherche fusionne
+le classement plein texte et le classement vectoriel par rang réciproque (RRF), donc les mots
+exacts comptent toujours.
+
+Les vecteurs vivent dans `embeddings.sqlite3`. C'est un cache, pas une projection : le supprimer
+coûte un recalcul, et un fait oublié disparaît du store, donc on ne le retrouve plus, quoi
+qu'il reste dans le cache. Si les embeddings ne répondent pas, la recherche se replie sur le plein
+texte et le journalise. Un fournisseur sans embeddings (les tests) désactive simplement le sens.
+
+**Personnes.** Il n'y a pas de fiche « personne » stockée. Une personne est l'ensemble des faits
+dont `about` la nomme et des engagements où elle apparaît, sous un seul nom. Les alias
+(« Paul », « Paul Martin ») sont des événements `person.aliased`. Deux personnes sont liées quand
+des faits les concernent toutes les deux. Le graphe est dérivé de la mémoire : toujours à jour,
+et un fait oublié en sort. Outils : `person`, `people`, `same_person`. Les noms du propriétaire
+(`memory.owner_names`) sont exclus.
+
+**Consolidation de nuit** (module `consolidation`, actif par défaut). Chaque nuit, les paires de
+faits proches (cosinus ≥ 0,5 ; les embeddings réels sont plus bas qu'on ne croit : deux
+formulations du même fait étaient à 0,52) sont jugées par le modèle d'arrière-plan :
+- doublon : on garde la version la plus précise ;
+- mise à jour : la plus récente remplace l'ancienne ;
+- contradiction : on pose la question au propriétaire dans le point du matin ;
+- compatibles : rien.
+
+Les noms dont l'un est contenu dans l'autre sont fusionnés si le juge le confirme.
+
+Le code, pas le modèle, décide de ce qui peut tomber : un fait n'est jamais retiré au profit d'un
+fait moins fiable. Un fait lu dans un mail ne peut donc pas évincer ce que le propriétaire a dit :
+ça devient une question. Chaque changement est un événement mémoire ordinaire
+(`orion:consolidation`), visible dans l'historique et réversible. Essai réel : doublon retiré,
+« habite à Bordeaux » remplacé par « a déménagé à Nantes », « Paul » fusionné avec « Paul
+Martin », Lyon contre Marseille (venu d'un mail) posé en question.
+
+**Plus tard.** Pour un doublon, fusionner les deux formulations en une seule plutôt que d'en
+choisir une. La fusion réécrit un souvenir ; elle demandera la même prudence que le reste.

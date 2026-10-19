@@ -74,3 +74,61 @@ enabled = false
 origination = "shared_imessage_number"
 brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
 calls_poll_seconds = 30          # poll mode: how often finished calls are read back
+
+# Your calendars (M6), read through their secret iCal address:
+# - Google: calendar settings > "Secret address in iCal format";
+# - iCloud: share the calendar as a public calendar, copy the webcal:// link;
+# - Outlook: Settings > Calendar > Shared calendars > Publish a calendar > ICS link.
+# These links are passwords: put each in an environment variable, never here.
+[modules.calendar]
+enabled = false
+owner_emails = ["you@example.com"]   # your addresses: tells your events from invitations
+refresh_minutes = 10
+horizon_days = 14
+heads_up_minutes = 15                 # message before each event; 0 = never
+
+[[modules.calendar.accounts]]
+name = "perso"
+url = { env = "CALENDAR_PERSO_ICS" }
+
+# [[modules.calendar.accounts]]
+# name = "boulot"
+# url = { env = "CALENDAR_BOULOT_ICS" }
+
+# Your mailboxes (M6), read over IMAP, strictly read-only (nothing is marked as read). Each
+# mail is read in quarantine by a separate model and reduced to a card; Orion never sees the
+# mail itself. Use an app password, never your account password:
+# - Gmail: imap.gmail.com, an app password (needs 2-step verification);
+# - iCloud: imap.mail.me.com, an app-specific password;
+# - Outlook.com needs OAuth for IMAP: not supported yet.
+[modules.mail]
+enabled = false
+owner_emails = ["you@example.com"]   # your own mail is skipped
+# quarantine_model = "deepseek/deepseek-v4.1-flash"   # defaults to agent.extractor_model
+refresh_minutes = 5
+lookback_days = 2                     # how far back the first sync reads
+alert_important = true                # a message when an important mail arrives
+
+[[modules.mail.accounts]]
+name = "perso"
+host = "imap.gmail.com"
+username = "you@gmail.com"
+password = { env = "MAIL_PERSO_PASSWORD" }
+
+# Memory search and people.
+[memory]
+owner_names = ["Noan"]                # your names: kept out of "the people in your life"
+embedding_model = "openai/text-embedding-3-small"   # semantic search; remove to search by words
+
+# Nightly consolidation: duplicates out, outdated facts replaced, names merged, contradictions
+# asked in the morning digest. On by default; never drops a fact for a less trusted one.
+[modules.consolidation]
+enabled = true
+at = "03:30:00"
+similarity = 0.5                      # how alike two facts must be to be compared
+
+# Third-party modules (Python packages exposing an `orion.modules` entry point) are configured
+# in their own section. A section for a module that is not installed stops Orion from starting.
+# [modules.weather]
+# enabled = true
+# city = "Lyon"

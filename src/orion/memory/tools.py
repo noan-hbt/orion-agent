@@ -98,7 +98,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")
 
     async def recall(args: Any, ctx: ToolContext) -> ToolResult:
-        facts = await memory.store.search(args.query, limit=10, include_past=args.include_history)
+        facts = await memory.search(args.query, limit=10, include_past=args.include_history)
         if not facts:
             return ToolResult("Rien en mémoire sur ce sujet.")
         return ToolResult("\n".join(format_fact(f) for f in facts))
