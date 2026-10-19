@@ -102,3 +102,27 @@ imposent.
 - On réimplémente les éléments solides identifiés à l'étape 1 (contrat d'outil fail-closed, budgets
   de sortie, conception guidée par le cache, hooks, sandbox) au lieu d'en hériter.
 - Compatibilité MCP obligatoire pour profiter de l'écosystème d'outils.
+
+## D7 — Multi-agent comme capacité de premier rang
+
+*19/10/2026 · acceptée*
+
+**Décision.** Orion est conçu dès le noyau pour travailler excellemment en multi-agent : sous-agents,
+équipes, délégation, parallélisme. Ce n'est pas une fonctionnalité ajoutée par-dessus une boucle
+mono-agent.
+
+**Conséquences.**
+- Les primitives de coordination (tâches, messages, artefacts partagés, verrous, budgets, annulation)
+  font partie du noyau, au même niveau que les outils et le contexte.
+- Un agent délégué externe (CLI `claude`, `codex`, cf. D5) doit pouvoir être membre d'une équipe
+  comme un agent interne.
+- Le coût (≈ 15× les tokens d'une conversation selon Anthropic) impose que le noyau décide **quand**
+  paralléliser, pas seulement **comment**.
+
+## D5-bis — Abonnement Claude : à réexaminer
+
+*19/10/2026 · ouverte*
+
+L'utilisateur signale que Hermes Agent permettrait d'utiliser l'abonnement Claude. À vérifier à
+l'étape 2 : mécanisme exact et conformité avec la politique d'Anthropic. D5 reste valable tant que
+ce point n'est pas tranché.
