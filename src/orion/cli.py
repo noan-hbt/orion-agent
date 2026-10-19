@@ -17,18 +17,27 @@ from orion.observability.logging import configure_logging
 
 if TYPE_CHECKING:
     from orion.channels.inkbox import InkboxClient
-    from orion.providers.openrouter import OpenRouterProvider
+    from orion.providers.router import Router
 
 
-def _provider(config: OrionConfig) -> OpenRouterProvider | None:
+def _provider(config: OrionConfig) -> Router | None:
     from orion.providers.openrouter import OpenRouterProvider
+    from orion.providers.router import Router
 
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
         print(f"Impossible de démarrer : {exc}")
         return None
-    return OpenRouterProvider(api_key.get_secret_value(), config.providers.openrouter.base_url)
+    openrouter = OpenRouterProvider(
+        api_key.get_secret_value(), config.providers.openrouter.base_url
+    )
+    agent = config.agent
+    chains = {
+        m: [f for f in agent.fallback_models if f != m]
+        for m in {agent.model, agent.extractor_model}
+    }
+    return Router({"openrouter": openrouter}, "openrouter", chains)
 
 
 def _inkbox(config: OrionConfig) -> InkboxClient | None:

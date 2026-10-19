@@ -12,7 +12,7 @@ from datetime import time
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 DEFAULT_CONFIG_PATH = Path("orion.toml")
 
@@ -59,6 +59,22 @@ class AgentConfig(BaseModel):
     max_tool_calls: int = Field(default=40, ge=0)
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
     extractor_model: str = "deepseek/deepseek-v4.1-flash"
+    fallback_models: list[str] = Field(
+        default_factory=lambda: ["anthropic/claude-haiku-5.5"],
+        description="Tried in order when the main or background model fails",
+    )
+    verifier_model: str = Field(
+        default="anthropic/claude-haiku-5.5",
+        description="Checks proactive messages; must differ from `model`",
+    )
+
+    @model_validator(mode="after")
+    def _verifier_differs(self) -> AgentConfig:
+        if self.verifier_model == self.model:
+            raise ValueError(
+                "verifier_model must differ from model (a model misses its own errors)"
+            )
+        return self
 
 
 class IMessageConfig(BaseModel):

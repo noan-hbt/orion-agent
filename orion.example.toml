@@ -15,6 +15,9 @@ max_window_tokens = 120000   # visible conversation window before a one-step reb
 max_steps = 12               # model calls per turn
 max_tool_calls = 40
 max_cost_usd_per_turn = 0.5
+extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
+fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
+verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family
 
 [providers.openrouter]
 api_key = { env = "OPENROUTER_API_KEY" }

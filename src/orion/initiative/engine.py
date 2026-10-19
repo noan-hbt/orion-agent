@@ -16,6 +16,7 @@ decision, including staying silent, is journaled with its reason.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
@@ -25,6 +26,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from orion.cognition.loop import StopReason
+from orion.cognition.verifier import Verifier
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -40,6 +42,7 @@ log = structlog.get_logger(__name__)
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
 _OWNER_SIDE = {"owner", "orion"}
+_IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
 
 
@@ -205,8 +208,10 @@ class InitiativeEngine:
         settings: InitiativeSettings,
         memory: MemoryStore | None = None,
         clock: Callable[[], datetime] | None = None,
+        verifier: Verifier | None = None,
     ) -> None:
         self._orion = orion
+        self._verifier = verifier
         self._journal = journal
         self._timers = timers
         self._notifier = notifier
@@ -304,12 +309,12 @@ class InitiativeEngine:
             end = start + self._settings.digest_window
             last_slot = index == len(slots) - 1
             lines = digest_lines(commitments, now.date(), last_slot, self.ledger.last_mention)
-            notice = "Points à signaler dans ce résumé :\n" + "\n".join(line for _, line in lines)
+            body = "\n".join(line for _, line in lines)
             return Candidate(
                 key=key,
-                notice=notice if lines else "",
+                notice=f"Points à signaler dans ce résumé :\n{body}" if lines else "",
                 why=f"c'est le point de {slot:%H:%M}",
-                fallback=notice,
+                fallback=f"Point de {slot:%H:%M} :\n" + _IDS.sub("", body),
                 trust=min(
                     (c.trust for c in commitments if c.id in {i for i, _ in lines}),
                     default=Trust.SYSTEM,
@@ -333,13 +338,13 @@ class InitiativeEngine:
             return False
         self._unavailable_logged = False
 
-        text = await self._compose(candidate, now)
+        text, how = await self._compose(candidate, now)
         if text is None:
             await self._record(SUPPRESSED, candidate, now, reason="model chose silence")
             return False
         correlation_id = new_id()
         await self._notifier.notify(text, correlation_id)
-        await self._record(DELIVERED, candidate, now, correlation_id=correlation_id)
+        await self._record(DELIVERED, candidate, now, correlation_id=correlation_id, how=how)
         if candidate.timer is not None:
             await self._timers.fired(candidate.timer.id, correlation_id)
         return True
@@ -355,22 +360,36 @@ class InitiativeEngine:
             return "daily attention budget spent"
         return None
 
-    async def _compose(self, candidate: Candidate, now: datetime) -> str | None:
-        """Let Orion write the message in its own voice; fall back to a plain text if the model
-        fails. Explicit reminders are always delivered, even if the model says SILENCE."""
+    async def _compose(self, candidate: Candidate, now: datetime) -> tuple[str | None, str]:
+        """Let Orion write the message in its own voice, then have a different model check it
+        against the facts. Any failure falls back to a plain, correct text. Explicit reminders
+        are always delivered, even if the model says SILENCE. Returns (text, how)."""
         try:
             turn = await self._orion.handle_initiative(
                 self._settings.thread_id, candidate.notice, candidate.why, candidate.trust, now
             )
         except Exception:
             log.exception("initiative.compose_failed", key=candidate.key)
-            return candidate.fallback
+            return candidate.fallback, "fallback: compose failed"
         if turn.reason is not StopReason.COMPLETED or not turn.text.strip():
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
-            return candidate.fallback
+            return candidate.fallback, f"fallback: {turn.reason.value}"
         if is_silence(turn.text):
-            return candidate.fallback if candidate.explicit else None
-        return turn.text.strip()
+            if candidate.explicit:
+                return candidate.fallback, "fallback: model chose silence"
+            return None, "silence"
+        draft = turn.text.strip()
+        if self._verifier is None:
+            return draft, "unverified"
+        facts = (
+            f"Now: {describe_moment(now, self._settings.timezone)}\n"
+            f"Why Orion writes: {candidate.why}\n{candidate.notice}"
+        )
+        verification = await self._verifier.check(draft, facts)
+        if not verification.ok:
+            log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
+            return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
+        return draft, "verified"
 
     async def _record(
         self,
@@ -379,6 +398,7 @@ class InitiativeEngine:
         now: datetime,
         reason: str | None = None,
         correlation_id: str | None = None,
+        how: str | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "key": candidate.key,
@@ -389,6 +409,8 @@ class InitiativeEngine:
         }
         if reason is not None:
             payload["reason"] = reason
+        if how is not None:
+            payload["how"] = how
         log.info(kind, key=candidate.key, reason=reason)
         await self._journal.append(
             [

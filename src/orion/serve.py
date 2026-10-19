@@ -16,6 +16,7 @@ from orion.app import App
 from orion.channels.imessage import IMessageChannel, IMessageSettings
 from orion.channels.inkbox import InkboxClient
 from orion.channels.webhook import webhook_app
+from orion.cognition.verifier import Verifier
 from orion.core.supervisor import Supervisor
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
 from orion.runtime import OWNER_THREAD, TurnResult
@@ -106,6 +107,7 @@ async def serve(app: App, client: InkboxClient) -> None:
                 daily_budget=initiative.daily_budget,
             ),
             memory=app.memory.store,
+            verifier=Verifier(app.provider, app.config.agent.verifier_model),
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
 
