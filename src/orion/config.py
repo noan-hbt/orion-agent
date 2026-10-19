@@ -11,8 +11,9 @@ import tomllib
 from datetime import time
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 DEFAULT_CONFIG_PATH = Path("orion.toml")
 
@@ -67,6 +68,15 @@ class AgentConfig(BaseModel):
         default="anthropic/claude-haiku-5.5",
         description="Checks proactive messages; must differ from `model`",
     )
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown timezone {value!r} (IANA name, e.g. Europe/Paris)") from exc
+        return value
 
     @model_validator(mode="after")
     def _verifier_differs(self) -> AgentConfig:

@@ -57,3 +57,15 @@ def test_cli_doctor_creates_journal(tmp_path: Path, capsys: pytest.CaptureFixtur
 def test_cli_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["version"]) == 0
     assert capsys.readouterr().out.strip() == "0.1.0"
+
+
+def test_timezones_resolve_without_system_tzdata() -> None:
+    # The `tzdata` package ships the IANA database, for hosts that lack it (Windows, slim images).
+    import tzdata  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    OrionConfig.model_validate({"agent": {"timezone": "Europe/Paris"}})
+
+
+def test_unknown_timezone_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="unknown timezone"):
+        OrionConfig.model_validate({"agent": {"timezone": "Europe/Pariss"}})
