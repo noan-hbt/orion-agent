@@ -162,3 +162,24 @@ async def test_anthropic_models_get_cache_breakpoints_on_the_wire_only() -> None
     assert assistant["content"] == ""  # nothing to mark: the last message with text was marked
     assert claude.messages[0]["content"] == "s"  # what the core journals is untouched
     assert seen[1]["messages"][0]["content"] == "s"  # other models cache by themselves
+
+
+async def test_web_search_runs_on_the_provider_and_its_sources_come_back() -> None:
+    seen: list[dict[str, Any]] = []
+    body = json.loads(json.dumps(OK_BODY))
+    body["choices"][0]["message"]["annotations"] = [
+        {"type": "url_citation", "url_citation": {"url": "https://a.fr/x", "title": "A"}},
+        {"type": "other"},
+    ]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=body)
+
+    provider = provider_with(handler)
+    response = await provider.complete(request().model_copy(update={"web_search": 4}))
+    assert seen[0]["plugins"] == [{"id": "web", "max_results": 4}]
+    assert [(c.url, c.title) for c in response.citations] == [("https://a.fr/x", "A")]
+    await provider.complete(request())
+    assert "plugins" not in seen[1]
+    await provider.aclose()

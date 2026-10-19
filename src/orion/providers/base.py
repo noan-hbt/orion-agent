@@ -73,6 +73,22 @@ class ModelRequest(BaseModel):
     temperature: float | None = None
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
     json_output: bool = Field(default=False, description="Ask for a single JSON object reply")
+    web_search: int | None = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Let the provider search the web first, with this many results (quarantine "
+        "calls only: what comes back is web content)",
+    )
+
+
+class Citation(BaseModel):
+    """A page the provider's web search read to answer."""
+
+    model_config = ConfigDict(frozen=True)
+
+    url: str
+    title: str = ""
 
 
 class ModelResponse(BaseModel):
@@ -84,6 +100,7 @@ class ModelResponse(BaseModel):
     model: str
     provider: str | None = None
     attempts: int = 1
+    citations: list[Citation] = Field(default_factory=list[Citation])
 
 
 class ProviderError(RuntimeError):

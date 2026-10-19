@@ -17,6 +17,7 @@ import structlog
 from pydantic import BaseModel, Field, ValidationError
 
 from orion.providers.base import (
+    Citation,
     Message,
     ModelRequest,
     ModelResponse,
@@ -167,6 +168,8 @@ class OpenRouterProvider:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         if self._sort is not None:
             body["provider"] = {"sort": self._sort}
+        if request.web_search is not None:
+            body["plugins"] = [{"id": "web", "max_results": request.web_search}]
         return body
 
     async def _post(self, body: dict[str, Any], path: str = "/chat/completions") -> dict[str, Any]:
@@ -244,6 +247,11 @@ class OpenRouterProvider:
             model=parsed.model,
             provider=parsed.provider,
             attempts=attempts,
+            citations=[
+                Citation(url=a.url_citation.url, title=a.url_citation.title or "")
+                for a in choice.message.annotations or []
+                if a.type == "url_citation" and a.url_citation is not None
+            ],
         )
 
 
@@ -260,9 +268,20 @@ class _RawToolCall(BaseModel):
     function: _RawFunction
 
 
+class _RawUrlCitation(BaseModel):
+    url: str
+    title: str | None = None
+
+
+class _RawAnnotation(BaseModel):
+    type: str = ""
+    url_citation: _RawUrlCitation | None = None
+
+
 class _RawMessage(BaseModel):
     content: str | None = None
     tool_calls: list[_RawToolCall] | None = None
+    annotations: list[_RawAnnotation] | None = None
 
 
 class _RawChoice(BaseModel):

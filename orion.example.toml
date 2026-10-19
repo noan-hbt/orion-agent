@@ -163,3 +163,11 @@ similarity = 0.5                      # how alike two facts must be to be compar
 # [modules.weather]
 # enabled = true
 # city = "Lyon"
+
+# The web (search and reading pages), through the model provider's web search: no other
+# account. A separate clerk reads every page; Orion only opens addresses you gave, a search
+# returned, or the clerk picked on a page it read.
+[modules.web]
+enabled = false
+# model = "deepseek/deepseek-v4.1-flash"   # the clerk; defaults to agent.extractor_model
+max_results = 6
