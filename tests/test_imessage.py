@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -14,6 +15,7 @@ from orion.channels.imessage import (
     answer_word,
     split_bubbles,
 )
+from orion.channels.inbox import Inbound as InboxItem
 from orion.channels.inbox import OwnerInbox
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
@@ -245,3 +247,17 @@ async def test_tapbacks_on_replies_become_feedback_once(
     feedback = [e for e in await journal.read() if e.kind == FEEDBACK_REACTION]
     assert len(feedback) == 1
     assert feedback[0].payload["remote_id"] == target and feedback[0].trust is Trust.OWNER
+
+
+async def test_the_turn_does_not_wait_for_the_read_receipt(channel: IMessageChannel) -> None:
+    class SlowInkbox:
+        async def mark_read(self, conversation: str) -> None:
+            await asyncio.sleep(30)
+
+        async def typing(self, conversation: str) -> None:
+            return None
+
+    channel._client = cast(Any, SlowInkbox())
+    item = InboxItem("imessage", ("m1",), "salut", context=CONVERSATION)
+    async with asyncio.timeout(1), channel.working(item):
+        pass  # entered and left at once: the receipt goes out beside the turn

@@ -69,7 +69,7 @@ class OwnerInbox:
     def __init__(
         self,
         orion: Orion,
-        coalesce_seconds: float = 1.5,
+        coalesce_seconds: float = 0.5,
         on_turn: Callable[[TurnResult], Awaitable[None]] | None = None,
     ) -> None:
         self._orion = orion

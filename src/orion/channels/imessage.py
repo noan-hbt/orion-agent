@@ -209,12 +209,12 @@ class IMessageChannel:
 
     @asynccontextmanager
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
-        """Read receipt, then a typing indicator kept alive until the answer is ready."""
+        """Read receipt, then a typing indicator kept alive until the answer is ready. Both run
+        beside the turn: the model starts at once instead of waiting for Inkbox."""
         conversation = item.context or self.state.owner_conversation
         if conversation is None:
             yield
             return
-        await self._best_effort(self._client.mark_read(conversation), "mark_read")
         typing = asyncio.create_task(self._keep_typing(conversation))
         try:
             yield
@@ -357,6 +357,7 @@ class IMessageChannel:
             await asyncio.sleep(interval)
 
     async def _keep_typing(self, conversation: str) -> None:
+        await self._best_effort(self._client.mark_read(conversation), "mark_read")
         while True:
             await self._best_effort(self._client.typing(conversation), "typing")
             await asyncio.sleep(self._settings.typing_refresh_seconds)

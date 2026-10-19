@@ -125,12 +125,16 @@ class IMessageConfig(BaseModel):
         default="", description="Owner's phone number, E.164 (e.g. +33612345678)"
     )
     mode: Literal["poll", "webhook"] = "poll"
-    poll_seconds: float = Field(default=2.0, ge=1.0)
+    poll_seconds: float = Field(default=1.0, ge=0.5)
     webhook_host: str = "127.0.0.1"
     webhook_port: int = 8787
     webhook_path: str = "/inkbox/webhook"
     signing_key: SecretRef = SecretRef(env="INKBOX_SIGNING_KEY")
-    coalesce_seconds: float = Field(default=1.5, ge=0.0)
+    coalesce_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        description="Wait for a burst before starting; later texts still join the running turn",
+    )
     approval_timeout_seconds: float = Field(default=900.0, gt=0)
 
 
