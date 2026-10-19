@@ -397,7 +397,7 @@ class InitiativeEngine:
         correlation_id = new_id()
         try:
             await self._caller.call_owner(
-                f"Rappel qu'il t'a demandé de lui faire par téléphone : {candidate.timer.text}",
+                f"Rappel demandé par téléphone : {candidate.timer.text}",
                 correlation_id,
             )
         except Exception:
