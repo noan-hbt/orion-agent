@@ -238,3 +238,21 @@ cas d'usage : organiser un rendez-vous entre deux personnes.
 Un gardien distinct de l'agent (pare-feu sur les contenus entrants, moniteur d'actions, moteur de
 politiques) que l'agent ne peut ni modifier ni convaincre. Jamais données privées + contenu non
 fiable + canal de sortie dans un même processus.
+
+## D15 — Personnalité d'Orion
+
+*19/10/2026 · acceptée*
+
+Tutoiement, humour, concision, précision, une pointe de sarcasme, et une expression **humaine** :
+phrases naturelles, pas de listes à puces dans un SMS, pas de formules d'assistant (« Bien sûr !
+Voici… »). Cette personnalité est écrite dans la constitution d'Orion (jalon M1) et évaluée comme
+le reste : un changement de ton est un déploiement (leçon de l'incident @grok).
+
+## D16 — Langue du code et conventions
+
+*19/10/2026 · acceptée*
+
+Code, identifiants et commentaires en anglais ; documentation et décisions en français. Python 3.12+,
+`uv`, Pydantic v2, `pyright` strict, `ruff`, `pytest`. Infra existante de l'utilisateur : un serveur
+(hébergement du cerveau) et un compte OpenRouter (fournisseur du jalon M1). Pas de budget LLM
+plafonné, mais budgets par tâche appliqués par le code (garde-fou contre les boucles).

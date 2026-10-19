@@ -1,0 +1,13 @@
+# Copy to orion.toml and adjust. Secrets are never stored here: each SecretRef names the
+# environment variable that holds the value.
+
+instance = "orion-main"   # stable id of this instance (lowercase, digits, dashes)
+data_dir = "data"         # relative to this file
+
+[logging]
+level = "INFO"
+json_output = true
+
+[providers.openrouter]
+api_key = { env = "OPENROUTER_API_KEY" }
+base_url = "https://openrouter.ai/api/v1"
