@@ -28,9 +28,14 @@ def estimate_tokens(messages: list[Message]) -> int:
     return sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) // 3 + 4 * len(messages)
 
 
-def render_user_message(text: str, when: datetime, channel: str) -> Message:
+def render_user_message(
+    text: str, when: datetime, channel: str, blocks: list[str] | None = None
+) -> Message:
+    """The owner's message with its context: a time/channel line, optional memory blocks, then
+    the text itself. Rendered once and journaled verbatim, so it never changes afterwards."""
     weekday = _WEEKDAYS_FR[when.weekday()]
-    return {"role": "user", "content": f"[{weekday} {when:%Y-%m-%d %H:%M} · {channel}]\n{text}"}
+    parts = [f"[{weekday} {when:%Y-%m-%d %H:%M} · {channel}]", *(blocks or []), text]
+    return {"role": "user", "content": "\n".join(parts)}
 
 
 @dataclass(frozen=True)

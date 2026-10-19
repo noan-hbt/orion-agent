@@ -13,14 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import AsyncIterator, Callable, Generator, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import HybridClock
+from orion.core.sqlite import SqliteWorker
 
 REDACTED_KIND = "journal.redacted"
 
@@ -85,20 +84,15 @@ class SqliteJournal:
     """SQLite-backed EventStore. One instance per database file; it is the single writer."""
 
     def __init__(self, path: Path, clock: HybridClock) -> None:
-        self._path = path
         self._clock = clock
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="journal")
-        self._conn: sqlite3.Connection | None = None
+        self._sql = SqliteWorker(path, "journal", _SCHEMA)
         self._appended = asyncio.Condition()
 
     async def open(self) -> None:
-        await self._run(self._open_sync)
+        await self._sql.open()
 
     async def close(self) -> None:
-        if self._conn is not None:
-            await self._run(self._conn.close)
-            self._conn = None
-        self._executor.shutdown(wait=True)
+        await self._sql.close()
 
     async def __aenter__(self) -> SqliteJournal:
         await self.open()
@@ -110,22 +104,22 @@ class SqliteJournal:
     async def append(self, events: Sequence[NewEvent]) -> list[Event]:
         if not events:
             return []
-        stored = await self._run(self._append_sync, list(events))
+        stored = await self._sql.run(self._append_sync, list(events))
         async with self._appended:
             self._appended.notify_all()
         return stored
 
     async def read(self, after_seq: int = 0, limit: int = 1000) -> list[Event]:
-        return await self._run(self._read_sync, after_seq, limit)
+        return await self._sql.run(self._read_sync, after_seq, limit)
 
     async def get(self, event_id: str) -> Event | None:
-        return await self._run(self._get_sync, event_id)
+        return await self._sql.run(self._get_sync, event_id)
 
     async def last_seq(self) -> int:
-        return await self._run(self._last_seq_sync)
+        return await self._sql.run(self._last_seq_sync)
 
     async def redact(self, event_ids: Sequence[str], reason: str, actor: str) -> Event:
-        stored = await self._run(self._redact_sync, list(event_ids), reason, actor)
+        stored = await self._sql.run(self._redact_sync, list(event_ids), reason, actor)
         async with self._appended:
             self._appended.notify_all()
         return stored
@@ -144,36 +138,6 @@ class SqliteJournal:
                 yield event
 
     # --- synchronous internals, always run on the journal thread ---
-
-    async def _run[T](self, fn: Callable[..., T], *args: object) -> T:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn, *args)
-
-    def _db(self) -> sqlite3.Connection:
-        if self._conn is None:
-            raise RuntimeError("journal is not open")
-        return self._conn
-
-    @contextmanager
-    def _transaction(self) -> Generator[sqlite3.Connection]:
-        db = self._db()
-        db.execute("BEGIN IMMEDIATE")
-        try:
-            yield db
-        except BaseException:
-            db.execute("ROLLBACK")
-            raise
-        db.execute("COMMIT")
-
-    def _open_sync(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._path, isolation_level=None, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.executescript(_SCHEMA)
-        self._conn = conn
 
     def _insert(self, db: sqlite3.Connection, new: NewEvent) -> Event:
         hlc = self._clock.now().encode()
@@ -197,32 +161,30 @@ class SqliteJournal:
         return Event(**new.model_dump(), seq=cast(int, cur.lastrowid), hlc=hlc)
 
     def _append_sync(self, events: list[NewEvent]) -> list[Event]:
-        with self._transaction() as db:
+        with self._sql.transaction() as db:
             return [self._insert(db, new) for new in events]
 
     def _read_sync(self, after_seq: int, limit: int) -> list[Event]:
-        rows = self._db().execute(
+        rows = self._sql.db.execute(
             f"SELECT {_COLUMNS} FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
             (after_seq, limit),
         )
         return [_row_to_event(r) for r in rows]
 
     def _get_sync(self, event_id: str) -> Event | None:
-        row = (
-            self._db()
-            .execute(f"SELECT {_COLUMNS} FROM events WHERE id = ?", (event_id,))
-            .fetchone()
-        )
+        row = self._sql.db.execute(
+            f"SELECT {_COLUMNS} FROM events WHERE id = ?", (event_id,)
+        ).fetchone()
         return _row_to_event(row) if row else None
 
     def _last_seq_sync(self) -> int:
-        row = self._db().execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
+        row = self._sql.db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()
         return int(row[0])
 
     def _redact_sync(self, event_ids: list[str], reason: str, actor: str) -> Event:
         if not event_ids:
             raise ValueError("nothing to redact")
-        with self._transaction() as db:
+        with self._sql.transaction() as db:
             _require_known(db, event_ids)
             db.executemany(
                 "UPDATE events SET payload = '{}', redacted = 1 WHERE id = ?",

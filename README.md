@@ -11,7 +11,11 @@ d'autres personnes.
   configuration typée, logs structurés, CI.
 - **M1 — premier cerveau** : client OpenRouter (DeepSeek v4.1 Flash par défaut), boucle d'agent
   (arrêts typés, budgets, détection de boucles, outils parallèles), contrat d'outil fail-closed,
-  gardien v0, constitution (personnalité), contexte conçu pour le cache de prompt, canal terminal. Voir l'ordre de construction dans
+  gardien v0, constitution (personnalité), contexte conçu pour le cache de prompt, canal terminal.
+- **M2 — mémoire v0** : faits bi-temporels avec provenance (jamais écrasés, gardés en historique),
+  registre des engagements (je dois / on me doit), recherche plein texte, outils mémoire,
+  extraction en arrière-plan, oubli par source vérifié par rejeu du journal, profil lisible
+  (`orion memory`), oubli (`orion forget <source>`). Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
 ## Démarrer

@@ -256,3 +256,19 @@ Code, identifiants et commentaires en anglais ; documentation et décisions en f
 `uv`, Pydantic v2, `pyright` strict, `ruff`, `pytest`. Infra existante de l'utilisateur : un serveur
 (hébergement du cerveau) et un compte OpenRouter (fournisseur du jalon M1). Pas de budget LLM
 plafonné, mais budgets par tâche appliqués par le code (garde-fou contre les boucles).
+
+## D17 — La mémoire voyage dans les messages, jamais dans le prompt système
+
+*19/10/2026 · acceptée*
+
+Pour préserver le cache de prompt, la mémoire n'est jamais injectée dans le message système. Elle
+est jointe au message de l'utilisateur au moment où il arrive, puis rejouée telle quelle :
+- `<memoire>` (profil, préférences, engagements ouverts) au premier message d'une fenêtre de
+  conversation (nouveau fil ou après un rebase) ;
+- `<souvenirs>` (faits pertinents trouvés par recherche plein texte) sur chaque message, sans
+  répéter ce qui est déjà visible dans la fenêtre.
+
+Les écritures en mémoire sont des outils à effet interne qui refusent les contextes non fiables :
+un contenu lu sur le web ou venant d'un tiers ne peut pas devenir un souvenir sans le
+propriétaire. L'extraction en arrière-plan produit des souvenirs de confiance `SYSTEM` au plus.
+La résolution d'entités (personnes) reste minimale en M2 (noms libres) et sera traitée en M6.

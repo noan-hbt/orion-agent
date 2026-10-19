@@ -56,6 +56,7 @@ class AgentConfig(BaseModel):
     max_steps: int = Field(default=12, ge=1)
     max_tool_calls: int = Field(default=40, ge=0)
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
+    extractor_model: str = "deepseek/deepseek-v4.1-flash"
 
 
 class OrionConfig(BaseModel):
@@ -74,6 +75,11 @@ class OrionConfig(BaseModel):
     @property
     def journal_path(self) -> Path:
         return self.data_dir / "journal.sqlite3"
+
+    @property
+    def memory_path(self) -> Path:
+        """Rebuildable projection: safe to delete, it is replayed from the journal."""
+        return self.data_dir / "memory.sqlite3"
 
 
 def load_config(path: Path | None = None) -> OrionConfig:

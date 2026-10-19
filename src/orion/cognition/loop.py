@@ -57,6 +57,7 @@ class LoopSettings:
     session_id: str
     thread_id: str
     correlation_id: str
+    origin_event_id: str | None = None
     timezone: str = "Europe/Paris"
     max_tokens: int | None = None
     budget: Budget = field(default_factory=Budget)
@@ -249,6 +250,7 @@ async def _execute_one(
     ctx = ToolContext(
         thread_id=settings.thread_id,
         correlation_id=settings.correlation_id,
+        origin_event_id=settings.origin_event_id,
         context_trust=context_trust,
         timezone=settings.timezone,
     )

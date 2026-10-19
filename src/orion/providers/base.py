@@ -72,6 +72,7 @@ class ModelRequest(BaseModel):
     max_tokens: int | None = None
     temperature: float | None = None
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    json_output: bool = Field(default=False, description="Ask for a single JSON object reply")
 
 
 class ModelResponse(BaseModel):

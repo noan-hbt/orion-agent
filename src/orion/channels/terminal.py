@@ -56,3 +56,6 @@ async def run_terminal(orion: Orion) -> None:
         print(f"\norion > {result.text.strip() or '(pas de réponse)'}")
         if result.reason.value != "completed":
             print(f"   [arrêt : {result.reason.value} {result.detail}]".rstrip())
+        report = await orion.consolidate(result)
+        if report and report.applied:
+            print(f"   [mémoire : {', '.join(report.applied)}]")

@@ -36,6 +36,8 @@ class Reversibility(StrEnum):
 class ToolContext:
     thread_id: str
     correlation_id: str
+    origin_event_id: str | None = None
+    """The event that started this turn (e.g. the owner's message); memory writes derive from it."""
     context_trust: Trust = Trust.OWNER
     timezone: str = "Europe/Paris"
 

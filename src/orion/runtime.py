@@ -12,7 +12,7 @@ extension of what was sent before.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -35,6 +35,11 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import Guardian
+from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
+from orion.memory.model import FACT_ASSERTED
+from orion.memory.render import recall_block, snapshot_block
+from orion.memory.service import ForgetReport, MemoryService, Origin
+from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, Usage
 from orion.tools.base import ToolRegistry
 
@@ -48,6 +53,10 @@ class TurnResult:
     usage: Usage
     correlation_id: str
     detail: str = ""
+    thread_id: str = ""
+    owner_text: str = ""
+    origin_event_id: str = ""
+    day: date | None = None
 
 
 class Orion:
@@ -59,8 +68,16 @@ class Orion:
         guardian: Guardian,
         compiler: ContextCompiler,
         agent: AgentConfig,
+        memory: MemoryService | None = None,
+        extractor: MemoryExtractor | None = None,
+        snapshot_chars: int = 2400,
+        recall_limit: int = 6,
     ) -> None:
         self._journal = journal
+        self._memory = memory
+        self._extractor = extractor
+        self._snapshot_chars = snapshot_chars
+        self._recall_limit = recall_limit
         self._provider = provider
         self._registry = registry
         self._guardian = guardian
@@ -71,6 +88,8 @@ class Orion:
 
     async def start(self) -> None:
         await self._projections.catch_up()
+        if self._memory is not None:
+            await self._memory.sync()
 
     async def handle_owner_message(
         self, thread_id: str, text: str, channel: str, now: datetime | None = None
@@ -86,12 +105,15 @@ class Orion:
             trust=Trust.OWNER,
             correlation_id=correlation_id,
         )
-        user_message = render_user_message(text, when, channel)
         await self._projections.catch_up()
         thread = self.threads.get(thread_id)
 
         events: list[NewEvent] = [received]
-        new_base = self._compiler.rebase_point(thread, [user_message])
+        new_base = self._compiler.rebase_point(thread, [render_user_message(text, when, channel)])
+        window = thread.messages[new_base if new_base is not None else thread.base :]
+        user_message = render_user_message(
+            text, when, channel, await self._memory_blocks(text, window)
+        )
         if new_base is not None:
             log.info("thread.rebase", thread=thread_id, base=new_base)
             events.append(
@@ -118,6 +140,7 @@ class Orion:
             session_id=f"orion:{thread_id}",
             thread_id=thread_id,
             correlation_id=correlation_id,
+            origin_event_id=received.id,
             timezone=self._agent.timezone,
             budget=Budget(
                 max_steps=self._agent.max_steps,
@@ -198,12 +221,81 @@ class Orion:
                             )
                         ]
                     )
-                    result = TurnResult(final_text, reason, usage, correlation_id, detail)
+                    result = TurnResult(
+                        final_text,
+                        reason,
+                        usage,
+                        correlation_id,
+                        detail,
+                        thread_id=thread_id,
+                        owner_text=text,
+                        origin_event_id=received.id,
+                        day=when.date(),
+                    )
 
         await self._projections.catch_up()
         if result is None:  # pragma: no cover - run_agent always ends with Finished
             raise RuntimeError("agent loop ended without a Finished event")
         return result
+
+    async def forget_source(self, source_prefix: str, reason: str) -> ForgetReport:
+        """Forget a source everywhere: memory, and the conversations that will be replayed."""
+        if self._memory is None:
+            raise RuntimeError("memory is not configured")
+        report = await self._memory.forget_source(source_prefix, reason, actor="owner:main")
+        await self._projections.rebuild(self.threads.name)
+        return report
+
+    async def consolidate(self, turn: TurnResult) -> ExtractionReport | None:
+        """Run background memory extraction for a finished turn (off the critical path)."""
+        if (
+            self._memory is None
+            or self._extractor is None
+            or turn.reason is not StopReason.COMPLETED
+        ):
+            return None
+        recorded: list[Fact] = []
+        for event in await self._journal.read(0, 100_000):
+            if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
+                fact = await self._memory.store.fact(str(event.payload["fact_id"]))
+                if fact is not None:
+                    recorded.append(fact)
+        origin = Origin(
+            actor="orion:extractor",
+            source=f"thread:{turn.thread_id}",
+            trust=EXTRACTOR_TRUST,
+            derived_from=(turn.origin_event_id,),
+            correlation_id=turn.correlation_id,
+        )
+        return await self._extractor.consolidate(
+            turn.owner_text, turn.text, origin, turn.day or date.today(), recorded
+        )
+
+    async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
+        """Memory to attach to this message: core memory when a window starts, then any
+        relevant facts not already visible in the window. Appended to the user message, never to
+        the system prompt, so the cached prefix is untouched."""
+        if self._memory is None:
+            return []
+        blocks: list[str] = []
+        if not window:
+            snapshot = snapshot_block(
+                await self._memory.store.facts(),
+                await self._memory.store.commitments(),
+                self._snapshot_chars,
+            )
+            if snapshot:
+                blocks.append(snapshot)
+        shown = "\n".join(str(m.get("content") or "") for m in window) + "\n".join(blocks)
+        relevant = [
+            f
+            for f in await self._memory.store.search(text, self._recall_limit)
+            if f.id not in shown
+        ]
+        recalled = recall_block(relevant)
+        if recalled:
+            blocks.append(recalled)
+        return blocks
 
     @staticmethod
     def _event(

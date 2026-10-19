@@ -94,6 +94,8 @@ class OpenRouterProvider:
             body["max_tokens"] = request.max_tokens
         if request.temperature is not None:
             body["temperature"] = request.temperature
+        if request.json_output:
+            body["response_format"] = {"type": "json_object"}
         if request.reasoning_effort is not None:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         return body
