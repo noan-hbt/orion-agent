@@ -14,6 +14,7 @@ from orion.adaptation.reflector import Reflector
 from orion.adaptation.service import AdaptationSettings, Adapter
 from orion.app import App
 from orion.channels.imessage import IMessageChannel, IMessageSettings
+from orion.channels.inbox import OwnerInbox
 from orion.channels.inkbox import InkboxClient
 from orion.channels.webhook import webhook_app
 from orion.cognition.verifier import Verifier
@@ -28,7 +29,16 @@ class ServeError(RuntimeError):
     """Configuration problem that prevents the daemon from starting."""
 
 
-async def connect_imessage(app: App, client: InkboxClient) -> IMessageChannel:
+def owner_inbox(app: App) -> OwnerInbox:
+    async def consolidate(turn: TurnResult) -> None:
+        report = await app.orion.consolidate(turn)
+        if report and report.applied:
+            log.info("memory.consolidated", applied=report.applied)
+
+    return OwnerInbox(app.orion, app.config.channels.imessage.coalesce_seconds, on_turn=consolidate)
+
+
+async def connect_imessage(app: App, client: InkboxClient, inbox: OwnerInbox) -> IMessageChannel:
     cfg = app.config.channels.imessage
     if not cfg.identity or not cfg.owner_number:
         raise ServeError("channels.imessage needs `identity` and `owner_number` in orion.toml")
@@ -38,22 +48,15 @@ async def connect_imessage(app: App, client: InkboxClient) -> IMessageChannel:
     if not identity.imessage_enabled:
         raise ServeError(f"iMessage is not enabled on {cfg.identity!r}: run `orion inkbox setup`")
 
-    async def consolidate(turn: TurnResult) -> None:
-        report = await app.orion.consolidate(turn)
-        if report and report.applied:
-            log.info("memory.consolidated", applied=report.applied)
-
     channel = IMessageChannel(
         client,
         app.journal,
-        app.orion,
+        inbox,
         IMessageSettings(
             owner_number=cfg.owner_number,
             identity_id=identity.id,
-            coalesce_seconds=cfg.coalesce_seconds,
             approval_timeout_seconds=cfg.approval_timeout_seconds,
         ),
-        on_turn=consolidate,
     )
     await channel.start()
     app.approver.target = channel
@@ -61,12 +64,13 @@ async def connect_imessage(app: App, client: InkboxClient) -> IMessageChannel:
 
 
 async def serve(app: App, client: InkboxClient) -> None:
-    channel = await connect_imessage(app, client)
+    inbox = owner_inbox(app)
+    channel = await connect_imessage(app, client, inbox)
     cfg = app.config.channels.imessage
 
     async def escalate(service: str, error: BaseException) -> None:
         try:
-            await channel.notify(
+            await inbox.notify(
                 f"Je m'arrête : le service {service} plante en boucle ({error!r}). "
                 "Regarde les logs du serveur.",
                 correlation_id="supervisor",
@@ -75,7 +79,7 @@ async def serve(app: App, client: InkboxClient) -> None:
             log.exception("supervisor.escalation_failed", service=service)
 
     supervisor = Supervisor(escalate)
-    supervisor.add("imessage.turns", channel.run_turns)
+    supervisor.add("inbox", inbox.run)
     if cfg.mode == "poll":
         supervisor.add("imessage.poll", lambda: channel.poll_forever(cfg.poll_seconds))
     else:
@@ -97,7 +101,7 @@ async def serve(app: App, client: InkboxClient) -> None:
             app.orion,
             app.journal,
             app.timers,
-            channel,
+            inbox,
             InitiativeSettings(
                 timezone=app.config.agent.timezone,
                 thread_id=OWNER_THREAD,

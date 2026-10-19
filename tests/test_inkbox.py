@@ -126,7 +126,7 @@ class FlakyTransport:
         self.failures = failures
         self.keys: list[str] = []
 
-    async def deliver(self, to: str, text: str, idempotency_key: str) -> str:
+    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
         self.keys.append(idempotency_key)
         if self.failures:
             raise self.failures.pop(0)

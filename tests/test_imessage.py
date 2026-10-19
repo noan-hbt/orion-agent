@@ -14,6 +14,7 @@ from orion.channels.imessage import (
     answer_word,
     split_bubbles,
 )
+from orion.channels.inbox import OwnerInbox
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Trust
@@ -27,7 +28,6 @@ from tests.fakes import ScriptedProvider, reply
 SETTINGS = IMessageSettings(
     owner_number="+33 6 11 11 11 11",
     identity_id="ident-1",
-    coalesce_seconds=0.05,
     approval_timeout_seconds=0.5,
 )
 
@@ -66,9 +66,10 @@ async def channel(
 ) -> AsyncIterator[IMessageChannel]:
     orion = make_orion(journal, provider)
     await orion.start()
-    channel = IMessageChannel(fake.client(), journal, orion, SETTINGS)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
+    channel = IMessageChannel(fake.client(), journal, inbox, SETTINGS)
     await channel.start()
-    worker = asyncio.create_task(channel.run_turns())
+    worker = asyncio.create_task(inbox.run())
     yield channel
     worker.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -129,7 +130,7 @@ async def test_unanswered_messages_are_requeued_after_a_restart(
     journal: SqliteJournal, fake: FakeInkbox
 ) -> None:
     crashed = IMessageChannel(
-        fake.client(), journal, make_orion(journal, ScriptedProvider()), SETTINGS
+        fake.client(), journal, OwnerInbox(make_orion(journal, ScriptedProvider())), SETTINGS
     )
     await crashed.start()
     fake.inbound("tu es là ?")
@@ -138,13 +139,14 @@ async def test_unanswered_messages_are_requeued_after_a_restart(
     provider = ScriptedProvider(reply("Oui."))
     orion = make_orion(journal, provider)
     await orion.start()
-    restarted = IMessageChannel(fake.client(), journal, orion, SETTINGS)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
+    restarted = IMessageChannel(fake.client(), journal, inbox, SETTINGS)
     await restarted.start()
-    worker = asyncio.create_task(restarted.run_turns())
+    worker = asyncio.create_task(inbox.run())
     await until(lambda: fake.texts() == ["Oui."])
     worker.cancel()
     # Handled now: a third start has nothing to redo.
-    again = IMessageChannel(fake.client(), journal, orion, SETTINGS)
+    again = IMessageChannel(fake.client(), journal, OwnerInbox(orion), SETTINGS)
     await again.start()
     assert again.state.unhandled() == []
 

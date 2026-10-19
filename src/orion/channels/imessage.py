@@ -5,9 +5,9 @@ by message id and journals the message before anything else happens (a webhook i
 only once that is done). Only the configured owner number is obeyed; anyone else is journaled
 as third-party content and gets no answer.
 
-Owner messages are coalesced (people send bursts of short texts), then handled as one turn on
-the owner's single thread, with a read receipt and a typing indicator while Orion thinks. The
-reply goes out through the outbox, split into bubbles at paragraph breaks.
+Owner messages go to the unified inbox (which coalesces bursts and runs the turn); this channel
+shows a read receipt and a typing indicator while Orion thinks, and sends the reply through the
+outbox, split into bubbles at paragraph breaks.
 
 Approvals are asked here too: Orion sends the exact action and waits for a tapback (👍/👎) or a
 one-word answer. No answer before the timeout means no.
@@ -19,13 +19,16 @@ import asyncio
 import contextlib
 import re
 import unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
 
 from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
+from orion.channels.inbox import Inbound as InboxItem
+from orion.channels.inbox import OwnerInbox
 from orion.channels.inkbox import (
     IMessage,
     InkboxClient,
@@ -34,14 +37,12 @@ from orion.channels.inkbox import (
     ReactionEvent,
     WebhookEvent,
 )
-from orion.cognition.loop import StopReason
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.outbox import Outbox, SendError
 from orion.guardian.policy import ActionProposal
-from orion.runtime import OWNER_THREAD, Orion, TurnResult
 
 log = structlog.get_logger(__name__)
 
@@ -81,7 +82,6 @@ def split_bubbles(text: str, max_bubbles: int = 4) -> list[str]:
 class IMessageSettings:
     owner_number: str
     identity_id: str | None = None
-    coalesce_seconds: float = 3.0
     approval_timeout_seconds: float = 900.0
     typing_refresh_seconds: float = 20.0
     max_bubbles: int = 4
@@ -144,29 +144,28 @@ class ChannelState:
 
 
 class IMessageChannel:
-    """Inbound handling, owner turns, outbound transport, notifier and approver for iMessage."""
+    """Inbound handling, outbound transport, inbox outlet and approver for iMessage."""
+
+    name = CHANNEL
 
     def __init__(
         self,
         client: InkboxClient,
         journal: EventStore,
-        orion: Orion,
+        inbox: OwnerInbox,
         settings: IMessageSettings,
-        on_turn: Callable[[TurnResult], Awaitable[None]] | None = None,
     ) -> None:
         self._client = client
         self._journal = journal
-        self._orion = orion
+        self._inbox = inbox
         self._settings = settings
         self._owner = normalize_number(settings.owner_number)
-        self._on_turn = on_turn
         self.outbox = Outbox(journal, {CHANNEL: self})
         self.state = ChannelState()
         self._runner = ProjectionRunner(journal, [self.state])
-        self._queue: asyncio.Queue[Inbound] = asyncio.Queue()
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
-        self._background: set[asyncio.Task[None]] = set()
         self._polls = 0
+        inbox.register(self)
 
     async def start(self) -> None:
         """Catch up, finish sends interrupted by a crash, requeue unanswered owner messages."""
@@ -174,11 +173,17 @@ class IMessageChannel:
         await self.outbox.resume()
         for message in self.state.unhandled():
             log.info("imessage.requeue", message_id=message.message_id)
-            self._queue.put_nowait(message)
+            self._inbox.submit(self._inbound(message))
 
-    # -- outbound: transport for the outbox, notifier for the initiative engine ---------------
+    @staticmethod
+    def _inbound(message: Inbound) -> InboxItem:
+        return InboxItem(
+            CHANNEL, (message.message_id,), message.text, context=message.conversation_id
+        )
 
-    async def deliver(self, to: str, text: str, idempotency_key: str) -> str:
+    # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
+
+    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
         try:
             sent = await self._client.send(to, text, idempotency_key, self._settings.identity_id)
         except InkboxError as exc:
@@ -189,8 +194,24 @@ class IMessageChannel:
         await self._runner.catch_up()
         return self.state.owner_conversation is not None
 
-    async def notify(self, text: str, correlation_id: str) -> None:
+    async def deliver(self, text: str, correlation_id: str | None) -> None:
         await self._send_to_owner(text, correlation_id)
+
+    @asynccontextmanager
+    async def working(self, item: InboxItem) -> AsyncGenerator[None]:
+        """Read receipt, then a typing indicator kept alive until the answer is ready."""
+        conversation = item.context or self.state.owner_conversation
+        if conversation is None:
+            yield
+            return
+        await self._best_effort(self._client.mark_read(conversation), "mark_read")
+        typing = asyncio.create_task(self._keep_typing(conversation))
+        try:
+            yield
+        finally:
+            typing.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await typing
 
     async def _send_to_owner(self, text: str, correlation_id: str | None = None) -> list[str]:
         conversation = self.state.owner_conversation
@@ -249,7 +270,7 @@ class IMessageChannel:
         inbound = Inbound(message.id, message.conversation_id, text)
         if self._approvals and self._resolve_by_word(inbound):
             return
-        self._queue.put_nowait(inbound)
+        self._inbox.submit(self._inbound(inbound))
 
     async def receive_reaction(self, reaction: ReactionEvent) -> None:
         if reaction.direction != "inbound":
@@ -325,44 +346,6 @@ class IMessageChannel:
             await self.poll_once()
             await asyncio.sleep(interval)
 
-    # -- owner turns --------------------------------------------------------------------------
-
-    async def run_turns(self) -> None:
-        while True:
-            batch = [await self._queue.get()]
-            while True:
-                try:
-                    batch.append(
-                        await asyncio.wait_for(self._queue.get(), self._settings.coalesce_seconds)
-                    )
-                except TimeoutError:
-                    break
-            await self._process(batch)
-
-    async def _process(self, batch: list[Inbound]) -> None:
-        conversation = batch[-1].conversation_id
-        await self._best_effort(self._client.mark_read(conversation), "mark_read")
-        typing = asyncio.create_task(self._keep_typing(conversation))
-        try:
-            turn = await self._orion.handle_owner_message(
-                OWNER_THREAD,
-                "\n".join(m.text for m in batch if m.text),
-                CHANNEL,
-                refs=[m.message_id for m in batch],
-            )
-        finally:
-            typing.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await typing
-        text = turn.text.strip()
-        if turn.reason is not StopReason.COMPLETED:
-            log.warning("imessage.turn_incomplete", reason=turn.reason, detail=turn.detail)
-            text = (text + "\n\n" if text else "") + f"(je me suis arrêté : {turn.reason.value})"
-        if text:
-            await self._send_to_owner(text, turn.correlation_id)
-        if self._on_turn is not None:
-            self._spawn(self._on_turn(turn))
-
     async def _keep_typing(self, conversation: str) -> None:
         while True:
             await self._best_effort(self._client.typing(conversation), "typing")
@@ -374,17 +357,6 @@ class IMessageChannel:
             await call
         except InkboxError:
             log.warning("imessage.cosmetic_failed", call=what, exc_info=True)
-
-    def _spawn(self, coro: Awaitable[None]) -> None:
-        async def guarded() -> None:
-            try:
-                await coro
-            except Exception:
-                log.exception("imessage.background_failed")
-
-        task = asyncio.create_task(guarded())
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
 
     # -- approvals ----------------------------------------------------------------------------
 

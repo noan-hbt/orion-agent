@@ -9,7 +9,7 @@ from orion.channels.imessage import IMessageChannel
 from orion.cli import main
 from orion.config import ChannelsConfig, IMessageConfig, OrionConfig
 from orion.runtime import is_silence
-from orion.serve import ServeError, connect_imessage
+from orion.serve import ServeError, connect_imessage, owner_inbox
 from tests.fake_inkbox import FakeInkbox
 from tests.fakes import ScriptedProvider
 
@@ -31,7 +31,7 @@ async def test_serve_wires_the_channel_as_approver_and_shares_the_registry(
     tmp_path: Path,
 ) -> None:
     async with build_app(config(tmp_path), ScriptedProvider()) as app:
-        channel = await connect_imessage(app, FakeInkbox().client())
+        channel = await connect_imessage(app, FakeInkbox().client(), owner_inbox(app))
         assert isinstance(channel, IMessageChannel)
         assert app.approver.target is channel
         tools = {spec.name for spec in app.orion._registry.specs()}
@@ -50,10 +50,10 @@ async def test_serve_refuses_a_half_configured_identity(
 ) -> None:
     async with build_app(config(tmp_path), ScriptedProvider()) as app:
         with pytest.raises(ServeError, match=message):
-            await connect_imessage(app, FakeInkbox(identity=identity).client())
+            await connect_imessage(app, FakeInkbox(identity=identity).client(), owner_inbox(app))
     async with build_app(config(tmp_path, owner_number=""), ScriptedProvider()) as app:
         with pytest.raises(ServeError, match="owner_number"):
-            await connect_imessage(app, FakeInkbox().client())
+            await connect_imessage(app, FakeInkbox().client(), owner_inbox(app))
 
 
 def test_serve_without_a_channel_says_so(

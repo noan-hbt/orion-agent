@@ -35,7 +35,7 @@ class SendError(RuntimeError):
 class Transport(Protocol):
     """A channel's sending side. Must honour the idempotency key."""
 
-    async def deliver(self, to: str, text: str, idempotency_key: str) -> str:
+    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
         """Send `text` to `to`; return the provider's message id."""
         ...
 
@@ -128,7 +128,7 @@ class Outbox:
             await self._settle(FAILED, item, error=f"no transport for {item.channel}")
             raise SendError(f"no transport for channel {item.channel!r}", retryable=False)
         try:
-            remote_id = await transport.deliver(item.to, item.text, item.outbox_id)
+            remote_id = await transport.transmit(item.to, item.text, item.outbox_id)
         except SendError as exc:
             if not exc.retryable:
                 await self._settle(FAILED, item, error=str(exc))
