@@ -8,6 +8,7 @@ has journaled it; the turn itself runs later, off the request.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 import structlog
 from starlette.applications import Starlette
@@ -20,24 +21,42 @@ from orion.channels.inkbox import InkboxError, WebhookEvent, parse_webhook, veri
 log = structlog.get_logger(__name__)
 
 
+class SignatureCheck(Protocol):
+    """Checks a delivery's signature elsewhere (the guardian process holds the key, D28)."""
+
+    async def __call__(
+        self, request_id: str, timestamp: str, signature: str, body: bytes
+    ) -> bool: ...
+
+
 def webhook_app(
     path: str,
-    signing_key: str | None,
+    signing_key: str | SignatureCheck | None,
     handle: Callable[[WebhookEvent], Awaitable[None]],
     clock: Callable[[], float] | None = None,
 ) -> Starlette:
+    async def check(request_id: str, timestamp: str, signature: str, body: bytes) -> bool:
+        if callable(signing_key):
+            return await signing_key(request_id, timestamp, signature, body)
+        return verify_signature(
+            signing_key or "",
+            request_id,
+            timestamp,
+            signature,
+            body,
+            now=clock() if clock else None,
+        )
+
     async def endpoint(request: Request) -> Response:
         if not signing_key:
             log.error("webhook.no_signing_key")
             return JSONResponse({"error": "signing key not configured"}, status_code=503)
         body = await request.body()
-        valid = verify_signature(
-            signing_key,
+        valid = await check(
             request.headers.get("x-inkbox-request-id", ""),
             request.headers.get("x-inkbox-timestamp", ""),
             request.headers.get("x-inkbox-signature", ""),
             body,
-            now=clock() if clock else None,
         )
         if not valid:
             log.warning("webhook.bad_signature", client=request.client)

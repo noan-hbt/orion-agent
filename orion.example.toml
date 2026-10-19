@@ -75,6 +75,17 @@ origination = "shared_imessage_number"
 brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
 calls_poll_seconds = 30          # poll mode: how often finished calls are read back
 
+# Run split (D28): `orion guardian` holds every secret but the LLM key and checks each effect on
+# the world; `orion serve` reaches Inkbox, calendars and mail through it, over a Unix socket.
+# Run them as two Unix users sharing a group (see deploy/). With this on, `orion serve`
+# refuses to start if it can see a secret that belongs to the guardian.
+[guardian]
+enabled = false
+socket = "run/guardian.sock"     # relative to this file; mode 0660
+data_dir = "guardian"            # the guardian's own ledger (mode 0700)
+approval_ttl_seconds = 1800      # an approval is used once, within this delay
+max_sends_per_minute = 30
+
 # Your calendars (M6), read through their secret iCal address:
 # - Google: calendar settings > "Secret address in iCal format";
 # - iCloud: share the calendar as a public calendar, copy the webcal:// link;

@@ -34,7 +34,8 @@ if TYPE_CHECKING:
     from orion.config import OrionConfig
     from orion.core.journal import SqliteJournal
     from orion.core.supervisor import Supervisor
-    from orion.guardian.policy import ActionProposal, Approver
+    from orion.guardian.client import GuardianClient
+    from orion.guardian.policy import ActionProposal, Approval, Approver
     from orion.initiative.engine import AlertSource, Caller, DigestSource, ReportSource
     from orion.initiative.timers import Timers
     from orion.memory.service import MemoryService
@@ -112,7 +113,7 @@ class LateApprover:
 
         self.target: Approver = DenyAllApprover()
 
-    async def approve(self, proposal: ActionProposal) -> bool:
+    async def approve(self, proposal: ActionProposal) -> Approval:
         return await self.target.approve(proposal)
 
 
@@ -127,6 +128,9 @@ class Plate:
     timers: Timers
     approver: LateApprover
     modules: list[Module]
+    guardian: GuardianClient | None = None
+    """The guardian process, when Orion runs split (D28): it holds the secrets, so modules
+    reach Inkbox, calendars and mailboxes through it."""
 
     def module(self, kind: type[M]) -> M | None:
         """An enabled module, by class (for modules that build on another)."""

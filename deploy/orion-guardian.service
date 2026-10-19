@@ -1,0 +1,19 @@
+[Unit]
+Description=Orion guardian: holds the secrets, checks every effect on the world (D28)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=orion-guardian
+Group=orion
+WorkingDirectory=/srv/orion
+EnvironmentFile=/etc/orion/guardian.env
+ExecStart=/srv/orion/.venv/bin/orion guardian
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/orion/guardian /srv/orion/run
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

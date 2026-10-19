@@ -1,0 +1,19 @@
+[Unit]
+Description=Orion core: memory, conversation, initiative; reaches the world through the guardian
+After=orion-guardian.service
+Requires=orion-guardian.service
+
+[Service]
+User=orion-core
+Group=orion
+WorkingDirectory=/srv/orion
+EnvironmentFile=/etc/orion/core.env
+ExecStart=/srv/orion/.venv/bin/orion serve
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/orion/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -20,6 +20,8 @@ from orion.modules.base import Daemon, Module, ModuleError, Plate
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+    from orion.guardian.client import GuardianClient
+    from orion.tools.base import Tool
 
 log = structlog.get_logger(__name__)
 
@@ -35,6 +37,7 @@ class IMessageModule(Module):
         self._client = client
         self._owns_client = client is None
         self._handlers: list[tuple[str, EventHandler]] = []
+        self._guardian: GuardianClient | None = None
         self.imessage: IMessageChannel | None = None
         self.identity_id: str | None = None
 
@@ -42,8 +45,15 @@ class IMessageModule(Module):
     def enabled(self) -> bool:
         return self.config.channels.imessage.enabled
 
+    async def assemble(self, plate: Plate) -> list[Tool]:
+        self._guardian = plate.guardian
+        return []
+
     @property
     def client(self) -> InkboxClient:
+        """Inkbox directly, or through the guardian process, which holds the key (D28)."""
+        if self._client is None and self._guardian is not None:
+            self._client = self._guardian.inkbox()
         if self._client is None:
             cfg = self.config.channels.imessage
             try:
@@ -88,6 +98,7 @@ class IMessageModule(Module):
                 identity_id=identity.id,
                 approval_timeout_seconds=cfg.approval_timeout_seconds,
             ),
+            desk=self._guardian,
         )
         await channel.start()
         plate.approver.target = channel
@@ -101,7 +112,11 @@ class IMessageModule(Module):
         if cfg.mode == "poll":
             daemon.add_service("imessage.poll", lambda: channel.poll_forever(cfg.poll_seconds))
         else:
-            signing_key = cfg.signing_key.resolve().get_secret_value()
+            signing_key = (
+                self._guardian.verify_webhook
+                if self._guardian is not None
+                else cfg.signing_key.resolve().get_secret_value()
+            )
             server = uvicorn.Server(
                 uvicorn.Config(
                     webhook_app(cfg.webhook_path, signing_key, self.dispatch),
@@ -125,6 +140,8 @@ class IMessageModule(Module):
 
     def doctor(self) -> list[str]:
         cfg = self.config.channels.imessage
+        if self.config.guardian.enabled:
+            return [f"through the guardian, identity @{cfg.identity or '?'}, {cfg.mode} mode"]
         try:
             cfg.api_key.resolve()
         except LookupError as exc:

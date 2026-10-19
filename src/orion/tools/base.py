@@ -40,6 +40,9 @@ class ToolContext:
     """The event that started this turn (e.g. the owner's message); memory writes derive from it."""
     context_trust: Trust = Trust.OWNER
     timezone: str = "Europe/Paris"
+    grant: str | None = None
+    """The owner's approval of this very call, as recorded by the guardian process: an action
+    the guardian checks (calling a stranger, writing to another Orion) presents it."""
 
 
 @dataclass

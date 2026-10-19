@@ -67,6 +67,16 @@ d'autres personnes.
   la mémoire se range : doublons retirés, faits périmés remplacés, noms fusionnés
   (« Paul » = « Paul Martin »), contradictions posées en question dans le point du matin (D27).
 
+- **Gardien séparé** (D28) : Orion peut tourner en deux processus. `orion guardian` détient
+  les secrets (Inkbox, agendas, mail) et vérifie chaque effet sur le monde, même si le reste
+  d'Orion était compromis :
+  - les messages ne partent que vers ta conversation ;
+  - la liste blanche de la ligne ne peut pas être levée ;
+  - un appel à un tiers n'a lieu que si tu as dit oui, et le gardien le vérifie lui-même auprès
+    d'Inkbox.
+
+  `orion serve` ne garde que la clé du modèle, et refuse de démarrer s'il voit un autre secret.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -94,6 +104,12 @@ uv run orion serve          # le démon : iMessage et initiative
 Orion ne peut t'écrire qu'une fois que tu lui as écrit. Le mode `poll` (par défaut) n'a besoin
 d'aucune URL publique. Pour le mode `webhook`, lance `orion inkbox setup --webhook-url
 https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
+
+### Deux processus (recommandé sur un serveur)
+
+Mets `[guardian] enabled = true`. Ensuite, lance `orion guardian`, avec les secrets d'Inkbox,
+des agendas et du mail, et `orion serve`, avec la seule clé OpenRouter. Le mieux est de les
+lancer sous deux utilisateurs différents : voir [`deploy/`](deploy/).
 
 ## Documentation
 

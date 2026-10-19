@@ -52,11 +52,30 @@ def _inkbox(config: OrionConfig) -> InkboxClient | None:
     return InkboxClient(api_key.get_secret_value(), cfg.base_url)
 
 
+def _secrets_kept_apart(config: OrionConfig) -> bool:
+    """Run split, the core must not see the guardian's secrets (D28): fail closed."""
+    if not config.guardian.enabled:
+        return True
+    from orion.guardian.secrets import exposed
+
+    visible = exposed(config)
+    if visible:
+        print(
+            f"Impossible de démarrer : {', '.join(visible)} est visible par le noyau. Avec "
+            "[guardian] enabled = true, ces secrets ne vivent que dans l'environnement de "
+            "`orion guardian`."
+        )
+    return not visible
+
+
 async def _chat(config: OrionConfig) -> int:
     # Imported lazily: `orion version` and `orion doctor` must work without network deps loaded.
     from orion.app import build_app
     from orion.channels.terminal import TerminalApprover, run_terminal
+    from orion.modules.base import ModuleError
 
+    if not _secrets_kept_apart(config):
+        return 2
     provider = _provider(config)
     if provider is None:
         return 3
@@ -64,8 +83,23 @@ async def _chat(config: OrionConfig) -> int:
         async with build_app(config, provider) as app:
             app.approver.target = TerminalApprover()
             await run_terminal(app.orion)
+    except ModuleError as exc:
+        print(f"Impossible de démarrer : {exc}")
+        return 2
     finally:
         await provider.aclose()
+    return 0
+
+
+async def _guardian(config: OrionConfig) -> int:
+    from orion.guardian.process import run
+    from orion.guardian.service import GuardianError
+
+    try:
+        await run(config)
+    except GuardianError as exc:
+        print(f"Le gardien ne peut pas démarrer : {exc}")
+        return 2
     return 0
 
 
@@ -82,6 +116,8 @@ async def _serve(config: OrionConfig) -> int:
         return 2
     if not any(module.channel for module in modules):
         print("Aucun canal activé : mets `enabled = true` dans [channels.imessage].")
+        return 2
+    if not _secrets_kept_apart(config):
         return 2
     provider = _provider(config)
     if provider is None:
@@ -221,6 +257,8 @@ async def _doctor(config: OrionConfig) -> int:
         print("openrouter: api key present")
     except LookupError as exc:
         print(f"openrouter: {exc}")
+    if config.guardian.enabled:
+        print(f"guardian:  {await _guardian_status(config)}")
     from orion.modules.base import ModuleError
     from orion.modules.registry import discover, load
 
@@ -237,6 +275,22 @@ async def _doctor(config: OrionConfig) -> int:
     return 0
 
 
+async def _guardian_status(config: OrionConfig) -> str:
+    from orion.guardian.client import GuardianClient, GuardianUnavailableError
+    from orion.guardian.secrets import exposed
+
+    client = GuardianClient.over_socket(config.guardian.socket)
+    try:
+        await client.health()
+        state = f"reachable at {config.guardian.socket}"
+    except GuardianUnavailableError:
+        state = f"not reachable at {config.guardian.socket} (start `orion guardian`)"
+    finally:
+        await client.aclose()
+    visible = exposed(config)
+    return state + (f"; secrets visible here: {', '.join(visible)}" if visible else "")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="orion")
     parser.add_argument("--config", type=Path, default=None, help="Path to orion.toml")
@@ -245,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("doctor", help="Check configuration and storage")
     sub.add_parser("chat", help="Talk to Orion in the terminal")
     sub.add_parser("serve", help="Run Orion: iMessage channel and initiative engine")
+    sub.add_parser("guardian", help="Run the guardian process, which holds the secrets (D28)")
     inkbox = sub.add_parser("inkbox", help="Inkbox (iMessage) administration")
     inkbox_sub = inkbox.add_subparsers(dest="inkbox_command", required=True)
     setup = inkbox_sub.add_parser("setup", help="Create Orion's identity and show how to connect")
@@ -275,6 +330,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         try:
             return asyncio.run(_serve(config))
+        except KeyboardInterrupt:
+            return 130
+    if args.command == "guardian":
+        try:
+            return asyncio.run(_guardian(config))
         except KeyboardInterrupt:
             return 130
     if args.command == "chat":

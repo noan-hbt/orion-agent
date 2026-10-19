@@ -9,3 +9,5 @@ dist/
 data/
 orion.toml
 .env
+guardian/
+run/

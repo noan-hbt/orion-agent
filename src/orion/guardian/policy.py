@@ -1,9 +1,11 @@
-"""Guardian v0: deterministic policy over tool calls.
+"""Guardian policy: deterministic rules over tool calls, in the core.
 
-M1 runs the guardian in-process behind this interface; it moves to its own process (holding
-credentials and channels) when the first external channel arrives in M3. The rules do not
-depend on anything the model writes: only on the tool's declared properties, the trust of the
-context it would run in, and the owner's answers.
+These rules need the conversation (the trust of the context a call would run in), so they live
+where the conversation is. What must hold even if the core itself is compromised (secrets,
+destinations, approvals checked with the owner) is enforced by the guardian process
+(`orion.guardian.service`, D28). The rules do not depend on anything the model writes: only on
+the tool's declared properties, the trust of the context it would run in, and the owner's
+answers.
 """
 
 from __future__ import annotations
@@ -40,9 +42,22 @@ class ActionProposal:
 
 
 @dataclass(frozen=True)
+class Approval:
+    """The owner's answer. `grant` names the approval the guardian process recorded, which the
+    approved action presents so the guardian can check it with the owner itself (D28)."""
+
+    granted: bool
+    grant: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.granted
+
+
+@dataclass(frozen=True)
 class Decision:
     verdict: Verdict
     reason: str
+    grant: str | None = None
 
     @property
     def allowed(self) -> bool:
@@ -50,14 +65,14 @@ class Decision:
 
 
 class Approver(Protocol):
-    async def approve(self, proposal: ActionProposal) -> bool: ...
+    async def approve(self, proposal: ActionProposal) -> Approval: ...
 
 
 class DenyAllApprover:
     """Used when no human is reachable: anything needing approval is refused."""
 
-    async def approve(self, proposal: ActionProposal) -> bool:
-        return False
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        return Approval(False)
 
 
 UNTRUSTED_REASON = (
@@ -83,8 +98,11 @@ class Guardian:
                     f"{tool.name} cannot run in a context containing untrusted content "
                     f"(trust {proposal.context_trust.name})",
                 )
-            if await self._approver.approve(replace(proposal, ask_reason=UNTRUSTED_REASON)):
-                return Decision(Verdict.ALLOW, "approved by owner despite untrusted context")
+            approval = await self._approver.approve(replace(proposal, ask_reason=UNTRUSTED_REASON))
+            if approval:
+                return Decision(
+                    Verdict.ALLOW, "approved by owner despite untrusted context", approval.grant
+                )
             return Decision(
                 Verdict.DENY,
                 f"{tool.name} in a context containing untrusted content "
@@ -94,6 +112,7 @@ class Guardian:
             return Decision(Verdict.ALLOW, "side-effect free")
         if tool.effect is Effect.INTERNAL:
             return Decision(Verdict.ALLOW, "internal effect only")
-        if await self._approver.approve(proposal):
-            return Decision(Verdict.ALLOW, "approved by owner")
+        approval = await self._approver.approve(proposal)
+        if approval:
+            return Decision(Verdict.ALLOW, "approved by owner", approval.grant)
         return Decision(Verdict.DENY, "owner approval required and not given")

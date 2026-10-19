@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from orion.core.events import Trust
-from orion.guardian.policy import ActionProposal, Guardian
+from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.tools.base import Effect, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
 
@@ -62,10 +62,10 @@ class _Approver:
         self.asked: list[str] = []
         self.reasons: list[str] = []
 
-    async def approve(self, proposal: ActionProposal) -> bool:
+    async def approve(self, proposal: ActionProposal) -> Approval:
         self.asked.append(proposal.describe())
         self.reasons.append(proposal.ask_reason)
-        return self.answer
+        return Approval(self.answer)
 
 
 def proposal(t: Tool, trust: Trust = Trust.OWNER) -> ActionProposal:

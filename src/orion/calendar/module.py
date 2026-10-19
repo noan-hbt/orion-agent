@@ -24,9 +24,8 @@ class CalendarModule(Module):
         self.calendar: Calendar | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
-        self.calendar = Calendar(
-            plate.journal, self.settings, self.config.agent.timezone, self._fetch
-        )
+        fetch = self._fetch or (plate.guardian.calendar if plate.guardian else None)
+        self.calendar = Calendar(plate.journal, self.settings, self.config.agent.timezone, fetch)
         await self.calendar.start()
         return calendar_tools(self.calendar)
 
@@ -46,6 +45,8 @@ class CalendarModule(Module):
         settings: CalendarSettings = self.settings
         if not settings.accounts:
             return ["no account: add [[modules.calendar.accounts]]"]
+        if self.config.guardian.enabled:
+            return [f"{len(settings.accounts)} account(s), read by the guardian"]
         lines: list[str] = []
         for account in settings.accounts:
             try:

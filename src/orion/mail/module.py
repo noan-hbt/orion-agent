@@ -32,7 +32,7 @@ class MailModule(Module):
             settings,
             Quarantine(plate.provider, model),
             self.config.agent.timezone,
-            self._fetch,
+            self._fetch or (plate.guardian.mail if plate.guardian else None),
         )
         await self.mailbox.start()
         return mail_tools(self.mailbox)
@@ -49,6 +49,8 @@ class MailModule(Module):
         settings: MailSettings = self.settings
         if not settings.accounts:
             return ["no account: add [[modules.mail.accounts]]"]
+        if self.config.guardian.enabled:
+            return [f"{len(settings.accounts)} account(s), read by the guardian"]
         lines: list[str] = []
         for account in settings.accounts:
             try:
