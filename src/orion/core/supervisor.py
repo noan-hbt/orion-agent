@@ -65,6 +65,10 @@ class Supervisor:
             raise ValueError(f"service {name!r} already registered")
         self._services.append(_ServiceSpec(name, fn, policy or RestartPolicy()))
 
+    @property
+    def services(self) -> list[str]:
+        return [spec.name for spec in self._services]
+
     async def run(self) -> None:
         """Run all services until cancelled, or until one gives up (then raise)."""
         async with asyncio.TaskGroup() as group:

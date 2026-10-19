@@ -37,6 +37,11 @@ d'autres personnes.
   - Orion peut t'appeler, te réveiller par un appel, ou appeler un tiers avec ton accord ;
   - la ligne est réservée à ton numéro.
 
+- **Modules** (D24) : Orion est une plaque sur laquelle on branche des modules. Le cœur garde la
+  mémoire, le manuel, le gardien, la boîte de réception, l'initiative et les rappels. iMessage,
+  la voix, la délégation et l'apprentissage en arrière-plan sont des modules, et d'autres peuvent
+  s'installer comme paquets Python. `orion doctor` liste les modules et leur état.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -70,3 +75,35 @@ https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 - [`docs/research/`](docs/research/) — études : Claude Code, paysage des agents, ce qui fait un Jarvis
 - [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md) — architecture
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — journal des décisions
+
+## Écrire un module
+
+Un module est une sous-classe de `orion.modules.base.Module`. Chaque crochet est facultatif :
+
+```python
+from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+
+
+class WeatherSettings(ModuleSettings):  # section [modules.weather] d'orion.toml
+    city: str = "Paris"
+
+
+class Weather(Module):
+    name = "weather"
+    settings_model = WeatherSettings
+    requires = ()  # autres modules nécessaires
+
+    def instructions_text(self) -> str:  # ajouté à la constitution
+        return "# La météo\n\nTu connais la météo avec `weather`."
+
+    async def assemble(self, plate: Plate) -> list[Tool]:
+        return [...]  # outils donnés au modèle
+
+    async def serve(self, daemon: Daemon) -> None:
+        daemon.add_service("weather.watch", self.watch)  # service supervisé
+        daemon.reports.append(self)  # comptes rendus pour l'initiative
+```
+
+On le publie comme paquet avec un point d'entrée dans le groupe `orion.modules`
+(`weather = "mon_paquet:Weather"`), puis on l'active avec `[modules.weather] enabled = true`.
+

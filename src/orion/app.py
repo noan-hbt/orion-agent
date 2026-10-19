@@ -1,13 +1,15 @@
 """Assembly: builds one Orion from its configuration, for every entry point.
 
-The tool registry is the same whatever the channel, so `orion chat` and `orion serve` share
-one cached prompt prefix on the owner's thread.
+The core (journal, memory, guardian, reminders, the playbook) is always there; modules snap on
+top (see `orion.modules`). The tool registry and the constitution depend only on which modules
+are enabled, so `orion chat` and `orion serve` share one cached prompt prefix on the owner's
+thread.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from orion.adaptation.tools import adaptation_tools
@@ -15,88 +17,116 @@ from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
-from orion.delegation.claude_code import ClaudeCodeAgent
-from orion.delegation.jobs import JobService, delegation_tools
-from orion.guardian.policy import ActionProposal, Approver, DenyAllApprover, Guardian
+from orion.guardian.policy import Guardian
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
+from orion.modules.base import LateApprover, M, Module, Plate
+from orion.modules.registry import load
 from orion.providers.base import ModelProvider
 from orion.resources import read_resource
 from orion.runtime import Orion
-from orion.tools.base import ToolRegistry
+from orion.tools.base import Tool, ToolRegistry
 from orion.tools.builtin import builtin_tools
-from orion.voice.tools import PhoneLink, voice_tools
+from orion.voice.module import VoiceModule
 
-
-class LateApprover:
-    """Approver chosen after assembly (the iMessage channel needs Orion to exist first).
-    Until one is set, everything that needs approval is refused."""
-
-    def __init__(self) -> None:
-        self.target: Approver = DenyAllApprover()
-
-    async def approve(self, proposal: ActionProposal) -> bool:
-        return await self.target.approve(proposal)
+__all__ = ["App", "LateApprover", "build_app", "constitution"]
 
 
 @dataclass
 class App:
-    config: OrionConfig
-    provider: ModelProvider
-    journal: SqliteJournal
-    memory: MemoryService
-    timers: Timers
+    plate: Plate
     orion: Orion
-    approver: LateApprover
-    jobs: JobService | None = None
-    phone: PhoneLink | None = None
+
+    @property
+    def config(self) -> OrionConfig:
+        return self.plate.config
+
+    @property
+    def provider(self) -> ModelProvider:
+        return self.plate.provider
+
+    @property
+    def journal(self) -> SqliteJournal:
+        return self.plate.journal
+
+    @property
+    def memory(self) -> MemoryService:
+        return self.plate.memory
+
+    @property
+    def timers(self) -> Timers:
+        return self.plate.timers
+
+    @property
+    def approver(self) -> LateApprover:
+        return self.plate.approver
+
+    @property
+    def modules(self) -> list[Module]:
+        return self.plate.modules
+
+    def module(self, kind: type[M]) -> M | None:
+        return self.plate.module(kind)
+
+
+def constitution(modules: list[Module]) -> str:
+    """The core constitution, then each enabled module's section, in loading order."""
+    parts = [read_resource("constitution.md").strip()]
+    parts += [text for text in (m.instructions_text() for m in modules) if text]
+    return "\n\n".join(parts) + "\n"
+
+
+def core_tools(plate: Plate) -> list[Tool]:
+    return [
+        *builtin_tools(),
+        *memory_tools(plate.memory),
+        *reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None),
+        *adaptation_tools(plate.memory),
+    ]
 
 
 @asynccontextmanager
-async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenerator[App]:
+async def build_app(
+    config: OrionConfig, provider: ModelProvider, modules: list[Module] | None = None
+) -> AsyncGenerator[App]:
+    """`modules` overrides the ones the configuration enables (tests inject fakes)."""
+    enabled = modules if modules is not None else load(config)
     store = MemoryStore(config.memory_path)
     await store.open()
-    try:
-        async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
-            memory = MemoryService(journal, store)
-            timers = Timers(journal, TimerProjection())
-            approver = LateApprover()
-            phone = PhoneLink()
-            jobs: JobService | None = None
-            if config.delegation.enabled:
-                d = config.delegation
-                agent = ClaudeCodeAgent(
-                    d.binary, d.model, d.timeout_seconds, d.max_budget_usd, d.allow_bash
-                )
-                jobs = JobService(journal, agent, config.workspaces_path)
-                await jobs.recover()
-            orion = Orion(
-                journal=journal,
-                provider=provider,
-                registry=ToolRegistry(
-                    [
-                        *builtin_tools(),
-                        *memory_tools(memory),
-                        *reminder_tools(timers, calls=config.voice.enabled),
-                        *adaptation_tools(memory),
-                        *(delegation_tools(jobs) if jobs else []),
-                        *(voice_tools(phone) if config.voice.enabled else []),
-                    ]
-                ),
-                guardian=Guardian(approver),
-                compiler=ContextCompiler(
-                    read_resource("constitution.md"), config.agent.max_window_tokens
-                ),
-                agent=config.agent,
-                memory=memory,
-                extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
-            )
-            await orion.start()
-            await timers.sync()
-            yield App(config, provider, journal, memory, timers, orion, approver, jobs, phone)
-    finally:
-        await store.close()
+    async with AsyncExitStack() as stack:
+        stack.push_async_callback(store.close)
+        journal = await stack.enter_async_context(
+            SqliteJournal(config.journal_path, HybridClock(config.instance))
+        )
+        memory = MemoryService(journal, store)
+        plate = Plate(
+            config=config,
+            provider=provider,
+            journal=journal,
+            memory=memory,
+            timers=Timers(journal, TimerProjection()),
+            approver=LateApprover(),
+            modules=enabled,
+        )
+        tools = core_tools(plate)
+        for module in enabled:
+            stack.push_async_callback(module.close)
+            tools += await module.assemble(plate)
+
+        orion = Orion(
+            journal=journal,
+            provider=provider,
+            registry=ToolRegistry(tools),
+            guardian=Guardian(plate.approver),
+            compiler=ContextCompiler(constitution(enabled), config.agent.max_window_tokens),
+            agent=config.agent,
+            memory=memory,
+            extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
+        )
+        await orion.start()
+        await plate.timers.sync()
+        yield App(plate, orion)

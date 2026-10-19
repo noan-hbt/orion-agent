@@ -436,3 +436,40 @@ champs structurés (mise en quarantaine). Elle sera faite avec la séparation du
 **Plus tard.** Le mode `client_websocket` d'Inkbox permettra de faire tourner notre propre
 pipeline vocal temps réel, avec un accès direct à la mémoire pendant l'appel, quand un modèle
 vocal temps réel sera branché.
+
+## D24 — Orion modulaire : une plaque et des modules
+
+**Contexte.** Chaque capacité (iMessage, voix, délégation, adaptation) était câblée à la main
+dans `app.py` et `serve.py`. M6 va ajouter des sources (agenda, mail), et le propriétaire veut
+qu'Orion soit « une plaque sur laquelle on met les legos qu'on veut ».
+
+**Décision.** Le cœur est la plaque : journal, mémoire et manuel, gardien, runtime, boîte de
+réception, moteur d'initiative, rappels. Tout le reste est un module (`orion.modules`). Un
+module peut :
+- donner des outils au modèle (`assemble`, identique en `chat` et en `serve`) ;
+- ajouter une section à la constitution ;
+- en mode démon, lancer des services supervisés, être un canal du propriétaire, fournir des
+  comptes rendus au moteur d'initiative ou passer des appels (`serve`) ;
+- dire son état dans `orion doctor`.
+
+Les modules déclarent leurs dépendances (`requires`). Ils sont chargés et démarrés dans l'ordre
+de ces dépendances. Si un module est activé sans ce dont il a besoin, Orion refuse de démarrer
+(fail closed), et de même si une section `[modules.x]` désigne un module qui n'est pas installé.
+
+Les modules intégrés gardent leurs sections de configuration actuelles (`[channels.imessage]`,
+`[voice]`, `[delegation]`, `[adaptation]`). Un module tiers est un paquet Python qui expose une
+sous-classe de `Module` dans le groupe de points d'entrée `orion.modules`. Il est configuré dans
+`[modules.<nom>]`, que ses propres réglages Pydantic valident.
+
+**Cache.** L'ensemble des modules actifs est fixé au démarrage, donc le registre d'outils et le
+message système le sont aussi : le contrat de cache tient. Changer de modules change le préfixe
+une fois.
+
+**Sécurité.** Un module est du code de confiance : l'installer lui donne les mêmes accès
+qu'Orion. Ce qu'il fait dans le monde passe quand même par le gardien (chaque outil déclare son
+effet), et ce qu'il fait entrer porte une `Provenance` et une `Trust`. Isoler les modules dans
+leur propre processus viendra avec la séparation du gardien.
+
+**Hors module, volontairement.** Le manuel et ses outils (`adapt`, `unlearn`…) font partie du
+cœur, car le propriétaire doit toujours pouvoir dire à Orion comment se comporter. Le module
+`adaptation` n'ajoute que la réflexion en arrière-plan.

@@ -20,6 +20,8 @@ in French; code, identifiers and comments are in English.
 - Every piece of content carries `Provenance` and `Trust`; derived trust is the minimum of inputs.
 - Fail closed. Never swallow an exception: log it with context or let it propagate.
 - No secrets in config files or code: use `SecretRef`.
+- New capabilities (channels, sources, skills) are modules (`orion.modules`, D24), not code
+  wired into `app.py` or `serve.py`. The core stays small.
 - Everything that leaves Orion goes through `guardian.outbox.Outbox` (journaled, idempotent).
   Orion speaks first only through the initiative engine, which journals every decision.
 - Every behaviour change comes with a test.

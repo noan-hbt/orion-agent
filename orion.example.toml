@@ -74,3 +74,9 @@ enabled = false
 origination = "shared_imessage_number"
 brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
 calls_poll_seconds = 30          # poll mode: how often finished calls are read back
+
+# Third-party modules (Python packages exposing an `orion.modules` entry point) are configured
+# in their own section. A section for a module that is not installed stops Orion from starting.
+# [modules.weather]
+# enabled = true
+# city = "Lyon"

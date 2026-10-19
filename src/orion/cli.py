@@ -71,23 +71,28 @@ async def _chat(config: OrionConfig) -> int:
 
 async def _serve(config: OrionConfig) -> int:
     from orion.app import build_app
-    from orion.serve import ServeError, serve
+    from orion.modules.base import ModuleError
+    from orion.modules.registry import load
+    from orion.serve import serve
 
-    if not config.channels.imessage.enabled:
+    try:
+        modules = load(config)
+    except ModuleError as exc:
+        print(f"Impossible de démarrer : {exc}")
+        return 2
+    if not any(module.channel for module in modules):
         print("Aucun canal activé : mets `enabled = true` dans [channels.imessage].")
         return 2
     provider = _provider(config)
-    client = _inkbox(config)
-    if provider is None or client is None:
+    if provider is None:
         return 3
     try:
-        async with build_app(config, provider) as app:
-            await serve(app, client)
-    except ServeError as exc:
+        async with build_app(config, provider, modules) as app:
+            await serve(app)
+    except ModuleError as exc:
         print(f"Impossible de démarrer : {exc}")
         return 2
     finally:
-        await client.aclose()
         await provider.aclose()
     return 0
 
@@ -216,20 +221,19 @@ async def _doctor(config: OrionConfig) -> int:
         print("openrouter: api key present")
     except LookupError as exc:
         print(f"openrouter: {exc}")
-    imessage = config.channels.imessage
-    if imessage.enabled:
-        try:
-            imessage.api_key.resolve()
-            print(f"inkbox:    api key present, identity @{imessage.identity or '?'}")
-        except LookupError as exc:
-            print(f"inkbox:    {exc}")
-    else:
-        print("inkbox:    disabled")
-    print(
-        "calls:     on"
-        if config.voice.enabled
-        else "calls:     off (set enabled = true in [voice], then rerun `orion inkbox setup`)"
-    )
+    from orion.modules.base import ModuleError
+    from orion.modules.registry import discover, load
+
+    try:
+        enabled = {module.name: module for module in load(config)}
+    except ModuleError as exc:
+        print(f"modules:   {exc}")
+        return 2
+    for kind in discover():
+        module = enabled.get(kind.name)
+        detail = "; ".join(module.doctor()) if module else ""
+        state = "on" if module else "off"
+        print(f"{kind.name + ':':<12}{state}" + (f" ({detail})" if detail else ""))
     return 0
 
 

@@ -10,7 +10,7 @@ import os
 import tomllib
 from datetime import time
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -185,6 +185,10 @@ class OrionConfig(BaseModel):
     adaptation: AdaptationConfig = AdaptationConfig()
     delegation: DelegationConfig = DelegationConfig()
     voice: VoiceConfig = VoiceConfig()
+    modules: dict[str, dict[str, Any]] = Field(
+        default_factory=dict[str, dict[str, Any]],
+        description="Third-party modules' [modules.<name>] sections, validated by each module",
+    )
 
     @property
     def journal_path(self) -> Path:
