@@ -8,7 +8,9 @@ asked, and reads every finished call back:
   is something to confirm;
 - a call Orion placed to someone else, at the owner's request, becomes a report the
   initiative engine passes on. Its transcript is third-party content: it informs, it never
-  instructs.
+  instructs;
+- a call Orion placed to the owner that never connected (failed, unanswered) also becomes a
+  report, so a reminder by phone is never lost silently.
 
     call.requested → call.ended          voice.brief.updated
 """
@@ -66,6 +68,8 @@ class EndedCall:
     title: str
     text: str
     ok: bool
+    status: str = ""
+    hangup: str = ""
 
 
 @dataclass
@@ -73,6 +77,8 @@ class VoiceState:
     name: str = "voice"
     requested: dict[str, tuple[str, str]] = field(default_factory=dict[str, tuple[str, str]])
     """call id → (purpose, title)"""
+    reasons: dict[str, str] = field(default_factory=dict[str, str])
+    """call id → what the call was about"""
     ended: dict[str, EndedCall] = field(default_factory=dict[str, EndedCall])
     brief: str | None = None
     _seq: int = 0
@@ -82,6 +88,7 @@ class VoiceState:
 
     async def reset(self) -> None:
         self.requested.clear()
+        self.reasons.clear()
         self.ended.clear()
         self.brief = None
         self._seq = 0
@@ -96,6 +103,7 @@ class VoiceState:
                 str(payload["purpose"]),
                 str(payload["title"]),
             )
+            self.reasons[str(payload["call_id"])] = str(payload.get("reason", ""))
         elif event.kind == CALL_ENDED:
             call_id = str(payload["call_id"])
             self.ended[call_id] = EndedCall(
@@ -104,6 +112,8 @@ class VoiceState:
                 str(payload.get("title", "")),
                 str(payload["text"]),
                 bool(payload["connected"]),
+                str(payload.get("status", "")),
+                str(payload.get("hangup_reason") or ""),
             )
         elif event.kind == BRIEF_UPDATED:
             self.brief = str(payload["fingerprint"])
@@ -278,6 +288,7 @@ class VoiceChannel:
                 "direction": call.direction,
                 "status": call.status,
                 "duration_seconds": call.duration_seconds,
+                "hangup_reason": call.hangup_reason,
                 "connected": bool(call.duration_seconds),
                 "text": text,
             },
@@ -299,8 +310,31 @@ class VoiceChannel:
             )
 
     async def reports(self) -> list[Report]:
-        """Calls placed to other people at the owner's request, once finished."""
+        """Calls placed to other people at the owner's request, once finished, and calls
+        Orion placed to the owner that never connected."""
         await self._runner.catch_up()
+        return [*self._missed_owner_calls(), *self._third_party_reports()]
+
+    def _missed_owner_calls(self) -> list[Report]:
+        reports: list[Report] = []
+        for c in self.state.ended.values():
+            if c.purpose != "owner" or c.ok or c.call_id not in self.state.requested:
+                continue
+            why = c.status + (f", {c.hangup}" if c.hangup else "")
+            about = self.state.reasons.get(c.call_id, "")
+            reports.append(
+                Report(
+                    key=f"call:{c.call_id}",
+                    notice=f"L'appel que tu viens de lui passer n'a pas abouti ({why}). Il "
+                    f"portait sur : {about}\nDis-le-lui et donne l'essentiel par message.",
+                    why="mon appel n'a pas abouti",
+                    fallback=f"Je t'ai appelé, sans succès ({why}). C'était pour : {about}",
+                    trust=Trust.SYSTEM,
+                )
+            )
+        return reports
+
+    def _third_party_reports(self) -> list[Report]:
         return [
             Report(
                 key=f"call:{c.call_id}",

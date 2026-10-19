@@ -81,7 +81,7 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
                     [
                         *builtin_tools(),
                         *memory_tools(memory),
-                        *reminder_tools(timers),
+                        *reminder_tools(timers, calls=config.voice.enabled),
                         *adaptation_tools(memory),
                         *(delegation_tools(jobs) if jobs else []),
                         *(voice_tools(phone) if config.voice.enabled else []),

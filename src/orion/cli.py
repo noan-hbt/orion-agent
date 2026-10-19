@@ -92,6 +92,27 @@ async def _serve(config: OrionConfig) -> int:
     return 0
 
 
+async def _inkbox_calls(config: OrionConfig) -> int:
+    client = _inkbox(config)
+    if client is None:
+        return 3
+    try:
+        identity = await client.identity(config.channels.imessage.identity or "")
+        calls = await client.calls(identity.id if identity else None)
+    finally:
+        await client.aclose()
+    for call in calls[:10]:
+        print(
+            f"{call.created_at[:16]}  {call.direction:8}  {call.remote_phone_number:16}  "
+            f"{call.status}"
+            + (f" ({call.hangup_reason})" if call.hangup_reason else "")
+            + (f", {call.duration_seconds} s" if call.duration_seconds else "")
+        )
+    if not calls:
+        print("Aucun appel.")
+    return 0
+
+
 async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
     cfg = config.channels.imessage
     if not cfg.identity:
@@ -204,6 +225,11 @@ async def _doctor(config: OrionConfig) -> int:
             print(f"inkbox:    {exc}")
     else:
         print("inkbox:    disabled")
+    print(
+        "calls:     on"
+        if config.voice.enabled
+        else "calls:     off (set enabled = true in [voice], then rerun `orion inkbox setup`)"
+    )
     return 0
 
 
@@ -219,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     inkbox_sub = inkbox.add_subparsers(dest="inkbox_command", required=True)
     setup = inkbox_sub.add_parser("setup", help="Create Orion's identity and show how to connect")
     setup.add_argument("--webhook-url", default=None, help="Public HTTPS URL for webhook mode")
+    inkbox_sub.add_parser("calls", help="Recent calls on Orion's line, with why they ended")
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
@@ -238,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
     if args.command == "inkbox":
+        if args.inkbox_command == "calls":
+            return asyncio.run(_inkbox_calls(config))
         return asyncio.run(_inkbox_setup(config, args.webhook_url))
     if args.command == "serve":
         try:

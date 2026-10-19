@@ -14,6 +14,7 @@ that is the same whatever the channel:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
@@ -65,7 +66,7 @@ class OwnerInbox:
     def __init__(
         self,
         orion: Orion,
-        coalesce_seconds: float = 3.0,
+        coalesce_seconds: float = 1.5,
         on_turn: Callable[[TurnResult], Awaitable[None]] | None = None,
     ) -> None:
         self._orion = orion
@@ -105,6 +106,7 @@ class OwnerInbox:
     async def run(self) -> None:
         while True:
             batch = [await self._next()]
+            started = time.monotonic()
             while True:
                 try:
                     item = await asyncio.wait_for(self._queue.get(), self._coalesce)
@@ -114,7 +116,7 @@ class OwnerInbox:
                     self._held = item  # a different kind of message: its own turn
                     break
                 batch.append(item)
-            await self._handle(batch)
+            await self._handle(batch, waited=time.monotonic() - started)
 
     async def _next(self) -> Inbound:
         if self._held is not None:
@@ -122,8 +124,9 @@ class OwnerInbox:
             return item
         return await self._queue.get()
 
-    async def _handle(self, batch: list[Inbound]) -> None:
+    async def _handle(self, batch: list[Inbound], waited: float = 0.0) -> None:
         first = batch[0]
+        started = time.monotonic()
         source = self._outlets.get(first.channel)
         reply = self._outlets.get(first.reply_via or first.channel)
         showing = source.working(batch[-1]) if source is not None else nothing_to_show()
@@ -134,6 +137,7 @@ class OwnerInbox:
                 first.channel,
                 refs=[i for item in batch for i in item.message_ids],
             )
+        thought = time.monotonic() - started
         text = turn.text.strip()
         if turn.reason is not StopReason.COMPLETED:
             log.warning("inbox.turn_incomplete", reason=turn.reason, detail=turn.detail)
@@ -144,6 +148,17 @@ class OwnerInbox:
             await reply.deliver(text, turn.correlation_id)
         elif text:
             log.warning("inbox.no_outlet", channel=first.reply_via or first.channel)
+        log.info(
+            "inbox.turn",
+            channel=first.channel,
+            messages=len(batch),
+            coalesce_s=round(waited, 2),
+            think_s=round(thought, 2),
+            send_s=round(time.monotonic() - started - thought, 2),
+            prompt_tokens=turn.usage.prompt_tokens,
+            cached_tokens=turn.usage.cached_tokens,
+            cost_usd=round(turn.usage.cost_usd, 5),
+        )
         if self._on_turn is not None:
             self._spawn(self._on_turn(turn))
 

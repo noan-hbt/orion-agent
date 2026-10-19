@@ -62,8 +62,9 @@ def _line(timer: Timer, timezone: str) -> str:
     return f"({timer.id}) {describe_moment(timer.due_at, timezone)} : {timer.text}"
 
 
-def reminder_tools(timers: Timers, clock: Any = None) -> list[Tool]:
-    """`clock` returns the current aware datetime; injectable for tests."""
+def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> list[Tool]:
+    """`clock` returns the current aware datetime; injectable for tests. `calls` says whether
+    the phone is on (`[voice]`): the schema stays the same either way, for the prompt cache."""
 
     def now(timezone: str) -> datetime:
         return clock() if clock is not None else datetime.now(ZoneInfo(timezone))
@@ -73,6 +74,12 @@ def reminder_tools(timers: Timers, clock: Any = None) -> list[Tool]:
             due = parse_moment(args.when, ctx.timezone)
         except ValueError:
             return ToolResult(f"Not an ISO date-time: {args.when!r}", is_error=True)
+        if args.by_call and not calls:
+            return ToolResult(
+                "Calls are off: the owner has not enabled [voice] in orion.toml. Say so, and "
+                "offer a message reminder instead.",
+                is_error=True,
+            )
         current = now(ctx.timezone)
         if due < current - _GRACE:
             return ToolResult(

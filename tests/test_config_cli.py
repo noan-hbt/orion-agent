@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from orion.channels.inkbox import InkboxClient
 from orion.cli import main
 from orion.config import OrionConfig, SecretRef, load_config
 
@@ -51,6 +52,7 @@ def test_cli_doctor_creates_journal(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert main(["--config", str(path), "doctor"]) == 0
     out = capsys.readouterr().out
     assert "0 events" in out
+    assert "calls:     off" in out
     assert (tmp_path / "d" / "journal.sqlite3").exists()
 
 
@@ -69,3 +71,23 @@ def test_timezones_resolve_without_system_tzdata() -> None:
 def test_unknown_timezone_is_rejected() -> None:
     with pytest.raises(ValidationError, match="unknown timezone"):
         OrionConfig.model_validate({"agent": {"timezone": "Europe/Pariss"}})
+
+
+def test_cli_inkbox_calls_shows_why_calls_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from orion import cli
+    from tests.fake_inkbox import FakeInkbox
+
+    fake = FakeInkbox()
+    fake.call(duration=0)["status"] = "failed"
+    next(iter(fake.phone_calls.values()))["hangup_reason"] = "rejected"
+
+    def client(_config: OrionConfig) -> InkboxClient:
+        return fake.client()
+
+    monkeypatch.setattr(cli, "_inkbox", client)
+    path = tmp_path / "orion.toml"
+    path.write_text('[channels.imessage]\nidentity = "orion-test"\n')
+    assert main(["--config", str(path), "inkbox", "calls"]) == 0
+    assert "failed (rejected)" in capsys.readouterr().out
