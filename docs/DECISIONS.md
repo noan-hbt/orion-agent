@@ -103,21 +103,30 @@ imposent.
   de sortie, conception guidée par le cache, hooks, sandbox) au lieu d'en hériter.
 - Compatibilité MCP obligatoire pour profiter de l'écosystème d'outils.
 
-## D7 — Multi-agent comme capacité de premier rang
+## D7 — Plusieurs instances d'Orion qui travaillent ensemble
 
-*19/10/2026 · acceptée*
+*19/10/2026 · acceptée · précisée le même jour*
 
-**Décision.** Orion est conçu dès le noyau pour travailler excellemment en multi-agent : sous-agents,
-équipes, délégation, parallélisme. Ce n'est pas une fonctionnalité ajoutée par-dessus une boucle
-mono-agent.
+**Précision de l'utilisateur.** « Multi-agent » veut dire : **plusieurs instances complètes
+d'Orion** (chacune avec son identité, sa mémoire, ses outils, son environnement, potentiellement
+sur des machines différentes) qui forment des équipes. Ce n'est pas qu'Orion soit un harnais
+orchestrant des sous-agents internes.
+
+**Décision.** La collaboration entre instances est une capacité de premier rang du noyau, pensée
+dès le départ.
 
 **Conséquences.**
-- Les primitives de coordination (tâches, messages, artefacts partagés, verrous, budgets, annulation)
-  font partie du noyau, au même niveau que les outils et le contexte.
-- Un agent délégué externe (CLI `claude`, `codex`, cf. D5) doit pouvoir être membre d'une équipe
-  comme un agent interne.
-- Le coût (≈ 15× les tokens d'une conversation selon Anthropic) impose que le noyau décide **quand**
-  paralléliser, pas seulement **comment**.
+- Chaque instance a une **identité propre** et authentifiable ; la délégation entre instances
+  transmet une **autorité restreinte**, jamais plus large que celle du délégant.
+- Le protocole entre instances (tâches, messages, artefacts, baux, budgets, annulation) est une
+  interface du noyau, pas une surcouche. Le standard A2A est le candidat naturel pour l'interop.
+- Il faut décider ce qui se partage entre instances (mémoire, décisions, artefacts) et ce qui reste
+  privé.
+- Les sous-agents internes éphémères restent utiles (ex. explorer sans polluer le contexte), mais
+  ce n'est pas l'axe principal.
+- Les principes de l'étape 2 (§5–6 de `02-paysage.md`) s'appliquent toujours : un seul écrivain par
+  ressource, vérification séparée, provenance, budgets, coût élevé du parallélisme.
+- Un agent délégué externe (CLI `claude`, `codex`, cf. D5) peut être membre d'une équipe.
 
 ## D5-bis — Abonnement Claude : à réexaminer
 
