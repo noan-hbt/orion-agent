@@ -185,7 +185,7 @@ async def test_approval_by_tapback(
     assert "send_mail" in fake.texts()[1] and "paul@example.com" in fake.texts()[1]
     fake.react(fake.sent[1]["id"], "like")
     await channel.poll_once()
-    assert await pending is True
+    assert (await pending).granted is True
     [decided] = [e for e in await journal.read() if e.kind == APPROVAL_DECIDED]
     assert decided.payload["how"] == "reaction:like"
 
@@ -198,7 +198,7 @@ async def test_approval_by_word_is_not_a_new_turn(
     await until(lambda: len(fake.sent) == 2)
     fake.inbound("Non.")
     await channel.poll_once()
-    assert await pending is False
+    assert (await pending).granted is False
     await asyncio.sleep(0.1)
     assert len(provider.requests) == 1  # the "non" did not start a conversation turn
     assert channel.state.unhandled() == []
@@ -208,11 +208,11 @@ async def test_no_answer_means_no(
     channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
 ) -> None:
     await _bind_owner(channel, fake, provider)
-    assert await channel.approve(PROPOSAL) is False
+    assert (await channel.approve(PROPOSAL)).granted is False
 
 
 async def test_approval_refused_when_owner_never_wrote(channel: IMessageChannel) -> None:
-    assert await channel.approve(PROPOSAL) is False
+    assert (await channel.approve(PROPOSAL)).granted is False
 
 
 def test_helpers() -> None:

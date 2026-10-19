@@ -137,19 +137,20 @@ class MailState:
             self.synced[account] = datetime.fromisoformat(str(payload["at"]))
 
 
-Fetch = Callable[[MailAccount, str, int, int, int, int, datetime], Awaitable[Batch]]
-"""(account, password, uidvalidity, last_uid, lookback_days, limit, now) → new mail."""
+Fetch = Callable[[MailAccount, int, int, int, int, datetime], Awaitable[Batch]]
+"""(account, uidvalidity, last_uid, lookback_days, limit, now) → new mail. The app password is
+resolved by whoever fetches: the guardian process when Orion runs split (D28)."""
 
 
 async def imap_fetch(
     account: MailAccount,
-    password: str,
     uidvalidity: int,
     last_uid: int,
     lookback_days: int,
     limit: int,
     now: datetime,
 ) -> Batch:
+    password = account.password.resolve().get_secret_value()
     return await asyncio.to_thread(
         fetch_since,
         account.host,
@@ -215,10 +216,8 @@ class Mailbox:
             for account in self.settings.accounts:
                 uidvalidity, last_uid = self.state.cursors.get(account.name, (0, 0))
                 try:
-                    password = account.password.resolve().get_secret_value()
                     batch = await self._fetch(
                         account,
-                        password,
                         uidvalidity,
                         last_uid,
                         self.settings.lookback_days,

@@ -13,7 +13,7 @@ from orion.context.compiler import ContextCompiler
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.core.projections import ProjectionRunner
-from orion.guardian.policy import ActionProposal, Guardian
+from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.mail import imap
 from orion.mail.imap import Batch, RawMail, parse_message
 from orion.mail.module import MailModule
@@ -221,14 +221,13 @@ class Server:
     async def fetch(
         self,
         account: MailAccount,
-        password: str,
         uidvalidity: int,
         last_uid: int,
         lookback_days: int,
         limit: int,
         now: datetime,
     ) -> Batch:
-        assert password == "app-pw"
+        assert account.password.resolve().get_secret_value() == "app-pw"
         self.cursors.append((uidvalidity, last_uid))
         if self.down:
             raise OSError("connection refused")
@@ -307,9 +306,9 @@ class Approver:
         self.answer = answer
         self.asked: list[str] = []
 
-    async def approve(self, proposal: ActionProposal) -> bool:
+    async def approve(self, proposal: ActionProposal) -> Approval:
         self.asked.append(proposal.ask_reason)
-        return self.answer
+        return Approval(self.answer)
 
 
 @pytest.mark.parametrize("answer", [False, True])

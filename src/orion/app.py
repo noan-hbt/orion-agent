@@ -17,6 +17,7 @@ from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
@@ -26,7 +27,7 @@ from orion.memory.semantic import EmbeddingCache, SemanticIndex
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
-from orion.modules.base import LateApprover, M, Module, Plate
+from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.registry import load
 from orion.providers.base import Embedder, ModelProvider
 from orion.resources import read_resource
@@ -94,14 +95,26 @@ def core_tools(plate: Plate) -> list[Tool]:
 
 @asynccontextmanager
 async def build_app(
-    config: OrionConfig, provider: ModelProvider, modules: list[Module] | None = None
+    config: OrionConfig,
+    provider: ModelProvider,
+    modules: list[Module] | None = None,
+    guardian: GuardianClient | None = None,
 ) -> AsyncGenerator[App]:
-    """`modules` overrides the ones the configuration enables (tests inject fakes)."""
+    """`modules` overrides the ones the configuration enables (tests inject fakes), and
+    `guardian` the guardian process's socket."""
     enabled = modules if modules is not None else load(config)
     store = MemoryStore(config.memory_path)
     await store.open()
     async with AsyncExitStack() as stack:
         stack.push_async_callback(store.close)
+        if guardian is None and config.guardian.enabled:
+            guardian = GuardianClient.over_socket(config.guardian.socket)
+            stack.push_async_callback(guardian.aclose)
+        if guardian is not None:
+            try:
+                await guardian.health()
+            except GuardianUnavailableError as exc:
+                raise ModuleError(f"{exc}: start `orion guardian` first") from exc
         journal = await stack.enter_async_context(
             SqliteJournal(config.journal_path, HybridClock(config.instance))
         )
@@ -120,6 +133,7 @@ async def build_app(
             timers=Timers(journal, TimerProjection()),
             approver=LateApprover(),
             modules=enabled,
+            guardian=guardian,
         )
         tools = core_tools(plate)
         for module in enabled:

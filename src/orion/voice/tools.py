@@ -14,7 +14,12 @@ class Phone(Protocol):
     async def call_owner(self, reason: str, correlation_id: str | None = None) -> str: ...
 
     async def call_someone(
-        self, number: str, name: str, goal: str, correlation_id: str | None = None
+        self,
+        number: str,
+        name: str,
+        goal: str,
+        correlation_id: str | None = None,
+        grant: str | None = None,
     ) -> str: ...
 
 
@@ -54,7 +59,7 @@ def voice_tools(link: PhoneLink) -> list[Tool]:
         if link.target is None:
             return ToolResult("Phone is not available right now.", is_error=True)
         call_id = await link.target.call_someone(
-            args.number, args.name, args.goal, ctx.correlation_id
+            args.number, args.name, args.goal, ctx.correlation_id, ctx.grant
         )
         return ToolResult(
             f"Appel à {args.name} lancé ({call_id}). Le compte rendu arrivera à la fin.",

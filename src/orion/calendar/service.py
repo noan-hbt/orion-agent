@@ -38,14 +38,17 @@ GONE = "calendar.event.gone"
 SYNCED = "calendar.synced"
 _WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
-Fetch = Callable[[str], Awaitable[str]]
-
 
 class CalendarAccount(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$", description="e.g. 'perso', 'boulot'")
     url: SecretRef = Field(description="The calendar's secret iCal address (it is a password)")
+
+
+Fetch = Callable[[CalendarAccount], Awaitable[str]]
+"""An account's feed. The secret address is resolved by whoever fetches: the guardian process
+when Orion runs split (D28), so the core never holds it."""
 
 
 class CalendarSettings(ModuleSettings):
@@ -89,6 +92,13 @@ class CalendarState:
             self.events.pop((str(payload["account"]), str(payload["key"])), None)
         elif event.kind == SYNCED:
             self.synced[str(payload["account"])] = datetime.fromisoformat(str(payload["at"]))
+
+
+async def fetch_feed(http: httpx.AsyncClient, account: CalendarAccount) -> str:
+    url = account.url.resolve().get_secret_value()
+    response = await http.get(url.replace("webcal://", "https://", 1))
+    response.raise_for_status()
+    return response.text
 
 
 def _hhmm(moment: datetime) -> str:
@@ -139,12 +149,10 @@ class Calendar:
         if self._http is not None:
             await self._http.aclose()
 
-    async def _http_fetch(self, url: str) -> str:
+    async def _http_fetch(self, account: CalendarAccount) -> str:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
-        response = await self._http.get(url.replace("webcal://", "https://", 1))
-        response.raise_for_status()
-        return response.text
+        return await fetch_feed(self._http, account)
 
     # -- sync ---------------------------------------------------------------------------------
 
@@ -174,8 +182,7 @@ class Calendar:
             changes: dict[str, int] = {}
             for account in self.settings.accounts:
                 try:
-                    url = account.url.resolve().get_secret_value()
-                    feed = await self._fetch(url)
+                    feed = await self._fetch(account)
                     found = occurrences(
                         feed, start, end, self._timezone, self.settings.owner_emails
                     )

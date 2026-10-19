@@ -188,6 +188,50 @@ class DelegationConfig(BaseModel):
     )
 
 
+class GuardianConfig(BaseModel):
+    """The guardian process (D28): holds the secrets and checks every effect on the world."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description="Run split: `orion guardian` holds the secrets, `orion serve` asks it",
+    )
+    socket: Path = Field(
+        default=Path("run/guardian.sock"), description="Unix socket shared by both processes"
+    )
+    data_dir: Path = Field(
+        default=Path("guardian"), description="The guardian's own ledger; only it reads it"
+    )
+    approval_ttl_seconds: float = Field(default=1800.0, gt=0)
+    max_sends_per_minute: int = Field(
+        default=30, ge=1, description="Messages to the owner, at most (a runaway loop stops)"
+    )
+
+
+class FederationConfig(BaseModel):
+    """Talking with other people's Orion (D29, M7). Needs the guardian process."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    owner_name: str = Field(default="", description="How other Orions name the owner")
+    key: SecretRef = Field(
+        default=SecretRef(env="ORION_FEDERATION_KEY"),
+        description="This instance's Ed25519 private key (`orion federation keygen`)",
+    )
+    public_url: str = Field(
+        default="", description="HTTPS address other Orions reach (a reverse proxy in front)"
+    )
+    listen_host: str = "127.0.0.1"
+    listen_port: int = 8788
+    invite_days: int = Field(default=7, ge=1, le=60)
+    max_inbound_per_hour: int = Field(default=60, ge=1, description="Per peer")
+    meeting_start: time = Field(default=time(9, 0), description="Earliest meeting start")
+    meeting_end: time = Field(default=time(19, 0), description="Latest meeting end")
+    weekends: bool = False
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -206,6 +250,8 @@ class OrionConfig(BaseModel):
     adaptation: AdaptationConfig = AdaptationConfig()
     delegation: DelegationConfig = DelegationConfig()
     voice: VoiceConfig = VoiceConfig()
+    guardian: GuardianConfig = GuardianConfig()
+    federation: FederationConfig = FederationConfig()
     modules: dict[str, dict[str, Any]] = Field(
         default_factory=dict[str, dict[str, Any]],
         description="Third-party modules' [modules.<name>] sections, validated by each module",
@@ -226,6 +272,10 @@ class OrionConfig(BaseModel):
         return self.data_dir / "embeddings.sqlite3"
 
     @property
+    def guardian_ledger_path(self) -> Path:
+        return self.guardian.data_dir / "guardian.sqlite3"
+
+    @property
     def workspaces_path(self) -> Path:
         """One folder per delegated job."""
         return self.data_dir / "workspaces"
@@ -241,6 +291,19 @@ def load_config(path: Path | None = None) -> OrionConfig:
     with target.open("rb") as f:
         data = tomllib.load(f)
     config = OrionConfig.model_validate(data)
-    if not config.data_dir.is_absolute():
-        config = config.model_copy(update={"data_dir": target.parent / config.data_dir})
-    return config
+    return config.model_copy(
+        update={
+            "data_dir": _beside(target, config.data_dir),
+            "guardian": config.guardian.model_copy(
+                update={
+                    "socket": _beside(target, config.guardian.socket),
+                    "data_dir": _beside(target, config.guardian.data_dir),
+                }
+            ),
+        }
+    )
+
+
+def _beside(config_file: Path, path: Path) -> Path:
+    """Relative paths in orion.toml are relative to the file itself."""
+    return path if path.is_absolute() else config_file.parent / path

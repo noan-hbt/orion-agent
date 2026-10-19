@@ -22,7 +22,7 @@ import unicodedata
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 
@@ -42,7 +42,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.outbox import Outbox, SendError
-from orion.guardian.policy import ActionProposal
+from orion.guardian.policy import ActionProposal, Approval
 
 log = structlog.get_logger(__name__)
 
@@ -53,8 +53,8 @@ APPROVAL_DECIDED = "approval.decided"
 
 _YES = {"oui", "ouais", "ok", "okay", "vas-y", "vas y", "go", "yes", "yep", "valide", "👍"}
 _NO = {"non", "nan", "no", "nope", "stop", "annule", "refuse", "👎"}
-_REACTION_YES = {"like", "love", "emphasize"}
-_REACTION_NO = {"dislike"}
+REACTION_YES = {"like", "love", "emphasize"}
+REACTION_NO = {"dislike"}
 
 
 def normalize_number(number: str) -> str:
@@ -76,6 +76,14 @@ def split_bubbles(text: str, max_bubbles: int = 4) -> list[str]:
     if len(parts) > max_bubbles:
         parts = [*parts[: max_bubbles - 1], "\n\n".join(parts[max_bubbles - 1 :])]
     return parts
+
+
+class ApprovalDesk(Protocol):
+    """The guardian process, which writes and records approval requests itself (D28)."""
+
+    async def request_approval(
+        self, action: str, params: dict[str, Any], reason: str, conversation_id: str
+    ) -> tuple[str, str]: ...
 
 
 @dataclass(frozen=True)
@@ -154,8 +162,10 @@ class IMessageChannel:
         journal: EventStore,
         inbox: OwnerInbox,
         settings: IMessageSettings,
+        desk: ApprovalDesk | None = None,
     ) -> None:
         self._client = client
+        self._desk = desk
         self._journal = journal
         self._inbox = inbox
         self._settings = settings
@@ -360,24 +370,29 @@ class IMessageChannel:
 
     # -- approvals ----------------------------------------------------------------------------
 
-    async def approve(self, proposal: ActionProposal) -> bool:
-        if self.state.owner_conversation is None:
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        conversation = self.state.owner_conversation
+        if conversation is None:
             log.warning("imessage.approval_unreachable", tool=proposal.tool.name)
-            return False
+            return Approval(False)
         approval_id = f"a_{new_id()}"
+        arguments = proposal.arguments.model_dump(mode="json")
+        grant: str | None = None
         await self._approval_event(
             APPROVAL_REQUESTED,
-            {
-                "approval_id": approval_id,
-                "tool": proposal.tool.name,
-                "arguments": proposal.arguments.model_dump(mode="json"),
-            },
+            {"approval_id": approval_id, "tool": proposal.tool.name, "arguments": arguments},
         )
-        [message_id, *_] = await self._send_to_owner(
-            f"Avant que je le fasse : {proposal.describe()}\n"
-            + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
-            + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
-        )
+        if self._desk is not None:
+            # The guardian writes the question itself and will check the answer itself.
+            grant, message_id = await self._desk.request_approval(
+                proposal.tool.name, arguments, proposal.ask_reason, conversation
+            )
+        else:
+            [message_id, *_] = await self._send_to_owner(
+                f"Avant que je le fasse : {proposal.describe()}\n"
+                + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
+                + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
+            )
         future: asyncio.Future[tuple[bool, str, list[str]]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -392,9 +407,15 @@ class IMessageChannel:
             self._approvals.pop(message_id, None)
         await self._approval_event(
             APPROVAL_DECIDED,
-            {"approval_id": approval_id, "approved": approved, "how": how, "refs": refs},
+            {
+                "approval_id": approval_id,
+                "approved": approved,
+                "how": how,
+                "refs": refs,
+                **({"grant": grant} if grant else {}),
+            },
         )
-        return approved
+        return Approval(approved, grant if approved else None)
 
     def _resolve_by_word(self, inbound: Inbound) -> bool:
         answer = answer_word(inbound.text)
@@ -410,9 +431,9 @@ class IMessageChannel:
         future = self._approvals.get(message_id)
         if future is None or future.done():
             return
-        if reaction in _REACTION_YES:
+        if reaction in REACTION_YES:
             future.set_result((True, f"reaction:{reaction}", []))
-        elif reaction in _REACTION_NO:
+        elif reaction in REACTION_NO:
             future.set_result((False, f"reaction:{reaction}", []))
 
     async def _approval_event(self, kind: str, payload: dict[str, object]) -> None:

@@ -214,21 +214,33 @@ class VoiceChannel:
         return await self._place(self._settings.owner_number, reason, "owner", "", correlation_id)
 
     async def call_someone(
-        self, number: str, name: str, goal: str, correlation_id: str | None = None
+        self,
+        number: str,
+        name: str,
+        goal: str,
+        correlation_id: str | None = None,
+        grant: str | None = None,
     ) -> str:
-        await self._client.allow_outbound_call(self._settings.handle, number)
+        """`grant` is the owner's approval, which the guardian process checks (D28)."""
+        await self._client.allow_outbound_call(self._settings.handle, number, grant)
         reason = (
             f"Tu appelles {name} de la part de ton propriétaire. Objectif : {goal}\n"
             "Présente-toi comme son assistant. Ne donne aucune information personnelle sur lui "
             "au-delà de ce qu'exige l'objectif."
         )
-        return await self._place(number, reason, "third_party", name, correlation_id)
+        return await self._place(number, reason, "third_party", name, correlation_id, grant)
 
     async def _place(
-        self, number: str, reason: str, purpose: str, title: str, correlation_id: str | None
+        self,
+        number: str,
+        reason: str,
+        purpose: str,
+        title: str,
+        correlation_id: str | None,
+        grant: str | None = None,
     ) -> str:
         call = await self._client.place_call(
-            number, reason, self._settings.identity_id, self._settings.origination
+            number, reason, self._settings.identity_id, self._settings.origination, grant=grant
         )
         await self._append(
             CALL_REQUESTED,

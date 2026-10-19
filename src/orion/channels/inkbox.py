@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import random
 import time
+from collections.abc import Sequence
 from typing import Any, Literal
 
 import httpx
@@ -26,6 +27,8 @@ log = structlog.get_logger(__name__)
 DEFAULT_BASE_URL = "https://inkbox.ai"
 SIGNATURE_TOLERANCE_SECONDS = 300
 _RETRYABLE_STATUS = {408, 425, 429, 500, 502, 503, 504}
+GRANT_HEADER = "X-Orion-Grant"
+"""Names the owner's approval of a gated action; read by the guardian process (D28)."""
 
 Reaction = Literal["love", "like", "dislike", "laugh", "emphasize", "question", "eyes", "custom"]
 
@@ -182,6 +185,10 @@ def parse_webhook(body: bytes) -> WebhookEvent:
         raise InkboxError(f"malformed webhook payload: {exc.error_count()} errors") from exc
 
 
+def _grant(grant: str | None) -> dict[str, str] | None:
+    return {GRANT_HEADER: grant} if grant else None
+
+
 class InkboxClient:
     """Async Inkbox client. `identity_id` scopes calls made with an org-wide (admin) key."""
 
@@ -311,7 +318,7 @@ class InkboxClient:
             json={"imessage_filter_mode": "whitelist", "phone_filter_mode": "whitelist"},
         )
 
-    async def allow_outbound_call(self, handle: str, number: str) -> None:
+    async def allow_outbound_call(self, handle: str, number: str, grant: str | None = None) -> None:
         """Let Orion's line call `number` (the line otherwise only talks to the owner)."""
         try:
             await self._request(
@@ -323,6 +330,7 @@ class InkboxClient:
                     "match_target": number,
                     "direction": "outbound",
                 },
+                headers=_grant(grant),
             )
         except InkboxError as exc:
             if exc.status != 409:
@@ -337,6 +345,7 @@ class InkboxClient:
         identity_id: str | None = None,
         origination: str = "shared_imessage_number",
         voicemail_message: str | None = None,
+        grant: str | None = None,
     ) -> Call:
         """Place a call driven by Inkbox Voice AI, with `reason` as its task brief."""
         body: dict[str, Any] = {
@@ -351,7 +360,9 @@ class InkboxClient:
         if voicemail_message:
             body["on_voicemail"] = "leave_message"
             body["voicemail_message"] = voicemail_message[:1000]
-        return Call.model_validate(await self._request("POST", "/phone/place-call", json=body))
+        return Call.model_validate(
+            await self._request("POST", "/phone/place-call", json=body, headers=_grant(grant))
+        )
 
     async def calls(self, identity_id: str | None = None, limit: int = 20) -> list[Call]:
         params: dict[str, Any] = {"limit": limit}
@@ -382,6 +393,23 @@ class InkboxClient:
         await self._request("PUT", "/phone/incoming-call-action", json=body)
 
     # -- transport ----------------------------------------------------------------------------
+
+    async def forward(
+        self,
+        method: str,
+        path: str,
+        params: Sequence[tuple[str, str]],
+        content: bytes,
+        headers: dict[str, str],
+    ) -> httpx.Response:
+        """One raw request, with this client's key: the guardian process relays the core's
+        requests this way once its policy allowed them."""
+        try:
+            return await self._client.request(
+                method, path, params=tuple(params), content=content, headers=headers
+            )
+        except httpx.TransportError as exc:
+            raise InkboxError(f"{method} {path}: {exc!r}", retryable=True) from exc
 
     async def _request(
         self,

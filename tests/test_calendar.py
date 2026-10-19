@@ -9,7 +9,14 @@ import pytest
 
 from orion.calendar.ics import Standing, occurrences
 from orion.calendar.module import CalendarModule
-from orion.calendar.service import GONE, SEEN, Calendar, CalendarSettings, CalendarState
+from orion.calendar.service import (
+    GONE,
+    SEEN,
+    Calendar,
+    CalendarAccount,
+    CalendarSettings,
+    CalendarState,
+)
 from orion.calendar.tools import calendar_tools
 from orion.config import OrionConfig
 from orion.core.events import Trust
@@ -127,7 +134,8 @@ class Feeds:
         self.feeds = feeds
         self.down: set[str] = set()
 
-    async def fetch(self, url: str) -> str:
+    async def fetch(self, account: CalendarAccount) -> str:
+        url = account.url.resolve().get_secret_value()
         if url in self.down:
             raise ValueError(f"not an iCalendar feed: {url} answered a login page")
         return self.feeds[url]

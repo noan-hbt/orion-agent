@@ -588,3 +588,68 @@ Martin », Lyon contre Marseille (venu d'un mail) posé en question.
 
 **Plus tard.** Pour un doublon, fusionner les deux formulations en une seule plutôt que d'en
 choisir une. La fusion réécrit un souvenir ; elle demandera la même prudence que le reste.
+
+## D28 — Le gardien dans son propre processus
+
+*19/10/2026 · acceptée · réalise D14 et §3 de l'architecture*
+
+**Problème.** Jusqu'ici, le gardien était une classe dans le processus d'Orion. Le modèle ne peut
+pas contourner du code, mais tout ce qui tourne dans ce processus le peut : un module tiers, une
+dépendance compromise, un agent délégué qui sortirait de son dossier. Ce processus détenait aussi
+tous les secrets : la clé Inkbox, les adresses secrètes des agendas, les mots de passe des boîtes
+mail.
+
+**Décision.** Orion peut tourner en deux processus (`[guardian] enabled = true`) :
+- `orion guardian` détient les secrets et applique des règles qui tiennent **même si le noyau
+  est compromis** ;
+- `orion serve` ne détient que la clé du fournisseur de modèles. Il parle au gardien par une
+  socket Unix (mode 0660, partagée par groupe), en JSON.
+
+Le noyau refuse de démarrer s'il voit dans son environnement un secret qui revient au gardien
+(fail closed). Pour que la séparation soit réelle, chaque processus tourne sous son propre
+utilisateur Unix (voir `deploy/`).
+
+**Ce que le gardien vérifie, sans rien savoir de la conversation :**
+- **Inkbox.** Le noyau utilise le même client qu'avant, pointé sur le gardien, qui ajoute la clé
+  si la requête passe :
+  - les lectures sont permises ;
+  - un message, un indicateur de frappe ou un accusé de lecture ne part que vers une
+    conversation dont le gardien a vérifié lui-même, auprès d'Inkbox, qu'elle est celle du
+    propriétaire ;
+  - 30 messages par minute au plus, pour qu'une boucle folle s'arrête ;
+  - jamais de changement des réglages de la ligne : la liste blanche reste en place, et
+    `orion inkbox setup` se lance avec la clé, sous l'utilisateur du gardien ;
+  - jamais d'action pour une autre identité ;
+  - appeler le propriétaire est permis, appeler quelqu'un d'autre demande une approbation.
+- **Les approbations.** Le gardien écrit lui-même la question, à partir de l'action et de ses
+  paramètres : le propriétaire voit ce qui va réellement s'exécuter. L'action approuvée
+  présente ensuite son approbation. Le gardien vérifie alors auprès d'Inkbox que le propriétaire
+  a bien dit oui : un 👍 sur ce message, ou un « oui » écrit après lui (la première réponse
+  compte). Il vérifie aussi que la requête est celle qui a été approuvée (même numéro, même
+  objectif dans le brief de l'appel). Une approbation sert une fois et expire au bout de 30 min.
+- **Agendas et mail.** Le gardien les lit et ne renvoie que le contenu demandé. Les adresses
+  secrètes et les mots de passe ne quittent jamais son processus.
+- **Webhooks.** La signature des livraisons Inkbox est vérifiée par le gardien, qui détient la
+  clé de signature.
+
+Tout ce que le gardien doit savoir est dans **son propre registre**, append-only. On y trouve les
+conversations du propriétaire vérifiées, les approbations envoyées et utilisées, et les refus
+(chacun journalisé). Il est rangé dans un dossier en 0700 que le noyau ne lit pas, et se rejoue
+au démarrage comme le journal du noyau.
+
+**Ce qui reste dans le noyau.** La politique qui dépend de la conversation reste là où est la
+conversation (`orion.guardian.policy`). Elle comprend la confiance de la fenêtre (D26) et les
+actions internes soumises au propriétaire. Le gardien ne voit que des requêtes, jamais le
+raisonnement de l'agent.
+
+**Limites connues.**
+- Le noyau garde la clé du fournisseur de modèles. C'est par là que partent, par construction,
+  la mémoire et la conversation : un noyau compromis peut donc encore faire fuir ce qu'il sait
+  par ce canal. Le gardien empêche qu'il agisse au nom du propriétaire, il ne rend pas la
+  mémoire secrète.
+- L'agent délégué (`claude`) tourne sous l'utilisateur du noyau.
+- `orion chat` en mode séparé demande les approbations dans le terminal. Le gardien ne peut pas
+  les vérifier, donc les actions qu'il contrôle (appeler un tiers, écrire à un autre Orion) y
+  sont refusées.
+- Le mode à un seul processus reste disponible (`enabled = false`, par défaut). Il est commode
+  pour essayer Orion, mais n'offre pas ces garanties.

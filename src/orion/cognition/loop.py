@@ -280,6 +280,7 @@ async def _execute_one(
         origin_event_id=settings.origin_event_id,
         context_trust=context_trust,
         timezone=settings.timezone,
+        grant=decision.grant,
     )
     try:
         result = await tool.handler(arguments, ctx)
