@@ -47,6 +47,17 @@ class ProvidersConfig(BaseModel):
     openrouter: OpenRouterConfig = OpenRouterConfig()
 
 
+class AgentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = "deepseek/deepseek-v4.1-flash"
+    timezone: str = "Europe/Paris"
+    max_window_tokens: int = Field(default=120_000, ge=4_000)
+    max_steps: int = Field(default=12, ge=1)
+    max_tool_calls: int = Field(default=40, ge=0)
+    max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -57,6 +68,7 @@ class OrionConfig(BaseModel):
     )
     data_dir: Path = Path("data")
     logging: LoggingConfig = LoggingConfig()
+    agent: AgentConfig = AgentConfig()
     providers: ProvidersConfig = ProvidersConfig()
 
     @property

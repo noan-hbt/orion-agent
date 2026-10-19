@@ -21,3 +21,7 @@ in French; code, identifiers and comments are in English.
 - Fail closed. Never swallow an exception: log it with context or let it propagate.
 - No secrets in config files or code: use `SecretRef`.
 - Every behaviour change comes with a test.
+- Prompt-cache contract (`tests/test_runtime_cache.py`): each model request must extend the
+  previous one byte for byte. Nothing volatile (time, retrieved memory) goes in the system
+  message; journaled messages are replayed exactly as sent; the tool registry is fixed and
+  sorted; every request carries a stable `session_id`. Never break these tests.

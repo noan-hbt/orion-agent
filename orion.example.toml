@@ -8,6 +8,14 @@ data_dir = "data"         # relative to this file
 level = "INFO"
 json_output = true
 
+[agent]
+model = "deepseek/deepseek-v4.1-flash"
+timezone = "Europe/Paris"
+max_window_tokens = 120000   # visible conversation window before a one-step rebase
+max_steps = 12               # model calls per turn
+max_tool_calls = 40
+max_cost_usd_per_turn = 0.5
+
 [providers.openrouter]
 api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"
