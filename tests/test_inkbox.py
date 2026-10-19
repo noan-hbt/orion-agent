@@ -165,7 +165,7 @@ async def test_the_line_is_reserved_for_the_owner() -> None:
     paths = [path for path, _ in fake.rules]
     assert paths == [
         "/imessage/identities/orion-test/contact-rules",
-        "/phone/identities/orion-test/phone-contact-rules",
+        "/identities/orion-test/phone-contact-rules",
         "/identities/orion-test",
     ]
     assert fake.rules[-1][1] == {

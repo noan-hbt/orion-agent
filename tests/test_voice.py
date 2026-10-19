@@ -192,7 +192,7 @@ async def test_calling_someone_is_reported_as_third_party_content(world: World) 
         "+33102030405", "La Pizzeria", "Réserver pour 2 jeudi 20h"
     )
     assert (
-        "/phone/identities/orion-test/phone-contact-rules",
+        "/identities/orion-test/phone-contact-rules",
         {
             "action": "allow",
             "match_type": "exact_number",
