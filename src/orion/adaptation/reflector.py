@@ -53,8 +53,9 @@ Reply with ONE JSON object: {"operations": [...]}. Allowed operations:
 - {"op": "retire", "rule_id": str, "reason": str, "evidence": [signal ids]}
 
 Rules:
-- A rule is one short, actionable sentence in the owner's language, written for Orion
-  ("Réponses courtes le matin : deux phrases max.").
+- A rule is one short, actionable sentence in the owner's language, written as an instruction
+  to Orion ("Réponses courtes le matin : deux phrases max."). Refer to the owner as "il"/"elle"
+  or by name, never as "the owner" or "l'owner".
 - Each learned rule cites at least two signals that clearly support it.
 - Only retire rules marked [appris], and only when recent signals contradict them.
 - Never contradict a rule the owner stated; refine it with "replaces" only if it is [appris].
