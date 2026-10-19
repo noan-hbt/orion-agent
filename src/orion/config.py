@@ -216,6 +216,13 @@ class GuardianConfig(BaseModel):
     max_sends_per_minute: int = Field(
         default=30, ge=1, description="Messages to the owner, at most (a runaway loop stops)"
     )
+    core_silence_alert_seconds: float = Field(
+        default=300.0,
+        ge=0.0,
+        description="The guardian texts the owner when the core has been silent this long "
+        "(the core can't say it is down); 0: never",
+    )
+    heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
 
 
 class FederationConfig(BaseModel):

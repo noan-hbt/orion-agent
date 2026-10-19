@@ -1,0 +1,43 @@
+# Orion on a server: two processes (guardian + core), webhook, federation behind Caddy.
+# Installed as /etc/orion/orion.toml by deploy/install.sh; secrets live in /etc/orion/*.env.
+# Every option is described in orion.example.toml.
+
+instance = "orion-main"
+data_dir = "data"
+
+[logging]
+level = "INFO"
+json_output = true
+
+[agent]
+model = "anthropic/claude-haiku-5.5"
+timezone = "Europe/Paris"
+extractor_model = "deepseek/deepseek-v4.1-flash-1017"
+fallback_models = ["deepseek/deepseek-v4.1-flash-1017"]
+verifier_model = "deepseek/deepseek-v4.1-flash-1017"
+max_cost_usd_per_turn = 2.0
+
+[memory]
+owner_names = []                 # your first name and nicknames
+
+[channels.imessage]
+enabled = true
+identity = "orion-CHANGE-ME"     # Orion's Inkbox handle
+owner_number = "+33600000000"    # your number, E.164
+mode = "webhook"                 # instant: Caddy forwards https://@DOMAIN@/inkbox/webhook
+webhook_host = "127.0.0.1"
+webhook_port = 8787
+webhook_path = "/inkbox/webhook"
+
+[guardian]
+enabled = true
+socket = "run/guardian.sock"
+data_dir = "guardian"
+core_silence_alert_seconds = 300 # the guardian texts you if the core stops
+
+[federation]
+enabled = false                  # needs the calendar module
+owner_name = ""
+public_url = "https://@DOMAIN@"
+listen_host = "127.0.0.1"
+listen_port = 8788

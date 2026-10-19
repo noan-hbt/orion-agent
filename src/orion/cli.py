@@ -249,6 +249,21 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -> int:
+    from orion.core.backup import BackupError, backup
+
+    source = config.guardian_ledger_path if guardian else config.journal_path
+    try:
+        result = backup(source, destination, keep)
+    except BackupError as exc:
+        print(f"Sauvegarde impossible : {exc}")
+        return 1
+    print(f"{result.events} événements copiés dans {result.path}")
+    for old in result.removed:
+        print(f"ancienne copie retirée : {old}")
+    return 0
+
+
 async def _doctor(config: OrionConfig) -> int:
     print(f"orion {__version__}")
     print(f"instance:  {config.instance}")
@@ -383,6 +398,12 @@ def main(argv: list[str] | None = None) -> int:
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
     forget.add_argument("--reason", default="owner request")
+    backup = sub.add_parser("backup", help="Copy the journal (everything else is rebuilt)")
+    backup.add_argument("destination", type=Path, help="Folder that holds the copies")
+    backup.add_argument("--keep", type=int, default=14, help="Copies kept, newest first")
+    backup.add_argument(
+        "--guardian", action="store_true", help="Copy the guardian's ledger instead"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -397,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "backup":
+        return _backup(config, args.destination, args.keep, args.guardian)
     if args.command == "inkbox":
         if args.inkbox_command == "calls":
             return asyncio.run(_inkbox_calls(config))
