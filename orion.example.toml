@@ -86,6 +86,23 @@ data_dir = "guardian"            # the guardian's own ledger (mode 0700)
 approval_ttl_seconds = 1800      # an approval is used once, within this delay
 max_sends_per_minute = 30
 
+# Other people's Orion (M7, D29): pair by invitation, then arrange meetings, each owner agreeing
+# once. Needs [guardian] enabled = true and the calendar module. The key lives only in the
+# guardian's environment (`orion federation keygen`); `public_url` is an HTTPS address served by
+# a reverse proxy in front of listen_host:listen_port.
+[federation]
+enabled = false
+owner_name = "Noan"                  # how other Orions name you
+key = { env = "ORION_FEDERATION_KEY" }
+public_url = "https://orion.example.com"
+listen_host = "127.0.0.1"
+listen_port = 8788
+invite_days = 7
+max_inbound_per_hour = 60            # per paired Orion
+meeting_start = "09:00:00"           # meetings start no earlier…
+meeting_end = "19:00:00"             # …and end no later
+weekends = false
+
 # Your calendars (M6), read through their secret iCal address:
 # - Google: calendar settings > "Secret address in iCal format";
 # - iCloud: share the calendar as a public calendar, copy the webcal:// link;

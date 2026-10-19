@@ -653,3 +653,78 @@ raisonnement de l'agent.
   sont refusées.
 - Le mode à un seul processus reste disponible (`enabled = false`, par défaut). Il est commode
   pour essayer Orion, mais n'offre pas ces garanties.
+
+## D29 — M7 v0 : deux Orion calent un rendez-vous
+
+*19/10/2026 · acceptée · réalise D8 et D13 pour un premier cas*
+
+**Identité.** Chaque instance a une clé Ed25519 (`orion federation keygen`). Elle vit seulement
+dans l'environnement du gardien, et la fédération exige donc le gardien séparé (D28). Le gardien
+publie une carte d'agent A2A (`/.well-known/agent-card.json`), qui contient l'instance, la clé
+publique et une empreinte courte à lire à voix haute.
+
+**Présentation entre humains.** Personne ne peut écrire à ton Orion sans y avoir été invité.
+- Tu crées une invitation : `orion federation invite --name Paul`. Elle vaut une seule fois,
+  pendant 7 jours. Tu donnes le code à Paul de la main à la main ou par message.
+- Paul l'accepte : `orion federation accept <code> --name Noan`. Son Orion se présente au tien,
+  signé, avec le jeton.
+- Chacun épingle la clé et l'adresse de l'autre. La relation porte des compétences ;
+  `scheduling` est la seule pour l'instant.
+- Ces commandes demandent le jeton d'administration du gardien. Il est rangé dans son dossier,
+  que le noyau ne peut pas lire. Un noyau compromis ne peut donc pas relier ton Orion à un
+  inconnu.
+- Une relation se révoque avec `orion federation revoke`.
+
+**Le fil.** Chaque message est une enveloppe signée qui couvre tous les champs : expéditeur,
+destinataire, type, négociation, heure, corps. Elle voyage comme un `message/send` JSON-RPC
+d'A2A, avec une partie de données. La couche de transport est isolée dans
+`orion.federation.wire`, pour suivre la spécification A2A au fur et à mesure qu'elle se fixe. Les
+corps de message sont typés et bornés : le seul texte libre est un titre de 80 caractères.
+
+**Le gardien, seul à parler aux autres Orion.**
+- **À l'entrée**, il vérifie dans l'ordre :
+  - que l'expéditeur est un pair actif et que la signature correspond à sa clé épinglée ;
+  - que le message t'est bien destiné ;
+  - l'horloge, à ±10 min près ;
+  - qu'il ne s'agit pas d'un rejeu (chaque id une seule fois) ;
+  - que le type est permis par la relation et que le corps est bien formé ;
+  - un quota par pair.
+
+  Ce qui passe va dans son registre, et le noyau vient le chercher. Ce qui ne passe pas est
+  refusé avant toute lecture, et journalisé.
+- **À la sortie**, il signe et n'envoie qu'à l'adresse épinglée d'un pair, en HTTPS. Il
+  n'envoie que ce que le propriétaire a accepté :
+  - une **proposition** exige son approbation, que le gardien vérifie lui-même (D28) : même
+    pair, même titre, même durée, même fenêtre, et chaque créneau dans la fenêtre ;
+  - une **acceptation** exige l'approbation de ce créneau, pour une proposition réellement reçue
+    qui le contenait ;
+  - une **confirmation** doit correspondre à la proposition approuvée et à l'acceptation reçue ;
+  - un **refus** ne révèle rien, et ne peut que répondre à une proposition reçue.
+
+**Le négociateur est du code, pas un modèle** (`orion.federation.meetings`). Ce qu'envoie un
+autre Orion est une donnée que le code vérifie : rien ne peut y orienter une décision. Le
+déroulé :
+1. Tu demandes à Orion de caler un rendez-vous (`meeting_propose` : avec qui, quoi, combien de
+   temps, dans quelle fenêtre). Tu approuves la proposition.
+2. Ton Orion envoie au plus 8 créneaux libres de cette fenêtre, au plus 2 par jour, à 2 h
+   d'écart minimum, dans tes heures (`meeting_start`, `meeting_end`, `weekends`). Un créneau
+   est libre s'il ne chevauche ni tes événements visibles ni un rendez-vous déjà calé. Rien
+   d'autre de ton agenda ne part.
+3. L'Orion de Paul garde le premier de ces créneaux qui est libre pour lui, et le soumet à Paul.
+   S'il n'y en a aucun, il refuse sans le déranger.
+4. Paul dit oui : l'acceptation part, ton Orion confirme. De chaque côté, le rendez-vous devient
+   un engagement daté du propriétaire (avec l'alerte qui précède), et un compte rendu passe par
+   le moteur d'initiative. Les deux signatures sont gardées comme reçus.
+
+**Confiance.** Ce qui vient d'un autre Orion est `TRUSTED_PEER`, en dessous du plancher
+`SYSTEM`. Ses comptes rendus contaminent donc la conversation comme un mail (D26), et
+l'engagement garde cette confiance. Les agendas sont en lecture seule : le compte rendu
+rappelle d'ajouter le rendez-vous à son agenda.
+
+**Pas encore.**
+- Contre-propositions et expiration des propositions sans réponse.
+- Mandats et capacités Biscuit : la relation porte pour l'instant une simple liste de
+  compétences.
+- Négociateur à modèle pour des cas plus ouverts (un prix, un lieu).
+- Instances d'un même propriétaire (`OWNER_INSTANCE`).
+- Écriture dans l'agenda.

@@ -77,6 +77,13 @@ d'autres personnes.
 
   `orion serve` ne garde que la clé du modèle, et refuse de démarrer s'il voit un autre secret.
 
+- **M7 v0 — les autres Orion** (D29) : ton Orion se relie à celui d'une autre personne par une
+  invitation à usage unique, échangée entre vous deux. Ensuite, « cale un déjeuner avec Paul la
+  semaine prochaine » suffit. Orion propose tes créneaux libres, et rien d'autre de ton agenda.
+  L'Orion de Paul choisit le premier qui lui va, et le soumet à Paul. Quand les deux ont dit oui,
+  le rendez-vous est noté de chaque côté. Les messages sont signés, et seul le gardien les
+  envoie ou les reçoit. Un Orion inconnu est refusé avant même d'être lu.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -110,6 +117,21 @@ https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 Mets `[guardian] enabled = true`. Ensuite, lance `orion guardian`, avec les secrets d'Inkbox,
 des agendas et du mail, et `orion serve`, avec la seule clé OpenRouter. Le mieux est de les
 lancer sous deux utilisateurs différents : voir [`deploy/`](deploy/).
+
+### Relier ton Orion à celui de quelqu'un
+
+Il faut le gardien séparé, le module `calendar` et `[federation] enabled = true`, avec une adresse
+publique en HTTPS (`public_url`, un proxy inverse devant `listen_port`). Ensuite :
+
+```bash
+uv run orion federation keygen            # la clé va dans l'environnement du gardien
+# sous l'utilisateur du gardien, une fois `orion guardian` lancé :
+uv run orion federation invite --name Paul    # donne le code à Paul
+uv run orion federation accept <code> --name Paul   # ou accepte le sien
+uv run orion federation peers             # ton empreinte et tes Orion reliés
+```
+
+Vérifiez vos empreintes de vive voix.
 
 ## Documentation
 
