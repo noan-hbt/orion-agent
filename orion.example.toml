@@ -1,0 +1,76 @@
+# Copy to orion.toml and adjust. Secrets are never stored here: each SecretRef names the
+# environment variable that holds the value.
+
+instance = "orion-main"   # stable id of this instance (lowercase, digits, dashes)
+data_dir = "data"         # relative to this file
+
+[logging]
+level = "INFO"
+json_output = true
+
+[agent]
+model = "deepseek/deepseek-v4.1-flash"
+timezone = "Europe/Paris"
+max_window_tokens = 120000   # visible conversation window before a one-step rebase
+max_steps = 12               # model calls per turn
+max_tool_calls = 40
+max_cost_usd_per_turn = 0.5
+extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
+fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
+verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family
+
+[providers.openrouter]
+api_key = { env = "OPENROUTER_API_KEY" }
+base_url = "https://openrouter.ai/api/v1"
+
+# iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
+# connect command it prints from your phone: Orion can only write to you after you wrote first.
+[channels.imessage]
+enabled = false
+api_key = { env = "INKBOX_API_KEY" }
+identity = "orion-noan"          # Orion's Inkbox handle (globally unique)
+owner_number = "+33600000000"    # your number, E.164: the only one Orion obeys
+mode = "poll"                    # "poll" needs no public URL; "webhook" is instant
+poll_seconds = 4
+webhook_host = "127.0.0.1"       # put a TLS reverse proxy in front for "webhook"
+webhook_port = 8787
+webhook_path = "/inkbox/webhook"
+signing_key = { env = "INKBOX_SIGNING_KEY" }
+coalesce_seconds = 3             # bursts of short texts become one message
+approval_timeout_seconds = 900   # no answer means no
+
+# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
+[initiative]
+enabled = true
+digests = ["08:30:00", "13:00:00", "19:00:00"]
+quiet_start = "22:30:00"
+quiet_end = "08:00:00"
+daily_budget = 6                 # unrequested messages per day
+tick_seconds = 30
+
+# How Orion learns to work with you: from what you tell it (immediately), from your reactions
+# and replies (a periodic reflection), and from what you ignore (digests nobody reads stop).
+[adaptation]
+enabled = true
+reflect_after_messages = 12        # reflect once this many new messages piled up…
+reflect_daily_after_messages = 3   # …or once a day if at least this many
+tick_seconds = 600
+
+# Long tasks (code, scripts, documents) handed to the official `claude` CLI, which uses your
+# subscription. Log it in once on the server: `claude auth login`. Off by default.
+[delegation]
+enabled = false
+binary = "claude"
+timeout_seconds = 1800
+max_budget_usd = 2.0
+allow_bash = false               # true: the agent may run commands; each job then needs your OK
+
+# Phone calls through Inkbox Voice AI, on the same line as iMessage. Orion keeps the voice
+# briefed (playbook, profile, commitments, reminders, last exchanges) and reads every call back.
+# `orion inkbox setup` reserves the line for your number and lets the voice pick up.
+[voice]
+enabled = false
+# voice = "..."                  # an Inkbox voice name; default voice if unset
+origination = "shared_imessage_number"
+brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
+calls_poll_seconds = 30          # poll mode: how often finished calls are read back
