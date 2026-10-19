@@ -21,6 +21,10 @@ d'autres personnes.
   bulles), outbox idempotente, approbations par tapback ou par mot, rappels durables
   (`remind_me`), moteur d'initiative (3 points par jour sur les engagements, alerte avant une
   échéance, heures calmes, budget d'attention, « pourquoi maintenant »), démon `orion serve`.
+- **Adaptation** : Orion apprend ton manuel. Il applique tout de suite ce que tu lui dis
+  (`adapt`, `initiative_settings`). Une réflexion périodique tire des règles de tes messages et
+  de tes tapbacks. Les points que tu ignores ne sont plus envoyés. Tout est visible
+  (`orion memory`), corrigeable, et oublié avec la conversation d'où il vient.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

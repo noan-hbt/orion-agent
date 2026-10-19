@@ -102,6 +102,17 @@ class InitiativeConfig(BaseModel):
     tick_seconds: float = Field(default=30.0, ge=1.0)
 
 
+class AdaptationConfig(BaseModel):
+    """How Orion learns to work with its owner."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    reflect_after_messages: int = Field(default=12, ge=1)
+    reflect_daily_after_messages: int = Field(default=3, ge=1)
+    tick_seconds: float = Field(default=600.0, ge=10.0)
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -116,6 +127,7 @@ class OrionConfig(BaseModel):
     providers: ProvidersConfig = ProvidersConfig()
     channels: ChannelsConfig = ChannelsConfig()
     initiative: InitiativeConfig = InitiativeConfig()
+    adaptation: AdaptationConfig = AdaptationConfig()
 
     @property
     def journal_path(self) -> Path:

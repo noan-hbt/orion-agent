@@ -15,8 +15,21 @@ FACT_ASSERTED = "memory.fact.asserted"
 FACT_INVALIDATED = "memory.fact.invalidated"
 COMMITMENT_CREATED = "commitment.created"
 COMMITMENT_CLOSED = "commitment.closed"
+RULE_LEARNED = "playbook.rule.learned"
+RULE_RETIRED = "playbook.rule.retired"
+SETTING_CHANGED = "settings.changed"
 
-MEMORY_KINDS = frozenset({FACT_ASSERTED, FACT_INVALIDATED, COMMITMENT_CREATED, COMMITMENT_CLOSED})
+MEMORY_KINDS = frozenset(
+    {
+        FACT_ASSERTED,
+        FACT_INVALIDATED,
+        COMMITMENT_CREATED,
+        COMMITMENT_CLOSED,
+        RULE_LEARNED,
+        RULE_RETIRED,
+        SETTING_CHANGED,
+    }
+)
 
 
 class Category(StrEnum):
@@ -70,3 +83,52 @@ class CommitmentClosed(BaseModel):
     commitment_id: str
     status: CommitmentStatus
     evidence: str | None = None
+
+
+class RuleScope(StrEnum):
+    STYLE = "style"  # how Orion talks to the owner: length, tone, humour, format
+    INITIATIVE = "initiative"  # when and about what Orion speaks first
+    WORK = "work"  # how the owner likes things done: tools, habits, defaults
+    OTHER = "other"
+
+
+class RuleBasis(StrEnum):
+    EXPLICIT = "explicit"  # the owner said so
+    INFERRED = "inferred"  # Orion noticed it from several signals
+
+
+class RuleLearned(BaseModel):
+    """One line of the owner's playbook: how to work with this person."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    rule: str = Field(min_length=3, max_length=300)
+    scope: RuleScope = RuleScope.OTHER
+    basis: RuleBasis = RuleBasis.EXPLICIT
+    replaces: list[str] = Field(default_factory=list[str], description="Rule ids this one retires")
+
+
+class RuleRetired(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rule_id: str
+    reason: str
+
+
+class SettingKey(StrEnum):
+    DIGESTS = "initiative.digests"  # list of "HH:MM"
+    QUIET_START = "initiative.quiet_start"  # "HH:MM"
+    QUIET_END = "initiative.quiet_end"  # "HH:MM"
+    DAILY_BUDGET = "initiative.daily_budget"  # int
+
+
+class SettingChanged(BaseModel):
+    """A behaviour setting changed by the owner or learned by Orion; overrides the config file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    change_id: str
+    key: SettingKey
+    value: str | int | list[str]
+    reason: str = Field(max_length=300)

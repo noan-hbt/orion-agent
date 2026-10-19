@@ -23,11 +23,20 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    RULE_LEARNED,
+    RULE_RETIRED,
+    SETTING_CHANGED,
     CommitmentClosed,
     CommitmentCreated,
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    RuleBasis,
+    RuleLearned,
+    RuleRetired,
+    RuleScope,
+    SettingChanged,
+    SettingKey,
 )
 
 log = structlog.get_logger(__name__)
@@ -66,6 +75,28 @@ CREATE TABLE IF NOT EXISTS commitments (
     event_id    TEXT NOT NULL,
     source      TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rules (
+    id              TEXT PRIMARY KEY,
+    rule            TEXT NOT NULL,
+    scope           TEXT NOT NULL,
+    basis           TEXT NOT NULL,
+    created_seq     INTEGER NOT NULL,
+    retired_seq     INTEGER,
+    retired_reason  TEXT,
+    trust           INTEGER NOT NULL,
+    event_id        TEXT NOT NULL,
+    source          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS setting_changes (
+    id          TEXT PRIMARY KEY,
+    key         TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    seq         INTEGER NOT NULL,
+    actor       TEXT NOT NULL,
+    trust       INTEGER NOT NULL,
+    event_id    TEXT NOT NULL
+);
 """
 
 _WORD = re.compile(r"\w{3,}", re.UNICODE)
@@ -100,6 +131,60 @@ class Commitment:
     status: CommitmentStatus
     evidence: str | None
     trust: Trust
+
+
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    rule: str
+    scope: RuleScope
+    basis: RuleBasis
+    created_seq: int
+    retired_seq: int | None
+    retired_reason: str | None
+    trust: Trust
+    source: str
+
+    @property
+    def active(self) -> bool:
+        return self.retired_seq is None
+
+
+@dataclass(frozen=True)
+class SettingChange:
+    id: str
+    key: SettingKey
+    value: str | int | list[str]
+    reason: str
+    seq: int
+    actor: str
+    trust: Trust
+
+
+def _rule(row: sqlite3.Row) -> Rule:
+    return Rule(
+        id=row["id"],
+        rule=row["rule"],
+        scope=RuleScope(row["scope"]),
+        basis=RuleBasis(row["basis"]),
+        created_seq=row["created_seq"],
+        retired_seq=row["retired_seq"],
+        retired_reason=row["retired_reason"],
+        trust=Trust(row["trust"]),
+        source=row["source"],
+    )
+
+
+def _setting(row: sqlite3.Row) -> SettingChange:
+    return SettingChange(
+        id=row["id"],
+        key=SettingKey(row["key"]),
+        value=json.loads(row["value"]),
+        reason=row["reason"],
+        seq=row["seq"],
+        actor=row["actor"],
+        trust=Trust(row["trust"]),
+    )
 
 
 def _fact(row: sqlite3.Row) -> Fact:
@@ -189,6 +274,19 @@ class MemoryStore:
     async def commitment(self, commitment_id: str) -> Commitment | None:
         return await self._sql.run(self._commitment_sync, commitment_id)
 
+    async def rules(self, include_retired: bool = False) -> list[Rule]:
+        return await self._sql.run(self._rules_sync, include_retired)
+
+    async def rule(self, rule_id: str) -> Rule | None:
+        return await self._sql.run(self._rule_sync, rule_id)
+
+    async def setting_changes(self) -> list[SettingChange]:
+        """Every setting change, oldest first. The current value of a key is its last change."""
+        return await self._sql.run(self._settings_sync)
+
+    async def settings(self) -> dict[SettingKey, SettingChange]:
+        return {change.key: change for change in await self.setting_changes()}
+
     # --- synchronous internals (memory thread only) ---
 
     def _checkpoint_sync(self) -> int:
@@ -200,6 +298,8 @@ class MemoryStore:
             db.execute("DELETE FROM facts")
             db.execute("DELETE FROM facts_fts")
             db.execute("DELETE FROM commitments")
+            db.execute("DELETE FROM rules")
+            db.execute("DELETE FROM setting_changes")
             db.execute("DELETE FROM meta")
 
     def _apply_sync(self, event: Event) -> None:
@@ -243,6 +343,54 @@ class MemoryStore:
                 "WHERE id = ? AND status = 'open'",
                 (c.status.value, event.seq, c.evidence, c.commitment_id),
             )
+
+        elif event.kind == RULE_LEARNED:
+            self._learn_rule(db, event, RuleLearned.model_validate(event.payload))
+        elif event.kind == RULE_RETIRED:
+            r = RuleRetired.model_validate(event.payload)
+            self._retire_rule(db, r.rule_id, r.reason, event.seq)
+        elif event.kind == SETTING_CHANGED:
+            c = SettingChanged.model_validate(event.payload)
+            db.execute(
+                "INSERT OR IGNORE INTO setting_changes (id, key, value, reason, seq, actor, trust, "
+                "event_id) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    c.change_id,
+                    c.key.value,
+                    json.dumps(c.value, ensure_ascii=False),
+                    c.reason,
+                    event.seq,
+                    event.provenance.actor,
+                    int(event.trust),
+                    event.id,
+                ),
+            )
+
+    def _learn_rule(self, db: sqlite3.Connection, event: Event, rule: RuleLearned) -> None:
+        for old in rule.replaces:
+            self._retire_rule(db, old, f"replaced by {rule.rule_id}", event.seq)
+        db.execute(
+            "INSERT OR IGNORE INTO rules (id, rule, scope, basis, created_seq, trust, event_id, "
+            "source) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                rule.rule_id,
+                rule.rule,
+                rule.scope.value,
+                rule.basis.value,
+                event.seq,
+                int(event.trust),
+                event.id,
+                event.provenance.source,
+            ),
+        )
+
+    @staticmethod
+    def _retire_rule(db: sqlite3.Connection, rule_id: str, reason: str, seq: int) -> None:
+        db.execute(
+            "UPDATE rules SET retired_seq = ?, retired_reason = ? "
+            "WHERE id = ? AND retired_seq IS NULL",
+            (seq, reason, rule_id),
+        )
 
     def _assert_fact(self, db: sqlite3.Connection, event: Event, fact: FactAsserted) -> None:
         for old in fact.supersedes:
@@ -314,3 +462,18 @@ class MemoryStore:
             "SELECT * FROM commitments WHERE id = ?", (commitment_id,)
         ).fetchone()
         return _commitment(row) if row else None
+
+    def _rules_sync(self, include_retired: bool) -> list[Rule]:
+        rows = self._sql.db.execute(
+            "SELECT * FROM rules WHERE ? OR retired_seq IS NULL ORDER BY created_seq",
+            (include_retired,),
+        )
+        return [_rule(r) for r in rows]
+
+    def _rule_sync(self, rule_id: str) -> Rule | None:
+        row = self._sql.db.execute("SELECT * FROM rules WHERE id = ?", (rule_id,)).fetchone()
+        return _rule(row) if row else None
+
+    def _settings_sync(self) -> list[SettingChange]:
+        rows = self._sql.db.execute("SELECT * FROM setting_changes ORDER BY seq")
+        return [_setting(r) for r in rows]

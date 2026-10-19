@@ -21,12 +21,21 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    RULE_LEARNED,
+    RULE_RETIRED,
+    SETTING_CHANGED,
     Category,
     CommitmentClosed,
     CommitmentCreated,
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    RuleBasis,
+    RuleLearned,
+    RuleRetired,
+    RuleScope,
+    SettingChanged,
+    SettingKey,
 )
 from orion.memory.store import MemoryStore
 
@@ -112,6 +121,33 @@ class MemoryService:
         payload = CommitmentClosed(commitment_id=commitment_id, status=status, evidence=evidence)
         await self._write(COMMITMENT_CLOSED, payload, origin)
 
+    async def learn_rule(
+        self,
+        rule: str,
+        origin: Origin,
+        *,
+        scope: RuleScope = RuleScope.OTHER,
+        basis: RuleBasis = RuleBasis.EXPLICIT,
+        replaces: list[str] | None = None,
+    ) -> str:
+        rule_id = f"u_{new_id()}"
+        payload = RuleLearned(
+            rule_id=rule_id, rule=rule, scope=scope, basis=basis, replaces=replaces or []
+        )
+        await self._write(RULE_LEARNED, payload, origin)
+        return rule_id
+
+    async def retire_rule(self, rule_id: str, reason: str, origin: Origin) -> None:
+        await self._write(RULE_RETIRED, RuleRetired(rule_id=rule_id, reason=reason), origin)
+
+    async def change_setting(
+        self, key: SettingKey, value: str | int | list[str], reason: str, origin: Origin
+    ) -> str:
+        change_id = f"s_{new_id()}"
+        payload = SettingChanged(change_id=change_id, key=key, value=value, reason=reason)
+        await self._write(SETTING_CHANGED, payload, origin)
+        return change_id
+
     async def forget_source(self, source_prefix: str, reason: str, actor: str) -> ForgetReport:
         """Redact every event from `source_prefix` and everything derived from it."""
         events = await self._all_events()
@@ -160,9 +196,13 @@ class MemoryService:
             same_commitments = await shadow.commitments(
                 status=None
             ) == await self.store.commitments(status=None)
+            same_rules = await shadow.rules(include_retired=True) == await self.store.rules(
+                include_retired=True
+            )
+            same_settings = await shadow.setting_changes() == await self.store.setting_changes()
         finally:
             await shadow.close()
-        return same_facts and same_commitments
+        return same_facts and same_commitments and same_rules and same_settings
 
     async def _all_events(self) -> list[Event]:
         events: list[Event] = []

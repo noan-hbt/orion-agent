@@ -25,7 +25,15 @@ from typing import Any
 
 import structlog
 
-from orion.channels.inkbox import IMessage, InkboxClient, InkboxError, ReactionEvent, WebhookEvent
+from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
+from orion.channels.inkbox import (
+    IMessage,
+    InkboxClient,
+    InkboxError,
+    MessageReaction,
+    ReactionEvent,
+    WebhookEvent,
+)
 from orion.cognition.loop import StopReason
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -77,6 +85,8 @@ class IMessageSettings:
     approval_timeout_seconds: float = 900.0
     typing_refresh_seconds: float = 20.0
     max_bubbles: int = 4
+    reaction_poll_every: int = 15
+    """In poll mode, read tapbacks on Orion's recent messages every N polls."""
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,7 @@ class ChannelState:
 
     name: str = "imessage-channel"
     seen: set[str] = field(default_factory=set[str])
+    reactions: set[str] = field(default_factory=set[str])
     handled: set[str] = field(default_factory=set[str])
     owner_inbound: dict[str, Inbound] = field(default_factory=dict[str, Inbound])
     owner_conversation: str | None = None
@@ -103,6 +114,7 @@ class ChannelState:
 
     async def reset(self) -> None:
         self.seen.clear()
+        self.reactions.clear()
         self.handled.clear()
         self.owner_inbound.clear()
         self.owner_conversation = None
@@ -122,6 +134,8 @@ class ChannelState:
                 self.owner_inbound[message_id] = Inbound(
                     message_id, conversation, str(payload.get("text") or "")
                 )
+        elif event.kind == FEEDBACK_REACTION:
+            self.reactions.add(str(payload.get("reaction_id")))
         elif event.kind in ("message.received", APPROVAL_DECIDED):
             self.handled.update(str(ref) for ref in payload.get("refs", []))
 
@@ -152,6 +166,7 @@ class IMessageChannel:
         self._queue: asyncio.Queue[Inbound] = asyncio.Queue()
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._background: set[asyncio.Task[None]] = set()
+        self._polls = 0
 
     async def start(self) -> None:
         """Catch up, finish sends interrupted by a crash, requeue unanswered owner messages."""
@@ -192,7 +207,7 @@ class IMessageChannel:
         if event.event_type == "imessage.received" and event.data.message is not None:
             await self.receive(event.data.message)
         elif event.event_type == "imessage.reaction_received" and event.data.reaction is not None:
-            self.receive_reaction(event.data.reaction)
+            await self.receive_reaction(event.data.reaction)
         else:
             log.info("imessage.webhook_ignored", event_type=event.event_type, event_id=event.id)
 
@@ -236,12 +251,60 @@ class IMessageChannel:
             return
         self._queue.put_nowait(inbound)
 
-    def receive_reaction(self, reaction: ReactionEvent) -> None:
+    async def receive_reaction(self, reaction: ReactionEvent) -> None:
         if reaction.direction != "inbound":
             return
         if normalize_number(reaction.remote_number or "") != self._owner:
             return
-        self._resolve_by_reaction(reaction.target_message_id, reaction.reaction)
+        if reaction.target_message_id in self._approvals:
+            self._resolve_by_reaction(reaction.target_message_id, reaction.reaction)
+            return
+        await self._feedback(
+            reaction.target_message_id,
+            reaction.id,
+            reaction.reaction,
+            reaction.custom_emoji,
+            reaction.conversation_id,
+        )
+
+    async def _feedback(
+        self,
+        target: str,
+        reaction_id: str,
+        reaction: str,
+        emoji: str | None,
+        conversation: str,
+    ) -> None:
+        """A tapback on one of Orion's messages: a signal about how Orion is doing."""
+        await self._runner.catch_up()
+        if reaction_id in self.state.reactions:
+            return
+        await self._journal.append(
+            [reaction_event(target, reaction, emoji, reaction_id, f"imessage:{conversation}")]
+        )
+        await self._runner.catch_up()
+
+    async def _poll_reactions(self) -> None:
+        conversation = self.state.owner_conversation
+        if conversation is None:
+            return
+        for message in await self._client.recent(conversation, self._settings.identity_id):
+            if message.direction != "outbound" or message.id in self._approvals:
+                continue
+            for reaction in message.reactions or []:
+                if self._is_owner_reaction(reaction):
+                    await self._feedback(
+                        message.id,
+                        reaction.id,
+                        reaction.reaction,
+                        reaction.custom_emoji,
+                        conversation,
+                    )
+
+    def _is_owner_reaction(self, reaction: MessageReaction) -> bool:
+        if reaction.direction != "inbound":
+            return False
+        return not reaction.remote_number or normalize_number(reaction.remote_number) == self._owner
 
     async def poll_once(self) -> None:
         for message in sorted(
@@ -253,6 +316,9 @@ class IMessageChannel:
             for reaction in message.reactions or []:
                 if reaction.direction == "inbound":
                     self._resolve_by_reaction(message_id, reaction.reaction)
+        self._polls += 1
+        if self._polls % self._settings.reaction_poll_every == 0:
+            await self._poll_reactions()
 
     async def poll_forever(self, interval: float) -> None:
         while True:

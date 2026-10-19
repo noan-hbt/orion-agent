@@ -218,3 +218,28 @@ def test_helpers() -> None:
     assert answer_word("oui mais attends") is None
     assert split_bubbles("a\n\nb\n\n\nc\n\nd\n\ne", max_bubbles=3) == ["a", "b", "c\n\nd\n\ne"]
     assert OWNER == "+33611111111" and CONVERSATION
+
+
+async def test_tapbacks_on_replies_become_feedback_once(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider, journal: SqliteJournal
+) -> None:
+    from orion.adaptation.signals import FEEDBACK_REACTION
+    from orion.channels.inkbox import ReactionEvent
+
+    await _bind_owner(channel, fake, provider)
+    target = fake.sent[0]["id"]
+    fake.react(target, "laugh")
+    reaction = ReactionEvent(
+        id=f"r-{target}",
+        conversation_id=CONVERSATION,
+        target_message_id=target,
+        direction="inbound",
+        reaction="laugh",
+        remote_number=OWNER,
+        created_at="2026-10-19T18:02:00Z",
+    )
+    await channel.receive_reaction(reaction)  # webhook
+    await channel._poll_reactions()  # and the polling path sees the same tapback
+    feedback = [e for e in await journal.read() if e.kind == FEEDBACK_REACTION]
+    assert len(feedback) == 1
+    assert feedback[0].payload["remote_id"] == target and feedback[0].trust is Trust.OWNER

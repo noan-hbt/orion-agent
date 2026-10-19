@@ -17,7 +17,7 @@ from orion.memory.service import MemoryService, Origin
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 
-def _origin(ctx: ToolContext) -> Origin:
+def origin_of(ctx: ToolContext) -> Origin:
     return Origin(
         actor="orion:core",
         source=f"thread:{ctx.thread_id}",
@@ -83,7 +83,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
     async def remember(args: Any, ctx: ToolContext) -> ToolResult:
         fact_id = await memory.remember(
             args.statement,
-            _origin(ctx),
+            origin_of(ctx),
             about=args.about,
             category=args.category,
             valid_from=args.valid_from,
@@ -94,7 +94,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
     async def forget_fact(args: Any, ctx: ToolContext) -> ToolResult:
         if await memory.store.fact(args.fact_id) is None:
             return ToolResult(f"No fact with id {args.fact_id}", is_error=True)
-        await memory.invalidate(args.fact_id, args.reason, _origin(ctx), args.valid_to)
+        await memory.invalidate(args.fact_id, args.reason, origin_of(ctx), args.valid_to)
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")
 
     async def recall(args: Any, ctx: ToolContext) -> ToolResult:
@@ -105,7 +105,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
 
     async def commitment_add(args: Any, ctx: ToolContext) -> ToolResult:
         cid = await memory.add_commitment(
-            args.what, _origin(ctx), debtor=args.debtor, creditor=args.creditor, due=args.due
+            args.what, origin_of(ctx), debtor=args.debtor, creditor=args.creditor, due=args.due
         )
         return ToolResult(f"Engagement noté ({cid}).", data={"commitment_id": cid})
 
@@ -115,7 +115,9 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
             return ToolResult(f"No commitment with id {args.commitment_id}", is_error=True)
         if existing.status is not CommitmentStatus.OPEN:
             return ToolResult(f"Already {existing.status.value}.", is_error=True)
-        await memory.close_commitment(args.commitment_id, args.status, _origin(ctx), args.evidence)
+        await memory.close_commitment(
+            args.commitment_id, args.status, origin_of(ctx), args.evidence
+        )
         return ToolResult(f"Engagement {args.commitment_id} : {args.status.value}.")
 
     async def commitments_list(args: Any, ctx: ToolContext) -> ToolResult:

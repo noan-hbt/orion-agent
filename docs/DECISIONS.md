@@ -328,3 +328,36 @@ décision, y compris celle de se taire, est journalisée avec sa raison.
 
 `remind_me` est la seule façon pour Orion de revenir vers toi plus tard. La constitution lui
 interdit de promettre un rappel sans l'avoir programmé (anomalie observée en M2).
+
+## D21 — Orion apprend son propriétaire : le manuel
+
+*19/10/2026 · acceptée*
+
+Orion s'adapte à toi tout seul, et tout ce qu'il apprend reste lisible, corrigeable et oubliable.
+Ce qu'il apprend forme ton **manuel** : des règles (« Pas d'emoji », « Le matin, deux phrases
+max ») et des réglages que le code applique (heures des points, heures calmes, budget
+d'attention). Il apprend par trois voies :
+
+1. **Ce que tu lui dis** : une remarque sur sa manière devient une règle tout de suite (outil
+   `adapt`). Changer le moment où il parle passe par `initiative_settings`.
+2. **Ce qu'il observe** : une réflexion en lot, sur un modèle économique, relit tes derniers
+   messages à côté de ses réponses, tes tapbacks sur ses messages, et la façon dont tu as réagi
+   quand il a écrit le premier. Elle a lieu après 12 nouveaux messages, ou une fois par jour à
+   partir de 3. Elle propose au plus trois règles, marquées « [appris] ».
+3. **Ton attention**, sans modèle : un point du jour resté cinq fois de suite sans réponse
+   n'est plus envoyé, et la raison est gardée.
+
+Garde-fous appliqués par le code :
+- une règle déduite doit citer au moins deux de **tes** événements (messages ou réactions). Un
+  contenu tiers ne peut jamais changer sa façon de faire ;
+- la réflexion ne peut ni contredire ni retirer une règle que tu as donnée ; elle ne retire que
+  ses propres déductions ;
+- les règles déduites ont une confiance `SYSTEM` et dérivent de leurs preuves. Oublier une
+  conversation oublie aussi ce qu'il en avait appris (vérifié par rejeu) ;
+- chaque réflexion est journalisée avec la position couverte : jamais deux fois sur les mêmes
+  signaux, même après un redémarrage.
+
+Le manuel passe par les messages, comme la mémoire (D17). Il est ouvert au début d'une fenêtre
+dans `<memoire>`, puis chaque changement arrive une seule fois dans un bloc `<manuel>`. La
+constitution demande à Orion de dire en une phrase ce qu'il a changé de lui-même, pour que tu
+puisses le corriger. `orion memory` affiche le manuel en tête du profil.

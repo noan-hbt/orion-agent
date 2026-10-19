@@ -132,7 +132,12 @@ async def _memory(config: OrionConfig) -> int:
     try:
         async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
             await MemoryService(journal, store).sync()
-            text = profile_markdown(await store.facts(), await store.commitments())
+            text = profile_markdown(
+                await store.facts(),
+                await store.commitments(),
+                await store.rules(),
+                list((await store.settings()).values()),
+            )
     finally:
         await store.close()
     profile = config.data_dir / "profile.md"

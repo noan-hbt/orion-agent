@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+from orion.adaptation.tools import adaptation_tools
 from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
@@ -42,6 +43,7 @@ class LateApprover:
 @dataclass
 class App:
     config: OrionConfig
+    provider: ModelProvider
     journal: SqliteJournal
     memory: MemoryService
     timers: Timers
@@ -62,7 +64,12 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
                 journal=journal,
                 provider=provider,
                 registry=ToolRegistry(
-                    [*builtin_tools(), *memory_tools(memory), *reminder_tools(timers)]
+                    [
+                        *builtin_tools(),
+                        *memory_tools(memory),
+                        *reminder_tools(timers),
+                        *adaptation_tools(memory),
+                    ]
                 ),
                 guardian=Guardian(approver),
                 compiler=ContextCompiler(
@@ -74,6 +81,6 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
             )
             await orion.start()
             await timers.sync()
-            yield App(config, journal, memory, timers, orion, approver)
+            yield App(config, provider, journal, memory, timers, orion, approver)
     finally:
         await store.close()

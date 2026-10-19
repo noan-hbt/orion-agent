@@ -81,6 +81,10 @@ class FakeInkbox:
             )
         if path == "/imessage/messages" and request.method == "POST":
             return self._send(request, body)
+        if path == "/imessage/messages" and "conversation_id" in request.url.params:
+            conversation = request.url.params["conversation_id"]
+            mine = [m for m in self.messages.values() if m["conversation_id"] == conversation]
+            return httpx.Response(200, json=list(reversed(mine)))
         if path == "/imessage/messages":
             unread = [
                 m

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
@@ -31,8 +31,8 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
-from orion.memory.model import CommitmentStatus
-from orion.memory.store import Commitment, MemoryStore
+from orion.memory.model import CommitmentStatus, SettingKey
+from orion.memory.store import Commitment, MemoryStore, SettingChange
 from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
@@ -66,6 +66,26 @@ class InitiativeSettings:
         if self.quiet_start <= self.quiet_end:
             return self.quiet_start <= moment < self.quiet_end
         return moment >= self.quiet_start or moment < self.quiet_end
+
+
+def effective_settings(
+    base: InitiativeSettings, changes: dict[SettingKey, SettingChange]
+) -> InitiativeSettings:
+    """The config file gives defaults; settings the owner changed (or Orion learned) win."""
+    updates: dict[str, Any] = {}
+    for key, change in changes.items():
+        value = change.value
+        if key is SettingKey.DIGESTS and isinstance(value, list):
+            updates["digests"] = tuple(time.fromisoformat(v) for v in value)
+        elif key is SettingKey.QUIET_START and isinstance(value, str):
+            updates["quiet_start"] = time.fromisoformat(value)
+        elif key is SettingKey.QUIET_END and isinstance(value, str):
+            updates["quiet_end"] = time.fromisoformat(value)
+        elif key is SettingKey.DAILY_BUDGET and isinstance(value, int):
+            updates["daily_budget"] = value
+        else:
+            log.error("initiative.bad_setting", key=key, value=value)
+    return replace(base, **updates)
 
 
 @dataclass(frozen=True)
@@ -190,6 +210,7 @@ class InitiativeEngine:
         self._journal = journal
         self._timers = timers
         self._notifier = notifier
+        self._base = settings
         self._settings = settings
         self._memory = memory
         self._zone = ZoneInfo(settings.timezone)
@@ -207,6 +228,8 @@ class InitiativeEngine:
         """One pass. Returns the keys delivered (for tests and logs)."""
         await self._runner.catch_up()
         await self._timers.sync()
+        if self._memory is not None:
+            self._settings = effective_settings(self._base, await self._memory.settings())
         now = self._clock().astimezone(self._zone)
         delivered: list[str] = []
         for candidate in await self._candidates(now):

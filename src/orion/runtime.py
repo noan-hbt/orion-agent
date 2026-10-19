@@ -38,7 +38,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
-from orion.memory.render import recall_block, snapshot_block
+from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, Usage
@@ -372,26 +372,30 @@ class Orion:
         )
 
     async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
-        """Memory to attach to this message: core memory when a window starts, then any
-        relevant facts not already visible in the window. Appended to the user message, never to
-        the system prompt, so the cached prefix is untouched."""
+        """Memory to attach to this message: core memory and the playbook when a window starts,
+        then playbook changes and relevant facts not already visible in the window. Appended to
+        the user message, never to the system prompt, so the cached prefix is untouched."""
         if self._memory is None:
             return []
+        store = self._memory.store
+        rules = await store.rules(include_retired=True)
+        settings = list((await store.settings()).values())
         blocks: list[str] = []
         if not window:
             snapshot = snapshot_block(
-                await self._memory.store.facts(),
-                await self._memory.store.commitments(),
+                await store.facts(),
+                await store.commitments(),
                 self._snapshot_chars,
+                rules=[r for r in rules if r.active],
+                settings=settings,
             )
             if snapshot:
                 blocks.append(snapshot)
         shown = "\n".join(str(m.get("content") or "") for m in window) + "\n".join(blocks)
-        relevant = [
-            f
-            for f in await self._memory.store.search(text, self._recall_limit)
-            if f.id not in shown
-        ]
+        delta = playbook_delta(rules, settings, shown)
+        if delta:
+            blocks.append(delta)
+        relevant = [f for f in await store.search(text, self._recall_limit) if f.id not in shown]
         recalled = recall_block(relevant)
         if recalled:
             blocks.append(recalled)

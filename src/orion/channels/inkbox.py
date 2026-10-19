@@ -220,6 +220,16 @@ class InkboxClient:
         data = await self._request("GET", "/imessage/messages", params=params)
         return [IMessage.model_validate(m) for m in data]
 
+    async def recent(
+        self, conversation_id: str, identity_id: str | None = None, limit: int = 20
+    ) -> list[IMessage]:
+        """Latest messages of a conversation, newest first (to read tapbacks while polling)."""
+        params: dict[str, Any] = {"conversation_id": conversation_id, "limit": limit}
+        if identity_id:
+            params["agent_identity_id"] = identity_id
+        data = await self._request("GET", "/imessage/messages", params=params)
+        return [IMessage.model_validate(m) for m in data]
+
     async def message(self, message_id: str, identity_id: str | None = None) -> IMessage:
         params = {"agent_identity_id": identity_id} if identity_id else None
         data = await self._request("GET", f"/imessage/messages/{message_id}", params=params)

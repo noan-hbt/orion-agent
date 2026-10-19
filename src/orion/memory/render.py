@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from orion.memory.model import Category
-from orion.memory.store import Commitment, Fact
+from collections.abc import Sequence
+
+from orion.memory.model import Category, RuleBasis, SettingKey
+from orion.memory.store import Commitment, Fact, Rule, SettingChange
 
 _OWNER = {"owner": "toi", "orion": "Orion"}
 
@@ -21,11 +23,42 @@ def format_commitment(c: Commitment) -> str:
     return f"- ({c.id}) {debtor} → {creditor} : {c.what}{due}"
 
 
-def snapshot_block(facts: list[Fact], commitments: list[Commitment], max_chars: int) -> str | None:
-    """Core memory shown once at the start of a conversation window."""
+_SETTING_LABELS = {
+    SettingKey.DIGESTS: "heures des points du jour",
+    SettingKey.QUIET_START: "début des heures calmes",
+    SettingKey.QUIET_END: "fin des heures calmes",
+    SettingKey.DAILY_BUDGET: "messages non demandés par jour, au plus",
+}
+
+
+def format_rule(rule: Rule) -> str:
+    learned = " [appris]" if rule.basis is RuleBasis.INFERRED else ""
+    return f"- ({rule.id}) {rule.rule}{learned}"
+
+
+def format_setting(change: SettingChange) -> str:
+    value = ", ".join(change.value) if isinstance(change.value, list) else change.value
+    value = value if value != "" else "aucun"
+    return f"- ({change.id}) {_SETTING_LABELS[change.key]} : {value} ({change.reason})"
+
+
+def snapshot_block(
+    facts: list[Fact],
+    commitments: list[Commitment],
+    max_chars: int,
+    rules: Sequence[Rule] = (),
+    settings: Sequence[SettingChange] = (),
+) -> str | None:
+    """Core memory shown once at the start of a conversation window. The playbook comes first:
+    it changes how Orion behaves, not only what it knows."""
     core = [f for f in facts if f.category in {Category.PROFILE, Category.PREFERENCE}]
     lines: list[str] = []
-    for line in [*(format_fact(f) for f in core), *(format_commitment(c) for c in commitments)]:
+    for line in [
+        *(format_rule(r) for r in rules),
+        *(format_setting(c) for c in settings),
+        *(format_fact(f) for f in core),
+        *(format_commitment(c) for c in commitments),
+    ]:
         if sum(len(x) + 1 for x in lines) + len(line) > max_chars:
             lines.append("- …")
             break
@@ -42,7 +75,29 @@ def recall_block(facts: list[Fact]) -> str | None:
     return "<souvenirs>\n" + "\n".join(format_fact(f) for f in facts) + "\n</souvenirs>"
 
 
-def profile_markdown(facts: list[Fact], commitments: list[Commitment]) -> str:
+def playbook_delta(
+    rules: Sequence[Rule], settings: Sequence[SettingChange], shown: str
+) -> str | None:
+    """What changed in the playbook since the window started: new rules and settings, and
+    rules retired since they were shown. Each change appears once, then stays in the window."""
+    lines = [format_rule(r) for r in rules if r.active and r.id not in shown]
+    lines += [format_setting(c) for c in settings if c.id not in shown]
+    lines += [
+        f"- ({r.id}) retirée : {r.retired_reason}"
+        for r in rules
+        if not r.active and f"({r.id})" in shown and f"({r.id}) retirée" not in shown
+    ]
+    if not lines:
+        return None
+    return "<manuel>\n" + "\n".join(lines) + "\n</manuel>"
+
+
+def profile_markdown(
+    facts: list[Fact],
+    commitments: list[Commitment],
+    rules: Sequence[Rule] = (),
+    settings: Sequence[SettingChange] = (),
+) -> str:
     """A human-readable view of everything Orion currently believes, grouped by category."""
     titles = {
         Category.PROFILE: "Toi",
@@ -52,6 +107,14 @@ def profile_markdown(facts: list[Fact], commitments: list[Commitment]) -> str:
         Category.OTHER: "Divers",
     }
     out = ["# Ce qu'Orion sait", ""]
+    if rules or settings:
+        out += [
+            "## Comment il travaille avec toi",
+            "",
+            *(format_rule(r) for r in rules),
+            *(format_setting(c) for c in settings),
+            "",
+        ]
     for category, title in titles.items():
         section = [f for f in facts if f.category == category.value and f.current]
         if section:

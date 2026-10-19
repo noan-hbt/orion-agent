@@ -10,6 +10,8 @@ from __future__ import annotations
 import structlog
 import uvicorn
 
+from orion.adaptation.reflector import Reflector
+from orion.adaptation.service import AdaptationSettings, Adapter
 from orion.app import App
 from orion.channels.imessage import IMessageChannel, IMessageSettings
 from orion.channels.inkbox import InkboxClient
@@ -107,7 +109,27 @@ async def serve(app: App, client: InkboxClient) -> None:
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
 
-    log.info("orion.serving", mode=cfg.mode, initiative=initiative.enabled)
+    adaptation = app.config.adaptation
+    if adaptation.enabled:
+        adapter = Adapter(
+            app.journal,
+            app.memory,
+            Reflector(app.provider, app.memory, app.config.agent.extractor_model),
+            AdaptationSettings(
+                timezone=app.config.agent.timezone,
+                digests=tuple(initiative.digests),
+                reflect_after_messages=adaptation.reflect_after_messages,
+                reflect_daily_after_messages=adaptation.reflect_daily_after_messages,
+            ),
+        )
+        supervisor.add("adaptation", lambda: adapter.run(adaptation.tick_seconds))
+
+    log.info(
+        "orion.serving",
+        mode=cfg.mode,
+        initiative=initiative.enabled,
+        adaptation=adaptation.enabled,
+    )
     if not await channel.available():
         triage = await client.triage_number()
         log.warning(
