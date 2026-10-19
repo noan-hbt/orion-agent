@@ -15,7 +15,14 @@ d'autres personnes.
 - **M2 — mémoire v0** : faits bi-temporels avec provenance (jamais écrasés, gardés en historique),
   registre des engagements (je dois / on me doit), recherche plein texte, outils mémoire,
   extraction en arrière-plan, oubli par source vérifié par rejeu du journal, profil lisible
-  (`orion memory`), oubli (`orion forget <source>`). Voir l'ordre de construction dans
+  (`orion memory`), oubli (`orion forget <source>`).
+- **M3 — iMessage et initiative v0** : canal iMessage via Inkbox (polling ou webhook signé,
+  dédoublonnage, reprise après crash, rafales regroupées, indicateur de frappe, réponses en
+  bulles), outbox idempotente, approbations par tapback ou par mot, rappels durables
+  (`remind_me`), moteur d'initiative (3 points par jour sur les engagements, alerte avant une
+  échéance, heures calmes, budget d'attention, « pourquoi maintenant »), démon `orion serve`.
+
+Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
 ## Démarrer
@@ -27,6 +34,21 @@ export OPENROUTER_API_KEY=...
 uv run orion doctor
 uv run orion chat
 ```
+
+### iMessage
+
+Il faut une clé Inkbox dans `INKBOX_API_KEY`. Dans `orion.toml`, section `[channels.imessage]`,
+indique `enabled = true`, l'identifiant d'Orion (`identity`) et ton numéro (`owner_number`).
+Ensuite :
+
+```bash
+uv run orion inkbox setup   # crée l'identité et affiche le message à envoyer depuis ton iPhone
+uv run orion serve          # le démon : iMessage et initiative
+```
+
+Orion ne peut t'écrire qu'une fois que tu lui as écrit. Le mode `poll` (par défaut) n'a besoin
+d'aucune URL publique. Pour le mode `webhook`, lance `orion inkbox setup --webhook-url
+https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 
 ## Documentation
 

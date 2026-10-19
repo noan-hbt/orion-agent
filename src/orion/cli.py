@@ -1,4 +1,4 @@
-"""Command-line entry point. For now: `orion version` and `orion doctor`."""
+"""Command-line entry point."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orion import __version__
 from orion.config import OrionConfig, load_config
@@ -14,48 +15,111 @@ from orion.core.journal import SqliteJournal
 from orion.memory.store import MemoryStore
 from orion.observability.logging import configure_logging
 
-
-async def _chat(config: OrionConfig) -> int:
-    # Imported lazily: `orion version` and `orion doctor` must work without network deps loaded.
-    from orion.channels.terminal import TerminalApprover, run_terminal
-    from orion.context.compiler import ContextCompiler
-    from orion.guardian.policy import Guardian
-    from orion.memory.extractor import MemoryExtractor
-    from orion.memory.service import MemoryService
-    from orion.memory.tools import memory_tools
+if TYPE_CHECKING:
+    from orion.channels.inkbox import InkboxClient
     from orion.providers.openrouter import OpenRouterProvider
-    from orion.resources import read_resource
-    from orion.runtime import Orion
-    from orion.tools.base import ToolRegistry
-    from orion.tools.builtin import builtin_tools
+
+
+def _provider(config: OrionConfig) -> OpenRouterProvider | None:
+    from orion.providers.openrouter import OpenRouterProvider
 
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
         print(f"Impossible de démarrer : {exc}")
-        return 3
-    provider = OpenRouterProvider(api_key.get_secret_value(), config.providers.openrouter.base_url)
-    store = MemoryStore(config.memory_path)
-    await store.open()
+        return None
+    return OpenRouterProvider(api_key.get_secret_value(), config.providers.openrouter.base_url)
+
+
+def _inkbox(config: OrionConfig) -> InkboxClient | None:
+    from orion.channels.inkbox import InkboxClient
+
+    cfg = config.channels.imessage
     try:
-        async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
-            memory = MemoryService(journal, store)
-            orion = Orion(
-                journal=journal,
-                provider=provider,
-                registry=ToolRegistry([*builtin_tools(), *memory_tools(memory)]),
-                guardian=Guardian(TerminalApprover()),
-                compiler=ContextCompiler(
-                    read_resource("constitution.md"), config.agent.max_window_tokens
-                ),
-                agent=config.agent,
-                memory=memory,
-                extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
-            )
-            await run_terminal(orion)
+        api_key = cfg.api_key.resolve()
+    except LookupError as exc:
+        print(f"Impossible de joindre Inkbox : {exc}")
+        return None
+    return InkboxClient(api_key.get_secret_value(), cfg.base_url)
+
+
+async def _chat(config: OrionConfig) -> int:
+    # Imported lazily: `orion version` and `orion doctor` must work without network deps loaded.
+    from orion.app import build_app
+    from orion.channels.terminal import TerminalApprover, run_terminal
+
+    provider = _provider(config)
+    if provider is None:
+        return 3
+    try:
+        async with build_app(config, provider) as app:
+            app.approver.target = TerminalApprover()
+            await run_terminal(app.orion)
     finally:
-        await store.close()
         await provider.aclose()
+    return 0
+
+
+async def _serve(config: OrionConfig) -> int:
+    from orion.app import build_app
+    from orion.serve import ServeError, serve
+
+    if not config.channels.imessage.enabled:
+        print("Aucun canal activé : mets `enabled = true` dans [channels.imessage].")
+        return 2
+    provider = _provider(config)
+    client = _inkbox(config)
+    if provider is None or client is None:
+        return 3
+    try:
+        async with build_app(config, provider) as app:
+            await serve(app, client)
+    except ServeError as exc:
+        print(f"Impossible de démarrer : {exc}")
+        return 2
+    finally:
+        await client.aclose()
+        await provider.aclose()
+    return 0
+
+
+async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
+    cfg = config.channels.imessage
+    if not cfg.identity:
+        print('Choisis un identifiant pour Orion : `identity = "..."` dans [channels.imessage].')
+        return 2
+    client = _inkbox(config)
+    if client is None:
+        return 3
+    try:
+        identity = await client.identity(cfg.identity)
+        if identity is None:
+            identity = await client.create_identity(cfg.identity, "Orion")
+            print(f"Identité créée : @{identity.agent_handle}")
+        elif not identity.imessage_enabled:
+            identity = await client.enable_imessage(cfg.identity)
+            print(f"iMessage activé pour @{identity.agent_handle}")
+        else:
+            print(f"Identité existante : @{identity.agent_handle} (iMessage actif)")
+        triage = await client.triage_number()
+        print(
+            f"\nDepuis ton iPhone ({cfg.owner_number or 'owner_number à renseigner'}), envoie "
+            f"« {triage.connect_command} » au {triage.number}. Ensuite, écris-lui ce que tu veux."
+        )
+        if webhook_url:
+            key = await client.subscribe_webhook(
+                identity.id, webhook_url, ["imessage.received", "imessage.reaction_received"]
+            )
+            print(f"\nWebhook abonné : {webhook_url}")
+            if key:
+                print(
+                    "Clé de signature (affichée une seule fois) : mets-la dans la variable "
+                    f"d'environnement {cfg.signing_key.env} du serveur :\n{key}"
+                )
+            else:
+                print("Inkbox n'a pas renvoyé de clé : l'identité en avait déjà une.")
+    finally:
+        await client.aclose()
     return 0
 
 
@@ -109,6 +173,15 @@ async def _doctor(config: OrionConfig) -> int:
         print("openrouter: api key present")
     except LookupError as exc:
         print(f"openrouter: {exc}")
+    imessage = config.channels.imessage
+    if imessage.enabled:
+        try:
+            imessage.api_key.resolve()
+            print(f"inkbox:    api key present, identity @{imessage.identity or '?'}")
+        except LookupError as exc:
+            print(f"inkbox:    {exc}")
+    else:
+        print("inkbox:    disabled")
     return 0
 
 
@@ -119,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("version", help="Print the version")
     sub.add_parser("doctor", help="Check configuration and storage")
     sub.add_parser("chat", help="Talk to Orion in the terminal")
+    sub.add_parser("serve", help="Run Orion: iMessage channel and initiative engine")
+    inkbox = sub.add_parser("inkbox", help="Inkbox (iMessage) administration")
+    inkbox_sub = inkbox.add_subparsers(dest="inkbox_command", required=True)
+    setup = inkbox_sub.add_parser("setup", help="Create Orion's identity and show how to connect")
+    setup.add_argument("--webhook-url", default=None, help="Public HTTPS URL for webhook mode")
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
@@ -137,6 +215,13 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "inkbox":
+        return asyncio.run(_inkbox_setup(config, args.webhook_url))
+    if args.command == "serve":
+        try:
+            return asyncio.run(_serve(config))
+        except KeyboardInterrupt:
+            return 130
     if args.command == "chat":
         try:
             return asyncio.run(_chat(config))

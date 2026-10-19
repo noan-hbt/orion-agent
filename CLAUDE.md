@@ -20,6 +20,8 @@ in French; code, identifiers and comments are in English.
 - Every piece of content carries `Provenance` and `Trust`; derived trust is the minimum of inputs.
 - Fail closed. Never swallow an exception: log it with context or let it propagate.
 - No secrets in config files or code: use `SecretRef`.
+- Everything that leaves Orion goes through `guardian.outbox.Outbox` (journaled, idempotent).
+  Orion speaks first only through the initiative engine, which journals every decision.
 - Every behaviour change comes with a test.
 - Prompt-cache contract (`tests/test_runtime_cache.py`): each model request must extend the
   previous one byte for byte. Nothing volatile (time, retrieved memory) goes in the system

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import tomllib
+from datetime import time
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -59,6 +61,47 @@ class AgentConfig(BaseModel):
     extractor_model: str = "deepseek/deepseek-v4.1-flash"
 
 
+class IMessageConfig(BaseModel):
+    """iMessage through an Inkbox managed line."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    api_key: SecretRef = SecretRef(env="INKBOX_API_KEY")
+    base_url: str = "https://inkbox.ai"
+    identity: str = Field(default="", description="Orion's Inkbox agent handle")
+    owner_number: str = Field(
+        default="", description="Owner's phone number, E.164 (e.g. +33612345678)"
+    )
+    mode: Literal["poll", "webhook"] = "poll"
+    poll_seconds: float = Field(default=4.0, ge=1.0)
+    webhook_host: str = "127.0.0.1"
+    webhook_port: int = 8787
+    webhook_path: str = "/inkbox/webhook"
+    signing_key: SecretRef = SecretRef(env="INKBOX_SIGNING_KEY")
+    coalesce_seconds: float = Field(default=3.0, ge=0.0)
+    approval_timeout_seconds: float = Field(default=900.0, gt=0)
+
+
+class ChannelsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    imessage: IMessageConfig = IMessageConfig()
+
+
+class InitiativeConfig(BaseModel):
+    """When Orion may speak first."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    digests: list[time] = Field(default_factory=lambda: [time(8, 30), time(13, 0), time(19, 0)])
+    quiet_start: time = time(22, 30)
+    quiet_end: time = time(8, 0)
+    daily_budget: int = Field(default=6, ge=0, description="Unrequested messages per day, max")
+    tick_seconds: float = Field(default=30.0, ge=1.0)
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -71,6 +114,8 @@ class OrionConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     agent: AgentConfig = AgentConfig()
     providers: ProvidersConfig = ProvidersConfig()
+    channels: ChannelsConfig = ChannelsConfig()
+    initiative: InitiativeConfig = InitiativeConfig()
 
     @property
     def journal_path(self) -> Path:

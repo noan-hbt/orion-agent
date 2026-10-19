@@ -6,9 +6,9 @@ import asyncio
 
 from orion.guardian.policy import ActionProposal
 from orion.providers.base import Usage
-from orion.runtime import Orion, TurnResult
+from orion.runtime import OWNER_THREAD, Orion, TurnResult
 
-THREAD_ID = "terminal-owner"
+THREAD_ID = OWNER_THREAD
 
 HELP = """Commandes : /stats (coût et cache de la session), /quit. Le reste part à Orion."""
 

@@ -19,3 +19,28 @@ max_cost_usd_per_turn = 0.5
 [providers.openrouter]
 api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"
+
+# iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
+# connect command it prints from your phone: Orion can only write to you after you wrote first.
+[channels.imessage]
+enabled = false
+api_key = { env = "INKBOX_API_KEY" }
+identity = "orion-noan"          # Orion's Inkbox handle (globally unique)
+owner_number = "+33600000000"    # your number, E.164: the only one Orion obeys
+mode = "poll"                    # "poll" needs no public URL; "webhook" is instant
+poll_seconds = 4
+webhook_host = "127.0.0.1"       # put a TLS reverse proxy in front for "webhook"
+webhook_port = 8787
+webhook_path = "/inkbox/webhook"
+signing_key = { env = "INKBOX_SIGNING_KEY" }
+coalesce_seconds = 3             # bursts of short texts become one message
+approval_timeout_seconds = 900   # no answer means no
+
+# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
+[initiative]
+enabled = true
+digests = ["08:30:00", "13:00:00", "19:00:00"]
+quiet_start = "22:30:00"
+quiet_end = "08:00:00"
+daily_budget = 6                 # unrequested messages per day
+tick_seconds = 30

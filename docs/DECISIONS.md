@@ -272,3 +272,59 @@ Les écritures en mémoire sont des outils à effet interne qui refusent les con
 un contenu lu sur le web ou venant d'un tiers ne peut pas devenir un souvenir sans le
 propriétaire. L'extraction en arrière-plan produit des souvenirs de confiance `SYSTEM` au plus.
 La résolution d'entités (personnes) reste minimale en M2 (noms libres) et sera traitée en M6.
+
+## D18 — iMessage par Inkbox, en polling par défaut
+
+*19/10/2026 · acceptée*
+
+Le canal iMessage passe par une ligne gérée Inkbox, via un petit client asynchrone écrit pour Orion
+(le SDK officiel est synchrone). Deux modes de réception, qui passent par le même point d'entrée :
+- **polling** (défaut) : aucun port ouvert ni URL publique, quelques secondes de latence ;
+- **webhook** : instantané, fermé par défaut (sans clé de signature, tout est refusé ; signature
+  HMAC et horodatage vérifiés ; accusé de réception seulement après journalisation).
+
+Seul le numéro du propriétaire est écouté. Les autres messages sont journalisés comme contenus
+tiers et restent sans réponse. Chaque message entrant est journalisé avant tout traitement, avec
+son identifiant : après un crash, ce qui n'a pas reçu de réponse est repris, rien n'est traité
+deux fois. Les rafales de messages courts sont regroupées en un seul tour (3 s). Tous les canaux
+du propriétaire partagent **un seul fil** (`owner`), et donc un seul préfixe en cache.
+
+## D19 — Outbox idempotente et approbations par message
+
+*19/10/2026 · acceptée*
+
+Tout envoi est journalisé (`outbox.queued`) avant de partir. Son identifiant sert de clé
+d'idempotence chez le fournisseur : après un crash, l'envoi est rejoué avec la même clé, sans
+risque de doublon. Un refus net (4xx) n'est jamais rejoué.
+
+Les approbations du gardien passent par iMessage : l'action exacte, puis un tapback (👍/👎) ou un
+mot (oui/non). Sans réponse avant le délai (15 min), c'est non. Une approbation vaut pour cette
+action seulement.
+
+Le gardien reste pour l'instant dans le processus d'Orion, derrière ses interfaces (`Approver`,
+`Outbox`, `Transport`). Aucun outil d'Orion n'a encore d'effet externe autre que te répondre. La
+séparation en processus (D14) se fera avec le premier outil qui agit sur le monde (mail, agenda),
+sans changer ces interfaces.
+
+## D20 — Initiative v0 : des règles décident, le modèle rédige
+
+*19/10/2026 · acceptée*
+
+Le moteur d'initiative tourne toutes les 30 s. Il examine trois sources :
+- les rappels demandés (`remind_me`) ;
+- trois points par jour (8h30, 13h, 19h), construits à partir du registre des engagements ;
+- une alerte une heure avant un engagement à heure précise.
+
+La décision de parler est **déterministe** : heures calmes (22h30 à 8h), budget quotidien
+d'attention (6 messages non demandés), et un registre de ce qui a déjà été dit, pour ne jamais se
+répéter, y compris après un redémarrage. Un point sans rien de nouveau n'est pas envoyé et ne
+coûte aucun appel au modèle. Les rappels que tu as demandés passent outre les heures calmes et le
+budget.
+
+Le modèle rédige le message, avec son « pourquoi maintenant », dans le fil du propriétaire. Ta
+réponse arrive donc avec le contexte. Le modèle peut répondre `SILENCE` pour un point qui ne
+mérite pas de te déranger ; pour un rappel demandé, un texte de secours part quand même. Chaque
+décision, y compris celle de se taire, est journalisée avec sa raison.
+
+`remind_me` est la seule façon pour Orion de revenir vers toi plus tard. La constitution lui
+interdit de promettre un rappel sans l'avoir programmé (anomalie observée en M2).

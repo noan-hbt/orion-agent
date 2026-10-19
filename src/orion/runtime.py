@@ -11,6 +11,7 @@ extension of what was sent before.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -44,6 +45,9 @@ from orion.providers.base import Message, ModelProvider, Usage
 from orion.tools.base import ToolRegistry
 
 log = structlog.get_logger(__name__)
+
+OWNER_THREAD = "owner"
+"""The owner's single conversation thread, shared by every owner channel."""
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ class Orion:
         self._agent = agent
         self.threads = ThreadProjection()
         self._projections = ProjectionRunner(journal, [self.threads])
+        self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self) -> None:
         await self._projections.catch_up()
@@ -92,27 +97,117 @@ class Orion:
             await self._memory.sync()
 
     async def handle_owner_message(
-        self, thread_id: str, text: str, channel: str, now: datetime | None = None
+        self,
+        thread_id: str,
+        text: str,
+        channel: str,
+        now: datetime | None = None,
+        refs: list[str] | None = None,
+    ) -> TurnResult:
+        """A message from the owner, on any channel. All owner channels share one thread.
+        `refs` are the channel's own message ids, recorded so a restart knows they were handled."""
+        owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
+        payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
+        if refs:
+            payload["refs"] = refs
+        return await self._turn(
+            thread_id,
+            kind="message.received",
+            payload=payload,
+            provenance=owner,
+            trust=Trust.OWNER,
+            body=text,
+            channel=channel,
+            now=now,
+        )
+
+    async def handle_initiative(
+        self,
+        thread_id: str,
+        notice: str,
+        why: str,
+        trust: Trust = Trust.SYSTEM,
+        now: datetime | None = None,
+    ) -> TurnResult:
+        """Orion speaks first: a notice from the initiative engine becomes a turn in the owner's
+        thread, so the owner's answer has the context. The reply may be `SILENCE` (nothing worth
+        sending), which callers must not deliver."""
+        body = f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
+        return await self._turn(
+            thread_id,
+            kind="initiative.triggered",
+            payload={"thread_id": thread_id, "notice": notice, "why": why},
+            provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
+            trust=min(trust, Trust.SYSTEM),
+            body=body,
+            channel="initiative",
+            now=now,
+            memory_query=notice,
+            owner_text="",
+        )
+
+    def lock(self, thread_id: str) -> asyncio.Lock:
+        """Turns on one thread are serialized: two channels never interleave a conversation."""
+        return self._locks.setdefault(thread_id, asyncio.Lock())
+
+    async def _turn(
+        self,
+        thread_id: str,
+        *,
+        kind: str,
+        payload: dict[str, object],
+        provenance: Provenance,
+        trust: Trust,
+        body: str,
+        channel: str,
+        now: datetime | None,
+        memory_query: str | None = None,
+        owner_text: str | None = None,
+    ) -> TurnResult:
+        async with self.lock(thread_id):
+            return await self._turn_locked(
+                thread_id,
+                kind,
+                payload,
+                provenance,
+                trust,
+                body,
+                channel,
+                now,
+                memory_query if memory_query is not None else body,
+                owner_text if owner_text is not None else body,
+            )
+
+    async def _turn_locked(
+        self,
+        thread_id: str,
+        kind: str,
+        payload: dict[str, object],
+        provenance: Provenance,
+        trust: Trust,
+        body: str,
+        channel: str,
+        now: datetime | None,
+        memory_query: str,
+        owner_text: str,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
-        owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
-
         received = NewEvent(
-            kind="message.received",
-            payload={"thread_id": thread_id, "channel": channel, "text": text},
-            provenance=owner,
-            trust=Trust.OWNER,
+            kind=kind,
+            payload=payload,
+            provenance=provenance,
+            trust=trust,
             correlation_id=correlation_id,
         )
         await self._projections.catch_up()
         thread = self.threads.get(thread_id)
 
         events: list[NewEvent] = [received]
-        new_base = self._compiler.rebase_point(thread, [render_user_message(text, when, channel)])
+        new_base = self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
         window = thread.messages[new_base if new_base is not None else thread.base :]
         user_message = render_user_message(
-            text, when, channel, await self._memory_blocks(text, window)
+            body, when, channel, await self._memory_blocks(memory_query, window)
         )
         if new_base is not None:
             log.info("thread.rebase", thread=thread_id, base=new_base)
@@ -127,7 +222,7 @@ class Orion:
             )
         events.append(
             self._message_event(
-                thread_id, user_message, Trust.OWNER, correlation_id, received.id, provenance=owner
+                thread_id, user_message, trust, correlation_id, received.id, provenance=provenance
             )
         )
         await self._journal.append(events)
@@ -228,7 +323,7 @@ class Orion:
                         correlation_id,
                         detail,
                         thread_id=thread_id,
-                        owner_text=text,
+                        owner_text=owner_text,
                         origin_event_id=received.id,
                         day=when.date(),
                     )
@@ -246,12 +341,17 @@ class Orion:
         await self._projections.rebuild(self.threads.name)
         return report
 
+    @property
+    def journal(self) -> EventStore:
+        return self._journal
+
     async def consolidate(self, turn: TurnResult) -> ExtractionReport | None:
         """Run background memory extraction for a finished turn (off the critical path)."""
         if (
             self._memory is None
             or self._extractor is None
             or turn.reason is not StopReason.COMPLETED
+            or not turn.owner_text
         ):
             return None
         recorded: list[Fact] = []
@@ -332,3 +432,14 @@ class Orion:
             causation_id,
             provenance,
         )
+
+
+SILENCE = "SILENCE"
+
+
+def is_silence(text: str) -> bool:
+    return text.strip().strip(".").upper() == SILENCE
+
+
+def _attr(value: str) -> str:
+    return value.replace("&", "&amp;").replace('"', "&quot;").replace("\n", " ")

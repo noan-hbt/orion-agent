@@ -1,0 +1,79 @@
+"""Assembly: builds one Orion from its configuration, for every entry point.
+
+The tool registry is the same whatever the channel, so `orion chat` and `orion serve` share
+one cached prompt prefix on the owner's thread.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+
+from orion.config import OrionConfig
+from orion.context.compiler import ContextCompiler
+from orion.core.hlc import HybridClock
+from orion.core.journal import SqliteJournal
+from orion.guardian.policy import ActionProposal, Approver, DenyAllApprover, Guardian
+from orion.initiative.timers import TimerProjection, Timers
+from orion.initiative.tools import reminder_tools
+from orion.memory.extractor import MemoryExtractor
+from orion.memory.service import MemoryService
+from orion.memory.store import MemoryStore
+from orion.memory.tools import memory_tools
+from orion.providers.base import ModelProvider
+from orion.resources import read_resource
+from orion.runtime import Orion
+from orion.tools.base import ToolRegistry
+from orion.tools.builtin import builtin_tools
+
+
+class LateApprover:
+    """Approver chosen after assembly (the iMessage channel needs Orion to exist first).
+    Until one is set, everything that needs approval is refused."""
+
+    def __init__(self) -> None:
+        self.target: Approver = DenyAllApprover()
+
+    async def approve(self, proposal: ActionProposal) -> bool:
+        return await self.target.approve(proposal)
+
+
+@dataclass
+class App:
+    config: OrionConfig
+    journal: SqliteJournal
+    memory: MemoryService
+    timers: Timers
+    orion: Orion
+    approver: LateApprover
+
+
+@asynccontextmanager
+async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenerator[App]:
+    store = MemoryStore(config.memory_path)
+    await store.open()
+    try:
+        async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+            memory = MemoryService(journal, store)
+            timers = Timers(journal, TimerProjection())
+            approver = LateApprover()
+            orion = Orion(
+                journal=journal,
+                provider=provider,
+                registry=ToolRegistry(
+                    [*builtin_tools(), *memory_tools(memory), *reminder_tools(timers)]
+                ),
+                guardian=Guardian(approver),
+                compiler=ContextCompiler(
+                    read_resource("constitution.md"), config.agent.max_window_tokens
+                ),
+                agent=config.agent,
+                memory=memory,
+                extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
+            )
+            await orion.start()
+            await timers.sync()
+            yield App(config, journal, memory, timers, orion, approver)
+    finally:
+        await store.close()
