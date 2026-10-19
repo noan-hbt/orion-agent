@@ -121,8 +121,23 @@ mono-agent.
 
 ## D5-bis — Abonnement Claude : à réexaminer
 
-*19/10/2026 · ouverte*
+*19/10/2026 · tranchée — complète D5*
 
-L'utilisateur signale que Hermes Agent permettrait d'utiliser l'abonnement Claude. À vérifier à
-l'étape 2 : mécanisme exact et conformité avec la politique d'Anthropic. D5 reste valable tant que
-ce point n'est pas tranché.
+L'utilisateur signale que Hermes Agent permettrait d'utiliser l'abonnement Claude. Vérifié dans le
+code de Hermes (étape 2, `docs/research/02-paysage.md` §1) : il existe trois voies.
+
+**Décision.**
+- **Voie B adoptée : « CLI comme modèle ».** Pour un appel modèle, Orion lance le binaire `claude`
+  officiel non modifié (`stream-json`, un seul tour), désactive ses outils natifs, lui annonce les
+  outils d'Orion via MCP et les exécute lui-même. L'authentification passe uniquement par
+  `claude auth login`. Modèle : le plugin `claude-subscription-directsdk` de Hermes. Même principe
+  pour ChatGPT via `codex app-server`.
+- **Voie C adoptée : « CLI comme agent délégué »** (D5 inchangée).
+- **Voie A refusée : réutiliser les jetons OAuth en se faisant passer pour Claude Code.** C'est de
+  l'usurpation d'identité contraire à la politique d'Anthropic ; en pratique elle ne consomme même
+  pas le forfait de base.
+
+**Conséquences.**
+- L'abonnement Claude peut servir de « cerveau » pour le raisonnement profond. Pas pour le chemin
+  réflexe de la voix : un processus lancé par appel ajoute de la latence.
+- Un fournisseur de repli (OpenRouter) reste obligatoire : la politique d'Anthropic peut changer.
