@@ -55,3 +55,12 @@ enabled = true
 reflect_after_messages = 12        # reflect once this many new messages piled up…
 reflect_daily_after_messages = 3   # …or once a day if at least this many
 tick_seconds = 600
+
+# Long tasks (code, scripts, documents) handed to the official `claude` CLI, which uses your
+# subscription. Log it in once on the server: `claude auth login`. Off by default.
+[delegation]
+enabled = false
+binary = "claude"
+timeout_seconds = 1800
+max_budget_usd = 2.0
+allow_bash = false               # true: the agent may run commands; each job then needs your OK

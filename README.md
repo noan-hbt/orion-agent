@@ -25,6 +25,9 @@ d'autres personnes.
   (`adapt`, `initiative_settings`). Une réflexion périodique tire des règles de tes messages et
   de tes tapbacks. Les points que tu ignores ne sont plus envoyés. Tout est visible
   (`orion memory`), corrigeable, et oublié avec la conversation d'où il vient.
+- **M4 — fournisseurs étendus** : routeur avec modèles de secours, vérificateur sur un autre
+  modèle pour tout message proactif, délégation des tâches longues au CLI `claude` officiel (en
+  arrière-plan, résultat transmis à la fin). Le CLI comme modèle principal reste à faire (D22).
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

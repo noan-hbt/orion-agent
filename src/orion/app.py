@@ -15,6 +15,8 @@ from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.delegation.claude_code import ClaudeCodeAgent
+from orion.delegation.jobs import JobService, delegation_tools
 from orion.guardian.policy import ActionProposal, Approver, DenyAllApprover, Guardian
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
@@ -49,6 +51,7 @@ class App:
     timers: Timers
     orion: Orion
     approver: LateApprover
+    jobs: JobService | None = None
 
 
 @asynccontextmanager
@@ -60,6 +63,14 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
             memory = MemoryService(journal, store)
             timers = Timers(journal, TimerProjection())
             approver = LateApprover()
+            jobs: JobService | None = None
+            if config.delegation.enabled:
+                d = config.delegation
+                agent = ClaudeCodeAgent(
+                    d.binary, d.model, d.timeout_seconds, d.max_budget_usd, d.allow_bash
+                )
+                jobs = JobService(journal, agent, config.workspaces_path)
+                await jobs.recover()
             orion = Orion(
                 journal=journal,
                 provider=provider,
@@ -69,6 +80,7 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
                         *memory_tools(memory),
                         *reminder_tools(timers),
                         *adaptation_tools(memory),
+                        *(delegation_tools(jobs) if jobs else []),
                     ]
                 ),
                 guardian=Guardian(approver),
@@ -81,6 +93,6 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
             )
             await orion.start()
             await timers.sync()
-            yield App(config, provider, journal, memory, timers, orion, approver)
+            yield App(config, provider, journal, memory, timers, orion, approver, jobs)
     finally:
         await store.close()

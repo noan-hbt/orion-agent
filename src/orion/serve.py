@@ -108,6 +108,7 @@ async def serve(app: App, client: InkboxClient) -> None:
             ),
             memory=app.memory.store,
             verifier=Verifier(app.provider, app.config.agent.verifier_model),
+            jobs=app.jobs,
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
 

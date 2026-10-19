@@ -31,6 +31,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.delegation.jobs import Job, JobService
 from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
@@ -209,8 +210,10 @@ class InitiativeEngine:
         memory: MemoryStore | None = None,
         clock: Callable[[], datetime] | None = None,
         verifier: Verifier | None = None,
+        jobs: JobService | None = None,
     ) -> None:
         self._orion = orion
+        self._jobs = jobs
         self._verifier = verifier
         self._journal = journal
         self._timers = timers
@@ -244,6 +247,9 @@ class InitiativeEngine:
 
     async def _candidates(self, now: datetime) -> list[Candidate]:
         found = [self._reminder(t, now) for t in self._timers.projection.due(now)]
+        if self._jobs is not None:
+            await self._jobs.sync()
+            found.extend(self._job_report(j) for j in self._jobs.projection.finished())
         commitments = await self._memory.commitments() if self._memory else []
         found.extend(self._heads_up(commitments, now))
         digest = self._digest(commitments, now)
@@ -265,6 +271,21 @@ class InitiativeEngine:
             trust=timer.trust,
             explicit=True,
             timer=timer,
+        )
+
+    @staticmethod
+    def _job_report(job: Job) -> Candidate:
+        status = "terminée" if job.ok else f"échouée ({job.error})"
+        files = ", ".join(job.files[:10]) or "aucun"
+        return Candidate(
+            key=f"job:{job.id}",
+            notice=f"Tâche déléguée « {job.title} » {status} ({job.id}).\n"
+            f"Compte rendu de l'agent :\n{job.result or '(vide)'}\n"
+            f"Fichiers produits, dans {job.workdir} : {files}",
+            why="la tâche que tu m'as confiée vient de se terminer",
+            fallback=f"Tâche « {job.title} » {status}. "
+            + (f"Fichiers dans {job.workdir} : {files}" if job.ok else ""),
+            explicit=True,
         )
 
     def _heads_up(self, commitments: list[Commitment], now: datetime) -> list[Candidate]:

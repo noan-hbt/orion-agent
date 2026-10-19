@@ -129,6 +129,21 @@ class AdaptationConfig(BaseModel):
     tick_seconds: float = Field(default=600.0, ge=10.0)
 
 
+class DelegationConfig(BaseModel):
+    """Long tasks handed to the official `claude` CLI (logged in with `claude auth login`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    binary: str = "claude"
+    model: str | None = None
+    timeout_seconds: float = Field(default=1800.0, gt=0)
+    max_budget_usd: float = Field(default=2.0, gt=0)
+    allow_bash: bool = Field(
+        default=False, description="Let the agent run commands; each job then needs approval"
+    )
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -144,6 +159,7 @@ class OrionConfig(BaseModel):
     channels: ChannelsConfig = ChannelsConfig()
     initiative: InitiativeConfig = InitiativeConfig()
     adaptation: AdaptationConfig = AdaptationConfig()
+    delegation: DelegationConfig = DelegationConfig()
 
     @property
     def journal_path(self) -> Path:
@@ -153,6 +169,11 @@ class OrionConfig(BaseModel):
     def memory_path(self) -> Path:
         """Rebuildable projection: safe to delete, it is replayed from the journal."""
         return self.data_dir / "memory.sqlite3"
+
+    @property
+    def workspaces_path(self) -> Path:
+        """One folder per delegated job."""
+        return self.data_dir / "workspaces"
 
 
 def load_config(path: Path | None = None) -> OrionConfig:

@@ -361,3 +361,34 @@ Le manuel passe par les messages, comme la mémoire (D17). Il est ouvert au déb
 dans `<memoire>`, puis chaque changement arrive une seule fois dans un bloc `<manuel>`. La
 constitution demande à Orion de dire en une phrase ce qu'il a changé de lui-même, pour que tu
 puisses le corriger. `orion memory` affiche le manuel en tête du profil.
+
+## D22 — M4 : routeur, vérificateur, délégation au CLI `claude`
+
+*19/10/2026 · acceptée*
+
+- **Routeur** : chaque appel modèle passe par un routeur. Un modèle se note `fournisseur:modèle`
+  (ou le modèle seul pour OpenRouter). Si un appel échoue après les tentatives propres au
+  fournisseur, le routeur essaie la chaîne de secours (par défaut Claude Haiku 5.5). Le secours
+  coûte le cache : il ne sert qu'en cas de panne.
+- **Vérificateur** : avant d'envoyer un message de sa propre initiative, Orion le fait relire par
+  un **autre** modèle (Claude Haiku 5.5, d'une autre famille que DeepSeek ; la config refuse le
+  même modèle). Le vérificateur ne voit que le brouillon et les faits : jour, heure, montant,
+  nom. En cas de doute ou de panne, c'est le texte simple et exact qui part. Calibré sur de vrais
+  brouillons : il attrape « mercredi » au lieu de « demain » et 80 € au lieu de 50 €, et accepte
+  les reformulations.
+- **Délégation (voie C)** : l'outil `delegate` confie une tâche entière au binaire `claude`
+  officiel, non modifié, connecté à l'abonnement du propriétaire (`claude auth login` sur le
+  serveur). Garde-fous :
+  - un dossier vide par tâche ;
+  - mode `-p`, liste d'outils fixe : fichiers seulement, sans shell sauf réglage explicite ;
+  - sans MCP ni session persistante, avec un plafond de dépenses ;
+  - un environnement nettoyé : aucun secret d'Orion n'est transmis.
+
+  La tâche tourne en arrière-plan. Orion répond « c'est lancé », et le moteur d'initiative
+  transmet le résultat à la fin (vérifié comme tout message proactif). Une tâche coupée par un
+  redémarrage est marquée en échec, jamais oubliée. Avec le shell autorisé, la délégation devient
+  un effet externe : ton accord est demandé à chaque fois.
+- **CLI comme modèle (voie B)** : reportée. Le protocole exact (le CLI renvoie-t-il les appels
+  d'outils sans les exécuter ?) doit être vérifié avec le binaire connecté à ton abonnement, sur
+  ton serveur. L'interface `ModelProvider` et le routeur sont prêts à l'accueillir comme
+  fournisseur `claude-cli:`.
