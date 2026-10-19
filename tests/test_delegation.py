@@ -126,7 +126,7 @@ async def test_delegated_job_round_trip(
         Timers(journal, TimerProjection()),
         inbox,
         InitiativeSettings(digests=()),
-        jobs=jobs,
+        reports=[jobs],
         clock=lambda: datetime(2026, 10, 19, 23, 30, tzinfo=PARIS),  # quiet hours: still sent
     )
     keys = await engine.tick()

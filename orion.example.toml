@@ -64,3 +64,13 @@ binary = "claude"
 timeout_seconds = 1800
 max_budget_usd = 2.0
 allow_bash = false               # true: the agent may run commands; each job then needs your OK
+
+# Phone calls through Inkbox Voice AI, on the same line as iMessage. Orion keeps the voice
+# briefed (playbook, profile, commitments, reminders, last exchanges) and reads every call back.
+# `orion inkbox setup` reserves the line for your number and lets the voice pick up.
+[voice]
+enabled = false
+# voice = "..."                  # an Inkbox voice name; default voice if unset
+origination = "shared_imessage_number"
+brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
+calls_poll_seconds = 30          # poll mode: how often finished calls are read back

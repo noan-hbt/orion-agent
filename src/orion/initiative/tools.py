@@ -42,6 +42,9 @@ class RemindMeInput(BaseModel):
         "an offset is given. Compute relative dates with date_math first."
     )
     what: str = Field(description="What to remind the owner of, self-contained")
+    by_call: bool = Field(
+        default=False, description="Call the owner instead of messaging (e.g. a wake-up call)"
+    )
 
 
 class ReminderCancelInput(BaseModel):
@@ -91,9 +94,11 @@ def reminder_tools(timers: Timers, clock: Any = None) -> list[Tool]:
             ctx.context_trust,
             correlation_id=ctx.correlation_id,
             causation_id=ctx.origin_event_id,
+            by_call=args.by_call,
         )
+        how = " (par appel)" if args.by_call else ""
         return ToolResult(
-            f"Rappel programmé ({timer_id}) pour {describe_moment(due, ctx.timezone)}.",
+            f"Rappel programmé ({timer_id}) pour {describe_moment(due, ctx.timezone)}{how}.",
             data={"reminder_id": timer_id, "due_at": due.isoformat()},
         )
 

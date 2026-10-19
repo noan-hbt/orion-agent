@@ -29,6 +29,7 @@ from orion.resources import read_resource
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
+from orion.voice.tools import PhoneLink, voice_tools
 
 
 class LateApprover:
@@ -52,6 +53,7 @@ class App:
     orion: Orion
     approver: LateApprover
     jobs: JobService | None = None
+    phone: PhoneLink | None = None
 
 
 @asynccontextmanager
@@ -63,6 +65,7 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
             memory = MemoryService(journal, store)
             timers = Timers(journal, TimerProjection())
             approver = LateApprover()
+            phone = PhoneLink()
             jobs: JobService | None = None
             if config.delegation.enabled:
                 d = config.delegation
@@ -81,6 +84,7 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
                         *reminder_tools(timers),
                         *adaptation_tools(memory),
                         *(delegation_tools(jobs) if jobs else []),
+                        *(voice_tools(phone) if config.voice.enabled else []),
                     ]
                 ),
                 guardian=Guardian(approver),
@@ -93,6 +97,6 @@ async def build_app(config: OrionConfig, provider: ModelProvider) -> AsyncGenera
             )
             await orion.start()
             await timers.sync()
-            yield App(config, provider, journal, memory, timers, orion, approver, jobs)
+            yield App(config, provider, journal, memory, timers, orion, approver, jobs, phone)
     finally:
         await store.close()

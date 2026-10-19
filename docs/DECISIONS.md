@@ -392,3 +392,47 @@ puisses le corriger. `orion memory` affiche le manuel en tête du profil.
   d'outils sans les exécuter ?) doit être vérifié avec le binaire connecté à ton abonnement, sur
   ton serveur. L'interface `ModelProvider` et le routeur sont prêts à l'accueillir comme
   fournisseur `claude-cli:`.
+
+## D23 — Boîte de réception unifiée, voix par Inkbox (révise D10)
+
+*19/10/2026 · acceptée*
+
+**Boîte de réception unifiée.** Les canaux ne font plus que traduire : recevoir, dédoublonner,
+journaliser, livrer. Tout ce qui est commun passe par `OwnerInbox` :
+- une seule file et un seul travailleur pour le fil du propriétaire ;
+- les rafales d'un même canal sont regroupées en un seul tour ;
+- le canal d'origine montre qu'Orion travaille (accusé de lecture, indicateur de frappe) ;
+- la réponse part par le canal demandé, avec `SILENCE` permis pour les transcriptions d'appel ;
+- les messages proactifs passent par le premier canal disponible.
+
+La future TUI sera un canal de plus.
+
+**Voix : Inkbox à la place de Twilio et Pipecat** (demande du propriétaire). La voix hébergée
+d'Inkbox (Voice AI) mène l'appel, sur la même ligne que l'iMessage. Elle ne peut pas appeler les
+outils d'Orion en cours d'appel, d'où le fonctionnement en trois temps :
+1. **Avant** : Orion tient la voix à jour avec un brief tiré de sa mémoire (manuel, profil,
+   engagements, rappels, derniers échanges), renvoyé à Inkbox dès qu'il change. Seul le contenu
+   de confiance `SYSTEM` ou plus y entre.
+2. **Pendant** : la voix parle comme Orion. Elle n'enregistre rien et dit « c'est noté ».
+3. **Après** : la transcription revient dans le fil (canal `appel`). Orion fait ce qui a été
+   convenu (rappels, mémoire, engagements) et confirme par iMessage seulement s'il y a quelque
+   chose à confirmer.
+
+Outils : `call_me` appelle le propriétaire ; `remind_me` avec `by_call` sert de réveil ou d'alerte
+par appel ; `call_someone` appelle un tiers pour lui, et c'est un effet externe, donc son accord
+est demandé à chaque fois. Le compte rendu d'un appel à un tiers est un contenu tiers : il informe,
+il n'ordonne rien.
+
+**Sécurité.** `orion inkbox setup` passe la ligne en liste blanche avec le seul numéro du
+propriétaire, pour l'iMessage comme pour le téléphone. Un inconnu ne peut donc pas parler à une
+voix qui connaît sa vie. Pour un appel à un tiers, Orion ajoute juste avant une autorisation
+sortante pour ce numéro seulement.
+
+**Limite connue.** Le compte rendu d'un appel à un tiers, comme tout contenu tiers, abaisse la
+confiance de la fenêtre de conversation. Jusqu'au prochain rebase, les écritures en mémoire y sont
+donc refusées. La réponse prévue : traiter ces contenus dans un appel isolé qui ne rend que des
+champs structurés (mise en quarantaine). Elle sera faite avec la séparation du gardien.
+
+**Plus tard.** Le mode `client_websocket` d'Inkbox permettra de faire tourner notre propre
+pipeline vocal temps réel, avec un accès direct à la mémoire pendant l'appel, quand un modèle
+vocal temps réel sera branché.

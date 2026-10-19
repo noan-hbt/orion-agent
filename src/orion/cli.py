@@ -110,6 +110,12 @@ async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
             print(f"iMessage activé pour @{identity.agent_handle}")
         else:
             print(f"Identité existante : @{identity.agent_handle} (iMessage actif)")
+        if cfg.owner_number:
+            await client.allow_only(cfg.identity, cfg.owner_number)
+            print(f"Ligne réservée à {cfg.owner_number} : personne d'autre ne peut joindre Orion.")
+        if config.voice.enabled:
+            await client.answer_calls_with_voice_ai(identity.id)
+            print("Appels entrants : la voix d'Orion décroche.")
         triage = await client.triage_number()
         print(
             f"\nDepuis ton iPhone ({cfg.owner_number or 'owner_number à renseigner'}), envoie "
@@ -117,7 +123,9 @@ async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
         )
         if webhook_url:
             key = await client.subscribe_webhook(
-                identity.id, webhook_url, ["imessage.received", "imessage.reaction_received"]
+                identity.id,
+                webhook_url,
+                ["imessage.received", "imessage.reaction_received", "call.ended"],
             )
             print(f"\nWebhook abonné : {webhook_url}")
             if key:

@@ -129,6 +129,20 @@ class AdaptationConfig(BaseModel):
     tick_seconds: float = Field(default=600.0, ge=10.0)
 
 
+class VoiceConfig(BaseModel):
+    """Phone calls through Inkbox Voice AI, on the same line as iMessage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    voice: str | None = Field(default=None, description="Inkbox voice name; None: default")
+    origination: Literal[
+        "shared_imessage_number", "dedicated_imessage_number", "dedicated_number"
+    ] = "shared_imessage_number"
+    brief_seconds: float = Field(default=300.0, ge=30.0)
+    calls_poll_seconds: float = Field(default=30.0, ge=5.0)
+
+
 class DelegationConfig(BaseModel):
     """Long tasks handed to the official `claude` CLI (logged in with `claude auth login`)."""
 
@@ -160,6 +174,7 @@ class OrionConfig(BaseModel):
     initiative: InitiativeConfig = InitiativeConfig()
     adaptation: AdaptationConfig = AdaptationConfig()
     delegation: DelegationConfig = DelegationConfig()
+    voice: VoiceConfig = VoiceConfig()
 
     @property
     def journal_path(self) -> Path:

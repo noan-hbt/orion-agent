@@ -156,3 +156,20 @@ async def test_outbox_does_not_retry_a_definite_refusal(journal: SqliteJournal) 
         await outbox.send("imessage", CONVERSATION, "hello")
     assert [e.kind for e in await journal.read()] == [QUEUED, FAILED]
     assert await outbox.resume() == 0
+
+
+async def test_the_line_is_reserved_for_the_owner() -> None:
+    fake = FakeInkbox()
+    client = fake.client()
+    await client.allow_only("orion-test", "+33611111111")
+    paths = [path for path, _ in fake.rules]
+    assert paths == [
+        "/imessage/identities/orion-test/contact-rules",
+        "/phone/identities/orion-test/phone-contact-rules",
+        "/identities/orion-test",
+    ]
+    assert fake.rules[-1][1] == {
+        "imessage_filter_mode": "whitelist",
+        "phone_filter_mode": "whitelist",
+    }
+    await client.aclose()

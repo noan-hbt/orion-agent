@@ -27,6 +27,14 @@ class FakeInkbox:
     sent: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     calls: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     idempotency: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    phone_calls: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
+    transcripts: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict[str, list[dict[str, Any]]]
+    )
+    voice_configs: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    rules: list[tuple[str, dict[str, Any]]] = field(
+        default_factory=list[tuple[str, dict[str, Any]]]
+    )
     fail_sends: list[int] = field(default_factory=list[int])
     """Status codes to answer the next sends with, in order."""
     _counter: int = 0
@@ -63,6 +71,31 @@ class FakeInkbox:
             }
         )
 
+    def call(
+        self,
+        remote: str = OWNER,
+        direction: str = "inbound",
+        turns: list[tuple[str, str]] | None = None,
+        duration: int = 95,
+    ) -> dict[str, Any]:
+        """A finished call with its transcript."""
+        self._counter += 1
+        call: dict[str, Any] = {
+            "id": f"call-{self._counter}",
+            "remote_phone_number": remote,
+            "direction": direction,
+            "status": "completed",
+            "created_at": "2026-10-19T18:00:00+00:00",
+            "duration_seconds": duration,
+            "post_call_action_items": [],
+        }
+        self.phone_calls[call["id"]] = call
+        self.transcripts[call["id"]] = [
+            {"party": party, "text": text, "ts_ms": i * 1000}
+            for i, (party, text) in enumerate(turns or [])
+        ]
+        return call
+
     def texts(self) -> list[str]:
         return [m["text"] for m in self.sent]
 
@@ -71,6 +104,34 @@ class FakeInkbox:
         self.calls.append((request.method, path))
         assert request.headers["X-API-Key"] == "test-key"
         body: dict[str, Any] = json.loads(request.content) if request.content else {}
+        if path.startswith("/identities/") and request.method == "PATCH":
+            self.rules.append((path, body))
+            return httpx.Response(200, json=self.identity)
+        if "contact-rules" in path:
+            self.rules.append((path, body))
+            return httpx.Response(201, json={"id": "rule"})
+        if path == "/phone/place-call":
+            self._counter += 1
+            call = {
+                "id": f"call-{self._counter}",
+                "remote_phone_number": body["to_number"],
+                "direction": "outbound",
+                "status": "ringing",
+                "created_at": "2026-10-19T18:00:00+00:00",
+                "reason": body["reason"],
+            }
+            self.phone_calls[call["id"]] = call
+            self.transcripts[call["id"]] = []
+            return httpx.Response(200, json=call)
+        if path == "/phone/calls":
+            return httpx.Response(200, json=list(reversed(self.phone_calls.values())))
+        if path.startswith("/phone/calls/") and path.endswith("/transcripts"):
+            return httpx.Response(200, json=self.transcripts[path.split("/")[3]])
+        if path == "/phone/hosted-agent-config":
+            self.voice_configs.append(body)
+            return httpx.Response(200, json=body)
+        if path == "/phone/incoming-call-action":
+            return httpx.Response(200, json=body)
         if path.startswith("/identities/"):
             if self.identity is None:
                 return httpx.Response(404, json={"detail": "not found"})

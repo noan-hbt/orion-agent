@@ -28,6 +28,13 @@ d'autres personnes.
 - **M4 — fournisseurs étendus** : routeur avec modèles de secours, vérificateur sur un autre
   modèle pour tout message proactif, délégation des tâches longues au CLI `claude` officiel (en
   arrière-plan, résultat transmis à la fin). Le CLI comme modèle principal reste à faire (D22).
+- **Boîte de réception unifiée** : tous les canaux passent par une seule file vers ton fil
+  (D23).
+- **M5 v0 — la voix, par Inkbox** :
+  - au téléphone, la voix d'Inkbox est tenue à jour avec un brief tiré de la mémoire d'Orion ;
+  - après chaque appel, la transcription revient dans ton fil et Orion fait ce qui a été convenu ;
+  - Orion peut t'appeler, te réveiller par un appel, ou appeler un tiers avec ton accord ;
+  - la ligne est réservée à ton numéro.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

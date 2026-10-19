@@ -97,9 +97,53 @@ class ReactionEvent(_Model):
     created_at: str
 
 
+class ActionItem(_Model):
+    action: str
+    details: str | None = None
+
+
+class Call(_Model):
+    id: str
+    remote_phone_number: str
+    direction: Literal["inbound", "outbound"]
+    status: str
+    origin: str | None = None
+    mode: str | None = None
+    reason: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    created_at: str
+    duration_seconds: int | None = None
+    hangup_reason: str | None = None
+    post_call_action_items: list[ActionItem] = Field(default_factory=list[ActionItem])
+
+    @property
+    def over(self) -> bool:
+        return self.status in ("completed", "failed", "canceled")
+
+
+class TranscriptEntry(_Model):
+    """One turn of a call ("party" is who spoke), or the marker of an abridged middle."""
+
+    party: str | None = None
+    text: str | None = None
+    ts_ms: int | None = None
+    marker: str | None = None
+    omitted_turns: int | None = None
+
+
+class Transcript(_Model):
+    entries: list[TranscriptEntry] = Field(default_factory=list[TranscriptEntry])
+    abridged: bool = False
+
+
 class WebhookData(_Model):
     message: IMessage | None = None
     reaction: ReactionEvent | None = None
+    call: Call | None = None
+    transcript: Transcript | None = None
+    outcome: str | None = None
+    post_call_action_items: list[ActionItem] = Field(default_factory=list[ActionItem])
 
 
 class WebhookEvent(_Model):
@@ -247,6 +291,95 @@ class InkboxClient:
         await self._request(
             "POST", "/imessage/reactions", json={"message_id": message_id, "reaction": reaction}
         )
+
+    async def allow_only(self, handle: str, number: str) -> None:
+        """Whitelist mode on iMessage and phone, with only `number` allowed: nobody else can
+        reach Orion's line, so nobody else can talk to a voice that knows the owner's life."""
+        rules = {"action": "allow", "match_type": "exact_number", "match_target": number}
+        for path in (
+            f"/imessage/identities/{handle}/contact-rules",
+            f"/phone/identities/{handle}/phone-contact-rules",
+        ):
+            try:
+                await self._request("POST", path, json=rules)
+            except InkboxError as exc:
+                if exc.status != 409:  # already allowed
+                    raise
+        await self._request(
+            "PATCH",
+            f"/identities/{handle}",
+            json={"imessage_filter_mode": "whitelist", "phone_filter_mode": "whitelist"},
+        )
+
+    async def allow_outbound_call(self, handle: str, number: str) -> None:
+        """Let Orion's line call `number` (the line otherwise only talks to the owner)."""
+        try:
+            await self._request(
+                "POST",
+                f"/phone/identities/{handle}/phone-contact-rules",
+                json={
+                    "action": "allow",
+                    "match_type": "exact_number",
+                    "match_target": number,
+                    "direction": "outbound",
+                },
+            )
+        except InkboxError as exc:
+            if exc.status != 409:
+                raise
+
+    # -- phone --------------------------------------------------------------------------------
+
+    async def place_call(
+        self,
+        to: str,
+        reason: str,
+        identity_id: str | None = None,
+        origination: str = "shared_imessage_number",
+        voicemail_message: str | None = None,
+    ) -> Call:
+        """Place a call driven by Inkbox Voice AI, with `reason` as its task brief."""
+        body: dict[str, Any] = {
+            "to_number": to,
+            "origination": origination,
+            "mode": "hosted_agent",
+            "reason": reason,
+            "hosted_agent_authority_mode": "contact_scoped",
+        }
+        if identity_id:
+            body["agent_identity_id"] = identity_id
+        if voicemail_message:
+            body["on_voicemail"] = "leave_message"
+            body["voicemail_message"] = voicemail_message[:1000]
+        return Call.model_validate(await self._request("POST", "/phone/place-call", json=body))
+
+    async def calls(self, identity_id: str | None = None, limit: int = 20) -> list[Call]:
+        params: dict[str, Any] = {"limit": limit}
+        if identity_id:
+            params["agent_identity_id"] = identity_id
+        data = await self._request("GET", "/phone/calls", params=params)
+        return [Call.model_validate(c) for c in data]
+
+    async def transcript(self, call_id: str) -> list[TranscriptEntry]:
+        data = await self._request("GET", f"/phone/calls/{call_id}/transcripts")
+        return [TranscriptEntry.model_validate(t) for t in data]
+
+    async def voice_config(
+        self, instructions: str, identity_id: str | None = None, voice: str | None = None
+    ) -> None:
+        """Full replace of the identity's Voice AI steering prompt (and voice)."""
+        body: dict[str, Any] = {"instructions": instructions}
+        if identity_id:
+            body["agent_identity_id"] = identity_id
+        if voice:
+            body["voice"] = voice
+        await self._request("PUT", "/phone/hosted-agent-config", json=body)
+
+    async def answer_calls_with_voice_ai(self, identity_id: str | None = None) -> None:
+        body: dict[str, Any] = {"incoming_call_action": "hosted_agent"}
+        if identity_id:
+            body["agent_identity_id"] = identity_id
+        await self._request("PUT", "/phone/incoming-call-action", json=body)
 
     # -- transport ----------------------------------------------------------------------------
 

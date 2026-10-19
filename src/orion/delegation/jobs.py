@@ -22,6 +22,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.delegation.claude_code import AgentOutcome
+from orion.initiative.engine import Report
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 log = structlog.get_logger(__name__)
@@ -145,6 +146,10 @@ class JobService:
         task_handle.add_done_callback(self._tasks.discard)
         return job_id
 
+    async def reports(self) -> list[Report]:
+        await self.sync()
+        return [_report(job) for job in self.projection.finished()]
+
     async def wait(self) -> None:
         """For tests and shutdown: wait for running jobs."""
         if self._tasks:
@@ -193,6 +198,20 @@ class JobService:
             ]
         )
         await self.sync()
+
+
+def _report(job: Job) -> Report:
+    status = "terminée" if job.ok else f"échouée ({job.error})"
+    files = ", ".join(job.files[:10]) or "aucun"
+    return Report(
+        key=f"job:{job.id}",
+        notice=f"Tâche déléguée « {job.title} » {status} ({job.id}).\n"
+        f"Compte rendu de l'agent :\n{job.result or '(vide)'}\n"
+        f"Fichiers produits, dans {job.workdir} : {files}",
+        why="la tâche que tu m'as confiée vient de se terminer",
+        fallback=f"Tâche « {job.title} » {status}. "
+        + (f"Fichiers dans {job.workdir} : {files}" if job.ok else ""),
+    )
 
 
 class DelegateInput(BaseModel):

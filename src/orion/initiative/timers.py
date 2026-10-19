@@ -30,6 +30,7 @@ class Timer:
     thread_id: str
     trust: Trust
     scheduled_seq: int
+    by_call: bool = False
 
 
 class TimerProjection:
@@ -62,6 +63,7 @@ class TimerProjection:
                 thread_id=str(payload["thread_id"]),
                 trust=event.trust,
                 scheduled_seq=event.seq,
+                by_call=bool(payload.get("by_call", False)),
             )
         elif event.kind in (TIMER_FIRED, TIMER_CANCELLED):
             self._pending.pop(str(payload["timer_id"]), None)
@@ -97,6 +99,7 @@ class Timers:
         trust: Trust,
         correlation_id: str | None = None,
         causation_id: str | None = None,
+        by_call: bool = False,
     ) -> str:
         if due_at.tzinfo is None:
             raise ValueError("due_at must be timezone-aware")
@@ -108,6 +111,7 @@ class Timers:
                 "due_at": due_at.isoformat(),
                 "text": text,
                 "thread_id": thread_id,
+                "by_call": by_call,
             },
             provenance,
             trust,
