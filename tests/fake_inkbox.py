@@ -143,7 +143,7 @@ class FakeInkbox:
             return httpx.Response(200, json=self.identity)
         if path == "/imessage/triage-number":
             return httpx.Response(
-                200, json={"number": "+15550000", "connect_command": "connect @x"}
+                200, json={"number": "+15550000", "connect_command": "connect @your-handle"}
             )
         if path == "/imessage/messages" and request.method == "POST":
             return self._send(request, body)

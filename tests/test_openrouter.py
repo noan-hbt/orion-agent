@@ -126,3 +126,17 @@ async def test_error_inside_200_body_is_surfaced() -> None:
     with pytest.raises(ProviderError, match="context too long"):
         await provider.complete(request())
     await provider.aclose()
+
+
+async def test_routing_prefers_the_fastest_host_when_asked() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=OK_BODY)
+
+    for provider in (provider_with(handler, sort="throughput"), provider_with(handler)):
+        await provider.complete(request())
+        await provider.aclose()
+    assert seen[0]["provider"] == {"sort": "throughput"}
+    assert "provider" not in seen[1]

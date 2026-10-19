@@ -42,6 +42,11 @@ class OpenRouterConfig(BaseModel):
 
     api_key: SecretRef = SecretRef(env="OPENROUTER_API_KEY")
     base_url: str = "https://openrouter.ai/api/v1"
+    sort: Literal["throughput", "latency", "price"] | None = Field(
+        default="throughput",
+        description="Which host serves the model: the fastest by default (a slow one made "
+        "each step 3 to 5 times longer)",
+    )
 
 
 class ProvidersConfig(BaseModel):

@@ -173,3 +173,10 @@ async def test_the_line_is_reserved_for_the_owner() -> None:
         "phone_filter_mode": "whitelist",
     }
     await client.aclose()
+
+
+def test_the_connect_command_names_orions_handle() -> None:
+    from orion.channels.inkbox import TriageNumber
+
+    triage = TriageNumber(number="+15550000", connect_command="connect @your-handle")
+    assert triage.command_for("orion-noan") == "connect @orion-noan"

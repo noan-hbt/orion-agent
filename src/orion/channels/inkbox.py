@@ -55,6 +55,10 @@ class TriageNumber(_Model):
     number: str
     connect_command: str
 
+    def command_for(self, handle: str) -> str:
+        """Inkbox answers with a template (`connect @your-handle`): fill in Orion's handle."""
+        return self.connect_command.replace("@your-handle", f"@{handle}")
+
 
 class _Subscription(_Model):
     id: str

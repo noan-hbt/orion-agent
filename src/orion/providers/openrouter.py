@@ -43,7 +43,11 @@ class OpenRouterProvider:
         max_backoff: float = 20.0,
         app_name: str = "Orion",
         transport: httpx.AsyncBaseTransport | None = None,
+        sort: str | None = None,
     ) -> None:
+        self._sort = sort
+        """OpenRouter's provider routing (`throughput`, `latency`, `price`): with no preference
+        a slow host can serve a model at a fifth of the speed of the fastest one."""
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout,
@@ -107,8 +111,7 @@ class OpenRouterProvider:
                 )
                 await asyncio.sleep(delay)
 
-    @staticmethod
-    def _body(request: ModelRequest) -> dict[str, Any]:
+    def _body(self, request: ModelRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": request.model,
             "messages": request.messages,
@@ -126,6 +129,8 @@ class OpenRouterProvider:
             body["response_format"] = {"type": "json_object"}
         if request.reasoning_effort is not None:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
+        if self._sort is not None:
+            body["provider"] = {"sort": self._sort}
         return body
 
     async def _post(self, body: dict[str, Any], path: str = "/chat/completions") -> dict[str, Any]:

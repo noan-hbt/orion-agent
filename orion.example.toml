@@ -22,6 +22,7 @@ verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages
 [providers.openrouter]
 api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"
+sort = "throughput"              # the fastest host for the model ("latency", "price"; remove: none)
 
 # iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
 # connect command it prints from your phone: Orion can only write to you after you wrote first.

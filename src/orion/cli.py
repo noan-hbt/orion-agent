@@ -30,7 +30,9 @@ def _provider(config: OrionConfig) -> Router | None:
         print(f"Impossible de démarrer : {exc}")
         return None
     openrouter = OpenRouterProvider(
-        api_key.get_secret_value(), config.providers.openrouter.base_url
+        api_key.get_secret_value(),
+        config.providers.openrouter.base_url,
+        sort=config.providers.openrouter.sort,
     )
     agent = config.agent
     chains = {
@@ -181,7 +183,8 @@ async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
         triage = await client.triage_number()
         print(
             f"\nDepuis ton iPhone ({cfg.owner_number or 'owner_number à renseigner'}), envoie "
-            f"« {triage.connect_command} » au {triage.number}. Ensuite, écris-lui ce que tu veux."
+            f"« {triage.command_for(cfg.identity)} » au {triage.number}. Ensuite, écris-lui ce "
+            "que tu veux."
         )
         if webhook_url:
             key = await client.subscribe_webhook(
