@@ -298,7 +298,7 @@ class InkboxClient:
         rules = {"action": "allow", "match_type": "exact_number", "match_target": number}
         for path in (
             f"/imessage/identities/{handle}/contact-rules",
-            f"/phone/identities/{handle}/phone-contact-rules",
+            f"/identities/{handle}/phone-contact-rules",
         ):
             try:
                 await self._request("POST", path, json=rules)
@@ -316,7 +316,7 @@ class InkboxClient:
         try:
             await self._request(
                 "POST",
-                f"/phone/identities/{handle}/phone-contact-rules",
+                f"/identities/{handle}/phone-contact-rules",
                 json={
                     "action": "allow",
                     "match_type": "exact_number",

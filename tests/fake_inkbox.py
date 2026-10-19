@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -107,7 +108,11 @@ class FakeInkbox:
         if path.startswith("/identities/") and request.method == "PATCH":
             self.rules.append((path, body))
             return httpx.Response(200, json=self.identity)
-        if "contact-rules" in path:
+        if re.fullmatch(
+            r"/imessage/identities/[^/]+/contact-rules|/identities/[^/]+/phone-contact-rules",
+            path,
+        ):
+            # The real paths, from the official SDK; anything else falls through to a 404.
             self.rules.append((path, body))
             return httpx.Response(201, json={"id": "rule"})
         if path == "/phone/place-call":
