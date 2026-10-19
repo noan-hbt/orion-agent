@@ -150,3 +150,23 @@ code de Hermes (étape 2, `docs/research/02-paysage.md` §1) : il existe trois v
 - L'abonnement Claude peut servir de « cerveau » pour le raisonnement profond. Pas pour le chemin
   réflexe de la voix : un processus lancé par appel ajoute de la latence.
 - Un fournisseur de repli (OpenRouter) reste obligatoire : la politique d'Anthropic peut changer.
+
+## D8 — Collaboration entre les Orion de personnes différentes
+
+*19/10/2026 · acceptée*
+
+**Décision.** Les instances d'Orion de **personnes différentes** doivent pouvoir collaborer :
+s'organiser, échanger, négocier, travailler ensemble pour le compte de leurs humains respectifs.
+C'est un axe stratégique, pas une option.
+
+**Conséquences.**
+- Chaque instance a une identité vérifiable par des tiers, et chaque relation (instance ↔ instance,
+  humain ↔ humain) porte ses propres permissions.
+- **Frontière de confidentialité** explicite : ce que mon Orion peut révéler de moi à ton Orion est
+  une politique, pas une improvisation du modèle.
+- Tout ce qui vient d'une instance étrangère est **non fiable par défaut** (injection de prompt,
+  manipulation, ingénierie sociale entre agents) et ne porte jamais l'autorité de son humain.
+- Il faut un protocole ouvert et interopérable (A2A comme candidat), une traçabilité des échanges et
+  une notion de confiance/réputation entre instances.
+- Un engagement pris au nom de l'utilisateur (rendez-vous, accord, dépense) suit les mêmes planchers
+  d'approbation que toute action à effet externe (D3).
