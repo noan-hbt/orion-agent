@@ -147,6 +147,18 @@ async def test_remind_me_refuses_the_past(world: World) -> None:
     assert "in the past" in str(tool_message["content"])
 
 
+async def test_remind_me_by_call_is_refused_while_the_phone_is_off(world: World) -> None:
+    world.provider.extend(
+        call_tools(("remind_me", {"when": "2026-10-19T19:00", "what": "réveil", "by_call": True})),
+        reply("Les appels sont coupés, je t'écris à la place ?"),
+    )
+    await world.orion.handle_owner_message(
+        "owner", "appelle-moi à 19h", "terminal", now=world.clock.now
+    )
+    assert world.timers.projection.pending() == []
+    assert "Calls are off" in str(world.provider.requests[-1].messages[-1]["content"])
+
+
 async def test_explicit_reminders_ignore_quiet_hours_and_survive_model_failure(
     world: World,
 ) -> None:

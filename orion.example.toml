@@ -31,12 +31,12 @@ api_key = { env = "INKBOX_API_KEY" }
 identity = "orion-noan"          # Orion's Inkbox handle (globally unique)
 owner_number = "+33600000000"    # your number, E.164: the only one Orion obeys
 mode = "poll"                    # "poll" needs no public URL; "webhook" is instant
-poll_seconds = 4
+poll_seconds = 2                 # worst-case delay before a text is seen; "webhook" has none
 webhook_host = "127.0.0.1"       # put a TLS reverse proxy in front for "webhook"
 webhook_port = 8787
 webhook_path = "/inkbox/webhook"
 signing_key = { env = "INKBOX_SIGNING_KEY" }
-coalesce_seconds = 3             # bursts of short texts become one message
+coalesce_seconds = 1.5           # bursts of short texts become one message (adds this delay)
 approval_timeout_seconds = 900   # no answer means no
 
 # When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.

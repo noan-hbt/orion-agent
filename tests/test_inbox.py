@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 import pytest
+import structlog.testing
 
 from orion.channels.inbox import Inbound, OwnerInbox
 from orion.config import AgentConfig
@@ -106,3 +107,18 @@ async def test_proactive_messages_take_the_first_available_outlet(inbox: OwnerIn
     assert tui.sent == ["coucou"] and imessage.sent == []
     tui.up = False
     assert not await inbox.available()
+
+
+async def test_each_turn_logs_where_the_time_went(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(reply("ok"))
+    with structlog.testing.capture_logs() as logs:
+        inbox.submit(Inbound("imessage", ("a",), "salut"))
+        await until(lambda: bool(imessage.sent))
+        await until(lambda: any(e["event"] == "inbox.turn" for e in logs))
+    [turn] = [e for e in logs if e["event"] == "inbox.turn"]
+    assert turn["messages"] == 1 and turn["coalesce_s"] >= 0.05
+    assert {"think_s", "send_s", "cached_tokens", "cost_usd"} <= turn.keys()

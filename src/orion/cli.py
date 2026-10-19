@@ -204,6 +204,11 @@ async def _doctor(config: OrionConfig) -> int:
             print(f"inkbox:    {exc}")
     else:
         print("inkbox:    disabled")
+    print(
+        "calls:     on"
+        if config.voice.enabled
+        else "calls:     off (set enabled = true in [voice], then rerun `orion inkbox setup`)"
+    )
     return 0
 
 
