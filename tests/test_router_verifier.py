@@ -152,3 +152,27 @@ async def test_proactive_drafts_are_checked_by_another_model(
     assert "mardi 2026-10-20 à 09:01" in facts and "Appeler Paul" in facts
     [record] = [e for e in await journal.read() if e.kind == DELIVERED]
     assert str(record.payload["how"]).startswith(how)
+
+
+async def test_the_verifier_also_reads_the_recent_conversation(
+    journal: SqliteJournal, setup: tuple[ScriptedProvider, Timers, Orion]
+) -> None:
+    provider, timers, orion = setup
+    provider.extend(reply("Trois appels ratés ce soir."), reply("Hé, Paul. Toujours pas joint."))
+    await orion.handle_owner_message(
+        "owner", "appelle-moi", "imessage", now=datetime(2026, 10, 20, 8, 0, tzinfo=PARIS)
+    )
+    checker = ScriptedProvider(json_reply({"ok": True, "issues": []}))
+    engine = InitiativeEngine(
+        orion,
+        journal,
+        timers,
+        Inbox(),
+        InitiativeSettings(digests=()),
+        clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
+        verifier=Verifier(checker, "verifier"),
+    )
+    await engine.tick()
+    prompt = checker.requests[0].messages[1]["content"]
+    background = prompt.split("RECENT CONVERSATION:\n")[1].split("\n\nDRAFT:")[0]
+    assert background == "Lui : appelle-moi\nOrion : Trois appels ratés ce soir."

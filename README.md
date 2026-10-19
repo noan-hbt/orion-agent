@@ -29,7 +29,8 @@ d'autres personnes.
   modèle pour tout message proactif, délégation des tâches longues au CLI `claude` officiel (en
   arrière-plan, résultat transmis à la fin). Le CLI comme modèle principal reste à faire (D22).
 - **Boîte de réception unifiée** : tous les canaux passent par une seule file vers ton fil
-  (D23).
+  (D23). Un message envoyé pendant qu'Orion travaille rejoint le tour en cours, entre deux
+  étapes : il peut changer de cap au lieu de finir un plan que tu as annulé.
 - **M5 v0 — la voix, par Inkbox** :
   - au téléphone, la voix d'Inkbox est tenue à jour avec un brief tiré de la mémoire d'Orion ;
   - après chaque appel, la transcription revient dans ton fil et Orion fait ce qui a été convenu ;

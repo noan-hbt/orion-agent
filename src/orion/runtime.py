@@ -12,6 +12,7 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -61,6 +62,22 @@ class TurnResult:
     owner_text: str = ""
     origin_event_id: str = ""
     day: date | None = None
+    steps: int = 0
+    tool_seconds: float = 0.0
+    interjections: int = 0
+    """Owner messages that arrived during the turn and were read before it ended."""
+
+
+@dataclass(frozen=True)
+class Interjection:
+    """An owner message that arrived while a turn was running."""
+
+    text: str
+    channel: str
+    refs: tuple[str, ...] = ()
+
+
+Interjections = Callable[[], Awaitable[list[Interjection]]]
 
 
 class Orion:
@@ -103,9 +120,12 @@ class Orion:
         channel: str,
         now: datetime | None = None,
         refs: list[str] | None = None,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
-        `refs` are the channel's own message ids, recorded so a restart knows they were handled."""
+        `refs` are the channel's own message ids, recorded so a restart knows they were handled.
+        `interjections` is asked between steps for messages the owner sent meanwhile: they join
+        the turn, so Orion can change course instead of finishing a plan the owner revoked."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
@@ -119,6 +139,7 @@ class Orion:
             body=text,
             channel=channel,
             now=now,
+            interjections=interjections,
         )
 
     async def handle_initiative(
@@ -163,6 +184,7 @@ class Orion:
         now: datetime | None,
         memory_query: str | None = None,
         owner_text: str | None = None,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -176,6 +198,7 @@ class Orion:
                 now,
                 memory_query if memory_query is not None else body,
                 owner_text if owner_text is not None else body,
+                interjections,
             )
 
     async def _turn_locked(
@@ -190,6 +213,7 @@ class Orion:
         now: datetime | None,
         memory_query: str,
         owner_text: str,
+        interjections: Interjections | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -244,6 +268,54 @@ class Orion:
             ),
         )
 
+        heard: list[str] = []
+
+        async def steer() -> tuple[Message, Trust] | None:
+            if interjections is None:
+                return None
+            items = await interjections()
+            if not items:
+                return None
+            text = "\n".join(item.text for item in items)
+            channel_now = items[0].channel
+            provenance_now = Provenance(source=f"{channel_now}:{thread_id}", actor="owner:main")
+            refs = [ref for item in items for ref in item.refs]
+            payload_now: dict[str, object] = {
+                "thread_id": thread_id,
+                "channel": channel_now,
+                "text": text,
+                "during_turn": True,
+            }
+            if refs:
+                payload_now["refs"] = refs
+            event = self._event(
+                "message.received",
+                payload_now,
+                Trust.OWNER,
+                correlation_id,
+                received.id,
+                provenance=provenance_now,
+            )
+            message = render_user_message(
+                text, now or datetime.now(ZoneInfo(self._agent.timezone)), channel_now
+            )
+            await self._journal.append(
+                [
+                    event,
+                    self._message_event(
+                        thread_id,
+                        message,
+                        Trust.OWNER,
+                        correlation_id,
+                        event.id,
+                        provenance=provenance_now,
+                    ),
+                ]
+            )
+            heard.append(text)
+            log.info("turn.interjection", thread=thread_id, messages=len(items))
+            return message, Trust.OWNER
+
         result: TurnResult | None = None
         async for event in run_agent(
             self._provider,
@@ -252,6 +324,7 @@ class Orion:
             messages,
             settings,
             context_trust=thread.window_trust(),
+            steer=steer,
         ):
             match event:
                 case MessageEmitted(message=message, trust=trust):
@@ -299,7 +372,14 @@ class Orion:
                             )
                         ]
                     )
-                case Finished(reason=reason, text=final_text, usage=usage, detail=detail):
+                case Finished(
+                    reason=reason,
+                    text=final_text,
+                    usage=usage,
+                    detail=detail,
+                    steps=steps,
+                    tool_seconds=tool_seconds,
+                ):
                     await self._journal.append(
                         [
                             self._event(
@@ -323,9 +403,12 @@ class Orion:
                         correlation_id,
                         detail,
                         thread_id=thread_id,
-                        owner_text=owner_text,
+                        owner_text="\n".join([owner_text, *heard]) if owner_text else "",
                         origin_event_id=received.id,
                         day=when.date(),
+                        steps=steps,
+                        tool_seconds=tool_seconds,
+                        interjections=len(heard),
                     )
 
         await self._projections.catch_up()

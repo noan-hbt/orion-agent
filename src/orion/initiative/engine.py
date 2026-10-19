@@ -27,6 +27,7 @@ import structlog
 
 from orion.cognition.loop import StopReason
 from orion.cognition.verifier import Verifier
+from orion.context.recent import recent_lines
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -44,6 +45,7 @@ SUPPRESSED = "initiative.suppressed"
 _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
+VERIFIER_CONTEXT_MESSAGES = 8
 
 
 class Notifier(Protocol):
@@ -424,6 +426,7 @@ class InitiativeEngine:
         """Let Orion write the message in its own voice, then have a different model check it
         against the facts. Any failure falls back to a plain, correct text. Explicit reminders
         are always delivered, even if the model says SILENCE. Returns (text, how)."""
+        earlier = list(self._orion.threads.get(self._settings.thread_id).messages)
         try:
             turn = await self._orion.handle_initiative(
                 self._settings.thread_id, candidate.notice, candidate.why, candidate.trust, now
@@ -445,7 +448,8 @@ class InitiativeEngine:
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
-        verification = await self._verifier.check(draft, facts)
+        conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
+        verification = await self._verifier.check(draft, facts, conversation)
         if not verification.ok:
             log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
             return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
