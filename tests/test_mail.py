@@ -370,6 +370,5 @@ def test_the_module_loads_and_reports_in_doctor(tmp_path: Path) -> None:
             },
         }
     )
-    [*_, module] = load(cfg)
-    assert isinstance(module, MailModule)
+    [module] = [m for m in load(cfg) if isinstance(m, MailModule)]
     assert module.doctor() == ["perso (noan on imap.gmail.com) ok"]

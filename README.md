@@ -61,6 +61,12 @@ d'autres personnes.
   demande ton accord avant de retenir quelque chose ou de programmer un rappel. Après deux
   heures sans échange, la conversation repart à neuf ; la mémoire garde l'essentiel.
 
+- **M6 — mémoire v1** : recherche par le sens et par les mots, fusionnées (« combien je paie
+  pour l'appart ? » trouve le loyer). Les personnes de ta vie forment un graphe tiré de la
+  mémoire : `person` dit tout ce qu'Orion sait de quelqu'un et à qui il est lié. Chaque nuit,
+  la mémoire se range : doublons retirés, faits périmés remplacés, noms fusionnés
+  (« Paul » = « Paul Martin »), contradictions posées en question dans le point du matin (D27).
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 

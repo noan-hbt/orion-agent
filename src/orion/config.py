@@ -93,6 +93,20 @@ class AgentConfig(BaseModel):
         return self
 
 
+class MemoryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_names: list[str] = Field(
+        default_factory=list[str],
+        description="The owner's names and nicknames: kept out of the people in their life",
+    )
+
+    embedding_model: str | None = Field(
+        default="openai/text-embedding-3-small",
+        description="Embeddings for semantic search, through the main provider; None: words only",
+    )
+
+
 class IMessageConfig(BaseModel):
     """iMessage through an Inkbox managed line."""
 
@@ -186,6 +200,7 @@ class OrionConfig(BaseModel):
     logging: LoggingConfig = LoggingConfig()
     agent: AgentConfig = AgentConfig()
     providers: ProvidersConfig = ProvidersConfig()
+    memory: MemoryConfig = MemoryConfig()
     channels: ChannelsConfig = ChannelsConfig()
     initiative: InitiativeConfig = InitiativeConfig()
     adaptation: AdaptationConfig = AdaptationConfig()
@@ -204,6 +219,11 @@ class OrionConfig(BaseModel):
     def memory_path(self) -> Path:
         """Rebuildable projection: safe to delete, it is replayed from the journal."""
         return self.data_dir / "memory.sqlite3"
+
+    @property
+    def embeddings_path(self) -> Path:
+        """A cache: safe to delete, recomputed on demand."""
+        return self.data_dir / "embeddings.sqlite3"
 
     @property
     def workspaces_path(self) -> Path:

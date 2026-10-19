@@ -7,7 +7,7 @@ byte: that is what keeps the prompt prefix stable and the provider cache warm.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -97,3 +97,10 @@ class ModelProvider(Protocol):
     name: str
 
     async def complete(self, request: ModelRequest) -> ModelResponse: ...
+
+
+@runtime_checkable
+class Embedder(Protocol):
+    """A provider that also turns texts into vectors (semantic memory search)."""
+
+    async def embed(self, model: str, texts: list[str]) -> list[list[float]]: ...

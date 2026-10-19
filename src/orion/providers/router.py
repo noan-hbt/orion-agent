@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import structlog
 
-from orion.providers.base import ModelProvider, ModelRequest, ModelResponse, ProviderError
+from orion.providers.base import (
+    Embedder,
+    ModelProvider,
+    ModelRequest,
+    ModelResponse,
+    ProviderError,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -58,6 +64,12 @@ class Router:
             return response
         assert last_error is not None
         raise last_error
+
+    async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
+        provider, name = self._resolve(model)
+        if not isinstance(provider, Embedder):
+            raise ProviderError(f"provider {provider.name!r} cannot embed", retryable=False)
+        return await provider.embed(name, texts)
 
     def _resolve(self, spec: str) -> tuple[ModelProvider, str]:
         name, model = parse_spec(spec, self._default)

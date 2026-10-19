@@ -20,6 +20,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.channels.module import IMessageModule
     from orion.delegation.module import DelegationModule
     from orion.mail.module import MailModule
+    from orion.memory.night import NightModule
     from orion.voice.module import VoiceModule
 
     return [
@@ -27,6 +28,7 @@ def builtin_modules() -> list[type[Module]]:
         VoiceModule,
         DelegationModule,
         AdaptationModule,
+        NightModule,
         CalendarModule,
         MailModule,
     ]

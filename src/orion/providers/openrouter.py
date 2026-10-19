@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import httpx
@@ -60,11 +61,38 @@ class OpenRouterProvider:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         body = self._body(request)
+        return await self._retrying(
+            lambda attempt: self._post(body),
+            lambda data, attempt: self._parse(data, attempts=attempt),
+        )
+
+    async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
+        def parse(data: dict[str, Any], _attempt: int) -> list[list[float]]:
+            try:
+                rows = sorted(cast(list[dict[str, Any]], data["data"]), key=lambda r: r["index"])
+                vectors = [cast(list[float], row["embedding"]) for row in rows]
+            except (KeyError, TypeError) as exc:
+                raise ProviderError(
+                    f"unexpected embeddings answer: {exc!r}", retryable=False
+                ) from exc
+            if len(vectors) != len(texts):
+                raise ProviderError("embedding count mismatch", retryable=False)
+            return vectors
+
+        return await self._retrying(
+            lambda attempt: self._post({"model": model, "input": texts}, "/embeddings"), parse
+        )
+
+    async def _retrying[T](
+        self,
+        call: Callable[[int], Awaitable[dict[str, Any]]],
+        parse: Callable[[dict[str, Any], int], T],
+    ) -> T:
         attempt = 0
         while True:
             attempt += 1
             try:
-                return self._parse(await self._post(body), attempts=attempt)
+                return parse(await call(attempt), attempt)
             except ProviderError as exc:
                 if not exc.retryable or attempt >= self._max_attempts:
                     raise
@@ -100,9 +128,9 @@ class OpenRouterProvider:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         return body
 
-    async def _post(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def _post(self, body: dict[str, Any], path: str = "/chat/completions") -> dict[str, Any]:
         try:
-            response = await self._client.post("/chat/completions", json=body)
+            response = await self._client.post(path, json=body)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             # The request may still have been processed and billed upstream; it is logged as a
             # retry so the cost is at least visible.

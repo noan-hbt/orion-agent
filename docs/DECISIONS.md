@@ -547,3 +547,44 @@ le dossier), au plus `max_per_sync` mails par passage. Le module fournit :
 
 Pas d'envoi : répondre à un mail sera une action externe, donc avec accord, et jamais depuis une
 conversation contaminée.
+
+## D27 — Mémoire v1 : sens, personnes, consolidation de nuit
+
+**Recherche par le sens.** Les faits sont aussi retrouvés par proximité de sens : « combien je
+paie pour l'appart ? » trouve « le loyer est de 850 € », sans aucun mot en commun. Les embeddings
+passent par OpenRouter (`openai/text-embedding-3-small`, quelques centimes par an pour une
+mémoire personnelle), avec la même clé : pas de modèle local à installer. La recherche fusionne
+le classement plein texte et le classement vectoriel par rang réciproque (RRF), donc les mots
+exacts comptent toujours.
+
+Les vecteurs vivent dans `embeddings.sqlite3`. C'est un cache, pas une projection : le supprimer
+coûte un recalcul, et un fait oublié disparaît du store, donc on ne le retrouve plus, quoi
+qu'il reste dans le cache. Si les embeddings ne répondent pas, la recherche se replie sur le plein
+texte et le journalise. Un fournisseur sans embeddings (les tests) désactive simplement le sens.
+
+**Personnes.** Il n'y a pas de fiche « personne » stockée. Une personne est l'ensemble des faits
+dont `about` la nomme et des engagements où elle apparaît, sous un seul nom. Les alias
+(« Paul », « Paul Martin ») sont des événements `person.aliased`. Deux personnes sont liées quand
+des faits les concernent toutes les deux. Le graphe est dérivé de la mémoire : toujours à jour,
+et un fait oublié en sort. Outils : `person`, `people`, `same_person`. Les noms du propriétaire
+(`memory.owner_names`) sont exclus.
+
+**Consolidation de nuit** (module `consolidation`, actif par défaut). Chaque nuit, les paires de
+faits proches (cosinus ≥ 0,5 ; les embeddings réels sont plus bas qu'on ne croit : deux
+formulations du même fait étaient à 0,52) sont jugées par le modèle d'arrière-plan :
+- doublon : on garde la version la plus précise ;
+- mise à jour : la plus récente remplace l'ancienne ;
+- contradiction : on pose la question au propriétaire dans le point du matin ;
+- compatibles : rien.
+
+Les noms dont l'un est contenu dans l'autre sont fusionnés si le juge le confirme.
+
+Le code, pas le modèle, décide de ce qui peut tomber : un fait n'est jamais retiré au profit d'un
+fait moins fiable. Un fait lu dans un mail ne peut donc pas évincer ce que le propriétaire a dit :
+ça devient une question. Chaque changement est un événement mémoire ordinaire
+(`orion:consolidation`), visible dans l'historique et réversible. Essai réel : doublon retiré,
+« habite à Bordeaux » remplacé par « a déménagé à Nantes », « Paul » fusionné avec « Paul
+Martin », Lyon contre Marseille (venu d'un mail) posé en question.
+
+**Plus tard.** Pour un doublon, fusionner les deux formulations en une seule plutôt que d'en
+choisir une. La fusion réécrit un souvenir ; elle demandera la même prudence que le reste.

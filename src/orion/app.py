@@ -21,12 +21,14 @@ from orion.guardian.policy import Guardian
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
+from orion.memory.people import people_tools
+from orion.memory.semantic import EmbeddingCache, SemanticIndex
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, Plate
 from orion.modules.registry import load
-from orion.providers.base import ModelProvider
+from orion.providers.base import Embedder, ModelProvider
 from orion.resources import read_resource
 from orion.runtime import Orion
 from orion.tools.base import Tool, ToolRegistry
@@ -86,6 +88,7 @@ def core_tools(plate: Plate) -> list[Tool]:
         *memory_tools(plate.memory),
         *reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None),
         *adaptation_tools(plate.memory),
+        *people_tools(plate.memory, plate.config.memory.owner_names),
     ]
 
 
@@ -102,7 +105,13 @@ async def build_app(
         journal = await stack.enter_async_context(
             SqliteJournal(config.journal_path, HybridClock(config.instance))
         )
-        memory = MemoryService(journal, store)
+        semantic: SemanticIndex | None = None
+        if config.memory.embedding_model and isinstance(provider, Embedder):
+            cache = EmbeddingCache(config.embeddings_path)
+            await cache.open()
+            stack.push_async_callback(cache.close)
+            semantic = SemanticIndex(store, provider, cache, config.memory.embedding_model)
+        memory = MemoryService(journal, store, semantic)
         plate = Plate(
             config=config,
             provider=provider,

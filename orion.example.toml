@@ -115,6 +115,18 @@ host = "imap.gmail.com"
 username = "you@gmail.com"
 password = { env = "MAIL_PERSO_PASSWORD" }
 
+# Memory search and people.
+[memory]
+owner_names = ["Noan"]                # your names: kept out of "the people in your life"
+embedding_model = "openai/text-embedding-3-small"   # semantic search; remove to search by words
+
+# Nightly consolidation: duplicates out, outdated facts replaced, names merged, contradictions
+# asked in the morning digest. On by default; never drops a fact for a less trusted one.
+[modules.consolidation]
+enabled = true
+at = "03:30:00"
+similarity = 0.5                      # how alike two facts must be to be compared
+
 # Third-party modules (Python packages exposing an `orion.modules` entry point) are configured
 # in their own section. A section for a module that is not installed stops Orion from starting.
 # [modules.weather]

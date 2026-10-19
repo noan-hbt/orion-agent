@@ -508,7 +508,9 @@ class Orion:
         delta = playbook_delta(rules, settings, shown)
         if delta:
             blocks.append(delta)
-        relevant = [f for f in await store.search(text, self._recall_limit) if f.id not in shown]
+        relevant = [
+            f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
+        ]
         recalled = recall_block(relevant)
         if recalled:
             blocks.append(recalled)

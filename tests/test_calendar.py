@@ -296,8 +296,7 @@ def test_the_module_loads_from_its_section_and_reports_in_doctor(tmp_path: Path)
             },
         }
     )
-    [*_, module] = load(cfg)
-    assert isinstance(module, CalendarModule)
+    [module] = [m for m in load(cfg) if isinstance(m, CalendarModule)]
     lines = module.doctor()
     assert lines[0] == "perso ok" and "CAL_BOULOT_MISSING" in lines[1]
     assert lines[2] == "owner_emails empty: every invitation stays hidden"

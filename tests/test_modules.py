@@ -103,7 +103,12 @@ def config(tmp_path: Path, **modules: dict[str, Any]) -> OrionConfig:
 
 def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None:
     both = config(tmp_path, desk={"enabled": True}, weather={"enabled": True, "city": "Lyon"})
-    assert [m.name for m in load(both, THIRD_PARTY)] == ["adaptation", "weather", "desk"]
+    assert [m.name for m in load(both, THIRD_PARTY)] == [
+        "adaptation",
+        "consolidation",
+        "weather",
+        "desk",
+    ]
 
     with pytest.raises(ModuleError, match="'desk' needs 'weather'"):
         load(config(tmp_path, desk={"enabled": True}), THIRD_PARTY)
@@ -131,7 +136,13 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         inbox = owner_inbox(app)
         supervisor = Supervisor()
         daemon = await start(app, inbox, supervisor)
-        assert supervisor.services == ["inbox", "adaptation", "weather.watch", "initiative"]
+        assert supervisor.services == [
+            "inbox",
+            "adaptation",
+            "consolidation",
+            "weather.watch",
+            "initiative",
+        ]
         assert daemon.reports == [app.module(Weather)]
         assert await inbox.available()
     weather = next(m for m in modules if isinstance(m, Weather))
@@ -150,5 +161,5 @@ def test_doctor_lists_every_module(tmp_path: Path, capsys: pytest.CaptureFixture
     toml.write_text('data_dir = "d"\n[delegation]\nenabled = true\nbinary = "no-such-bin"\n')
     assert main(["--config", str(toml), "doctor"]) == 0
     out = capsys.readouterr().out
-    assert "delegation: on (no-such-bin not found on PATH)" in out
-    assert "imessage:   off" in out
+    assert "delegation:    on (no-such-bin not found on PATH)" in out
+    assert "imessage:      off" in out

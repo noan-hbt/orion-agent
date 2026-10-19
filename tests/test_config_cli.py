@@ -52,7 +52,7 @@ def test_cli_doctor_creates_journal(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert main(["--config", str(path), "doctor"]) == 0
     out = capsys.readouterr().out
     assert "0 events" in out
-    assert "voice:      off" in out and "adaptation: on" in out
+    assert "voice:         off" in out and "adaptation:    on" in out
     assert (tmp_path / "d" / "journal.sqlite3").exists()
 
 

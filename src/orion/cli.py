@@ -233,7 +233,7 @@ async def _doctor(config: OrionConfig) -> int:
         module = enabled.get(kind.name)
         detail = "; ".join(module.doctor()) if module else ""
         state = "on" if module else "off"
-        print(f"{kind.name + ':':<12}{state}" + (f" ({detail})" if detail else ""))
+        print(f"{kind.name + ':':<15}{state}" + (f" ({detail})" if detail else ""))
     return 0
 
 
