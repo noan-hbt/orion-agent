@@ -25,28 +25,6 @@ async def run(name: str, **args: Any) -> ToolResult:
     return await t.handler(t.input_model.model_validate(args), CTX)
 
 
-@pytest.mark.parametrize(
-    ("expression", "expected"),
-    [("2 + 3 * 4", "14"), ("(12.5 * 3) / 4 ** 2", "2.34375"), ("-7 // 2", "-4")],
-)
-async def test_calculate(expression: str, expected: str) -> None:
-    result = await run("calculate", expression=expression)
-    assert not result.is_error
-    assert result.content == expected
-
-
-@pytest.mark.parametrize(
-    "expression", ["__import__('os').system('id')", "a + 1", "2 ** 100000", "1 / 0", "[1, 2]"]
-)
-async def test_calculate_rejects_anything_but_arithmetic(expression: str) -> None:
-    assert (await run("calculate", expression=expression)).is_error
-
-
-async def test_date_math_gives_weekday_in_french() -> None:
-    result = await run("date_math", start="2026-10-19", days=12)
-    assert result.content.startswith("samedi 2026-10-31")
-
-
 async def test_current_time_uses_requested_timezone() -> None:
     result = await run("current_time", timezone="America/New_York")
     assert "America/New_York" in result.content
@@ -55,16 +33,16 @@ async def test_current_time_uses_requested_timezone() -> None:
 
 def test_registry_is_sorted_and_rejects_duplicates() -> None:
     registry = ToolRegistry(builtin_tools())
-    assert [s.name for s in registry.specs()] == ["calculate", "current_time", "date_math"]
+    assert [s.name for s in registry.specs()] == ["current_time"]
     with pytest.raises(ValueError):
         ToolRegistry([*builtin_tools(), *builtin_tools()])
 
 
 def test_tool_parse_reports_bad_arguments() -> None:
     with pytest.raises(ToolInputError, match="JSON"):
-        tool("calculate").parse("{not json")
+        tool("current_time").parse("{not json")
     with pytest.raises(ToolInputError, match="invalid arguments"):
-        tool("calculate").parse('{"expression": 3, "extra": true}')
+        tool("current_time").parse('{"timezone": 3, "extra": true}')
 
 
 class _Args(BaseModel):

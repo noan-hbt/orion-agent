@@ -39,7 +39,7 @@ class RemindMeInput(BaseModel):
 
     when: str = Field(
         description="ISO date-time of the reminder, e.g. '2026-10-23T09:00'. Local time unless "
-        "an offset is given. Compute relative dates with date_math first."
+        "an offset is given."
     )
     what: str = Field(description="What to remind the owner of, self-contained")
     by_call: bool = Field(

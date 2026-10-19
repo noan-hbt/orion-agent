@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
 
 from orion.providers.base import (
     Message,
@@ -11,6 +14,7 @@ from orion.providers.base import (
     ToolCall,
     Usage,
 )
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 Script = Callable[[ModelRequest], ModelResponse]
 
@@ -85,3 +89,27 @@ class ScriptedProvider:
         if not self._script:
             raise AssertionError("provider called more times than scripted")
         return self._script.pop(0)(request)
+
+
+class _EchoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+
+
+async def _echo(args: Any, _ctx: ToolContext) -> ToolResult:
+    return ToolResult(args.text)
+
+
+def echo_tool() -> Tool:
+    """A side-effect-free tool that returns its input, for loop and runtime tests."""
+    return Tool(
+        name="echo",
+        description="Return the text.",
+        input_model=_EchoInput,
+        handler=_echo,
+        effect=Effect.NONE,
+        reversibility=Reversibility.REVERSIBLE,
+        concurrency_safe=True,
+        accepts_untrusted_context=True,
+    )

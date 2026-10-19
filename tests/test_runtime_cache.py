@@ -20,7 +20,7 @@ from orion.guardian.policy import Guardian
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
-from tests.fakes import ScriptedProvider, call_tools, reply
+from tests.fakes import ScriptedProvider, call_tools, echo_tool, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -33,7 +33,7 @@ def make_orion(journal: SqliteJournal, provider: ScriptedProvider, window: int =
     return Orion(
         journal=journal,
         provider=provider,
-        registry=ToolRegistry(builtin_tools()),
+        registry=ToolRegistry([*builtin_tools(), echo_tool()]),
         guardian=Guardian(),
         compiler=ContextCompiler("CONSTITUTION", max_window_tokens=window),
         agent=AgentConfig(),
@@ -109,7 +109,7 @@ async def test_rebase_happens_in_one_jump_at_a_user_boundary(journal: SqliteJour
 
 
 async def test_turn_is_fully_journaled(journal: SqliteJournal) -> None:
-    provider = ScriptedProvider(call_tools(("calculate", {"expression": "2+2"})), reply("4"))
+    provider = ScriptedProvider(call_tools(("echo", {"text": "4"})), reply("4"))
     orion = make_orion(journal, provider)
     await orion.start()
     result = await orion.handle_owner_message("t1", "2+2 ?", "terminal", now=at(1))
