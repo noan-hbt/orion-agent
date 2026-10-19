@@ -19,9 +19,17 @@ def builtin_modules() -> list[type[Module]]:
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
     from orion.delegation.module import DelegationModule
+    from orion.mail.module import MailModule
     from orion.voice.module import VoiceModule
 
-    return [IMessageModule, VoiceModule, DelegationModule, AdaptationModule, CalendarModule]
+    return [
+        IMessageModule,
+        VoiceModule,
+        DelegationModule,
+        AdaptationModule,
+        CalendarModule,
+        MailModule,
+    ]
 
 
 def discover() -> list[type[Module]]:

@@ -49,6 +49,18 @@ d'autres personnes.
   restent invisibles, et la description d'une invitation n'est jamais lue (D25). Lecture seule
   pour l'instant.
 
+- **M6 (en cours) — le mail** : module `mail`. Orion lit tes boîtes en IMAP, en lecture seule
+  stricte : rien n'est marqué comme lu. Il ne lit jamais un mail lui-même. Une quarantaine (un
+  modèle à part, sans outils ni mémoire) en tire une fiche bornée : catégorie, importance,
+  réponse attendue, échéance, montant, résumé d'une ligne. Un mail qui essaie de donner des
+  ordres à un assistant est signalé comme suspect. Orion t'alerte pour un mail important, met
+  les mails utiles dans tes points, et répond à tes questions (`mail`). Il ne peut pas encore
+  en envoyer.
+- **Contenu venu d'ailleurs** (D26) : quand une conversation contient un mail, une invitation
+  ou un compte rendu d'appel, Orion ne peut plus agir sur le monde (envoyer, appeler), et il te
+  demande ton accord avant de retenir quelque chose ou de programmer un rappel. Après deux
+  heures sans échange, la conversation repart à neuf ; la mémoire garde l'essentiel.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -94,6 +106,15 @@ Ces liens donnent accès à ton agenda : mets chacun dans une variable d'environ
 déclare-les dans `[modules.calendar]` (voir `orion.example.toml`). Renseigne aussi
 `owner_emails` : sans tes adresses, Orion ne sait pas distinguer tes événements des
 invitations, et il les masque toutes. `uv run orion doctor` vérifie chaque compte.
+
+### Mail
+
+Pour chaque boîte, crée un mot de passe d'application (jamais ton vrai mot de passe) :
+**Gmail** (`imap.gmail.com`, nécessite la validation en deux étapes) ou **iCloud**
+(`imap.mail.me.com`). Outlook.com impose OAuth pour l'IMAP : pas encore pris en charge.
+Mets chaque mot de passe dans une variable d'environnement et déclare la boîte dans
+`[modules.mail]` (voir `orion.example.toml`). Le journal ne garde que les fiches, jamais le
+contenu des mails ; `orion forget mail:perso` les efface.
 
 ## Écrire un module
 

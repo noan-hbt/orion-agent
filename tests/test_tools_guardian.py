@@ -60,9 +60,11 @@ class _Approver:
     def __init__(self, answer: bool) -> None:
         self.answer = answer
         self.asked: list[str] = []
+        self.reasons: list[str] = []
 
     async def approve(self, proposal: ActionProposal) -> bool:
         self.asked.append(proposal.describe())
+        self.reasons.append(proposal.ask_reason)
         return self.answer
 
 
@@ -96,3 +98,28 @@ async def test_guardian_blocks_external_effects_in_untrusted_context_without_ask
     assert not decision.allowed
     assert "untrusted" in decision.reason
     assert approver.asked == []  # the owner is not even bothered
+
+
+async def test_internal_writes_in_untrusted_context_are_put_to_the_owner() -> None:
+    write = Tool(
+        name="note",
+        description="note",
+        input_model=_Args,
+        handler=_noop,
+        effect=Effect.INTERNAL,
+    )
+    no = _Approver(answer=False)
+    decision = await Guardian(no).decide(
+        ActionProposal(write, _Args(to="x"), Trust.THIRD_PARTY, "t")
+    )
+    assert not decision.allowed and "approval" in decision.reason
+    assert no.asked == ['note({"to":"x"})']
+    assert no.reasons[0].startswith("la conversation contient du contenu venu d'ailleurs")
+    yes = _Approver(answer=True)
+    assert (
+        await Guardian(yes).decide(ActionProposal(write, _Args(to="x"), Trust.THIRD_PARTY, "t"))
+    ).allowed
+    # In a clean context, an internal write needs nobody.
+    assert (
+        await Guardian(no).decide(ActionProposal(write, _Args(to="x"), Trust.OWNER, "t"))
+    ).allowed

@@ -59,6 +59,12 @@ class AgentConfig(BaseModel):
     max_steps: int = Field(default=12, ge=1)
     max_tool_calls: int = Field(default=40, ge=0)
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
+    untrusted_idle_minutes: int = Field(
+        default=120,
+        ge=0,
+        description="After this long without messages, a window holding untrusted content "
+        "starts afresh (memory carries what matters); 0 never does",
+    )
     extractor_model: str = "deepseek/deepseek-v4.1-flash"
     fallback_models: list[str] = Field(
         default_factory=lambda: ["anthropic/claude-haiku-5.5"],

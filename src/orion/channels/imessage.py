@@ -375,7 +375,8 @@ class IMessageChannel:
         )
         [message_id, *_] = await self._send_to_owner(
             f"Avant que je le fasse : {proposal.describe()}\n"
-            "👍 pour oui, 👎 pour non (ou réponds oui / non)."
+            + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
+            + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
         )
         future: asyncio.Future[tuple[bool, str, list[str]]] = (
             asyncio.get_running_loop().create_future()

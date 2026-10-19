@@ -28,7 +28,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.initiative.engine import Alert
+from orion.initiative.engine import Alert, DigestLine
 from orion.modules.base import ModuleSettings
 
 log = structlog.get_logger(__name__)
@@ -285,7 +285,9 @@ class Calendar:
             )
         return found
 
-    async def digest(self, now: datetime, first_slot: bool, last_slot: bool) -> list[str]:
+    async def digest(
+        self, now: datetime, since: datetime, first_slot: bool, last_slot: bool
+    ) -> list[DigestLine]:
         """Today's agenda in the first digest, tomorrow's in the last one."""
         await self._runner.catch_up()
         lines: list[str] = []
@@ -301,4 +303,4 @@ class Calendar:
             tomorrow = self.day(now.date() + timedelta(days=1))
             if tomorrow:
                 lines.append("- Agenda de demain : " + " ; ".join(tomorrow))
-        return lines
+        return [DigestLine(line) for line in lines]

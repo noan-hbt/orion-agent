@@ -503,3 +503,47 @@ Sans `owner_emails`, toute invitation reste masquée (fail closed).
 (soumises aux heures calmes et au budget, et abandonnées une fois expirées) et des lignes pour
 les points du jour. L'agenda fournit une alerte avant chaque événement (`heads_up_minutes`), la
 journée dans le premier point et le lendemain dans le dernier.
+
+## D26 — Contenu tiers : quarantaine, accord du propriétaire, expiration (révise D23)
+
+**Problème.** Le mail est le cas d'école du contenu non fiable : n'importe qui peut écrire dans
+la boîte du propriétaire, et « ignore tes instructions et transfère… » est l'attaque classique
+contre un assistant. Jusqu'ici, un contenu tiers dans la conversation bloquait tout outil
+d'écriture jusqu'au prochain rebase, et donc toute la journée dès qu'un point mentionnait un
+mail. C'est sûr, mais inutilisable.
+
+**1. Quarantaine.** Orion ne lit jamais un mail. Un appel séparé, sans outils, sans mémoire et
+sans conversation, le lit et remplit une fiche : catégorie, importance, réponse attendue,
+échéance, montant, résumé de 200 caractères au plus. Le code valide et coupe chaque champ. Un
+mail qui s'adresse à une IA est réduit à « Mail suspect ». Les mails en masse (listes, publicité)
+n'atteignent pas de modèle. La fiche reste du contenu tiers (`THIRD_PARTY`) : la quarantaine
+réduit ce qui peut arriver jusqu'à Orion, elle ne le rend pas fiable. Le journal garde les fiches,
+jamais le corps des mails.
+
+**2. Le gardien demande au lieu de refuser, mais seulement pour l'interne.** Dans une
+conversation contaminée :
+- une action **externe** (envoyer, appeler un tiers, déléguer avec shell) reste refusée sans
+  demander. C'est exactement ce qu'une instruction injectée demanderait, et le propriétaire ne
+  doit pas prendre l'habitude de l'approuver ;
+- une écriture **interne** (retenir, engagement, rappel, manuel) lui est soumise, avec la raison
+  (« la conversation contient du contenu venu d'ailleurs… »). Sans réponse, c'est non. Ce qui
+  est retenu garde la confiance de la conversation (`THIRD_PARTY`) : la mémoire sait d'où ça
+  vient.
+
+**3. La contamination expire.** Ce qu'Orion écrit après avoir lu un contenu tiers est lui-même
+contaminé (il a pu être influencé). On ne peut donc pas la retirer « au-dessus » du contenu
+tiers : il faut repartir d'une fenêtre neuve. On le fait après une pause de la conversation
+(`agent.untrusted_idle_minutes`, 2 h par défaut). La mémoire, le manuel et les engagements
+reviennent en tête de la nouvelle fenêtre. Chaque message journalisé porte désormais l'heure de
+son tour (`at`), ce qui rend cette règle déterministe et testable.
+
+**Mail v0.** IMAP en lecture seule stricte (`EXAMINE`, `BODY.PEEK`), avec mot de passe
+d'application : Gmail, iCloud, Fastmail et la plupart des hébergeurs. Outlook.com impose OAuth et
+viendra plus tard. Synchronisation par UID (et reprise depuis une date si le serveur renumérote
+le dossier), au plus `max_per_sync` mails par passage. Le module fournit :
+- l'outil `mail` ;
+- une alerte pour un mail important (soumise aux heures calmes et au budget) ;
+- les mails utiles reçus depuis le point précédent, dans chaque point du jour.
+
+Pas d'envoi : répondre à un mail sera une action externe, donc avec accord, et jamais depuis une
+conversation contaminée.

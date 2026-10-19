@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -31,12 +31,12 @@ from orion.cognition.loop import (
 )
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, render_user_message
-from orion.context.threads import MESSAGE_KIND, REBASED_KIND, ThreadProjection
+from orion.context.threads import MESSAGE_KIND, REBASED_KIND, Thread, ThreadProjection
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.guardian.policy import Guardian
+from orion.guardian.policy import TRUSTED_FLOOR, Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
@@ -228,13 +228,23 @@ class Orion:
         thread = self.threads.get(thread_id)
 
         events: list[NewEvent] = [received]
-        new_base = self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
+        stale = self._untrusted_and_idle(thread, when)
+        new_base = (
+            len(thread.messages)
+            if stale
+            else self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
+        )
         window = thread.messages[new_base if new_base is not None else thread.base :]
         user_message = render_user_message(
             body, when, channel, await self._memory_blocks(memory_query, window)
         )
         if new_base is not None:
-            log.info("thread.rebase", thread=thread_id, base=new_base)
+            log.info(
+                "thread.rebase",
+                thread=thread_id,
+                base=new_base,
+                reason="untrusted content, conversation idle" if stale else "window budget",
+            )
             events.append(
                 self._event(
                     REBASED_KIND,
@@ -246,7 +256,13 @@ class Orion:
             )
         events.append(
             self._message_event(
-                thread_id, user_message, trust, correlation_id, received.id, provenance=provenance
+                thread_id,
+                user_message,
+                trust,
+                correlation_id,
+                received.id,
+                provenance=provenance,
+                at=when,
             )
         )
         await self._journal.append(events)
@@ -309,6 +325,7 @@ class Orion:
                         correlation_id,
                         event.id,
                         provenance=provenance_now,
+                        at=when,
                     ),
                 ]
             )
@@ -331,7 +348,7 @@ class Orion:
                     await self._journal.append(
                         [
                             self._message_event(
-                                thread_id, message, trust, correlation_id, received.id
+                                thread_id, message, trust, correlation_id, received.id, at=when
                             )
                         ]
                     )
@@ -454,6 +471,19 @@ class Orion:
             turn.owner_text, turn.text, origin, turn.day or date.today(), recorded
         )
 
+    def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:
+        """Untrusted content stays in the window, and everything written after it is tainted
+        too, until the window starts afresh. Do it after a pause in the conversation: the
+        content can no longer steer anything, and memory carries what mattered (D26)."""
+        idle = self._agent.untrusted_idle_minutes
+        return bool(
+            idle
+            and thread.window()
+            and thread.window_trust() < TRUSTED_FLOOR
+            and thread.last_at is not None
+            and when - thread.last_at >= timedelta(minutes=idle)
+        )
+
     async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
         """Memory to attach to this message: core memory and the playbook when a window starts,
         then playbook changes and relevant facts not already visible in the window. Appended to
@@ -510,10 +540,14 @@ class Orion:
         correlation_id: str,
         causation_id: str,
         provenance: Provenance | None = None,
+        at: datetime | None = None,
     ) -> NewEvent:
+        payload: dict[str, object] = {"thread_id": thread_id, "message": message}
+        if at is not None:
+            payload["at"] = at.isoformat()
         return self._event(
             MESSAGE_KIND,
-            {"thread_id": thread_id, "message": message},
+            payload,
             trust,
             correlation_id,
             causation_id,

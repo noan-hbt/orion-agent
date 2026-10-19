@@ -213,11 +213,18 @@ async def test_agenda_tool_alerts_and_digest(journal: SqliteJournal) -> None:
     assert alert.why == "ça commence dans 10 min" and alert.expires_at == at(20, 9)
     assert await calendar.alerts(at(20, 8, 30)) == []  # too early
 
-    morning = await calendar.digest(at(20, 8, 30), first_slot=True, last_slot=False)
+    morning = [
+        line.text
+        for line in await calendar.digest(
+            at(20, 8, 30), at(19, 19), first_slot=True, last_slot=False
+        )
+    ]
     assert morning[0].startswith("- Agenda d'aujourd'hui : 09:00-10:00 Dentiste")
     assert morning[1] == "- 1 invitation(s) attendent sa réponse"
-    evening = await calendar.digest(at(20, 19), first_slot=False, last_slot=True)
-    assert evening == ["- Agenda de demain : toute la journée Anniversaire de Léa"]
+    evening = await calendar.digest(at(20, 19), at(20, 13), first_slot=False, last_slot=True)
+    assert [line.text for line in evening] == [
+        "- Agenda de demain : toute la journée Anniversaire de Léa"
+    ]
 
 
 async def test_the_initiative_engine_uses_calendar_alerts_and_digests(

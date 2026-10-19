@@ -12,6 +12,7 @@ on every turn, which a sliding window would cause. Earlier messages stay in the 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from orion.core.events import Event, Trust
 from orion.providers.base import Message
@@ -26,6 +27,8 @@ class Thread:
     messages: list[Message] = field(default_factory=list[Message])
     trusts: list[Trust] = field(default_factory=list[Trust])
     base: int = 0
+    last_at: datetime | None = None
+    """When the last message was added (the turn's time), if recorded."""
 
     def window(self) -> list[Message]:
         return self.messages[self.base :]
@@ -50,6 +53,8 @@ class ThreadProjection:
                 thread = self.get(event.payload["thread_id"])
                 thread.messages.append(event.payload["message"])
                 thread.trusts.append(event.trust)
+                if "at" in event.payload:
+                    thread.last_at = datetime.fromisoformat(str(event.payload["at"]))
             elif event.kind == REBASED_KIND:
                 thread = self.get(event.payload["thread_id"])
                 thread.base = max(thread.base, int(event.payload["base"]))

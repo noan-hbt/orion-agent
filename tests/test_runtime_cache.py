@@ -122,3 +122,26 @@ async def test_turn_is_fully_journaled(journal: SqliteJournal) -> None:
     assert kinds[-1] == "turn.finished"
     assert {e.correlation_id for e in events} == {result.correlation_id}
     assert events[0].provenance.actor == "owner:main"
+
+
+async def test_untrusted_content_leaves_the_window_after_a_pause(journal: SqliteJournal) -> None:
+    from datetime import timedelta
+
+    from orion.core.events import Trust
+
+    provider = ScriptedProvider(reply("Paul t'a écrit."), reply("ok"), reply("ok"), reply("salut"))
+    orion = make_orion(journal, provider)
+    await orion.start()
+    await orion.handle_initiative(
+        "owner", "Mail de Paul : …", "nouveau mail", Trust.THIRD_PARTY, now=at(0)
+    )
+    await orion.handle_owner_message("owner", "merci", "imessage", now=at(30))
+    thread = orion.threads.get("owner")
+    assert thread.window_trust() is Trust.THIRD_PARTY and thread.base == 0  # still talking
+
+    await orion.handle_owner_message("owner", "re", "imessage", now=at(31) + timedelta(hours=2))
+    thread = orion.threads.get("owner")
+    assert thread.window_trust() is Trust.SYSTEM  # started afresh after the pause: clean
+    assert [m["role"] for m in thread.window()] == ["user", "assistant"]
+    rebased = [e for e in await journal.read() if e.kind == "thread.rebased"]
+    assert len(rebased) == 1

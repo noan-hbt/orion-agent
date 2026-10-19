@@ -97,9 +97,17 @@ class AlertSource(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class DigestLine:
+    text: str
+    trust: Trust = Trust.SYSTEM
+
+
 class DigestSource(Protocol):
-    async def digest(self, now: datetime, first_slot: bool, last_slot: bool) -> list[str]:
-        """Lines to add to the digest due now (e.g. today's agenda in the first one)."""
+    async def digest(
+        self, now: datetime, since: datetime, first_slot: bool, last_slot: bool
+    ) -> list[DigestLine]:
+        """Lines for the digest due now. `since` is when the previous digest was due."""
         ...
 
 
@@ -390,19 +398,27 @@ class InitiativeEngine:
             end = start + self._settings.digest_window
             last_slot = index == len(slots) - 1
             lines = digest_lines(commitments, now.date(), last_slot, self.ledger.last_mention)
+            previous = (
+                datetime.combine(now.date(), slots[index - 1], self._zone)
+                if index
+                else datetime.combine(now.date() - timedelta(days=1), slots[-1], self._zone)
+            )
             extra = [
                 line
                 for source in self._digest_sources
-                for line in await source.digest(now, index == 0, last_slot)
+                for line in await source.digest(now, previous, index == 0, last_slot)
             ]
-            body = "\n".join([*(line for _, line in lines), *extra])
+            body = "\n".join([*(line for _, line in lines), *(e.text for e in extra)])
             return Candidate(
                 key=key,
                 notice=f"Points à signaler dans ce résumé :\n{body}" if body else "",
                 why=f"c'est le point de {slot:%H:%M}",
                 fallback=f"Point de {slot:%H:%M} :\n" + _IDS.sub("", body),
                 trust=min(
-                    (c.trust for c in commitments if c.id in {i for i, _ in lines}),
+                    [
+                        *(c.trust for c in commitments if c.id in {i for i, _ in lines}),
+                        *(e.trust for e in extra),
+                    ],
                     default=Trust.SYSTEM,
                 ),
                 mentions=tuple(i for i, _ in lines),
