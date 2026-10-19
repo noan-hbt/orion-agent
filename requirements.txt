@@ -1,3 +1,0 @@
-# Compatibility shim for source checkouts.
-# Runtime dependencies live in pyproject.toml, which is the single source of truth.
-.
