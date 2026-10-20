@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -7,7 +8,7 @@ import httpx
 import pytest
 
 from orion.providers.base import ModelRequest, ProviderError, ToolSpec
-from orion.providers.openrouter import OpenRouterProvider
+from orion.providers.openrouter import OpenRouterProvider, said_as_written
 
 OK_BODY: dict[str, Any] = {
     "model": "deepseek/deepseek-v4.1-flash",
@@ -199,3 +200,32 @@ async def test_a_closing_call_keeps_the_tools_but_forbids_them() -> None:
     assert "tool_choice" not in seen[0]
     assert seen[1]["tool_choice"] == "none"
     assert seen[1]["tools"] == seen[0]["tools"]
+
+
+def speech(*said: str) -> Any:
+    """A speech model answering each request with a bit of audio and what it says."""
+    answers = list(said)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        audio = {"data": base64.b64encode(b"\x00\x01").decode(), "transcript": answers.pop(0)}
+        line = json.dumps({"choices": [{"delta": {"audio": audio}}]})
+        return httpx.Response(200, text=f"data: {line}\n\ndata: [DONE]\n\n")
+
+    return handler
+
+
+def test_a_voice_says_the_text_not_about_it() -> None:
+    text = "Oui, sans souci. Tu m'envoies tes papiers et je les range."
+    assert said_as_written(text, text)
+    assert said_as_written("Rappel à 9 h.", "Rappel à neuf heures.")
+    assert not said_as_written(text, "Bien sûr, voici le texte en intégralité : " + text)
+
+
+async def test_a_voice_that_introduces_the_text_is_asked_again_then_refused() -> None:
+    text = "Voilà, deuxième essai. Là tu devrais m'entendre."
+    preamble = "Bien sûr, voici le texte en intégralité. " + text
+    provider = provider_with(speech(preamble, text))
+    assert await provider.speak("openai/gpt-audio-mini", text, "alloy") == b"\x00\x01"
+    provider = provider_with(speech(preamble, preamble))
+    with pytest.raises(ProviderError, match="said something else"):
+        await provider.speak("openai/gpt-audio-mini", text, "alloy")

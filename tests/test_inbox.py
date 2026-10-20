@@ -101,6 +101,20 @@ async def test_call_transcripts_may_need_no_answer(
     assert len(provider.requests) == 2  # transcripts are never merged together
 
 
+async def test_silence_is_never_sent_as_a_word(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    """After a voice message, Orion has nothing to add: he must not read « SILENCE »."""
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(reply("SILENCE."), reply("Et voilà."))
+    inbox.submit(Inbound("imessage", ("a",), "envoie-moi un vocal"))
+    await until(lambda: len(provider.requests) == 1)
+    inbox.submit(Inbound("imessage", ("b",), "merci"))
+    await until(lambda: bool(imessage.sent))
+    assert imessage.sent == ["Et voilà."]
+
+
 async def test_proactive_messages_take_the_first_available_outlet(inbox: OwnerInbox) -> None:
     imessage, tui = Outlet("imessage", up=False), Outlet("tui")
     inbox.register(imessage)

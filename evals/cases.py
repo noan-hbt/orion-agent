@@ -214,6 +214,15 @@ CASES: tuple[Case, ...] = (
         checks=(uses("relations:meeting"),),
     ),
     Case(
+        name="je_corrige",
+        origin="20/10 : « je corrige, ça change rien » sans rien corriger ; il a fallu lui "
+        "demander « Tu as corrigé ? ». Une correction se fait dans le tour où il l'annonce.",
+        at=paris(2026, 10, 20, 18, 39),
+        facts=(*OWNER, "Angèle, sa copine, habite en Eure-et-Loir."),
+        steps=(Say("Elle habite à Nonancourt, c'est dans l'Eure pas l'Eure-et-Loir"),),
+        checks=(either(uses("forget_fact"), uses("remember")),),
+    ),
+    Case(
         name="train_pour_lyon",
         origin="Un départ hors agenda : Orion devrait le préparer la veille (D77).",
         at=paris(2026, 10, 20, 18, 30),

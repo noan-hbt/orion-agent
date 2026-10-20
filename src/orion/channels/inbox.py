@@ -9,7 +9,7 @@ that is the same whatever the channel:
   change course ("non, laisse tomber") instead of finishing a plan the owner revoked;
 - while Orion thinks, the channel shows it is working (read receipt, typing indicator);
 - the reply goes back through the outlet the message asked for, unless Orion answers
-  `SILENCE` (used for call transcripts that need no follow-up);
+  `SILENCE` (a call transcript that needs no follow-up, or a voice message already sent);
 - proactive messages go to the first available outlet, in order of preference.
 """
 
@@ -224,8 +224,10 @@ class OwnerInbox:
             log.warning("inbox.turn_incomplete", reason=turn.reason, detail=turn.detail)
             if not text:  # a limit already gets a closing answer; this is for the rest
                 text = f"(je me suis arrêté : {turn.reason.value})"
-        if first.allow_silence and is_silence(text):
-            log.info("inbox.silence", channel=first.channel)
+        if is_silence(text):
+            # Allowed for transcripts; after a voice message or a file, it is all the answer
+            # needed. The word itself is never his to read.
+            log.info("inbox.silence", channel=first.channel, allowed=first.allow_silence)
         elif text and reply is not None:
             await reply.deliver(text, turn.correlation_id)
         elif text:

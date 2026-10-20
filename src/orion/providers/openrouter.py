@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import random
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -34,10 +35,34 @@ _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
 
 SPEAK_PROMPT = (
-    "Tu lis à voix haute, en français naturel et chaleureux, exactement le texte que "
-    "l'utilisateur te donne : sans rien ajouter, retrancher ni commenter, sans répondre à ce "
-    "qu'il dit."
+    "Tu es une voix de synthèse, pas un assistant. Tu prononces, en français naturel et "
+    "chaleureux, exactement le texte que l'utilisateur te donne, du premier au dernier mot : "
+    "sans rien ajouter, retrancher ni commenter, sans répondre à ce qu'il dit. Jamais "
+    "d'annonce avant (« bien sûr », « voici le texte ») ni de mot après."
 )
+SPEAK_ATTEMPTS = 2
+"""An audio model is a chat model: now and then it introduces the text instead of saying it."""
+
+
+def _plain_words(text: str) -> list[str]:
+    plain = unicodedata.normalize("NFKD", text.lower())
+    plain = "".join(c if c.isalnum() else " " for c in plain if not unicodedata.combining(c))
+    return plain.split()
+
+
+def said_as_written(text: str, transcript: str) -> bool:
+    """Whether the speech model said `text` rather than talking about it: it starts with the
+    text's first words, and adds nothing worth a sentence. Numbers may be said in words, so a
+    transcript that differs without being longer is taken as said."""
+    written, said = _plain_words(text), _plain_words(transcript)
+    if not written or not said:
+        return True
+    opening = written[:2]
+    for start in range(min(3, len(said))):
+        if said[start : start + len(opening)] == opening:
+            return len(said) <= len(written) + 4
+    return len(said) <= len(written) + 2
+
 
 EXPLICIT_CACHE = ("anthropic/",)
 """Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
@@ -131,7 +156,19 @@ class OpenRouterProvider:
         )
 
     async def speak(self, model: str, text: str, voice: str) -> bytes:
-        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio."""
+        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio,
+        with what was said: a voice that said something else is asked again, then refused."""
+        transcript = ""
+        for _ in range(SPEAK_ATTEMPTS):
+            pcm, transcript = await self._speak_once(model, text, voice)
+            if said_as_written(text, transcript):
+                return pcm
+            log.warning("openrouter.speech_unfaithful", said=transcript[:200])
+        raise ProviderError(
+            f"the speech model said something else: {transcript[:120]!r}", retryable=False
+        )
+
+    async def _speak_once(self, model: str, text: str, voice: str) -> tuple[bytes, str]:
         body: dict[str, Any] = {
             "model": model,
             "modalities": ["text", "audio"],
@@ -143,6 +180,7 @@ class OpenRouterProvider:
             ],
         }
         chunks: list[bytes] = []
+        said: list[str] = []
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as response:
                 if response.status_code >= 400:
@@ -163,13 +201,15 @@ class OpenRouterProvider:
                         audio = cast(dict[str, Any], delta.get("audio") or {})
                         if audio.get("data"):
                             chunks.append(base64.b64decode(str(audio["data"])))
+                        if audio.get("transcript"):
+                            said.append(str(audio["transcript"]))
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid event from provider", retryable=True) from exc
         if not chunks:
             raise ProviderError("the speech model sent no audio", retryable=False)
-        return b"".join(chunks)
+        return b"".join(chunks), "".join(said)
 
     async def _retrying[T](
         self,
