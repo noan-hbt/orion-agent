@@ -37,6 +37,15 @@ class TelegramModule(Module):
     def enabled(self) -> bool:
         return self.config.channels.telegram.enabled
 
+    def offers(self) -> list[str]:
+        if not self.enabled:
+            return []
+        return [
+            "Tant qu'il te parle par Telegram, le gardien séparé ne peut pas tourner : tout ce "
+            "qui en dépend (une session prêtée pour agir sur ses comptes, les autres Orion) "
+            "reste impossible, même une fois le module activé. Dis-le plutôt que de le promettre."
+        ]
+
     async def assemble(self, plate: Plate) -> list[Tool]:
         if self.config.guardian.enabled:
             raise ModuleError(

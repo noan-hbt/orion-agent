@@ -16,6 +16,9 @@ def test_a_module_that_is_off_offers_itself() -> None:
     assert any("[modules.web] enabled = true" in o for o in listed)
     assert not any("orion login" in o for o in listed)  # the browser itself is off
 
+    (browser,) = [o for o in listed if o.startswith("Un navigateur à toi")]
+    assert "session" in browser and "gardien" in browser  # its accounts need more than this
+
     on = offers(_config(modules={"web": {"enabled": True}}))
     assert not any("[modules.web]" in o for o in on)
 
@@ -37,3 +40,10 @@ def test_offers_close_the_constitution_and_are_stable() -> None:
     section = first[first.index("# Ce que tu pourrais faire de plus") :]
     assert "Une\nseule fois par sujet" in section and "- " in section
     assert "# Ce que tu pourrais faire de plus" not in constitution([], [])
+
+
+def test_telegram_says_what_it_rules_out() -> None:
+    assert not any("Telegram" in o for o in offers(_config()))
+    listed = offers(_config(channels={"telegram": {"enabled": True, "owner_id": 1}}))
+    (telegram,) = [o for o in listed if "Telegram" in o]
+    assert "gardien" in telegram and "session" in telegram

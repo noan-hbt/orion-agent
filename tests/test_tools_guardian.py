@@ -102,6 +102,14 @@ async def test_guardian_blocks_external_effects_in_untrusted_context_without_ask
     assert approver.asked == []  # the owner is not even bothered
 
 
+async def test_a_refusal_says_what_tainted_the_conversation_and_until_when() -> None:
+    """Orion repeats the reason to the owner: the source and the delay are in it, not guessed."""
+    decision = await Guardian(fresh_after_minutes=120).decide(proposal(SEND, Trust.WEB))
+    assert "a web page" in decision.reason and "120 minutes without any message" in decision.reason
+    never = await Guardian().decide(proposal(SEND, Trust.THIRD_PARTY))
+    assert "a mail" in never.reason and "stays impossible" in never.reason
+
+
 async def test_internal_writes_in_untrusted_context_are_put_to_the_owner() -> None:
     write = Tool(
         name="note",

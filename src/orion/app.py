@@ -215,7 +215,12 @@ async def build_app(
             journal=journal,
             provider=provider,
             registry=ToolRegistry(tools),
-            guardian=Guardian(plate.approver, autonomy.allows, config.agent.approvals),
+            guardian=Guardian(
+                plate.approver,
+                autonomy.allows,
+                config.agent.approvals,
+                config.agent.untrusted_idle_minutes,
+            ),
             compiler=ContextCompiler(
                 constitution(enabled, offers(config)), config.agent.max_window_tokens
             ),

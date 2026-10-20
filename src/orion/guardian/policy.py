@@ -82,6 +82,16 @@ UNTRUSTED_REASON = (
 )
 
 
+UNTRUSTED_SOURCES = {
+    Trust.UNKNOWN: "content of unknown origin",
+    Trust.WEB: "a web page or a search result",
+    Trust.THIRD_PARTY: "a mail, a call or someone else's message",
+    Trust.TRUSTED_PEER: "another Orion",
+    Trust.OWNER_INSTANCE: "a file or a document read for him",
+}
+"""What lowered a context to this trust, in words the model can repeat to the owner."""
+
+
 Approvals = Literal["prudent", "equilibre"]
 """What the owner is asked in a context holding outside content (`agent.approvals`, D85)."""
 
@@ -96,10 +106,30 @@ class Guardian:
         approver: Approver | None = None,
         autonomous: Autonomous | None = None,
         approvals: Approvals = "prudent",
+        fresh_after_minutes: int = 0,
     ) -> None:
         self._approver = approver or DenyAllApprover()
         self._autonomous = autonomous
         self._approvals: Approvals = approvals
+        self._fresh_after = fresh_after_minutes
+        """`agent.untrusted_idle_minutes`: when the conversation starts afresh (D26)."""
+
+    def _untrusted_refusal(self, tool: Tool, trust: Trust) -> str:
+        """Why, and until when: the model tells the owner, so it must not have to guess."""
+        source = UNTRUSTED_SOURCES.get(trust, "outside content")
+        until = (
+            f"It becomes possible again once the conversation starts afresh, after "
+            f"{self._fresh_after} minutes without any message (each message pushes that back)"
+            if self._fresh_after
+            else "It stays impossible in this conversation"
+        )
+        return (
+            f"{tool.name} cannot run in a context containing untrusted content "
+            f"(trust {trust.name}: {source} is in this conversation). Anything that acts on "
+            "the world or on your settings is never done from such a context, even when he "
+            f"asked: the outside content could have steered you. {until}; or he does it "
+            "himself. Tell him exactly this, without promising to retry sooner."
+        )
 
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
@@ -113,11 +143,7 @@ class Guardian:
             # reminders, playbook) is put to the owner instead (D26), unless he chose not to be
             # asked for those (D85): what it writes keeps the context's trust anyway.
             if effect is Effect.EXTERNAL:
-                return Decision(
-                    Verdict.DENY,
-                    f"{tool.name} cannot run in a context containing untrusted content "
-                    f"(trust {proposal.context_trust.name})",
-                )
+                return Decision(Verdict.DENY, self._untrusted_refusal(tool, proposal.context_trust))
             if self._approvals == "equilibre":
                 return Decision(
                     Verdict.ALLOW,

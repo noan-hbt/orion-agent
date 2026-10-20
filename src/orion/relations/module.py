@@ -187,6 +187,14 @@ class Relations:
     async def sync(self) -> None:
         await self._runner.catch_up()
 
+    def is_owner(self, name: str) -> bool:
+        """The owner himself, by one of his names, alone or followed by his surname."""
+        key = name_key(name)
+        return any(
+            key == own or key.startswith(own + " ")
+            for own in (name_key(n) for n in self._owner_names | {"owner"})
+        )
+
     async def record(self, kind: str, payload: dict[str, Any], ctx: ToolContext) -> None:
         await self._journal.append(
             [
@@ -382,6 +390,12 @@ def relation_tools(relations: Relations) -> list[Tool]:
             date(2000, args.month, args.day)  # a leap year: 29 February is a real birthday
         except ValueError:
             return ToolResult("No such day.", is_error=True)
+        if relations.is_owner(args.person):
+            return ToolResult(
+                f"{args.person} is the owner himself, not someone in his life: his own "
+                "birthday goes in memory (remember, category profile).",
+                is_error=True,
+            )
         await relations.record(
             BIRTHDAY,
             {"person": args.person, "month": args.month, "day": args.day, "year": args.year},

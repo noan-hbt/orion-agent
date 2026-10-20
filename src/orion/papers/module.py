@@ -63,6 +63,7 @@ Kind = Literal[
     "attestation employeur",
     "rib",
     "diplôme",
+    "extrait Kbis",
     "autre",
 ]
 EXPIRING: frozenset[str] = frozenset(

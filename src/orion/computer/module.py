@@ -65,8 +65,10 @@ class StatusInput(BaseModel):
 class ComputerModule(Module):
     name = "computer"
     offer = (
-        "Un navigateur à toi, pour faire des démarches sur des sites : `[modules.computer] "
-        "enabled = true`."
+        "Un navigateur à toi, pour parcourir des sites et remplir un formulaire public qu'il "
+        "approuve : `[modules.computer] enabled = true`. Agir sur un de ses comptes (URSSAF, "
+        "banque, Doctolib…) demande en plus une session de ce site qu'il te prête, par le "
+        "gardien séparé : le navigateur seul n'y suffit pas."
     )
 
     def offers(self) -> list[str]:
