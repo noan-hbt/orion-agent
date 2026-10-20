@@ -21,6 +21,7 @@ from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
 import structlog
@@ -59,6 +60,8 @@ class Inbound:
     context: str = field(default="", compare=False)
     """Opaque per-channel data, e.g. the conversation to show typing in."""
     media: tuple[Attachment, ...] = ()
+    sent_at: datetime | None = field(default=None, compare=False)
+    """When the owner sent it, if the channel knows: a message that waited is said to have."""
 
 
 class Outlet(Protocol):
@@ -209,6 +212,7 @@ class OwnerInbox:
                 progress=progress,
                 waiting=lambda: not first.allow_silence and self._waiting(first),
                 photos=photos,
+                sent_at=min((i.sent_at for i in batch if i.sent_at), default=None),
             )
         thought = time.monotonic() - started
         text = turn.text.strip()

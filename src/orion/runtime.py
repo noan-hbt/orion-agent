@@ -106,6 +106,9 @@ class Photo:
     attributes: tuple[tuple[str, str], ...] = ()
 
 
+LATE_AFTER = timedelta(minutes=2)
+"""A message older than this when Orion takes it up waited: Orion was down or busy."""
+
 PHOTO_TRUST = Trust.OWNER_INSTANCE
 """The owner sent it, but what is in it was written by others (a flyer, a screenshot of a
 message): information, not orders, like a file read from their machine."""
@@ -173,13 +176,15 @@ class Orion:
         progress: Progress | None = None,
         waiting: Waiting | None = None,
         photos: Sequence[Photo] = (),
+        sent_at: datetime | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
         `refs` are the channel's own message ids, recorded so a restart knows they were handled.
         `interjections` is asked between steps for messages the owner sent meanwhile: they join
         the turn, so Orion can change course instead of finishing a plan the owner revoked.
         `photos` came with the message: their content lowers the turn's trust (`PHOTO_TRUST`),
-        and their words never count as the owner's (`owner_text`)."""
+        and their words never count as the owner's (`owner_text`). `sent_at`, when the channel
+        knows it: a message that waited (Orion was down) says so, so the answer can too."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
@@ -188,6 +193,11 @@ class Orion:
         if photos:
             payload["photos"] = [p.id for p in photos if p.id]
             body = "\n\n".join([*([text] if text else []), *(photo_block(p) for p in photos)])
+        waited = self._waited(sent_at, now)
+        if waited is not None:
+            assert sent_at is not None
+            payload["sent_at"] = sent_at.isoformat()
+            body = f"{waited}\n{body}"
         return await self._turn(
             thread_id,
             kind="message.received",
@@ -231,6 +241,19 @@ class Orion:
     def lock(self, thread_id: str) -> asyncio.Lock:
         """Turns on one thread are serialized: two channels never interleave a conversation."""
         return self._locks.setdefault(thread_id, asyncio.Lock())
+
+    def _waited(self, sent_at: datetime | None, now: datetime | None) -> str | None:
+        """A line for a message the owner sent a while ago: Orion was down, or busy."""
+        if sent_at is None:
+            return None
+        zone = ZoneInfo(self._agent.timezone)
+        late = (now or datetime.now(zone)) - sent_at
+        if late < LATE_AFTER:
+            return None
+        minutes = max(1, round(late.total_seconds() / 60))
+        span = f"{minutes} min" if minutes < 120 else f"{round(minutes / 60)} h"
+        sent = sent_at.astimezone(zone)
+        return f'<attente envoyé="{sent:%Y-%m-%d %H:%M}" depuis="{span}"/>'
 
     async def _turn(
         self,
