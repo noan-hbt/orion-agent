@@ -45,6 +45,7 @@ from orion.memory.service import MemoryService
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.runtime import OWNER_THREAD
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -656,7 +657,18 @@ class ThinkingModule(Module):
             self.config.agent.timezone,
         )
         await self.thinking.sync()
-        return thinking_tools(self.thinking)
+        tools = thinking_tools(self.thinking)
+        promise = [t for t in tools if t.name == "think_later"]
+        return [
+            *promise,
+            grouped(
+                "follow_up",
+                "Asking the owner how a moment that matters went (an interview, a medical "
+                "appointment, a visit, an exam), a few hours after it, once.",
+                [t for t in tools if t.name != "think_later"],
+                {"follow_up": "plan", "follow_up_cancel": "cancel", "follow_ups": "list"},
+            ),
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         if self.thinking is None:  # pragma: no cover - assemble always runs first

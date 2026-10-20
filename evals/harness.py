@@ -13,6 +13,7 @@ They cost real calls (a few cents for the whole set) and are not deterministic: 
 
 from __future__ import annotations
 
+import json
 import re
 import tempfile
 import time
@@ -20,7 +21,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import time_machine
@@ -80,7 +81,22 @@ class Observation:
         return self.replies[-1] if self.replies else ""
 
     def used(self, tool: str) -> bool:
-        return any(name == tool for name, _ in self.tools)
+        """`tool`, or `tool:action` for a tool with actions (`mission:start`)."""
+        name, _, action = tool.partition(":")
+        return any(
+            used == name and (not action or _action(arguments) == action)
+            for used, arguments in self.tools
+        )
+
+
+def _action(arguments: str) -> str:
+    try:
+        parsed: object = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return ""
+    return (
+        str(cast(dict[str, object], parsed).get("action", "")) if isinstance(parsed, dict) else ""
+    )
 
 
 Judge = Callable[[str, str], Awaitable[bool]]

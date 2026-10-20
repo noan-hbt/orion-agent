@@ -48,7 +48,7 @@ log = structlog.get_logger(__name__)
 PAGE = "browser.page"
 IDLE_SECONDS = 600.0
 SHOWN_CHARS = 4000
-"""Page text shown after each action; `browser_read` gives the rest, part by part."""
+"""Page text shown after each action; `browser` read gives the rest, part by part."""
 READ_CHARS = 60_000
 TURNS_KEPT = 50
 _WORD = re.compile(r"\w+", re.UNICODE)
@@ -185,7 +185,7 @@ class BrowserDesk:
     async def read(self, part: int, find: str, ctx: ToolContext) -> str:
         live = self._live.get(ctx.thread_id)
         if live is None or not live.text:
-            raise Refused("No page is open: use browser_open first.")
+            raise Refused("No page is open: browser open first.")
         text = live.text
         if find:
             spots = [m.start() for m in re.finditer(re.escape(find), text, re.IGNORECASE)][:5]
@@ -197,7 +197,7 @@ class BrowserDesk:
             return f"La page s'arrête avant la partie {part} ({len(text)} caractères)."
         chunk = text[start : start + SHOWN_CHARS]
         more = len(text) > start + SHOWN_CHARS
-        return chunk + (f"\n[suite : browser_read part={part + 1}]" if more else "\n[fin]")
+        return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
     async def _act(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
         async with self._lock:
@@ -235,7 +235,7 @@ class BrowserDesk:
 def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     text = snapshot.text[:SHOWN_CHARS]
     more = (
-        f"\n[{len(snapshot.text) - SHOWN_CHARS} caractères de plus : browser_read]"
+        f"\n[{len(snapshot.text) - SHOWN_CHARS} caractères de plus : browser read]"
         if len(snapshot.text) > SHOWN_CHARS
         else ""
     )

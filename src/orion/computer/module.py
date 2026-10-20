@@ -15,6 +15,7 @@ from orion.core.events import Provenance, Trust
 from orion.delegation.jobs import JobService
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -101,7 +102,23 @@ class ComputerModule(Module):
         self.desk = BrowserDesk(plate.journal, lambda: sessions(True))
         return [
             *computer_tools(self.reading, self.sending, plate.guardian),
-            *browser_tools(self.desk),
+            grouped(
+                "browser",
+                "Your own browser, which you drive yourself, page by page: open a page and see "
+                "it (its text and numbered elements), then act on the page shown. For a site's "
+                "search, listings, schedules. Nothing is ever sent from it.",
+                browser_tools(self.desk),
+                {
+                    "browser_open": "open",
+                    "browser_click": "click",
+                    "browser_type": "type",
+                    "browser_select": "select",
+                    "browser_scroll": "scroll",
+                    "browser_back": "back",
+                    "browser_read": "read",
+                    "browser_close": "close",
+                },
+            ),
         ]
 
     async def serve(self, daemon: Daemon) -> None:

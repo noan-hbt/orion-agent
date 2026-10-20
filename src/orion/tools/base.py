@@ -68,6 +68,18 @@ class Tool:
     concurrency_safe: bool = False
     accepts_untrusted_context: bool = False
     max_output_chars: int = 20_000
+    effect_of: Callable[[BaseModel], Effect] | None = None
+    """For a tool with several actions (`orion.tools.actions`): the effect of this call."""
+    untrusted_of: Callable[[BaseModel], bool] | None = None
+    """For a tool with several actions: whether this call may run in an untrusted context."""
+
+    def effect_for(self, arguments: BaseModel) -> Effect:
+        return self.effect_of(arguments) if self.effect_of is not None else self.effect
+
+    def accepts_untrusted_for(self, arguments: BaseModel) -> bool:
+        if self.untrusted_of is not None:
+            return self.untrusted_of(arguments)
+        return self.accepts_untrusted_context
 
     def spec(self) -> ToolSpec:
         schema = self.input_model.model_json_schema()

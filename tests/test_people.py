@@ -66,7 +66,7 @@ async def test_person_tools(memory: MemoryService) -> None:
     same = tool(tools, "same_person")
     exact = (await person.handler(person.parse('{"name": "Paul"}'), CTX)).content
     assert exact.startswith("Paul\n") and exact.endswith(
-        "Noms proches : Paul Martin (si c'est la même personne, dis-le avec same_person)"
+        "Noms proches : Paul Martin (si c'est la même personne, dis-le avec people, action same)"
     )
     await memory.remember("Paul Durand est plombier.", OWNER, about=["Paul Durand"])
     ambiguous = await person.handler(person.parse('{"name": "Durand Paul"}'), CTX)

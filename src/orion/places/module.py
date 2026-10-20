@@ -37,6 +37,7 @@ from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Report
 from orion.memory.store import name_key
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -355,7 +356,15 @@ class PlacesModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         self.places = Places(plate.journal)
         await self.places.sync()
-        return place_tools(self.places)
+        return [
+            grouped(
+                "places",
+                "Reminders for when the owner arrives at, or leaves, a place (« quand je passe à "
+                "la boulangerie »), not at a time.",
+                place_tools(self.places),
+                {"remind_at_place": "remind", "place_reminder_cancel": "cancel", "places": "list"},
+            )
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         if self.places is None:  # pragma: no cover - assemble always runs first

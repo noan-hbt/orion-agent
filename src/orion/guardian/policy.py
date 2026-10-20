@@ -96,12 +96,15 @@ class Guardian:
 
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
-        if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_context:
+        effect = tool.effect_for(proposal.arguments)
+        if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
+            proposal.arguments
+        ):
             # Content from elsewhere may have steered the model. Acting on the world from such a
             # context is refused outright: that is what an injected instruction would ask for,
             # and the owner must not get used to approving it. An internal write (memory,
             # reminders, playbook) is put to the owner instead (D26).
-            if tool.effect is Effect.EXTERNAL:
+            if effect is Effect.EXTERNAL:
                 return Decision(
                     Verdict.DENY,
                     f"{tool.name} cannot run in a context containing untrusted content "
@@ -117,9 +120,9 @@ class Guardian:
                 f"{tool.name} in a context containing untrusted content "
                 f"(trust {proposal.context_trust.name}) needs the owner's approval, not given",
             )
-        if tool.effect is Effect.NONE:
+        if effect is Effect.NONE:
             return Decision(Verdict.ALLOW, "side-effect free")
-        if tool.effect is Effect.INTERNAL:
+        if effect is Effect.INTERNAL:
             return Decision(Verdict.ALLOW, "internal effect only")
         if (
             proposal.context_trust >= TRUSTED_FLOOR

@@ -157,7 +157,7 @@ CASES: tuple[Case, ...] = (
             Say("Cherche pour Dreux"),
         ),
         checks=(
-            uses("web_search", "web_read", "browser_open"),
+            uses("web_search", "web_read", "browser:open"),
             avoids("computer_task"),
             says(r"\d[\d  ]*\s?€", "no rent figure in the answer"),
         ),
@@ -175,7 +175,7 @@ CASES: tuple[Case, ...] = (
                 "Cherche régulièrement et préviens-moi quand il y a du nouveau."
             ),
         ),
-        checks=(uses("mission_start"), avoids("remind_me")),
+        checks=(uses("mission:start"), avoids("remind_me")),
     ),
     Case(
         name="garde_cette_note",
@@ -187,7 +187,7 @@ CASES: tuple[Case, ...] = (
                 "100 g de sucre, 50 g de farine, 150 g de beurre, 25 min à 180°."
             ),
         ),
-        checks=(uses("library_add"),),
+        checks=(uses("library:add"),),
     ),
     Case(
         name="entretien_jeudi",
@@ -195,7 +195,7 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 20, 18, 0),
         facts=OWNER,
         steps=(Say("J'ai mon entretien chez Decathlon jeudi à 10h, je stresse un peu"),),
-        checks=(uses("follow_up"),),
+        checks=(uses("follow_up:plan"),),
     ),
     Case(
         name="me_remettre_a_courir",
@@ -203,7 +203,7 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 20, 19, 0),
         facts=OWNER,
         steps=(Say("Je voudrais vraiment me remettre à courir, genre trois fois par semaine"),),
-        checks=(either(uses("intention_set"), asks()), avoids("remind_me")),
+        checks=(either(uses("intention:set"), asks()), avoids("remind_me")),
     ),
     Case(
         name="je_vois_paul_jeudi",
@@ -211,7 +211,7 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 20, 18, 30),
         facts=(*OWNER, "Paul cherche du travail depuis son licenciement."),
         steps=(Say("Je déjeune avec Paul jeudi midi"),),
-        checks=(uses("meeting_soon"),),
+        checks=(uses("relations:meeting"),),
     ),
     Case(
         name="anniversaire_de_maman",
@@ -219,14 +219,14 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 20, 18, 45),
         facts=OWNER,
         steps=(Say("Au fait l'anniversaire de ma mère c'est le 3 mars"),),
-        checks=(uses("person_birthday"), avoids("remind_me")),
+        checks=(uses("relations:birthday"), avoids("remind_me")),
     ),
     Case(
         name="quand_je_passe_a_la_boulangerie",
         origin="Un rappel de lieu, pas d'heure.",
         at=paris(2026, 10, 20, 17, 0),
         steps=(Say("Rappelle-moi d'acheter du pain quand je passe à la boulangerie"),),
-        checks=(uses("remind_at_place"), avoids("remind_me")),
+        checks=(uses("places:remind"), avoids("remind_me")),
         modules=("places",),
     ),
     Case(

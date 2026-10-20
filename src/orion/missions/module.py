@@ -17,6 +17,7 @@ from orion.initiative.engine import Alert
 from orion.missions.service import Mission, Missions
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.runtime import Orion, is_silence
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -327,7 +328,23 @@ class MissionsModule(Module):
         settings: MissionSettings = self.settings
         self.missions = Missions(plate.journal)
         await self.missions.sync()
-        return mission_tools(self.missions, self._clock, settings.max_active)
+        return [
+            grouped(
+                "mission",
+                "Missions: goals you keep working on alone over days (find a flat, watch a price, "
+                "look for a slot), instead of answering once.",
+                mission_tools(self.missions, self._clock, settings.max_active),
+                {
+                    "mission_start": "start",
+                    "mission_update": "update",
+                    "mission_note": "note",
+                    "mission_seen": "seen",
+                    "mission_reject": "reject",
+                    "mission_close": "close",
+                    "missions": "list",
+                },
+            )
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         if self.missions is None:  # pragma: no cover - assemble always runs first

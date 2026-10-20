@@ -9,7 +9,7 @@ attentive to them, the way a friend with a good memory is:
   meeting, the morning of a later one.
 - **Birthdays** (`person_birthday`): three days before, to think of something; on the day.
 - **Staying in touch** (`keep_in_touch`): for the people the owner wants to see often, Orion
-  notes when they saw each other (`saw_someone`) and says it when it has been too long, with a
+  notes when they saw each other (`saw`) and says it when it has been too long, with a
   concrete idea rather than a reproach.
 
 Everything reaches the owner through the initiative engine; the model writing the message gets
@@ -37,6 +37,7 @@ from orion.memory.people import Person, describe, find, people_index
 from orion.memory.service import MemoryService
 from orion.memory.store import name_key
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -396,7 +397,7 @@ def relation_tools(relations: Relations) -> list[Tool]:
             return ToolResult(f"Tu ne suis plus le rythme avec {args.person}.")
         return ToolResult(
             f"Noté : tu lui diras quand il n'aura pas vu {args.person} depuis {args.every_days} "
-            "jours. Note-le quand ils se voient (saw_someone)."
+            "jours. Note-le quand ils se voient (relations, saw)."
         )
 
     async def saw(args: Any, ctx: ToolContext) -> ToolResult:
@@ -491,7 +492,20 @@ class RelationsModule(Module):
             self.config.memory.owner_names,
         )
         await self.relations.sync()
-        return relation_tools(self.relations)
+        return [
+            grouped(
+                "relations",
+                "Attention to the people in the owner's life: meetings to prepare, birthdays, "
+                "staying in touch.",
+                relation_tools(self.relations),
+                {
+                    "meeting_soon": "meeting",
+                    "person_birthday": "birthday",
+                    "keep_in_touch": "keep_in_touch",
+                    "saw_someone": "saw",
+                },
+            )
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         from orion.calendar.module import CalendarModule

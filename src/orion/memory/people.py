@@ -156,7 +156,7 @@ def people_tools(memory: MemoryService, owner_names: list[str]) -> list[Tool]:
         if others:
             profile += (
                 f"\nNoms proches : {', '.join(sorted(others))} (si c'est la même personne, "
-                "dis-le avec same_person)"
+                "dis-le avec people, action same)"
             )
         return ToolResult(profile)
 

@@ -90,16 +90,16 @@ class Mission:
             ]
         if self.seen:
             lines.append(
-                f"Déjà vu : {len(self.seen)} élément(s) ; mission_seen dit ce qui est neuf."
+                f"Déjà vu : {len(self.seen)} élément(s) ; `mission` (seen) dit ce qui est neuf."
             )
         if self.notes:
             lines.append("Tes notes des passages précédents :")
             lines += [f"- {note}" for note in self.notes[-NOTES_SHOWN:]]
         lines.append(
             "Travaille maintenant : cherche ce qui est neuf (recherche web, ton navigateur), "
-            "enregistre chaque élément trouvé avec mission_seen, note ce que tu apprends avec "
-            "mission_note. Ne demande aucun accord pendant ce travail. Puis réponds : SILENCE "
-            "s'il n'y a rien de neuf qui vaille un message, sinon le message pour le "
+            "enregistre chaque élément trouvé avec `mission` (seen), note ce que tu apprends "
+            "avec `mission` (note). Ne demande aucun accord pendant ce travail. Puis réponds : "
+            "SILENCE s'il n'y a rien de neuf qui vaille un message, sinon le message pour le "
             "propriétaire, court, avec les liens. Si la mission est accomplie ou n'a plus de "
             "sens, propose-lui de la clore."
         )

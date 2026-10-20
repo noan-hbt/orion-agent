@@ -31,6 +31,7 @@ from orion.core.projections import ProjectionRunner
 from orion.library.store import ADDED, REMOVED, LibraryStore, Passage
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.providers.base import ProviderError
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -297,7 +298,24 @@ class LibraryModule(Module):
             plate.journal, self._store, semantic.vectors if semantic is not None else None
         )
         await self.library.sync()
-        return library_tools(self.library, self.config.agent.timezone, settings.results)
+        tools = library_tools(self.library, self.config.agent.timezone, settings.results)
+        talk = [t for t in tools if t.name == "conversations_search"]
+        shelf = [t for t in tools if t.name != "conversations_search"]
+        return [
+            *talk,
+            grouped(
+                "library",
+                "The owner's library: notes and documents kept whole, searchable by words and "
+                "by meaning.",
+                shelf,
+                {
+                    "library_add": "add",
+                    "library_search": "search",
+                    "library": "list",
+                    "library_remove": "remove",
+                },
+            ),
+        ]
 
     async def close(self) -> None:
         if self._store is not None:

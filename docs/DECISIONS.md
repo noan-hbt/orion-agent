@@ -1199,3 +1199,25 @@ demandé. Il part une fois, et les noms se rapprochent sans exiger l'exactitude
 - **Les goûts** : ce que le propriétaire ou ses proches aiment et n'aiment pas (cuisine, lieux,
   films, musique, cadeaux, marques), et ce qu'ils ont écarté et pourquoi, sont des faits
   durables pour l'extracteur de mémoire. Pour un cadeau ou un resto, Orion part de là.
+
+## D59 — Un outil par domaine
+
+*20/10/2026 · acceptée*
+
+Orion avait 64 outils, et environ 80 avec tous les modules : beaucoup de petites variantes
+(`mission_start`, `mission_note`, `missions`…) entre lesquelles le modèle doit choisir. Les
+variantes d'un même domaine deviennent les actions d'un seul outil (`orion.tools.actions`) :
+`mission`, `library`, `intention`, `follow_up`, `relations`, `places`, `commitments`,
+`reminders`, `playbook`, `people`, `browser`. Il en reste 33 avec la configuration d'essai. Le
+modèle choisit d'abord le domaine, puis l'action, que la description liste avec ses paramètres.
+
+- Chaque action garde son modèle d'entrée, son traitement, son effet et sa règle de confiance.
+  Le gardien juge chaque appel selon l'action demandée (`Tool.effect_for`) : lister reste une
+  lecture, même dans une conversation qui contient un mail.
+- Restent à part les gestes fréquents (`remember`, `recall`, `remind_me`, `web_search`), et
+  toute action dont le gardien vérifie l'accord par son nom (`mail_send`, `calendar_add`,
+  `computer_task_send`, `contact_message`, l'autonomie) : ce nom est ce sur quoi le oui du
+  propriétaire est vérifié.
+- La liste reste fixe et triée : le contrat du cache tient.
+
+Le banc d'essai complet a tourné avant et après, sur Haiku et DeepSeek, deux fois par cas.

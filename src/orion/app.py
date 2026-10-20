@@ -34,6 +34,7 @@ from orion.modules.registry import load
 from orion.providers.base import Embedder, ModelProvider
 from orion.resources import read_resource
 from orion.runtime import Orion
+from orion.tools.actions import grouped
 from orion.tools.base import Tool, ToolRegistry
 from orion.tools.builtin import builtin_tools
 from orion.voice.module import VoiceModule
@@ -86,12 +87,41 @@ def constitution(modules: list[Module]) -> str:
 
 
 def core_tools(plate: Plate) -> list[Tool]:
+    """The core's tools; small variants of one domain are the actions of one tool."""
+    memory = memory_tools(plate.memory)
+    reminders = reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None)
+    adaptation = adaptation_tools(plate.memory)
+    commitments = {"commitment_add": "add", "commitment_close": "close", "commitments_list": "list"}
     return [
         *builtin_tools(),
-        *memory_tools(plate.memory),
-        *reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None),
-        *adaptation_tools(plate.memory),
-        *people_tools(plate.memory, plate.config.memory.owner_names),
+        *[t for t in memory if t.name not in commitments],
+        grouped(
+            "commitments",
+            "The commitments ledger: what the owner owes, and what is owed to him (or to you).",
+            [t for t in memory if t.name in commitments],
+            commitments,
+        ),
+        *[t for t in reminders if t.name not in {"reminder_cancel", "reminders_list"}],
+        grouped(
+            "reminders",
+            "The reminders set with remind_me: see them, cancel one.",
+            [t for t in reminders if t.name in {"reminder_cancel", "reminders_list"}],
+            {"reminders_list": "list", "reminder_cancel": "cancel"},
+        ),
+        *[t for t in adaptation if t.name == "initiative_settings"],
+        grouped(
+            "playbook",
+            "The owner's playbook: how he wants you to behave (tone, length, habits), learnt "
+            "and corrected.",
+            [t for t in adaptation if t.name != "initiative_settings"],
+            {"adapt": "learn", "unlearn": "unlearn", "playbook": "show"},
+        ),
+        grouped(
+            "people",
+            "The people in the owner's life, as memory knows them.",
+            people_tools(plate.memory, plate.config.memory.owner_names),
+            {"person": "show", "people": "list", "same_person": "same"},
+        ),
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
     ]
 

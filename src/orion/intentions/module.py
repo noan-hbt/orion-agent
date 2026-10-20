@@ -34,6 +34,7 @@ from orion.initiative.engine import Alert
 from orion.memory.model import Category
 from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -401,7 +402,20 @@ class IntentionsModule(Module):
             plate.journal, plate.memory, self.settings, self.config.agent.timezone
         )
         await self.intentions.sync()
-        return intention_tools(self.intentions)
+        return [
+            grouped(
+                "intention",
+                "The owner's intentions: what he wants to become or do lastingly (run more, "
+                "spend less, see his mother more), not one-off tasks.",
+                intention_tools(self.intentions),
+                {
+                    "intention_set": "set",
+                    "intention_note": "note",
+                    "intention_drop": "drop",
+                    "intentions": "list",
+                },
+            )
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         if self.intentions is not None:
