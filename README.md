@@ -134,6 +134,9 @@ d'autres personnes.
 - **Le secrétaire** (D54, à activer) : les proches que tu choisis peuvent écrire à Orion. Il
   leur répond sans rien savoir de ta vie (au plus, tes créneaux occupés), te transmet ce qui
   compte, et ne leur écrit en premier qu'avec ton accord.
+- **Les gens de ta vie** (D56) : avant de voir quelqu'un, ce qui compte sur lui ; les
+  anniversaires à temps ; et un mot quand ça fait trop longtemps que tu n'as pas vu quelqu'un
+  qui compte.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

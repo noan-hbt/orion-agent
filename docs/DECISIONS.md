@@ -1151,3 +1151,23 @@ section `[agent]` nomme les modèles partagés :
 
 Chaque module peut nommer le sien dans sa section, et c'est lui qui l'emporte. Les modèles de
 secours s'appliquent désormais à chacun de ces modèles, plus seulement aux deux premiers.
+
+## D56 — Les gens de sa vie
+
+*20/10/2026 · acceptée*
+
+Module `relations`, actif par défaut. La mémoire connaît les personnes (D27) ; ce module rend
+Orion attentif à elles.
+- **Avant une rencontre** : un événement de l'agenda dont le titre nomme quelqu'un que la
+  mémoire connaît, ou une rencontre que le propriétaire mentionne (`meeting_soon`). Orion lui
+  rappelle ce qui compte : ce qui se passe dans la vie de la personne, les engagements dans un
+  sens ou dans l'autre. La veille au soir pour un rendez-vous du matin, le matin pour un
+  rendez-vous plus tard. `SILENCE` s'il ne sait rien d'utile.
+- **Anniversaires** (`person_birthday`) : trois jours avant, pour penser à quelque chose, et le
+  jour même, avec une idée tirée de ce qu'il sait.
+- **Garder le lien** (`keep_in_touch`, `saw_someone`) : pour les gens qu'il veut voir souvent,
+  Orion dit quand ça fait trop longtemps, une fois par semaine au plus, avec une idée concrète
+  plutôt qu'un reproche.
+
+Le message est écrit par le moteur d'initiative à partir de la fiche de la personne : rien
+d'inventé, et la confiance du message est celle des faits qu'il cite.

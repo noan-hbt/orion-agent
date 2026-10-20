@@ -205,4 +205,20 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Je voudrais vraiment me remettre à courir, genre trois fois par semaine"),),
         checks=(either(uses("intention_set"), asks()), avoids("remind_me")),
     ),
+    Case(
+        name="je_vois_paul_jeudi",
+        origin="Une rencontre hors agenda : Orion devrait la préparer.",
+        at=paris(2026, 10, 20, 18, 30),
+        facts=(*OWNER, "Paul cherche du travail depuis son licenciement."),
+        steps=(Say("Je déjeune avec Paul jeudi midi"),),
+        checks=(uses("meeting_soon"),),
+    ),
+    Case(
+        name="anniversaire_de_maman",
+        origin="Un anniversaire dit en passant.",
+        at=paris(2026, 10, 20, 18, 45),
+        facts=OWNER,
+        steps=(Say("Au fait l'anniversaire de ma mère c'est le 3 mars"),),
+        checks=(uses("person_birthday"), avoids("remind_me")),
+    ),
 )
