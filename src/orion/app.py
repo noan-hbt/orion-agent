@@ -86,10 +86,17 @@ MAX_SECTION_CHARS = 2_500
 section drowns the others. What a tool does belongs in its description, read when it matters."""
 
 
-def constitution(modules: list[Module], offers: Sequence[str] = ()) -> str:
-    """The core constitution, each enabled module's section in loading order, then what Orion
-    could do with more setup (D64). All fixed while Orion runs: the system message is cached."""
+def constitution(
+    modules: list[Module], offers: Sequence[str] = (), owner_names: Sequence[str] = ()
+) -> str:
+    """The core constitution, his name, each enabled module's section in loading order, then
+    what Orion could do with more setup (D64). All fixed while Orion runs: the system message
+    is cached."""
     parts = [read_resource("constitution.md").strip()]
+    if owner_names:
+        # From `[memory] owner_names`: known from the first message, not asked (20/10).
+        also = f" (il répond aussi à : {', '.join(owner_names[1:])})" if owner_names[1:] else ""
+        parts.append(f"Ton propriétaire s'appelle {owner_names[0]}{also}.")
     for module in modules:
         text = module.instructions_text()
         if len(text) > MAX_SECTION_CHARS:
@@ -222,7 +229,8 @@ async def build_app(
                 config.agent.untrusted_idle_minutes,
             ),
             compiler=ContextCompiler(
-                constitution(enabled, offers(config)), config.agent.max_window_tokens
+                constitution(enabled, offers(config), config.memory.owner_names),
+                config.agent.max_window_tokens,
             ),
             agent=config.agent,
             memory=memory,

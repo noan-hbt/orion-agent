@@ -5,12 +5,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Trust
 from orion.guardian.policy import ActionProposal, Approval, Guardian, Verdict
 from orion.tools.actions import NO_ARGS, Action, action_tool, grouped
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.base import (
+    Effect,
+    Reversibility,
+    Tool,
+    ToolContext,
+    ToolInputError,
+    ToolResult,
+)
 
 
 class AddInput(BaseModel):
@@ -39,7 +47,19 @@ CTX = ToolContext("owner", "c")
 
 
 async def run(tool: Tool, **args: object) -> ToolResult:
-    return await tool.handler(tool.parse(json.dumps(args)), CTX)
+    try:
+        parsed = tool.parse(json.dumps(args))
+    except ToolInputError as exc:
+        return ToolResult(str(exc), is_error=True)
+    return await tool.handler(parsed, CTX)
+
+
+async def test_a_bad_call_is_refused_before_anyone_is_asked() -> None:
+    """20/10: configure was approved, then failed on its arguments, then asked again."""
+    with pytest.raises(ToolInputError, match=r"notes\.add"):
+        NOTES.parse(json.dumps({"action": "add"}))
+    with pytest.raises(ToolInputError, match="takes no what"):
+        NOTES.parse(json.dumps({"action": "list", "what": "pain"}))
 
 
 async def test_each_action_takes_its_own_arguments() -> None:

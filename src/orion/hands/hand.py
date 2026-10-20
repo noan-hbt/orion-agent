@@ -113,8 +113,12 @@ class Hand:
     def open_url(self, url: str) -> dict[str, Any]:
         if urlsplit(url).scheme not in ("http", "https"):
             raise Refused("only web addresses")
-        opener = "open" if platform.system() == "Darwin" else "xdg-open"
-        subprocess.run([opener, url], check=False, timeout=10)
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(url)  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            opener = "open" if system == "Darwin" else "xdg-open"
+            subprocess.run([opener, url], check=False, timeout=10)
         return {"content": f"opened {url}"}
 
     def find_files(self, query: str) -> dict[str, Any]:

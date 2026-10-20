@@ -76,8 +76,10 @@ class ComputerModule(Module):
             return super().offers()
         lend = (
             "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) avec une session qu'il te "
-            "prête, pour un site où tu ne l'as pas déjà : sur son Mac, `orion login <site>`, puis "
-            "`orion sessions add` sur le serveur"
+            "prête, pour un site où tu ne l'as pas déjà : une fois, sur un ordinateur avec un "
+            "écran (Windows, Linux ou Mac, pas le téléphone), `orion login <nom> <adresse de la "
+            "page de connexion>` ; il s'y connecte à la main, puis `orion sessions add <nom> "
+            "<fichier>` sur le serveur. Ne lui suppose aucune machine : demande-lui ce qu'il a"
         )
         if not self.config.guardian.enabled:
             lend += " (il faut d'abord le gardien séparé, `[guardian] enabled = true`)"

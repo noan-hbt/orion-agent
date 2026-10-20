@@ -1,0 +1,308 @@
+# Copy to orion.toml and adjust. Secrets are never stored here: each SecretRef names the
+# environment variable that holds the value.
+
+instance = "orion-main"   # stable id of this instance (lowercase, digits, dashes)
+data_dir = "data"         # relative to this file
+
+[logging]
+level = "INFO"
+json_output = false
+
+[agent]
+model = "deepseek/deepseek-v4.1-flash"
+timezone = "Europe/Paris"
+max_window_tokens = 120000   # visible conversation window before a one-step rebase
+max_steps = 40               # model calls per turn (cost and repeats stop it first)
+max_tool_calls = 80
+max_cost_usd_per_turn = 0.5
+prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
+approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
+                             # acting on the world, saying why (D90); "prudent" refuses that, and
+                             # asks before each memory, reminder or voice message (D85)
+extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
+fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
+verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family
+strong_model = "anthropic/claude-opus-5.5"           # consulted when hard; night thinking; chronicle
+vision_model = "google/gemini-3.8-flash"             # looks at the photos you send
+image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask for
+# summary_model = "..."      # summarizes what leaves the window; default: extractor_model
+# reflection_model = "..."   # learns your playbook, tidies memory at night; default: extractor_model
+# Each module can also name its own, overriding these: [modules.expert] model, [modules.thinking]
+# model, [modules.chronicle] model, [modules.photos] model, [modules.secretary] model,
+# [modules.web] model, [modules.mail] quarantine_model, [modules.computer] model,
+# [modules.delegation] model. [memory] embedding_model is the embeddings model.
+
+# What Orion may spend on models (D79). What it does on its own (the night, curiosity,
+# missions, initiative) stops at the day's or the month's ceiling; answering you never does.
+# It tells you at 80 % of the month, and when it pauses. `spending` answers « combien tu m'as
+# coûté ? ». Not changeable by message.
+[budget]
+daily_usd = 3.0
+monthly_usd = 40.0
+
+[providers.openrouter]
+api_key = { env = "OPENROUTER_API_KEY" }
+base_url = "https://openrouter.ai/api/v1"
+sort = "throughput"              # the fastest host for the model ("latency", "price"; remove: none)
+# A request with an image goes only to hosts that really look at it: some drop it without a
+# word, and the model makes the picture up (D87).
+image_hosts = { "deepseek/deepseek-v4.1-flash" = ["deepinfra", "together"] }
+
+# Your ChatGPT Plus or Pro plan (D62), through OpenAI's "Sign in with ChatGPT": run
+# `uv run orion chatgpt login` once, then name models `chatgpt:<model>` anywhere above, e.g.
+# model = "chatgpt:gpt-6-luna" (`orion chatgpt models` lists yours). Calls draw on the plan's
+# allowance, not on money. Not available through it: pictures (image_model) and embeddings.
+[providers.chatgpt]
+enabled = false
+reasoning_effort = "low"         # when a call asks nothing; "medium", "high"
+
+# iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
+# connect command it prints from your phone: Orion can only write to you after you wrote first.
+[channels.imessage]
+enabled = false
+api_key = { env = "INKBOX_API_KEY" }
+identity = "orion-noan"          # Orion's Inkbox handle (globally unique)
+owner_number = "+33600000000"    # your number, E.164: the only one Orion obeys
+mode = "poll"                    # "poll" needs no public URL; "webhook" is instant
+poll_seconds = 1                 # worst-case delay before a text is seen; "webhook" has none
+webhook_host = "127.0.0.1"       # put a TLS reverse proxy in front for "webhook"
+webhook_port = 8787
+webhook_path = "/inkbox/webhook"
+signing_key = { env = "INKBOX_SIGNING_KEY" }
+coalesce_seconds = 0.5           # bursts become one message (adds this delay); later texts join the turn
+approval_timeout_seconds = 900   # no answer means no
+
+# Telegram through a bot of your own (D88): free, no daily cap, beside iMessage or instead of it.
+# Create the bot with @BotFather, set TELEGRAM_BOT_TOKEN on the server, write to the bot once:
+# Orion logs your user id (telegram.stranger), which goes in owner_id. Orion answers where you
+# wrote from. With [guardian] enabled, TELEGRAM_BOT_TOKEN goes in the guardian's environment
+# only: it holds the token and asks for approvals itself (D89).
+[channels.telegram]
+enabled = true
+bot_token = { env = "TELEGRAM_BOT_TOKEN" }
+owner_id = 8491079293                     # your Telegram user id; anyone else is ignored
+
+# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
+[initiative]
+enabled = true
+digests = ["08:30:00", "13:00:00", "19:00:00"]
+quiet_start = "22:30:00"
+quiet_end = "08:00:00"
+daily_budget = 6                 # unrequested messages per day
+tick_seconds = 30
+
+# How Orion learns to work with you: from what you tell it (immediately), from your reactions
+# and replies (a periodic reflection), and from what you ignore (digests nobody reads stop).
+[adaptation]
+enabled = true
+reflect_after_messages = 12        # reflect once this many new messages piled up…
+reflect_daily_after_messages = 3   # …or once a day if at least this many
+tick_seconds = 600
+
+# Long tasks (code, scripts, documents) handed to the official `claude` CLI, which uses your
+# subscription. Log it in once on the server: `claude auth login`. Off by default.
+[delegation]
+enabled = false
+binary = "claude"
+timeout_seconds = 1800
+max_budget_usd = 2.0
+allow_bash = false               # true: the agent may run commands; each job then needs your OK
+
+# Phone calls through Inkbox Voice AI, on the same line as iMessage. Orion keeps the voice
+# briefed (playbook, profile, commitments, reminders, last exchanges) and reads every call back.
+# `orion inkbox setup` reserves the line for your number and lets the voice pick up.
+[voice]
+enabled = false
+# voice = "..."                  # an Inkbox voice name; default voice if unset
+origination = "shared_imessage_number"
+brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
+calls_poll_seconds = 30          # poll mode: how often finished calls are read back
+live = false                     # Orion itself leads calls with you (memory and tools during the call)
+live_url = "wss://orion.example.com/voice/live"   # behind your HTTPS proxy, to live_host:live_port
+live_host = "127.0.0.1"
+live_port = 8791
+
+# Run split (D28): `orion guardian` holds every secret but the LLM key and checks each effect on
+# the world; `orion serve` reaches Inkbox, calendars and mail through it, over a Unix socket.
+# Run them as two Unix users sharing a group (see deploy/). With this on, `orion serve`
+# refuses to start if it can see a secret that belongs to the guardian.
+[guardian]
+enabled = true
+socket = "run/guardian.sock"     # relative to this file; mode 0660
+data_dir = "guardian"            # the guardian's own ledger (mode 0700)
+approval_ttl_seconds = 1800      # an approval is used once, within this delay
+max_sends_per_minute = 30
+core_silence_alert_seconds = 300 # the guardian texts you when the core has been silent this long; 0 = never
+heartbeat_seconds = 60           # the core tells the guardian it is alive
+autonomable = ["calendar_add", "configure_change"]   # actions you may let Orion do alone,
+                                 # once earned (configure_change: its own settings, D72); add
+                                 # "mail_send" and "computer_task_send" to allow them within
+                                 # limits you state (recipients, sites)
+offer_autonomy_after = 5         # approvals in a row before Orion offers (at most monthly)
+max_autonomous_per_day = 10      # the guardian stops autonomous actions beyond this
+
+# Other people's Orion (M7, D29): pair by invitation, then arrange meetings, each owner agreeing
+# once. Needs [guardian] enabled = true and the calendar module. The key lives only in the
+# guardian's environment (`orion federation keygen`); `public_url` is an HTTPS address served by
+# a reverse proxy in front of listen_host:listen_port.
+[federation]
+enabled = false
+owner_name = "Noan"                  # how other Orions name you
+key = { env = "ORION_FEDERATION_KEY" }
+public_url = "https://orion.example.com"
+listen_host = "127.0.0.1"
+listen_port = 8788
+invite_days = 7
+max_inbound_per_hour = 60            # per paired Orion
+meeting_start = "09:00:00"           # meetings start no earlier…
+meeting_end = "19:00:00"             # …and end no later
+weekends = false
+
+# Your calendars (M6), read through their secret iCal address:
+# - Google: calendar settings > "Secret address in iCal format";
+# - iCloud: share the calendar as a public calendar, copy the webcal:// link;
+# - Outlook: Settings > Calendar > Shared calendars > Publish a calendar > ICS link.
+# These links are passwords: put each in an environment variable, never here.
+[modules.calendar]
+enabled = false
+owner_emails = ["you@example.com"]   # your addresses: tells your events from invitations
+refresh_minutes = 10
+horizon_days = 14
+heads_up_minutes = 15                 # message before each event; 0 = never
+
+[[modules.calendar.accounts]]
+name = "perso"
+url = { env = "CALENDAR_PERSO_ICS" }
+# To let Orion add events (each one approved; meetings agreed with another Orion go in alone).
+# Google: create an OAuth client "Desktop app" (console.cloud.google.com > APIs > Credentials,
+# enable the Calendar API), then `orion google auth <client id>` prints the refresh token.
+# [modules.calendar.accounts.write]
+# kind = "google"
+# calendar_id = "primary"
+# client_id = "1234-abc.apps.googleusercontent.com"
+# client_secret = { env = "GOOGLE_CLIENT_SECRET" }
+# refresh_token = { env = "GOOGLE_REFRESH_TOKEN" }
+# iCloud, Fastmail, Nextcloud: CalDAV with an app password.
+# [modules.calendar.accounts.write]
+# kind = "caldav"
+# url = "https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/Default/"
+# username = "you@fastmail.com"
+# password = { env = "CALDAV_PASSWORD" }
+
+# [[modules.calendar.accounts]]
+# name = "boulot"
+# url = { env = "CALENDAR_BOULOT_ICS" }
+
+# Your mailboxes (M6), read over IMAP, strictly read-only (nothing is marked as read). Each
+# mail is read in quarantine by a separate model and reduced to a card; Orion never sees the
+# mail itself. Use an app password, never your account password:
+# - Gmail: imap.gmail.com, an app password (needs 2-step verification);
+# - iCloud: imap.mail.me.com, an app-specific password;
+# - Outlook.com needs OAuth for IMAP: not supported yet.
+[modules.mail]
+enabled = false
+owner_emails = ["you@example.com"]   # your own mail is skipped
+# quarantine_model = "deepseek/deepseek-v4.1-flash"   # defaults to agent.extractor_model
+refresh_minutes = 5
+lookback_days = 2                     # how far back the first sync reads
+alert_important = true                # a message when an important mail arrives
+
+[[modules.mail.accounts]]
+name = "perso"
+host = "imap.gmail.com"
+username = "you@gmail.com"
+password = { env = "MAIL_PERSO_PASSWORD" }
+smtp_host = "smtp.gmail.com"          # to send (each mail approved word for word); remove: read-only
+smtp_port = 465
+archive_folder = "[Gmail]/All Mail"   # where archived mail goes (iCloud: "Archive")
+drafts_folder = "[Gmail]/Drafts"      # where reply drafts go (iCloud: "Drafts")
+
+# Memory search and people.
+[memory]
+owner_names = ["Noan"]                # your names: kept out of "the people in your life"
+embedding_model = "openai/text-embedding-3-small"   # semantic search; remove to search by words
+extract_idle_minutes = 5          # what to remember is read after a pause this long…
+extract_min_messages = 3          # …once this many messages were exchanged…
+extract_max_wait_minutes = 60     # …or after this long anyway (D86)
+
+# Nightly consolidation: duplicates out, outdated facts replaced, names merged, contradictions
+# asked in the morning digest. On by default; never drops a fact for a less trusted one.
+[modules.consolidation]
+enabled = true
+at = "03:30:00"
+similarity = 0.5                      # how alike two facts must be to be compared
+
+# Third-party modules (Python packages exposing an `orion.modules` entry point) are configured
+# in their own section. A section for a module that is not installed stops Orion from starting.
+# [modules.weather]
+# enabled = true
+# city = "Lyon"
+
+# The web (search and reading pages), through the model provider's web search: no other
+# account. A separate clerk reads every page; Orion only opens addresses you gave, a search
+# returned, or the clerk picked on a page it read.
+[modules.web]
+enabled = true
+# model = "deepseek/deepseek-v4.1-flash"   # the clerk; defaults to agent.extractor_model
+max_results = 6
+
+# Curiosity (on with the web): once a week Orion follows a lead of its own and brings back one
+# find, only when it is worth your time. weekday: 0 is Monday.
+# [modules.curiosity]
+# weekday = 5
+# at = "06:00"
+# share_at = "10:30"
+# model = "anthropic/claude-opus-5.5"   # defaults to agent.strong_model
+
+# Orion's own computer: a headless browser driven by a worker that sees only the brief (no
+# memory, no conversation). Read-only tasks cannot send anything (the browser aborts every
+# request but GET); a task that must submit a form is approved by you first. Private addresses
+# are out of reach. `playwright install --with-deps chromium` once on the server.
+[modules.computer]
+enabled = true
+# model = "anthropic/claude-haiku-5.5"   # the worker; defaults to agent.model
+max_steps = 30
+
+# Booking (on with the computer): the slot you pick is booked, then goes to your calendar
+# with reminders (the evening before, and remind_before_minutes before).
+[modules.booking]
+enabled = true
+# remind_before_minutes = 90
+# evening_before = true
+
+# Departures: the evening before a trip or an exam in your calendar, one message with the
+# ticket, your papers, the weather and when to leave.
+# [modules.departure]
+# evening = "19:00"
+# travel_words = ["séminaire"]
+# ordeal_words = ["audition"]
+
+# The control page: memory, commitments, playbook, autonomy, activity, suspicious sources.
+# Served by the core on host:port; reach it through a one-time link Orion texts you (ask it),
+# or `orion console link`. Put it behind your HTTPS proxy and set public_url to use it from
+# your phone.
+[modules.console]
+enabled = true
+host = "127.0.0.1"
+port = 8790
+# public_url = "https://orion.example.com"
+
+# Orion's hands (D1): `orion hand` on your own machines dials out to the server and offers what
+# you allow there (notifications, finding and reading files in chosen folders, opening pages
+# with your approval). Pair a machine: `orion hands pair mac` on the server gives a code, then
+# on the Mac: `uv tool install git+https://github.com/noan-hbt/orion-agent` and
+# `orion hand pair https://orion.example.com <code> --root ~/Documents`, then `orion hand run`.
+[modules.hands]
+enabled = false
+host = "127.0.0.1"               # behind your HTTPS proxy at /hands/
+port = 8792
+
+# Le secrétaire (D54) : les proches qui peuvent écrire à Orion. Relance `orion inkbox setup`
+# après chaque changement, puis demande-leur d'envoyer la commande de connexion qu'il affiche.
+# [modules.secretary]
+# enabled = true
+# [[modules.secretary.contacts]]
+# name = "Maman"
+# number = "+33600000001"
+# about = "ma mère, elle s'inquiète vite"
+# share = ["availability"]

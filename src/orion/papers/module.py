@@ -24,11 +24,11 @@ import io
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 from zoneinfo import ZoneInfo
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -66,6 +66,7 @@ Kind = Literal[
     "extrait Kbis",
     "autre",
 ]
+KINDS: frozenset[str] = frozenset(get_args(Kind))
 EXPIRING: frozenset[str] = frozenset(
     {
         "carte d'identité",
@@ -347,10 +348,18 @@ class FileInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     attachment: str = Field(description="The attachment id (at_… or ph_…) he sent")
-    kind: Kind
+    kind: Kind = Field(description="A kind not in the list is filed as « autre »")
     label: str = Field(
         min_length=2, max_length=80, description="« Fiche de paie septembre 2026 », « Passeport »"
     )
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _other(cls, value: object) -> object:
+        """A relevé bancaire, a facture…: filed as « autre » (the label says what it is),
+        rather than refused and filed on a second try (20/10)."""
+        return value if value in KINDS else "autre"
+
     holder: str = Field(default="", max_length=80, description="Whose paper, if not his")
     issued: date | None = Field(default=None, description="Issue date or period start, ISO")
     valid_until: date | None = Field(default=None, description="Expiry date, ISO")
