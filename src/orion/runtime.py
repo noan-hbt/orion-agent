@@ -26,6 +26,7 @@ from orion.cognition.loop import (
     MessageEmitted,
     ModelCalled,
     StopReason,
+    Told,
     ToolExecuted,
     Waiting,
     run_agent,
@@ -494,6 +495,9 @@ class Orion:
                             )
                         ]
                     )
+                case Told(text=told):
+                    if progress is not None:
+                        await progress(told, correlation_id)
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
                     await self._journal.append(
                         [

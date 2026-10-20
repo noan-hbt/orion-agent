@@ -3,12 +3,17 @@
 The current time is a tool, not part of the system prompt: the prompt stays byte-stable for the
 cache, and the model never has to guess the date. Date arithmetic is left to the model; tools
 that take a date (`remind_me`) echo the exact weekday back so a mistake shows.
+
+During a long turn (D97), Orion keeps a plan (`plan`: every step with its status, the whole
+list each time, so the plan lives in the conversation and nowhere else) and tells the owner
+where it is without waiting for the end (`tell`). Both hand their words to the runtime through
+`TELL`, which delivers them now, on the channel the owner wrote from.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,6 +46,60 @@ async def _current_time(args: Any, ctx: ToolContext) -> ToolResult:
     )
 
 
+TELL = "tell"
+"""A tool result whose data holds text under this key: the runtime sends it to the owner now,
+mid-turn (nothing is sent when no one is waiting, e.g. an initiative turn)."""
+
+
+class TellInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=600, description="One or two short sentences")
+
+
+async def _tell(args: Any, _ctx: ToolContext) -> ToolResult:
+    return ToolResult("Dit. Continue.", data={TELL: args.text.strip()})
+
+
+class Step(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=2, max_length=160, description="The step, a few words")
+    status: Literal["todo", "doing", "done"] = "todo"
+
+
+class PlanInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: list[Step] = Field(
+        min_length=1, max_length=12, description="Every step, in order, each time"
+    )
+    show: bool = Field(
+        default=False, description="Send him the plan now (when starting a long task)"
+    )
+
+
+_MARK = {"todo": "·", "doing": "→", "done": "✓"}
+
+
+def render_plan(steps: list[Step]) -> str:
+    return "\n".join(f"{_MARK[s.status]} {s.text}" for s in steps)
+
+
+async def _plan(args: Any, _ctx: ToolContext) -> ToolResult:
+    steps: list[Step] = list(args.steps)
+    if sum(s.status == "doing" for s in steps) > 1:
+        return ToolResult("One step at a time: only one may be `doing`.", is_error=True)
+    done = sum(s.status == "done" for s in steps)
+    left = [s.text for s in steps if s.status != "done"]
+    shown = render_plan(steps)
+    status = f"Plan : {done}/{len(steps)} fait.\n{shown}" + (
+        f"\nEnsuite : {left[0]}." if left else "\nTout est fait : réponds-lui."
+    )
+    data = {TELL: f"Je m'y mets :\n{shown}"} if args.show else {}
+    return ToolResult(status, data=data)
+
+
 def builtin_tools() -> list[Tool]:
     common: dict[str, Any] = {
         "effect": Effect.NONE,
@@ -54,6 +113,26 @@ def builtin_tools() -> list[Tool]:
             description="Current date, weekday and time. Use it instead of guessing the date.",
             input_model=CurrentTimeInput,
             handler=_current_time,
+            **common,
+        ),
+        Tool(
+            name="tell",
+            description="Tell him something now, while you keep working: what you are about "
+            "to do when it will take a while (« je regarde les horaires, deux secondes »), or "
+            "a first finding before you go on. One short message, not one per step; never "
+            "your final answer.",
+            input_model=TellInput,
+            handler=_tell,
+            **common,
+        ),
+        Tool(
+            name="plan",
+            description="Your plan for a task of three steps or more: every step with its "
+            "status (todo, doing, done), the whole list each time you move on. Mark a step "
+            "done as soon as it is, one `doing` at a time. `show` sends him the plan when you "
+            "start. Not for a quick answer.",
+            input_model=PlanInput,
+            handler=_plan,
             **common,
         ),
     ]

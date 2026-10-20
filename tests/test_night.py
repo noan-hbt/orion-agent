@@ -27,7 +27,7 @@ def test_the_night_says_which_day_demain_is() -> None:
 async def test_current_time_says_it_too() -> None:
     import time_machine
 
-    (tool,) = builtin_tools()
+    tool = next(t for t in builtin_tools() if t.name == "current_time")
     with time_machine.travel(datetime(2026, 10, 20, 2, 30, tzinfo=PARIS), tick=False):
         result = await tool.handler(tool.parse("{}"), ToolContext("owner", "c"))
     assert result.content.endswith("· nuit : son « demain » est sans doute ce mardi 20")

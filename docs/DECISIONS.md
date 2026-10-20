@@ -2032,3 +2032,22 @@ outil ne fait : convertir un fichier, vérifier quelque chose, lancer un script.
   cœur n'a de toute façon que la clé du modèle ;
 - elle s'arrête après son délai (`max_seconds` au plus), avec tout son groupe de processus. La
   sortie est bornée et compte comme du contenu venu d'ailleurs.
+
+## D97 — Un plan pendant le tour, et des messages en cours de route
+
+*20/10/2026 · acceptée*
+
+Sur une tâche longue, Orion se perdait parfois entre les étapes, et le propriétaire attendait
+sans savoir où il en était. Désormais :
+- `plan` : pour une tâche de trois étapes ou plus, Orion tient la liste de ses étapes, chacune
+  à faire, en cours ou faite. Il renvoie la liste entière à chaque avancée : le plan vit dans la
+  conversation, nulle part ailleurs, et se rejoue avec elle. Une seule étape en cours à la fois.
+  `show` envoie le plan au propriétaire au départ ;
+- `tell` : un message court au propriétaire maintenant, pendant qu'Orion continue (« je regarde
+  les horaires »). Ce n'est jamais la réponse finale ;
+- ces deux outils passent **avant les autres appels de la même étape** : ce qu'ils disent part
+  avant qu'un outil lent tourne (événement `Told`). Leurs résultats restent dans l'ordre des
+  appels. Rien n'est envoyé quand personne n'attend (un tour d'initiative).
+
+Le texte qu'Orion écrit à côté d'un appel d'outil était déjà envoyé ; `tell` le rend explicite,
+pour les modèles qui n'écrivent rien en appelant un outil.

@@ -33,6 +33,7 @@ from orion.providers.base import (
     Usage,
 )
 from orion.tools.base import Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
+from orion.tools.builtin import TELL
 
 log = structlog.get_logger(__name__)
 
@@ -133,7 +134,18 @@ SWITCH_MODEL = "switch_model"
 reads it, so each request still extends the previous one."""
 SWITCH_COST = "max_cost_usd"
 
-LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Finished
+
+@dataclass(frozen=True)
+class Told:
+    """Words for the owner now, mid-turn (`tell`, a plan shown): the caller delivers them."""
+
+    text: str
+
+
+EARLY = ("tell", "plan")
+"""Run before a step's other calls, so what they tell leaves before a slow tool runs."""
+
+LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
 
 
 async def run_agent(
@@ -255,8 +267,18 @@ async def run_agent(
                 stalled = True
 
         started = time.monotonic()
-        executions = await _execute_calls(
-            response.tool_calls,
+        first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
+        for call in response.tool_calls:
+            if call.name in EARLY:
+                result, reason = await _execute_one(
+                    call, registry, guardian, settings, context_trust, call_counts, budget
+                )
+                first[call.id] = (call, result, reason)
+                told = result.data.get(TELL)
+                if isinstance(told, str) and told and not result.is_error:
+                    yield Told(told)
+        rest = await _execute_calls(
+            [c for c in response.tool_calls if c.id not in first],
             registry,
             guardian,
             settings,
@@ -265,6 +287,8 @@ async def run_agent(
             budget,
             waiting,
         )
+        by_id = {**first, **{c.id: (c, r, why) for c, r, why in rest}}
+        executions = [by_id[c.id] for c in response.tool_calls]
         tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
             switch = result.data.get(SWITCH_MODEL)
