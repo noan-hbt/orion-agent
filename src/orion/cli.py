@@ -568,6 +568,17 @@ def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -
     return 0
 
 
+async def _simulate(config: OrionConfig, days: int) -> int:
+    from orion.initiative.simulate import simulate
+
+    if not 1 <= days <= 60:
+        print("--days : entre 1 et 60")
+        return 1
+    week = await simulate(config, days)
+    print(week.render())
+    return 0
+
+
 def _check_backup(path: Path) -> int:
     from orion.core.backup import BackupError, verify
 
@@ -798,6 +809,10 @@ def main(argv: list[str] | None = None) -> int:
     backup.add_argument(
         "--guardian", action="store_true", help="Copy the guardian's ledger instead"
     )
+    simulate = sub.add_parser(
+        "simulate", help="Play the next days of initiative on a copy: what Orion would send"
+    )
+    simulate.add_argument("--days", type=int, default=7, help="How many days ahead")
     check_backup = sub.add_parser(
         "check-backup", help="Check that a copy of the journal can be restored"
     )
@@ -842,6 +857,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_chatgpt(config, args))
     if args.command == "backup":
         return _backup(config, args.destination, args.keep, args.guardian)
+    if args.command == "simulate":
+        return asyncio.run(_simulate(config, args.days))
     if args.command == "inkbox":
         if args.inkbox_command == "calls":
             return asyncio.run(_inkbox_calls(config))

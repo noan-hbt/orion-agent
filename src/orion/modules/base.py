@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
@@ -46,6 +47,27 @@ if TYPE_CHECKING:
     from orion.tools.base import Tool
 
 M = TypeVar("M", bound="Module")
+
+
+@dataclass(frozen=True)
+class Planned:
+    """Something Orion will do for the owner, on its own, at a set time (D78)."""
+
+    at: datetime
+    what: str
+    """In French, as the owner would read it: « te demander comment s'est passé l'entretien »."""
+    undo: str = ""
+    """How to call it off, for Orion: « follow_up (cancel, f_…) ». Empty: it cannot be."""
+
+
+def next_weekly(now: datetime, weekday: int, at: time) -> datetime:
+    """The next time it is `weekday` (0: Monday) at `at`, after `now`, in now's zone."""
+    for ahead in range(8):
+        day = now.date() + timedelta(days=ahead)
+        moment = datetime.combine(day, at, now.tzinfo)
+        if day.weekday() == weekday and moment > now:
+            return moment
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 class ModuleError(RuntimeError):
@@ -111,6 +133,11 @@ class Module:
 
     def doctor(self) -> list[str]:
         """Lines for `orion doctor` when the module is enabled (config problems first)."""
+        return []
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        """What the module will do for the owner on its own between now and `until`, so he
+        can see it all in one place and call any of it off (D78)."""
         return []
 
 

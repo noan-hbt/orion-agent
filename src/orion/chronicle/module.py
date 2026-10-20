@@ -40,7 +40,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.memory.service import MemoryService
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate, next_weekly
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.runtime import OWNER_THREAD
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
@@ -533,6 +533,11 @@ class ChronicleModule(Module):
         )
         await self.chronicle.sync()
         return chronicle_tools(self.chronicle)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        settings: ChronicleSettings = self.settings
+        page = next_weekly(now, settings.weekday, settings.at)
+        return [Planned(page, "écrire la page de ta semaine")] if page < until else []
 
     async def serve(self, daemon: Daemon) -> None:
         from orion.library.module import LibraryModule

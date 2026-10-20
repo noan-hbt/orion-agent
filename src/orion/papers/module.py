@@ -23,7 +23,7 @@ import asyncio
 import io
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -35,7 +35,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.tools.actions import Action, action_tool
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
 
@@ -521,3 +521,24 @@ class PapersModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.vault is not None:
             daemon.alerts.append(self.vault)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        vault = self.vault
+        if vault is None:
+            return []
+        await vault.sync()
+        found: list[Planned] = []
+        for paper in vault.papers():
+            if paper.kind not in EXPIRING or paper.valid_until is None:
+                continue
+            for days in WARN_DAYS:
+                warn = paper.valid_until - timedelta(days=days)
+                at = datetime.combine(warn, time(9, 0), vault.zone)
+                if now <= at < until:
+                    found.append(
+                        Planned(
+                            at,
+                            f"te prévenir que {paper.label} expire le {paper.valid_until:%d/%m/%Y}",
+                        )
+                    )
+        return found

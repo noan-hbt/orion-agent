@@ -54,7 +54,7 @@ async def test_the_background_stops_at_the_daily_ceiling_the_owner_never(
     now = [NOON]
     spending = wallet(journal, provider, now, daily_usd=1.0)
     await spending.complete(REQUEST)
-    with pytest.raises(ProviderError, match="1.00 \\$ today") as stopped:
+    with pytest.raises(ProviderError, match=r"1\.00 \$ today") as stopped:
         await spending.complete(REQUEST)
     assert not stopped.value.retryable
     with foreground():

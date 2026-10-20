@@ -35,7 +35,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -216,11 +216,11 @@ class Departures:
             return "voyage"
         return None
 
-    def from_calendar(self, now: datetime) -> list[Departure]:
+    def from_calendar(self, now: datetime, ahead: timedelta = LOOKAHEAD) -> list[Departure]:
         if self.calendar is None:
             return []
         found: list[Departure] = []
-        for account, occurrence in self.calendar.between(now, now + LOOKAHEAD):
+        for account, occurrence in self.calendar.between(now, now + ahead):
             kind = self.kind_of(occurrence)
             if kind is None or occurrence.start < now:
                 continue
@@ -459,3 +459,17 @@ class DepartureModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.departures is not None:
             daemon.alerts.append(self.departures)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        departures = self.departures
+        if departures is None:
+            return []
+        await departures.sync()
+        found: list[Planned] = []
+        ahead = until - now + timedelta(days=1)
+        for d in [*departures.state.planned.values(), *departures.from_calendar(now, ahead)]:
+            at = max(prepared_at(d.at, departures.settings.evening), now)
+            if at < until and at < d.at - LAST_CALL:
+                undo = f"departure (cancel, {d.key})" if d.key in departures.state.planned else ""
+                found.append(Planned(at, f"préparer : {d.what} ({d.at:%d/%m %H:%M})", undo))
+        return found

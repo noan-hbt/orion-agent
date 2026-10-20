@@ -36,7 +36,7 @@ from orion.initiative.engine import Alert
 from orion.memory.people import Person, describe, find, people_index
 from orion.memory.service import MemoryService
 from orion.memory.store import name_key
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -228,7 +228,7 @@ class Relations:
         trust = min((f.trust for f in person.facts if f.current), default=Trust.SYSTEM)
         return "\n".join(lines), min(trust, Trust.SYSTEM)
 
-    async def _calendar_meetings(self, now: datetime) -> list[Meeting]:
+    async def calendar_meetings(self, now: datetime) -> list[Meeting]:
         """Upcoming events whose title names someone memory knows."""
         if self.calendar is None:
             return []
@@ -259,7 +259,7 @@ class Relations:
     async def alerts(self, now: datetime) -> list[Alert]:
         await self.sync()
         found: list[Alert] = []
-        meetings = [*self.state.meetings.values(), *await self._calendar_meetings(now)]
+        meetings = [*self.state.meetings.values(), *await self.calendar_meetings(now)]
         seen: set[tuple[str, date]] = set()
         for meeting in meetings:
             when = (name_key(meeting.person), meeting.at.date())
@@ -507,6 +507,37 @@ class RelationsModule(Module):
                 },
             )
         ]
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        relations = self.relations
+        if relations is None:
+            return []
+        await relations.sync()
+        settings = relations.settings
+        found: list[Planned] = []
+        for meeting in [
+            *relations.state.meetings.values(),
+            *await relations.calendar_meetings(now),
+        ]:
+            at = prepared_at(meeting.at, settings)
+            if now <= at < until:
+                found.append(
+                    Planned(at, f"te rappeler ce qui compte avant de voir {meeting.person}")
+                )
+        for month, day, _, person in relations.state.birthdays.values():
+            birthday = next_birthday(month, day, now.date())
+            for before in sorted({settings.birthday_days_before, 0}, reverse=True):
+                at = datetime.combine(
+                    birthday - timedelta(days=before),
+                    settings.morning if before == 0 else time(10, 0),
+                    relations.zone,
+                )
+                if now <= at < until:
+                    what = "aujourd'hui" if before == 0 else f"dans {before} jours"
+                    found.append(
+                        Planned(at, f"te dire que c'est l'anniversaire de {person} {what}")
+                    )
+        return found
 
     async def serve(self, daemon: Daemon) -> None:
         from orion.calendar.module import CalendarModule

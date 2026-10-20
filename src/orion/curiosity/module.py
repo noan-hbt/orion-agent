@@ -42,7 +42,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.memory.service import MemoryService
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate, next_weekly
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
@@ -654,6 +654,19 @@ class CuriosityModule(Module):
             return
         daemon.alerts.append(self.curiosity)
         daemon.add_service("curiosity.hunt", self.curiosity.run)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        settings: CuriositySettings = self.settings
+        hunt = next_weekly(now, settings.weekday, settings.at)
+        if self.curiosity is None or hunt >= until:
+            return []
+        return [
+            Planned(
+                hunt,
+                "suivre une piste à moi, et te rapporter une trouvaille si elle vaut le coup",
+                "configure (modules.curiosity.enabled = false)",
+            )
+        ]
 
     def doctor(self) -> list[str]:
         settings: CuriositySettings = self.settings

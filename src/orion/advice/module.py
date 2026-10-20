@@ -32,7 +32,7 @@ from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert
 from orion.memory.model import Category
 from orion.memory.service import MemoryService, Origin
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -330,3 +330,21 @@ class AdviceModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.keeper is not None:
             daemon.alerts.append(self.keeper)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        keeper = self.keeper
+        if keeper is None:
+            return []
+        await keeper.sync()
+        found: list[Planned] = []
+        for advice in keeper.book.items.values():
+            at = datetime.combine(advice.follow_up, keeper.settings.ask_at, keeper.zone)
+            if advice.verdict is None and now <= at < until:
+                found.append(
+                    Planned(
+                        at,
+                        f"te demander ce que tu as pensé de : {advice.what}",
+                        f"advice (verdict, {advice.id}, pas essayé)",
+                    )
+                )
+        return found

@@ -20,6 +20,7 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy, autonomy_tools
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
+from orion.initiative.planned import planned_tools
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
@@ -135,6 +136,7 @@ def core_tools(plate: Plate) -> list[Tool]:
         ),
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
         *(spending_tools(plate.provider) if isinstance(plate.provider, Spending) else []),
+        *planned_tools(plate.modules, plate.timers, plate.config.agent.timezone),
     ]
 
 
