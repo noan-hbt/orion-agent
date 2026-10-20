@@ -20,11 +20,14 @@ def builtin_modules() -> list[type[Module]]:
     from orion.booking.module import BookingModule
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
+    from orion.channels.telegram_module import TelegramModule
     from orion.chronicle.module import ChronicleModule
     from orion.computer.module import ComputerModule
     from orion.configure.module import ConfigureModule
     from orion.console.module import ConsoleModule
+    from orion.curiosity.module import CuriosityModule
     from orion.delegation.module import DelegationModule
+    from orion.departure.module import DepartureModule
     from orion.expert.module import ExpertModule
     from orion.federation.module import FederationModule
     from orion.files.module import FilesModule
@@ -33,6 +36,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.intentions.module import IntentionsModule
     from orion.library.module import LibraryModule
     from orion.mail.module import MailModule
+    from orion.memory.doubt import DoubtModule
     from orion.memory.night import NightModule
     from orion.missions.module import MissionsModule
     from orion.onboarding.module import OnboardingModule
@@ -49,14 +53,17 @@ def builtin_modules() -> list[type[Module]]:
 
     return [
         IMessageModule,
+        TelegramModule,
         VoiceModule,
         DelegationModule,
         AdaptationModule,
         NightModule,
+        DoubtModule,
         CalendarModule,
         MailModule,
         FederationModule,
         WebModule,
+        CuriosityModule,
         FilesModule,
         ComputerModule,
         BookingModule,
@@ -71,6 +78,7 @@ def builtin_modules() -> list[type[Module]]:
         ChronicleModule,
         IntentionsModule,
         RelationsModule,
+        DepartureModule,
         AdviceModule,
         StyleModule,
         ConfigureModule,

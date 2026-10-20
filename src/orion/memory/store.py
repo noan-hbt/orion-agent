@@ -18,7 +18,7 @@ from pathlib import Path
 import structlog
 
 from orion.core.events import Event, Trust
-from orion.core.sqlite import SqliteWorker
+from orion.core.sqlite import SqliteWorker, dump
 from orion.memory.model import (
     COMMITMENT_CLOSED,
     COMMITMENT_CREATED,
@@ -269,6 +269,15 @@ class MemoryStore:
 
     async def reset(self) -> None:
         await self._sql.run(self._reset_sync)
+
+    async def snapshot(self) -> dict[str, list[tuple[object, ...]]]:
+        """Every row: what a rebuild from the journal must give back (D81)."""
+        return await self._sql.run(
+            lambda: dump(
+                self._sql.db,
+                ("meta", "facts", "commitments", "rules", "aliases", "setting_changes"),
+            )
+        )
 
     # --- queries ---
 

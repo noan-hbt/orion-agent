@@ -4,6 +4,9 @@
 > concrète : composants, frontières de confiance, modèle d'exécution, modèle de données, contexte,
 > et ordre de construction. Il sert de référence pour l'implémentation ; toute divergence ultérieure
 > donne lieu à une nouvelle décision dans `DECISIONS.md`.
+>
+> Les sections 1 à 16 sont le plan d'origine. La section 17 dit ce qui est construit au
+> 20/10/2026 (jusqu'à D84), et où le code s'est écarté du plan.
 
 ---
 
@@ -318,17 +321,26 @@ Implémente D12 (détail dans `03-jarvis.md` §4).
 
 ## 10. Canaux
 
+Tout passe par la boîte de réception unifiée (`channels/inbox.py`, D88). Un canal est un module
+qui dépose les messages du propriétaire dans la boîte et lui fournit une sortie :
+
 ```python
-class Channel(Protocol):
-    id: str
-    async def inbound(self) -> AsyncIterator[InboundMessage]: ...
-    async def send(self, msg: OutboundMessage) -> DeliveryReceipt: ...  # appelé par le gardien
-    capabilities: ChannelCapabilities   # réactions, frappe, médias, groupes, voix…
+class Outlet(Protocol):              # ce que fait tout canal
+    name: str
+    async def available(self) -> bool: ...
+    async def deliver(self, text, correlation_id) -> None: ...   # par l'outbox du canal
+    def working(self, item): ...     # accusé de lecture, « en train d'écrire »
+class FileOutlet(Outlet): async def deliver_file(self, path, caption, correlation_id): ...
+class AskingOutlet(Outlet): async def approve(self, proposal) -> Approval: ...
 ```
 
-- **iMessage via Inkbox** (D9) : webhook entrant, envoi par API, indicateur de frappe, réactions,
-  regroupement des rafales entrantes (3 s).
-- **Telegram** : secours.
+Réponses, messages d'initiative, fichiers, vocaux et demandes d'accord partent par le canal d'où
+il a écrit en dernier, sinon le premier disponible. Ses réactions deviennent des
+`feedback.reaction`, quel que soit le canal.
+
+- **iMessage** (D9) : derrière une « ligne » (`channels/line.py`) ; Inkbox aujourd'hui, Blooio ou
+  BlueBubbles demain, une classe chacun. Indicateur de frappe, réactions, bulles.
+- **Telegram** (D88) : un bot à soi, gratuit et sans plafond ; boutons Oui / Non pour les accords.
 - **Terminal** : développement et administration.
 - **Voix** (D10) : `orion-voice` (Pipecat + Twilio) parle au noyau par des outils à deux vitesses
   (`consult_fast` < 1,5 s ; `start_task` → résultat dans l'appel ou par iMessage). Brief préparé
@@ -407,7 +419,7 @@ orion/
   tools/          contrat d'outil, outils intégrés, adaptateur MCP
   providers/      API (openrouter, anthropic, openai), cli_model, cli_agent, routeur
   guardian/       pare-feu, politiques, moniteur, coffre, outbox, approbations
-  channels/       imessage_inkbox, telegram, terminal
+  channels/       inbox, imessage + line (inkbox), telegram, terminal
   voice/          passerelle Pipecat, outils vocaux, brief de sonnerie
   federation/     identité, relations, capacités, négociateur, mandats, reçus, A2A
   exec/           sandboxes d'exécution
@@ -449,3 +461,87 @@ L'**évaluation** commence dès M1 et grossit à chaque jalon : chaque bug réel
 4. **Comptes à créer** quand on arrivera aux jalons concernés : OpenRouter (M1), Inkbox (M3), Twilio
    (M5).
 5. **Langue du code** : je propose code, noms et commentaires en anglais, documentation en français.
+
+---
+
+## 17. Ce qui est construit (au 20/10/2026, jusqu'à D84)
+
+Le plan des sections 1 à 16 tient dans ses principes : journal append-only, projections
+reconstructibles, provenance et confiance, gardien séparé, initiative gouvernée, cache de prompt.
+Le code s'en est écarté sur la forme, chaque fois par une décision.
+
+### 17.1 Écarts au plan
+
+| Plan | Ce qui existe | Décision |
+|---|---|---|
+| Cinq processus (`guardian`, `core`, `voice`, `exec`, `negotiator`) | Deux : `orion guardian` (secrets, effets, canaux) et `orion serve` (le cœur, la seule clé du modèle). Deux services systemd sous deux utilisateurs | D28, D30 |
+| Voix par Pipecat et Twilio | Voix par Inkbox : Orion répond lui-même au téléphone, avec sa mémoire et ses outils | D23, D40 |
+| Trois processus cognitifs | Une boucle d'agent (`cognition/loop.py`), des travaux de fond (extraction, nuit, réflexion) et un moteur d'initiative à règles | D20, D27, D43 |
+| Contexte recompilé à chaque appel | La mémoire voyage dans les messages, jamais dans le message système : chaque requête prolonge la précédente octet pour octet | D17, `tests/test_runtime_cache.py` |
+| CLI-modèle (`claude`, `codex`) comme fournisseurs | OpenRouter, le forfait ChatGPT du propriétaire (API Responses officielle), et la délégation au CLI `claude` pour les tâches longues | D22, D62 |
+| Exécuteurs en bac à sable | Un navigateur isolé qu'Orion conduit, des tâches `computer`, et `orion hand` sur les appareils du propriétaire | D33, D41, D42 |
+| Capacités Biscuit, négociateur isolé | Fédération v0 : invitation à usage unique, messages signés Ed25519, créneaux libres seuls divulgués, échangés par le gardien | D29 |
+| Arborescence monolithique (§14) | Une plaque et des modules (§17.2) | D24 |
+
+### 17.2 La plaque et les modules
+
+Le cœur garde le journal, la mémoire, le manuel, le gardien, la boîte de réception unifiée,
+l'initiative et les rappels. Tout le reste est un module (`orion.modules.base.Module`) qui peut
+ajouter des consignes à la constitution, des outils, des services supervisés et des comptes
+rendus pour l'initiative. Chaque module déclare ce qu'il permettrait s'il était activé
+(`offer`, D64). Un outil par domaine, avec des actions (D59).
+
+| Domaine | Modules | Décisions |
+|---|---|---|
+| Canaux | `imessage`, `telegram`, `voice`, `vocal` (vocaux dans les deux sens), `photos` (tout fichier reçu) | D18, D40, D50, D63, D71, D88 |
+| Sources | `calendar`, `mail` (lecture seule stricte, quarantaine, rangement explicite), `web` | D25, D31, D75 |
+| Mains | `computer` (navigateur), `booking` (rendez-vous de bout en bout), `files`, `hands`, `delegation`, `expert` (modèle plus fort) | D33, D41, D46, D60, D61, D73 |
+| Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77 |
+| Le connaître | `adaptation` (le manuel), `onboarding`, `advice` (ses conseils assumés), `style` (écrire en son nom), `focus` | D21, D34, D65, D68, D70 |
+| Les autres | `federation`, `secretary` | D29, D54 |
+| Administration | `configure` (réglages par message), `console`, `night` (rangement de la mémoire), `doubt` (la mémoire qui doute) | D27, D39, D72, D83 |
+
+### 17.3 Le socle, renforcé (D78 à D84)
+
+| Besoin | Ce qui le tient | Décision |
+|---|---|---|
+| Voir et annuler tout ce qu'Orion fera seul | `Module.planned`, l'outil `planned` | D78 |
+| Ne pas dépenser sans limite | `providers.spending` : chaque appel journalisé, le fond coupé au plafond, jamais le premier plan | D79 |
+| Rejouer un journal ancien | une version par événement, `core.upcast` à la lecture | D80 |
+| Prouver que tout se reconstruit | chaque test rejoue chaque projection ; une sauvegarde est relue en entier | D81 |
+| Régler l'arbitre sur des chiffres | `orion simulate`, sur une copie, sans modèle | D82 |
+| Ne pas affirmer ce qui a changé | `memory.doubt` : fraîcheur des faits de situation | D83 |
+| Garder le début fixe des requêtes court | sections ≤ 2 500 caractères, budgets testés | D84 |
+
+### 17.4 Arborescence réelle
+
+```
+src/orion/
+  core/          journal, HLC, événements et leurs versions, projections, superviseur, sauvegarde
+  cognition/     boucle d'agent, vérificateur
+  context/       compilateur, fenêtre récente, résumé, fils
+  memory/        faits, personnes, recherche par le sens, extraction, nuit, provenance
+  initiative/    moteur, arbitre, minuteurs, ce qui est prévu, simulation
+  guardian/      politiques, autonomie, limites, outbox, sessions prêtées, coffre, service
+  providers/     openrouter, chatgpt (+ connexion), routeur, dépense
+  channels/      boîte de réception unifiée, iMessage (ligne Inkbox), Telegram, webhook, terminal
+  modules/       la plaque : base, registre (intégrés puis paquets `orion.modules`)
+  tools/         contrat d'outil, outils intégrés
+  resources/     consignes de la constitution, une par module
+  <module>/      un dossier par module de §17.2
+evals/           évaluations sur le vrai modèle (`python -m evals`)
+deploy/          installation sur un VPS : Caddy, systemd, sauvegardes
+```
+
+### 17.5 Les jalons
+
+| Jalon | État |
+|---|---|
+| M0 à M3 | Faits |
+| M4 | Fait, sauf le CLI comme modèle principal (remplacé par le forfait ChatGPT, D62) |
+| M5 | Fait, par Inkbox au lieu de Pipecat (D23, D40) |
+| M6 | Fait : mémoire v1, agenda et mail en lecture puis en écriture approuvée |
+| M7 | v0 : deux Orion calent un rendez-vous (D29) |
+
+Au-delà du plan : missions, bibliothèque, chronique, intentions, secrétaire, papiers,
+rendez-vous, rangement du mail, carnet d'erreurs, curiosité, veille des départs.

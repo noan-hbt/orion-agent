@@ -47,6 +47,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 filterwarnings = ["error"]
+markers = ["no_rebuild_check: the test builds a projection that is not a pure function of the journal on purpose"]
 
 [tool.ruff]
 line-length = 100

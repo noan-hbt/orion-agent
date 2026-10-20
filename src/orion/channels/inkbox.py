@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 log = structlog.get_logger(__name__)
 
@@ -33,11 +33,17 @@ GRANT_HEADER = "X-Orion-Grant"
 Reaction = Literal["love", "like", "dislike", "laugh", "emphasize", "question", "eyes", "custom"]
 
 
-class InkboxError(RuntimeError):
+class LineError(RuntimeError):
+    """A failed call to an iMessage line, whatever the provider (`orion.channels.line`)."""
+
     def __init__(self, message: str, status: int | None = None, retryable: bool = False) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
+
+
+class InkboxError(LineError):
+    pass
 
 
 class _Model(BaseModel):
@@ -77,6 +83,12 @@ class Media(_Model):
     url: str
     content_type: str = ""
     size: int | None = None
+
+    @field_validator("content_type", mode="before")
+    @classmethod
+    def _unknown_type(cls, value: object) -> object:
+        """Inkbox sends `null` for an attachment whose type it does not know: read by name."""
+        return "" if value is None else value
 
 
 class IMessage(_Model):

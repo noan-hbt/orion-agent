@@ -51,6 +51,7 @@ from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, Usage
+from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
 
 log = structlog.get_logger(__name__)
@@ -153,6 +154,9 @@ class Orion:
         self._registry = registry
         self._guardian = guardian
         self._compiler = compiler
+        self.inline: Callable[[Message], Message] | None = None
+        """Turns a journaled message into what goes on the wire (photos the model looks at
+        itself, D87): same input, same bytes, so the prompt cache holds."""
         self._agent = agent
         self.threads = ThreadProjection()
         self._projections = ProjectionRunner(journal, [self.threads])
@@ -200,20 +204,21 @@ class Orion:
             assert sent_at is not None
             payload["sent_at"] = sent_at.isoformat()
             body = f"{waited}\n{body}"
-        return await self._turn(
-            thread_id,
-            kind="message.received",
-            payload=payload,
-            provenance=owner,
-            trust=min(Trust.OWNER, PHOTO_TRUST) if photos else Trust.OWNER,
-            body=body,
-            channel=channel,
-            now=now,
-            owner_text=text,
-            interjections=interjections,
-            progress=progress,
-            waiting=waiting,
-        )
+        with foreground():  # he is waiting: never cut by the spending ceiling (D79)
+            return await self._turn(
+                thread_id,
+                kind="message.received",
+                payload=payload,
+                provenance=owner,
+                trust=min(Trust.OWNER, PHOTO_TRUST) if photos else Trust.OWNER,
+                body=body,
+                channel=channel,
+                now=now,
+                owner_text=text,
+                interjections=interjections,
+                progress=progress,
+                waiting=waiting,
+            )
 
     async def handle_initiative(
         self,
@@ -382,6 +387,8 @@ class Orion:
 
         thread = self.threads.get(thread_id)
         messages = self._compiler.compile(thread, [])
+        if self.inline is not None:
+            messages = [self.inline(m) for m in messages]
         settings = LoopSettings(
             model=self._agent.model,
             session_id=f"orion:{thread_id}",

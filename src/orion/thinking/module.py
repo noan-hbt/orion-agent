@@ -42,7 +42,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.memory.service import MemoryService
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.runtime import OWNER_THREAD
 from orion.tools.actions import grouped
@@ -675,6 +675,25 @@ class ThinkingModule(Module):
             return
         daemon.alerts.append(self.thinking)
         daemon.add_service("thinking.night", self.thinking.run)
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        thinking = self.thinking
+        if thinking is None:
+            return []
+        await thinking.sync()
+        found = [
+            Planned(f.at, f"te demander : {f.question}", f"follow_up (cancel, {f.id})")
+            for f in thinking.state.follow_ups.values()
+            if now <= f.at < until
+        ]
+        night = datetime.combine(now.date(), thinking.settings.at, now.tzinfo)
+        night = night if night > now else night + timedelta(days=1)
+        found += [
+            Planned(night, f"repenser à : {p.question}, et t'en reparler le matin")
+            for p in thinking.state.promised.values()
+            if night < until
+        ]
+        return found
 
     def doctor(self) -> list[str]:
         settings: ThinkingSettings = self.settings

@@ -15,7 +15,7 @@ from orion.cognition.loop import StopReason
 from orion.core.events import Provenance
 from orion.initiative.engine import Alert
 from orion.missions.service import Mission, Missions
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
 from orion.runtime import Orion, is_silence
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
@@ -346,6 +346,23 @@ class MissionsModule(Module):
                 },
             )
         ]
+
+    async def planned(self, now: datetime, until: datetime) -> list[Planned]:
+        if self.missions is None:
+            return []
+        found: list[Planned] = []
+        for mission in await self.missions.active():
+            at = (mission.last_run or mission.started_at) + timedelta(hours=mission.every_hours)
+            at = max(at, now)
+            if at < until:
+                found.append(
+                    Planned(
+                        at,
+                        f"reprendre la mission : {mission.goal}",
+                        f"mission (close, {mission.id})",
+                    )
+                )
+        return found
 
     async def serve(self, daemon: Daemon) -> None:
         if self.missions is None:  # pragma: no cover - assemble always runs first

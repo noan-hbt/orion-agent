@@ -539,8 +539,4 @@ class FilesModule(Module):
         ]
 
     async def serve(self, daemon: Daemon) -> None:
-        from orion.channels.module import IMessageModule
-
-        imessage = daemon.plate.module(IMessageModule)
-        if imessage is not None and imessage.imessage is not None:
-            self.deliver = imessage.imessage.deliver_file
+        self.deliver = daemon.inbox.deliver_file  # whichever channel carries files (D88)

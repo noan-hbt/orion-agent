@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import random
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -34,13 +35,50 @@ _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
 
 SPEAK_PROMPT = (
-    "Tu lis à voix haute, en français naturel et chaleureux, exactement le texte que "
-    "l'utilisateur te donne : sans rien ajouter, retrancher ni commenter, sans répondre à ce "
-    "qu'il dit."
+    "Tu es une voix de synthèse, pas un assistant. Tu prononces, en français naturel et "
+    "chaleureux, exactement le texte que l'utilisateur te donne, du premier au dernier mot : "
+    "sans rien ajouter, retrancher ni commenter, sans répondre à ce qu'il dit. Jamais "
+    "d'annonce avant (« bien sûr », « voici le texte ») ni de mot après."
 )
+
+
+def _plain_words(text: str) -> list[str]:
+    plain = unicodedata.normalize("NFKD", text.lower())
+    plain = "".join(c if c.isalnum() else " " for c in plain if not unicodedata.combining(c))
+    return plain.split()
+
+
+def said_as_written(text: str, transcript: str) -> bool:
+    """Whether the speech model said `text` rather than talking about it: it starts with the
+    text's first words, and adds nothing worth a sentence. Numbers may be said in words, so a
+    transcript that differs without being longer is taken as said."""
+    written, said = _plain_words(text), _plain_words(transcript)
+    if not written or not said:
+        return True
+    opening = written[:2]
+    for start in range(min(3, len(said))):
+        if said[start : start + len(opening)] == opening:
+            return len(said) <= len(written) + 4
+    return len(said) <= len(written) + 2
+
 
 EXPLICIT_CACHE = ("anthropic/",)
 """Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
+
+
+IMAGE_TOKENS_AT_LEAST = 200
+"""An image a model really looked at costs hundreds of prompt tokens (about 1 100 for a photo
+1 568 px wide); fewer means the host dropped it."""
+
+
+def images_in(messages: list[Message]) -> int:
+    count = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = cast(list[dict[str, Any]], content)
+            count += sum(1 for part in parts if part.get("type") == "image_url")
+    return count
 
 
 def cache_marked(messages: list[Message]) -> list[Message]:
@@ -87,8 +125,12 @@ class OpenRouterProvider:
         app_name: str = "Orion",
         transport: httpx.AsyncBaseTransport | None = None,
         sort: str | None = None,
+        image_hosts: dict[str, list[str]] | None = None,
     ) -> None:
         self._sort = sort
+        self._image_hosts = image_hosts or {}
+        """Hosts that really look at images, per model: some hosts of a model said to see drop
+        the image without a word, and the model makes up what it would have shown (D87)."""
         """OpenRouter's provider routing (`throughput`, `latency`, `price`): with no preference
         a slow host can serve a model at a fifth of the speed of the fastest one."""
         self._client = httpx.AsyncClient(
@@ -108,10 +150,20 @@ class OpenRouterProvider:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         body = self._body(request)
-        return await self._retrying(
-            lambda attempt: self._post(body),
-            lambda data, attempt: self._parse(data, attempts=attempt),
-        )
+        images = images_in(request.messages)
+
+        def parse(data: dict[str, Any], attempt: int) -> ModelResponse:
+            response = self._parse(data, attempts=attempt)
+            if response.usage.prompt_tokens < IMAGE_TOKENS_AT_LEAST * images:
+                # Fail closed: an answer about an image nobody looked at is made up.
+                raise ProviderError(
+                    f"{response.provider or 'the host'} ignored the image(s): "
+                    f"{response.usage.prompt_tokens} prompt tokens for {images}",
+                    retryable=False,
+                )
+            return response
+
+        return await self._retrying(lambda attempt: self._post(body), parse)
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         def parse(data: dict[str, Any], _attempt: int) -> list[list[float]]:
@@ -131,7 +183,18 @@ class OpenRouterProvider:
         )
 
     async def speak(self, model: str, text: str, voice: str) -> bytes:
-        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio."""
+        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio with
+        what was said, at no extra cost: an audio model is a chat model, and now and then it
+        introduces the text instead of saying it. That voice is refused (Orion writes instead)."""
+        pcm, transcript = await self._speak_once(model, text, voice)
+        if said_as_written(text, transcript):
+            return pcm
+        log.warning("openrouter.speech_unfaithful", said=transcript[:200])
+        raise ProviderError(
+            f"the speech model said something else: {transcript[:120]!r}", retryable=False
+        )
+
+    async def _speak_once(self, model: str, text: str, voice: str) -> tuple[bytes, str]:
         body: dict[str, Any] = {
             "model": model,
             "modalities": ["text", "audio"],
@@ -143,6 +206,7 @@ class OpenRouterProvider:
             ],
         }
         chunks: list[bytes] = []
+        said: list[str] = []
         try:
             async with self._client.stream("POST", "/chat/completions", json=body) as response:
                 if response.status_code >= 400:
@@ -163,13 +227,15 @@ class OpenRouterProvider:
                         audio = cast(dict[str, Any], delta.get("audio") or {})
                         if audio.get("data"):
                             chunks.append(base64.b64decode(str(audio["data"])))
+                        if audio.get("transcript"):
+                            said.append(str(audio["transcript"]))
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid event from provider", retryable=True) from exc
         if not chunks:
             raise ProviderError("the speech model sent no audio", retryable=False)
-        return b"".join(chunks)
+        return b"".join(chunks), "".join(said)
 
     async def _retrying[T](
         self,
@@ -219,6 +285,13 @@ class OpenRouterProvider:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         if self._sort is not None:
             body["provider"] = {"sort": self._sort}
+        hosts = self._image_hosts.get(request.model)
+        if hosts and images_in(request.messages):
+            body["provider"] = {
+                **body.get("provider", {}),
+                "order": hosts,
+                "allow_fallbacks": False,
+            }
         if request.image_output:
             body["modalities"] = ["image", "text"]
         if request.web_search is not None:

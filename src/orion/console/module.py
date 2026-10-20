@@ -10,8 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.console.app import PREFIX, Console, console_app
 from orion.console.auth import Gate, session_key
+from orion.initiative.planned import everything_planned
 from orion.memory.provenance import Provenances
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.providers.spending import Spending
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -63,6 +65,8 @@ class ConsoleModule(Module):
             Provenances(plate.journal, plate.memory, plate.timers),
             self.config.agent.timezone,
             secure_cookie=self.base_url().startswith("https://"),
+            planned=lambda now, until: everything_planned(plate.modules, plate.timers, now, until),
+            spending=plate.provider if isinstance(plate.provider, Spending) else None,
         )
 
         async def console_link(_args: Any, _ctx: ToolContext) -> ToolResult:

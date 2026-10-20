@@ -149,6 +149,16 @@ async def test_outbox_journals_and_resumes_with_the_same_key(journal: SqliteJour
     assert await Outbox(journal, {"imessage": transport}).resume() == 0
 
 
+async def test_each_channel_resumes_only_its_own_sends(journal: SqliteJournal) -> None:
+    """Two channels, two outboxes on one journal: one never fails the other's pending sends."""
+    down = FlakyTransport([SendError("network down", retryable=True)])
+    with pytest.raises(SendError):
+        await Outbox(journal, {"telegram": down}).send("telegram", "42", "hello")
+    assert await Outbox(journal, {"imessage": FlakyTransport([])}).resume() == 0
+    assert await Outbox(journal, {"telegram": down}).resume() == 1
+    assert FAILED not in [e.kind for e in await journal.read()]
+
+
 async def test_outbox_does_not_retry_a_definite_refusal(journal: SqliteJournal) -> None:
     transport = FlakyTransport([SendError("blocked", retryable=False)])
     outbox = Outbox(journal, {"imessage": transport})
@@ -180,3 +190,27 @@ def test_the_connect_command_names_orions_handle() -> None:
 
     triage = TriageNumber(number="+15550000", connect_command="connect @your-handle")
     assert triage.command_for("orion-noan") == "connect @orion-noan"
+
+
+def test_an_attachment_inkbox_cannot_type_is_still_read() -> None:
+    from orion.channels.inkbox import IMessage
+
+    message = IMessage.model_validate(
+        {
+            "id": "m1",
+            "conversation_id": "c1",
+            "direction": "inbound",
+            "content": "",
+            "created_at": "2026-10-20T16:10:00Z",
+            "media": [{"url": "https://cdn.inkbox.test/f/IMG_1.heic", "content_type": None}],
+        }
+    )
+    assert message.media is not None and message.media[0].content_type == ""
+
+
+def test_an_untyped_attachment_is_typed_by_its_name() -> None:
+    from orion.channels.imessage import _guessed_type  # pyright: ignore[reportPrivateUsage]
+
+    assert _guessed_type("https://cdn.inkbox.test/f/IMG_1.HEIC?sig=x") == "image/heic"
+    assert _guessed_type("https://cdn.inkbox.test/f/scan.pdf") == "application/pdf"
+    assert _guessed_type("https://cdn.inkbox.test/f/blob") == ""

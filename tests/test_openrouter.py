@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -7,7 +8,7 @@ import httpx
 import pytest
 
 from orion.providers.base import ModelRequest, ProviderError, ToolSpec
-from orion.providers.openrouter import OpenRouterProvider
+from orion.providers.openrouter import OpenRouterProvider, said_as_written
 
 OK_BODY: dict[str, Any] = {
     "model": "deepseek/deepseek-v4.1-flash",
@@ -199,3 +200,65 @@ async def test_a_closing_call_keeps_the_tools_but_forbids_them() -> None:
     assert "tool_choice" not in seen[0]
     assert seen[1]["tool_choice"] == "none"
     assert seen[1]["tools"] == seen[0]["tools"]
+
+
+def speech(*said: str) -> Any:
+    """A speech model answering each request with a bit of audio and what it says."""
+    answers = list(said)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        audio = {"data": base64.b64encode(b"\x00\x01").decode(), "transcript": answers.pop(0)}
+        line = json.dumps({"choices": [{"delta": {"audio": audio}}]})
+        return httpx.Response(200, text=f"data: {line}\n\ndata: [DONE]\n\n")
+
+    return handler
+
+
+def test_a_voice_says_the_text_not_about_it() -> None:
+    text = "Oui, sans souci. Tu m'envoies tes papiers et je les range."
+    assert said_as_written(text, text)
+    assert said_as_written("Rappel à 9 h.", "Rappel à neuf heures.")
+    assert not said_as_written(text, "Bien sûr, voici le texte en intégralité : " + text)
+
+
+async def test_a_voice_that_introduces_the_text_is_refused() -> None:
+    text = "Voilà, deuxième essai. Là tu devrais m'entendre."
+    assert await provider_with(speech(text)).speak("m", text, "alloy") == b"\x00\x01"
+    provider = provider_with(speech("Bien sûr, voici le texte en intégralité. " + text))
+    with pytest.raises(ProviderError, match="said something else"):
+        await provider.speak("openai/gpt-audio-mini", text, "alloy")
+
+
+def with_image() -> ModelRequest:
+    image = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
+    return ModelRequest(
+        model="deepseek/deepseek-v4.1-flash",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "tiens"}, image]}],
+        session_id="orion:t1",
+    )
+
+
+async def test_an_image_goes_to_hosts_that_look_at_it_and_a_dropped_one_is_refused() -> None:
+    """D87: a host of a model said to see dropped the image; the model made up a whole form."""
+    seen: list[dict[str, Any]] = []
+    tokens = [2570, 97, 2570]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        body = json.loads(json.dumps(OK_BODY))
+        body["usage"]["prompt_tokens"] = tokens.pop(0)
+        return httpx.Response(200, json=body)
+
+    provider = provider_with(
+        handler, sort="throughput", image_hosts={"deepseek/deepseek-v4.1-flash": ["deepinfra"]}
+    )
+    await provider.complete(with_image())
+    assert seen[0]["provider"] == {
+        "sort": "throughput",
+        "order": ["deepinfra"],
+        "allow_fallbacks": False,
+    }
+    with pytest.raises(ProviderError, match="ignored the image"):
+        await provider.complete(with_image())
+    await provider.complete(request())  # no image: the usual routing
+    assert seen[-1]["provider"] == {"sort": "throughput"}

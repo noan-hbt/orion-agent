@@ -8,6 +8,7 @@ stops everything after trying to tell the owner, rather than running half-dead.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 import structlog
 
@@ -17,8 +18,11 @@ from orion.cognition.verifier import Verifier
 from orion.core.supervisor import Supervisor
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
+from orion.memory.batch import MemoryBatcher
+from orion.memory.extractor import MemoryExtractor
 from orion.modules.base import Daemon, ModuleError
-from orion.runtime import OWNER_THREAD, TurnResult
+from orion.providers.spending import Spending
+from orion.runtime import OWNER_THREAD
 
 log = structlog.get_logger(__name__)
 
@@ -27,12 +31,22 @@ ServeError = ModuleError
 
 
 def owner_inbox(app: App) -> OwnerInbox:
-    async def consolidate(turn: TurnResult) -> None:
-        report = await app.orion.consolidate(turn)
-        if report and report.applied:
-            log.info("memory.consolidated", applied=report.applied)
+    return OwnerInbox(app.orion, app.config.channels.imessage.coalesce_seconds)
 
-    return OwnerInbox(app.orion, app.config.channels.imessage.coalesce_seconds, on_turn=consolidate)
+
+def memory_batcher(app: App) -> MemoryBatcher:
+    """Memory is read after a conversation, not after every message (D86)."""
+    memory = app.config.memory
+    return MemoryBatcher(
+        app.journal,
+        app.memory,
+        MemoryExtractor(app.provider, app.memory, app.config.agent.extractor_model),
+        OWNER_THREAD,
+        app.config.agent.timezone,
+        idle=timedelta(minutes=memory.extract_idle_minutes),
+        min_messages=memory.extract_min_messages,
+        max_wait=timedelta(minutes=memory.extract_max_wait_minutes),
+    )
 
 
 async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
@@ -43,12 +57,15 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         )
     daemon = Daemon(app.plate, app.orion, inbox, supervisor)
     supervisor.add("inbox", inbox.run)
+    supervisor.add("memory.batch", memory_batcher(app).run)
     guardian = app.plate.guardian
     if guardian is not None:
         every = app.config.guardian.heartbeat_seconds
         supervisor.add("guardian.heartbeat", lambda: heartbeat(guardian, every))
     for module in app.modules:
         await module.serve(daemon)
+    if isinstance(app.provider, Spending):
+        daemon.alerts.append(app.provider)
 
     initiative = app.config.initiative
     autonomy = app.plate.autonomy

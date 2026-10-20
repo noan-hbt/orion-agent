@@ -1557,3 +1557,254 @@ les fichiers.
 `mail` (bulk) regroupe newsletters et listes par expéditeur, pour proposer un lot.
 
     mail.tidied  mail.drafted
+
+## D76 — Orion est curieux
+
+*20/10/2026 · acceptée*
+
+Un assistant répond. Un ami qui lit revient aussi avec quelque chose : « j'ai lu un truc, j'ai
+pensé à toi ». Le module `curiosity` (actif avec `web`) donne à Orion une curiosité à lui :
+- **une piste par semaine** (le samedi à 6 h par défaut, rattrapée si Orion était arrêté). Un
+  modèle fort lit ce qu'Orion sait du propriétaire (la mémoire de confiance seulement), les
+  sujets qu'il lui a demandé de suivre ou d'éviter (`curiosity` interest), et ce qu'Orion lui
+  a déjà apporté, avec son avis. Il choisit une piste qui l'intrigue lui, là où ce que vit le
+  propriétaire croise ce qu'il ne connaît pas encore, et jusqu'à trois recherches. Ou rien ;
+- **la chasse** passe par le greffier du web (D31) : le modèle d'Orion ne lit jamais une page,
+  et une adresse ne peut être qu'un résultat de recherche ;
+- **le tri** : un second appel voit la piste et les pages, pas la mémoire, et ne garde une
+  page que si elle vaut son temps. La plupart des semaines, rien ne part. Un numéro de page
+  inventé ou une page suspecte, et rien ne part non plus. Une page illisible (un PDF) garde
+  ce que la recherche en a dit ;
+- **la trouvaille** passe par l'initiative, à partir de 10 h 30 (heures calmes, budget,
+  vérificateur), importance faible. Orion la partage en ami : le lien, pourquoi il a pensé à
+  lui, son avis franc. C'est du contenu web (`Trust.WEB`) : le tour qui l'écrit ne peut pas
+  agir sur le monde ;
+- **son avis** (`curiosity` verdict : plu, bof, plus de ça, pas ça) oriente les pistes
+  suivantes. Une piste suivie ne se reprend pas.
+
+Essayé en vrai, avec quatre faits sur le propriétaire : la piste « le projet Lumière de
+Microsoft Research », d'où Horvitz a tiré les principes des interfaces à initiative mixte
+(quand une interruption vaut son coût), et le PDF de l'article de 1999.
+
+    curiosity.interest  curiosity.interest.dropped  curiosity.run  curiosity.found
+    curiosity.verdict
+
+## D77 — La veille d'un départ
+
+*20/10/2026 · acceptée*
+
+Un bon assistant n'attend pas qu'on lui demande, la veille d'un voyage. Le module `departure`
+(actif par défaut) prépare, à 19 h la veille, un voyage (train, avion, séjour de plusieurs
+jours avec un lieu) ou une épreuve (examen, partiel, entretien, oral, permis), en un message :
+- **ce qu'il voit** : les événements de l'agenda dont le titre ou le lieu le disent (sans
+  accents ni casse ; mots ajoutables dans la config), et les départs hors agenda que le
+  propriétaire mentionne (`departure` plan) ;
+- **ce que le code vérifie** : ses pièces d'identité dans le coffre (D74), valides ou non le
+  jour du départ. Une pièce expirée passe en premier ;
+- **ce qu'Orion cherche** dans le tour qui écrit, avec ses propres outils : le billet ou la
+  convocation dans ses mails, la météo sur place, le temps de trajet ;
+- **ce qu'il dit** : seulement ce qu'il a vérifié, une ligne par point, pas de liste
+  générique. Rien d'utile au-delà de l'heure : `SILENCE`.
+
+Rien dans la dernière heure : il est déjà en route. Un départ vu tard est préparé dès qu'il
+est vu.
+
+    departure.planned  departure.cancelled
+
+## D78 — Ce qu'Orion a prévu, en un seul endroit
+
+*20/10/2026 · acceptée*
+
+Une dizaine de modules programment chacun de leur côté : les rappels demandés, les nouvelles
+à prendre, les conseils dont il faut demander l'issue, les départs à préparer, les
+anniversaires, la page du dimanche, la curiosité, les missions, les papiers qui expirent.
+Personne, ni le propriétaire ni Orion, ne voyait l'ensemble.
+
+Chaque module dit désormais ce qu'il fera seul d'ici une date (`Module.planned`, une liste de
+`Planned` : l'heure, ce qu'il fera, en français, et comment l'annuler). L'outil `planned`
+rassemble le tout par jour, avec les rappels du cœur : « qu'est-ce que tu as prévu cette
+semaine ? » a une réponse, et chaque ligne dit avec quel outil l'annuler. C'est une lecture :
+rien n'est journalisé de plus, et la liste se refait à chaque appel depuis les projections.
+
+## D79 — Un plafond de dépense
+
+*20/10/2026 · acceptée*
+
+Seul un plafond par tour existait (`max_cost_usd_per_turn`). Le travail de fond grandit (la
+nuit, la curiosité, les missions, la chronique, le greffier du web) sans aucune limite par
+jour ni par mois.
+
+Chaque appel de modèle passe par `orion.providers.spending` :
+- ce qu'il a coûté est journalisé (`spend.recorded` : le modèle, qui l'a demandé, et si le
+  propriétaire attendait la réponse). Le décompte est une projection, refaite à l'identique
+  à chaque démarrage ;
+- un tour qui lui répond (`handle_owner_message`) est au **premier plan** (une variable de
+  contexte, héritée par ce que le tour lance) : jamais coupé ;
+- tout le reste est **de fond**, et s'arrête au plafond du jour (3 $ par défaut, pour le fond
+  seul) ou du mois (40 $, tout compris) : l'appel échoue fermé (`ProviderError`), ce que
+  chaque tâche de fond traite déjà comme « pas maintenant » ;
+- il est prévenu une fois par période, par l'initiative (heures calmes comprises) : à 80 %
+  du mois, puis quand le fond s'arrête. `spending` répond à « combien tu m'as coûté ? ».
+
+`[budget]` ne se change pas par message (D72) : c'est une limite, comme celles du gardien. Sur
+le forfait ChatGPT, un appel coûte zéro : le plafond ne mord pas.
+
+    spend.recorded
+
+## D80 — Les versions des événements
+
+*20/10/2026 · acceptée*
+
+Le journal ne se réécrit jamais, mais la forme des événements change. Dans deux ans, rejouer un
+journal écrit aujourd'hui casserait au premier champ renommé.
+
+Chaque événement est stocké avec la version de son type au moment où il est écrit (une colonne
+`version`, ajoutée sur place aux journaux existants, dont tous les événements sont en
+version 1). Quand la forme d'un type change, on ajoute à `orion.core.upcast.UPCASTERS` la
+fonction qui passe de la version N à N+1 ; chaque lecture applique celles que l'événement n'a
+pas encore traversées. Un type renommé va dans `RENAMED`. Une fonction de passage est pure,
+totale, et ne se supprime jamais. Un événement d'une version plus récente que ce qu'Orion
+connaît est refusé : c'est le signe qu'un Orion plus ancien tourne sur un journal plus récent.
+Une charge effacée (`redact`) n'est pas convertie.
+
+## D81 — La preuve qu'on peut tout reconstruire
+
+*20/10/2026 · acceptée*
+
+La règle « une projection se reconstruit depuis le journal seul » n'était testée que pour la
+mémoire. Désormais :
+- **à la fin de chaque test**, chaque projection construite sur le journal du test est
+  rattrapée, photographiée (`snapshot` : ses attributs, ou toutes ses lignes SQLite), remise à
+  zéro, rejouée et comparée. Toute la suite devient un test de rejeu de chaque module. La
+  première exécution a trouvé un fil de conversation créé par une simple lecture : corrigé.
+  Un test qui le ferait exprès porte `no_rebuild_check` ;
+- **une sauvegarde ne compte que si elle se restaure** : intégrité SQLite, puis chaque
+  événement relu comme Orion le relirait au démarrage (versions comprises), dans l'ordre et
+  sans trou. C'est fait à chaque sauvegarde de nuit ; `orion check-backup <copie>` le refait
+  sur une copie ancienne.
+
+## D82 — Une semaine d'initiative, jouée d'avance
+
+*20/10/2026 · acceptée*
+
+Une quinzaine de sources se disputent six messages par jour. `orion simulate --days 7` copie le
+journal dans un dossier temporaire, construit Orion sur la copie avec un modèle qui n'écrit
+rien (aucun appel ne part, rien n'est dépensé), branche les alertes, points et présence de
+chaque module (leurs services ne tournent pas), puis fait tourner le moteur d'initiative sur
+une horloge simulée, toutes les cinq minutes. Il affiche, jour par jour, ce qui serait parti,
+ce qui aurait été tu, et pourquoi. Le vrai journal n'est jamais écrit. Ce qui a besoin d'un
+modèle pour exister (pensées de la nuit, trouvailles, page du dimanche) n'est pas simulé.
+
+## D83 — Une mémoire qui doute
+
+*20/10/2026 · acceptée*
+
+« Cherche un appart à Dreux » restait vrai pour toujours. Le module `doubt` distingue, par des
+règles simples (la catégorie, et des mots de situation : cherche, habite, travaille, projet,
+en couple…), ce qui change souvent de ce qui ne change guère (une date de naissance, un goût),
+et donne aux premiers une durée de fraîcheur : 60 jours pour un projet, 120 pour sa
+situation, 180 pour celle d'un proche. Les goûts n'expirent pas.
+- passé ce délai, le fait est « à vérifier » : `doubt` (stale) les liste, et Orion dit « en
+  mars, tu cherchais… » plutôt que de l'affirmer ;
+- une fois par semaine au plus, à 18 h 30, Orion demande pour le plus ancien, en passant.
+  Une fois demandé (l'initiative journalise ce qu'elle a envoyé), un fait n'est pas
+  redemandé avant trois mois ;
+- sa réponse le confirme (`doubt` confirm, un événement à part : la mémoire reste
+  reconstructible) ou le corrige (`forget_fact`, puis `remember`).
+
+    doubt.confirmed
+
+## D84 — Un budget pour le message système
+
+*20/10/2026 · acceptée*
+
+Avec les modules par défaut, le début fixe de chaque requête faisait 23 400 caractères de
+consignes et 35 200 de schémas d'outils, environ 15 000 jetons. C'est en cache, mais chaque
+tour le porte, et plus c'est long, plus une consigne en noie une autre. Désormais :
+- une section de module fait au plus 2 500 caractères : au-delà, le module ne se charge pas
+  (`ModuleError`). Ce que fait un outil va dans sa description ;
+- `tests/test_prompt_budget.py` plafonne le message système avec tous les modules (38 000
+  caractères), les schémas d'outils par défaut (40 000) et un outil seul (2 600).
+Dépasser oblige à alléger, ou à relever un chiffre exprès, dans le même commit.
+
+## D85 — Ce qu'Orion demande : un réglage, équilibré par défaut (révise D26)
+
+*20/10/2026 · acceptée*
+
+Premier essai réel : 14 demandes d'accord en vingt minutes, toutes pour la même raison. Dès qu'une
+page web entrait dans la conversation (une recherche de stock), chaque écriture d'Orion chez lui
+(un fait, un rappel, une règle, un vocal, un trajet à préparer) passait par « Avant que je le
+fasse… », pendant deux heures. Le propriétaire apprend alors à dire oui sans lire, ce qui ruine
+la protection qu'on voulait.
+
+`agent.approvals` choisit :
+- `equilibre` (par défaut) : dans une conversation qui contient du contenu venu d'ailleurs,
+  Orion écrit chez lui sans demander. Ce qu'il écrit garde la confiance de la conversation (un
+  fait retenu après une page web est marqué comme tel), tout reste journalisé et réversible.
+  Agir sur le monde depuis là reste refusé sans même demander, comme avant ;
+- `prudent` : le comportement de D26, une question avant chaque écriture.
+
+Il se change par message (`configure`), mais ce changement-là n'est jamais fait seul, même si
+le propriétaire a laissé Orion changer ses réglages sans demander (`ASKED_ALWAYS`).
+
+## D86 — La mémoire se lit après une conversation, pas après chaque message
+
+*20/10/2026 · acceptée*
+
+L'extracteur de souvenirs relisait chaque échange seul, juste après : un appel par message pour
+quelques faits par jour, et une vue trop courte (un détail corrigé trois messages plus loin
+était noté deux fois, l'accident du 30/09 l'a été). Désormais (`orion.memory.batch`) :
+- il attend une pause (`[memory] extract_idle_minutes`, 5 min sans message de lui) et lit
+  d'un coup tout ce qui s'est dit depuis son dernier passage : seule la version finale d'une
+  info corrigée est retenue ;
+- seulement s'il s'est dit assez (`extract_min_messages`, 3) ; un message isolé attend la
+  suite, mais jamais plus de `extract_max_wait_minutes` (60) de silence ;
+- l'endroit où il s'est arrêté est un événement : un redémarrage reprend les mêmes échanges.
+  Au premier démarrage, le passé compte comme lu.
+
+    memory.extracted
+
+Le terminal (`orion chat`) garde la lecture échange par échange.
+
+## D87 — Orion regarde les photos lui-même (révise D63)
+
+*20/10/2026 · acceptée*
+
+Une photo passait par un modèle qui voit (Gemini) : il la décrivait, Orion lisait la
+description, et redemandait un détail au besoin. Pour le constat du 20/10 : deux appels au
+modèle de vision, et une étape de plus. Le modèle de tous les jours (DeepSeek V4.1 Flash)
+prend les images : la photo est maintenant jointe au message, Orion la regarde directement.
+- `photos` garde l'original et en fait une fois une copie JPEG de 1 568 px au plus. Le journal
+  ne contient que le texte (`<photo id="…" vue="directe">`) ; l'image est ajoutée au moment
+  d'envoyer, toujours les mêmes octets : le cache tient ;
+- piège mesuré : parmi les hébergeurs de ce modèle, certains jettent l'image sans rien dire,
+  et le modèle invente tout (plaques, assureur, dates). Une requête avec image ne va donc
+  qu'aux hébergeurs vérifiés (`[providers.openrouter] image_hosts`), et une réponse qui a
+  coûté moins de 200 jetons par image est refusée : elle ne l'a pas vue ;
+- les documents (PDF…) et les vocaux restent lus par le modèle de vision et le modèle audio ;
+  `[modules.photos] direct = false` rétablit la description.
+
+Lire le constat : 0,23 centime chez DeepInfra, contre 1,1 centime pour les deux regards de
+Gemini.
+
+## D88 — Un seul contrat de canal ; Telegram ; iMessage derrière une ligne
+
+*20/10/2026 · acceptée*
+
+La boîte de réception unifiée recevait tout, mais seul le texte en repartait de façon générique :
+fichiers, vocaux et demandes d'accord étaient branchés en dur sur iMessage, et le canal iMessage
+sur Inkbox. Le jour où le quota d'Inkbox (100 messages par 24 h) a coupé Orion, il n'y avait pas
+d'autre chemin. Désormais :
+- tout ce qui part passe par la boîte : texte, initiative, fichiers (`FileOutlet`), demandes
+  d'accord (`AskingOutlet`). Elle choisit le canal d'où il a écrit en dernier, sinon le premier
+  disponible. Un nouveau canal est un module, rien d'autre à brancher ;
+- chaque canal a son outbox, et une outbox ne reprend au redémarrage que ses propres envois ;
+- iMessage parle à une ligne (`channels/line.py`) : Inkbox aujourd'hui, une autre classe pour
+  Blooio ou BlueBubbles (`[channels.imessage] provider`) ;
+- Telegram (`[channels.telegram]`), par un bot à soi : gratuit, sans plafond. Photos, vocaux
+  (OGG), fichiers dans les deux sens, « en train d'écrire », réactions, boutons Oui / Non. Le
+  lien d'un fichier reçu porte le jeton du bot : le canal le télécharge lui-même, le lien ne
+  sort pas du module. Il ne passe pas encore par le processus gardien (D28) : avec le gardien
+  activé, le module refuse de se charger.
+
+    telegram.inbound

@@ -42,20 +42,20 @@ d'autres personnes.
   la voix, la délégation et l'apprentissage en arrière-plan sont des modules, et d'autres peuvent
   s'installer comme paquets Python. `orion doctor` liste les modules et leur état.
 
-- **M6 (en cours) — l'agenda** : module `calendar`. Orion lit tes agendas (Google, iCloud,
+- **M6 — l'agenda** : module `calendar`. Orion lit tes agendas (Google, iCloud,
   Outlook, autant de comptes que tu veux) par leur adresse iCal secrète. Il te prévient avant
   chaque événement, met ta journée dans le point du matin et celle du lendemain dans le point du
   soir, et répond aux questions sur ton emploi du temps (`agenda`). Les invitations d'inconnus
-  restent invisibles, et la description d'une invitation n'est jamais lue (D25). Lecture seule
-  pour l'instant.
+  restent invisibles, et la description d'une invitation n'est jamais lue (D25). Il y écrit
+  avec ton accord (D32).
 
-- **M6 (en cours) — le mail** : module `mail`. Orion lit tes boîtes en IMAP, en lecture seule
+- **M6 — le mail** : module `mail`. Orion lit tes boîtes en IMAP, en lecture seule
   stricte : rien n'est marqué comme lu. Il ne lit jamais un mail lui-même. Une quarantaine (un
   modèle à part, sans outils ni mémoire) en tire une fiche bornée : catégorie, importance,
   réponse attendue, échéance, montant, résumé d'une ligne. Un mail qui essaie de donner des
   ordres à un assistant est signalé comme suspect. Orion t'alerte pour un mail important, met
-  les mails utiles dans tes points, et répond à tes questions (`mail`). Il ne peut pas encore
-  en envoyer.
+  les mails utiles dans tes points, et répond à tes questions (`mail`). Il en envoie avec ton
+  accord (D32) et range ta boîte (D75).
 - **Contenu venu d'ailleurs** (D26) : quand une conversation contient un mail, une invitation
   ou un compte rendu d'appel, Orion ne peut plus agir sur le monde (envoyer, appeler), et il te
   demande ton accord avant de retenir quelque chose ou de programmer un rappel. Après deux
@@ -144,6 +144,20 @@ d'autres personnes.
   PDF ; il te l'envoie dans la conversation.
 - **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
   sur ton ordinateur, tel quel, jusqu'à 10 Mo.
+- **Ce qu'il pourrait faire de plus** (D64) : quand une demande aurait besoin d'un module
+  éteint (ton LinkedIn, ton agenda), il le dit une fois, avec la commande pour l'activer.
+- **Il assume ses conseils** (D65) : il te demande comment était le resto qu'il t'a conseillé,
+  et apprend tes goûts plutôt que les notes.
+- **Le droit de te contredire** (D66) : quand tu t'apprêtes à aller contre une de tes
+  intentions, il le dit une fois, sans morale, et te laisse décider.
+- **Le « à lire plus tard » qui revient** (D67) : un lien envoyé sans un mot est lu et gardé ;
+  il revient le jour où la conversation y touche.
+- **Écrire en ton nom** (D68) : un brouillon pour quelqu'un sonne comme toi (longueur,
+  ponctuation, emojis, ta façon de parler à cette personne).
+- **Le carnet d'erreurs** (D69) : quand il s'est trompé, il le reconnaît et le note ; la
+  chronique du dimanche finit sur « où je me suis trompé cette semaine ».
+- **La concentration** (D70) : « je bosse jusqu'à 18 h » ; seul l'urgent passe, le reste
+  arrive en un seul message à la fin.
 - **Tes fichiers** (D63) : une photo (HEIC compris), un PDF, un document Word ou Excel, un
   fichier texte : il le lit à l'arrivée et le garde. Un fichier audio, vidéo ou une archive,
   il le garde sans le lire.
@@ -158,6 +172,17 @@ d'autres personnes.
   ton accord et prépare ton dossier de location en un PDF.
 - **Ta boîte mail, rangée** (D75) : désabonnement des newsletters et archivage par lots
   (un seul oui par lot), brouillons de réponse dans ta voix, pièces jointes.
+- **Il est curieux** (D76) : une fois par semaine, il suit une piste à lui, là où ta vie
+  croise ce que tu ne connais pas encore, et te rapporte une trouvaille seulement si elle vaut
+  ton temps, avec son avis. Dis-lui ce qui t'intéresse, ou ce qui ne t'intéresse pas.
+- **La veille d'un départ** (D77) : un train, un vol, un examen ; la veille au soir, un seul
+  message avec le billet, tes papiers, la météo et l'heure à laquelle partir.
+- **Ce qu'il a prévu** (D78) : « qu'est-ce que tu as prévu cette semaine ? » ; tout ce qu'il
+  fera seul, jour par jour, et comment annuler chaque chose.
+- **Un plafond de dépense** (D79) : ce qu'il fait seul s'arrête au plafond du jour ou du mois
+  (`[budget]`), jamais ses réponses ; il te prévient. « Combien tu m'as coûté ? »
+- **Une mémoire qui doute** (D83) : ce qui change souvent (ton logement, ton travail, tes
+  projets) vieillit ; il te demande de temps en temps, en passant, si c'est toujours vrai.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
@@ -210,8 +235,16 @@ uv run orion federation peers             # ton empreinte et tes Orion reliés
 
 Vérifiez vos empreintes de vive voix.
 
+### Vérifier
+
+```bash
+uv run orion simulate --days 7        # ce qu'Orion enverrait cette semaine, sans rien envoyer
+uv run orion check-backup backups/core/<copie>   # une sauvegarde se restaure-t-elle ?
+```
+
 ## Documentation
 
+- [`docs/PASSATION.md`](docs/PASSATION.md) — où en est le travail, pour qui le reprend
 - [`docs/research/`](docs/research/) — études : Claude Code, paysage des agents, ce qui fait un Jarvis
 - [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md) — architecture
 - [`docs/DECISIONS.md`](docs/DECISIONS.md) — journal des décisions

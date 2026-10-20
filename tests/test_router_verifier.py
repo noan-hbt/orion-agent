@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import BaseModel
 
 from orion.cognition.verifier import Verifier
 from orion.config import AgentConfig
@@ -13,13 +15,13 @@ from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import Guardian
-from orion.initiative.engine import DELIVERED, InitiativeEngine, InitiativeSettings
+from orion.initiative.engine import DELIVERED, InitiativeEngine, InitiativeSettings, readable
 from orion.initiative.timers import TimerProjection, Timers
 from orion.providers.base import ModelRequest, ModelResponse, ProviderError, Usage
 from orion.providers.router import Router, parse_spec
 from orion.runtime import Orion
-from orion.tools.base import ToolRegistry
-from tests.fakes import Script, ScriptedProvider, fail, reply
+from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
+from tests.fakes import Script, ScriptedProvider, call_tools, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -95,6 +97,10 @@ class Inbox:
 
     async def notify(self, text: str, correlation_id: str) -> None:
         self.messages.append(text)
+
+
+class Empty(BaseModel):
+    pass
 
 
 @pytest.fixture
@@ -176,3 +182,60 @@ async def test_the_verifier_also_reads_the_recent_conversation(
     prompt = checker.requests[0].messages[1]["content"]
     background = prompt.split("RECENT CONVERSATION:\n")[1].split("\n\nDRAFT:")[0]
     assert background == "Lui : appelle-moi\nOrion : Trois appels ratés ce soir."
+
+
+async def test_the_verifier_sees_what_orion_looked_up_while_writing(
+    journal: SqliteJournal, setup: tuple[ScriptedProvider, Timers, Orion]
+) -> None:
+    """20/10, 19:00: a trip prep built on real searches (weather, route) was rejected as
+    invented, because the verifier only saw the notice."""
+    provider, timers, _ = setup
+
+    async def weather(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("Nonancourt mercredi : averses, 13 °C, coucher 18h54")
+
+    look = Tool(
+        name="weather",
+        description="w",
+        input_model=Empty,
+        handler=weather,
+        effect=Effect.NONE,
+        concurrency_safe=True,
+    )
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([look]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    provider.extend(call_tools(("weather", {})), reply("Averses demain, prends une veste."))
+    checker = ScriptedProvider(json_reply({"ok": True, "issues": []}))
+    engine = InitiativeEngine(
+        orion,
+        journal,
+        timers,
+        Inbox(),
+        InitiativeSettings(digests=()),
+        clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
+        verifier=Verifier(checker, "verifier"),
+    )
+    await engine.tick()
+    facts = checker.requests[0].messages[1]["content"].split("RECENT CONVERSATION:")[0]
+    assert "What Orion read while writing" in facts and "averses, 13 °C" in facts
+
+
+def test_a_point_reads_like_a_message() -> None:
+    """The plain version, when Orion's own wording was not kept: no ids, no arrows, nothing
+    Orion owes itself, each thing once."""
+    lines = [
+        "- (c_01A) moi (Orion) → toi : Préparer le trajet, pour aujourd'hui",
+        "- (c_01B) toi → toi : Appeler le garagiste, pour demain à 09:00",
+        "- (c_01C) toi → toi : Appeler le garagiste, pour demain à 09:00",
+        "- (c_01D) toi → Paul : Rendre la perceuse, pour aujourd'hui",
+    ]
+    assert readable(lines) == (
+        "- Appeler le garagiste, pour demain à 09:00\n- pour Paul : Rendre la perceuse, pour "
+        "aujourd'hui"
+    )

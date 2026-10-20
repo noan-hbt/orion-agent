@@ -40,6 +40,7 @@ from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.store import Commitment, MemoryStore, SettingChange
+from orion.providers.base import Message
 from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
@@ -50,6 +51,7 @@ _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
 VERIFIER_CONTEXT_MESSAGES = 8
+VERIFIER_READ_CHARS = 12_000
 
 
 class Notifier(Protocol):
@@ -240,6 +242,28 @@ def _due_date(c: Commitment) -> date | None:
         return None
 
 
+def _at(c: Commitment) -> str:
+    """« à 09:00 » when the commitment has an hour."""
+    hour = (c.due or "")[11:16]
+    return f" à {hour}" if len(hour) == 5 and hour != "00:00" else ""
+
+
+def readable(lines: Sequence[str]) -> str:
+    """Digest lines as the owner reads them when Orion's own wording was not kept: no ids, no
+    arrows, what Orion owes itself left out (it is Orion's to do, not his to read), each thing
+    once."""
+    kept: list[str] = []
+    for line in lines:
+        text = _IDS.sub("", line)
+        if text.startswith("- moi (Orion) → "):
+            continue
+        text = text.replace("- toi → toi : ", "- ").replace("- toi → ", "- pour ")
+        text = text.replace("- moi (Orion)", "- moi")
+        if text not in kept:
+            kept.append(text)
+    return "\n".join(kept)
+
+
 def _who(name: str) -> str:
     return {"owner": "toi", "orion": "moi (Orion)"}.get(name, name)
 
@@ -268,9 +292,9 @@ def digest_lines(
             if due < today:
                 when = f"en retard (c'était pour le {due.isoformat()})"
             elif due == today:
-                when = "pour aujourd'hui"
+                when = "pour aujourd'hui" + _at(c)
             elif due == today + timedelta(days=1) and last_slot:
-                when = "pour demain"
+                when = "pour demain" + _at(c)
             else:
                 continue
             lines.append(
@@ -287,6 +311,21 @@ def digest_lines(
                 )
             )
     return lines
+
+
+def _read_while_writing(messages: Sequence[Message]) -> str:
+    """The memory and tool results of the turn that wrote a draft: what it may rest on."""
+    parts = [
+        str(m.get("content") or "")
+        for m in messages
+        if m.get("role") in ("user", "tool") and isinstance(m.get("content"), str)
+    ]
+    return "\n---\n".join(p for p in parts if p)[-VERIFIER_READ_CHARS:]
+
+
+def _point(lines: str, extra: list[str]) -> str:
+    body = "\n".join(part for part in (lines, *extra) if part)
+    return f"Pour la suite :\n{body}" if body else ""
 
 
 class InitiativeEngine:
@@ -490,7 +529,7 @@ class InitiativeEngine:
                 key=key,
                 notice=f"Points à signaler dans ce résumé :\n{body}" if body else "",
                 why=f"c'est le point de {slot:%H:%M}",
-                fallback=f"Point de {slot:%H:%M} :\n" + _IDS.sub("", body),
+                fallback=_point(readable([line for _, line in lines]), [e.text for e in extra]),
                 trust=min(
                     [
                         *(c.trust for c in commitments if c.id in {i for i, _ in lines}),
@@ -644,6 +683,11 @@ class InitiativeEngine:
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
+        read = _read_while_writing(
+            self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
+        )
+        if read:
+            facts += f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
         conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
         verification = await self._verifier.check(draft, facts, conversation)
         if not verification.ok:

@@ -47,6 +47,11 @@ class OpenRouterConfig(BaseModel):
         description="Which host serves the model: the fastest by default (a slow one made "
         "each step 3 to 5 times longer)",
     )
+    image_hosts: dict[str, list[str]] = Field(
+        default_factory=lambda: {"deepseek/deepseek-v4.1-flash": ["deepinfra", "together"]},
+        description="Per model, the hosts a request with an image goes to: some hosts drop "
+        "images silently (D87)",
+    )
 
 
 class ChatGPTConfig(BaseModel):
@@ -92,6 +97,13 @@ class AgentConfig(BaseModel):
         ge=0,
         description="After this long without messages (the model cache has expired anyway), "
         "old bulky tool results are shown shortened; 0 never does",
+    )
+    approvals: Literal["prudent", "equilibre"] = Field(
+        default="equilibre",
+        description="When outside content (a web page, a mail) is in the conversation: "
+        "'prudent' asks before each of Orion's own writes (memory, reminders, a voice message "
+        "to him); 'equilibre' asks only before acting on the world, which stays refused there "
+        "(D85)",
     )
     untrusted_idle_minutes: int = Field(
         default=120,
@@ -178,6 +190,15 @@ class MemoryConfig(BaseModel):
         default="openai/text-embedding-3-small",
         description="Embeddings for semantic search, through the main provider; None: words only",
     )
+    extract_idle_minutes: int = Field(
+        default=5, ge=1, description="Memory is extracted after this long without a message (D86)"
+    )
+    extract_min_messages: int = Field(
+        default=3, ge=1, description="…once at least this many messages were exchanged"
+    )
+    extract_max_wait_minutes: int = Field(
+        default=60, ge=5, description="…or after this long, however few they were"
+    )
 
 
 class IMessageConfig(BaseModel):
@@ -186,6 +207,10 @@ class IMessageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    provider: Literal["inkbox"] = Field(
+        default="inkbox",
+        description="Who carries the line; another provider is one class (`channels.line`, D88)",
+    )
     api_key: SecretRef = SecretRef(env="INKBOX_API_KEY")
     base_url: str = "https://inkbox.ai"
     identity: str = Field(default="", description="Orion's Inkbox agent handle")
@@ -206,10 +231,27 @@ class IMessageConfig(BaseModel):
     approval_timeout_seconds: float = Field(default=900.0, gt=0)
 
 
+class TelegramConfig(BaseModel):
+    """Telegram, through a bot of one's own (D88): free, no daily cap."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    bot_token: SecretRef = SecretRef(env="TELEGRAM_BOT_TOKEN")
+    owner_id: int = Field(
+        default=0,
+        description="The owner's Telegram user id: anyone else is ignored. Unknown? Write to "
+        "the bot: Orion logs the id of whoever writes (`telegram.stranger`)",
+    )
+    poll_seconds: int = Field(default=25, ge=1, le=50, description="Long polling timeout")
+    approval_timeout_seconds: float = Field(default=900.0, gt=0)
+
+
 class ChannelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     imessage: IMessageConfig = IMessageConfig()
+    telegram: TelegramConfig = TelegramConfig()
 
 
 class InitiativeConfig(BaseModel):
@@ -335,6 +377,22 @@ class FederationConfig(BaseModel):
     weekends: bool = False
 
 
+class BudgetConfig(BaseModel):
+    """`[budget]` in orion.toml: what Orion may spend on models on its own."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    daily_usd: float | None = Field(
+        default=3.0, gt=0, description="Background spending per day; none: no daily ceiling"
+    )
+    monthly_usd: float | None = Field(
+        default=40.0, gt=0, description="All spending per month; background stops at it"
+    )
+    warn_at: float = Field(
+        default=0.8, gt=0, lt=1, description="Share of the month's ceiling to warn at"
+    )
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -355,6 +413,7 @@ class OrionConfig(BaseModel):
     voice: VoiceConfig = VoiceConfig()
     guardian: GuardianConfig = GuardianConfig()
     federation: FederationConfig = FederationConfig()
+    budget: BudgetConfig = BudgetConfig()
     modules: dict[str, dict[str, Any]] = Field(
         default_factory=dict[str, dict[str, Any]],
         description="Third-party modules' [modules.<name>] sections, validated by each module",

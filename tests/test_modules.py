@@ -106,6 +106,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
     assert [m.name for m in load(both, THIRD_PARTY)] == [
         "adaptation",
         "consolidation",
+        "doubt",
         "files",
         "onboarding",
         "focus",
@@ -118,6 +119,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
         "chronicle",
         "intentions",
         "relations",
+        "departure",
         "advice",
         "style",
         "configure",
@@ -156,6 +158,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         daemon = await start(app, inbox, supervisor)
         assert supervisor.services == [
             "inbox",
+            "memory.batch",
             "adaptation",
             "consolidation",
             "missions.work",

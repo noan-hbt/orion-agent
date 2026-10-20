@@ -4,6 +4,9 @@ Events are never updated. The only mutation is redaction, used to honour "forget
 the payload is erased, the event row stays (so sequence numbers and causal links remain intact),
 and a `journal.redacted` event records what was erased and why.
 
+Each event is stored with the version of its kind's payload when it was written; reads bring
+it to today's shape (`orion.core.upcast`), so changing a payload never means rewriting history.
+
 SQLite runs in WAL mode with a single writer. All blocking calls go through a dedicated worker
 thread so the asyncio loop never blocks on disk.
 """
@@ -20,6 +23,7 @@ from typing import Protocol, cast
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import HybridClock
 from orion.core.sqlite import SqliteWorker
+from orion.core.upcast import upcast, version_of
 
 REDACTED_KIND = "journal.redacted"
 
@@ -36,7 +40,8 @@ CREATE TABLE IF NOT EXISTS events (
     trust          INTEGER NOT NULL,
     causation_id   TEXT,
     correlation_id TEXT,
-    redacted       INTEGER NOT NULL DEFAULT 0
+    redacted       INTEGER NOT NULL DEFAULT 0,
+    version        INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS events_kind ON events(kind);
 CREATE INDEX IF NOT EXISTS events_source ON events(source);
@@ -45,7 +50,7 @@ CREATE INDEX IF NOT EXISTS events_correlation ON events(correlation_id);
 
 _COLUMNS = (
     "seq, id, hlc, kind, payload, source, actor, derived_from, trust, "
-    "causation_id, correlation_id, redacted"
+    "causation_id, correlation_id, redacted, version"
 )
 
 
@@ -61,13 +66,16 @@ class EventStore(Protocol):
     async def redact(self, event_ids: Sequence[str], reason: str, actor: str) -> Event: ...
 
 
-def _row_to_event(row: sqlite3.Row) -> Event:
+def event_from_row(row: sqlite3.Row) -> Event:
+    kind, payload = row["kind"], json.loads(row["payload"])
+    if not row["redacted"]:  # an erased payload has no shape left to bring up to date
+        kind, payload = upcast(kind, row["version"], payload)
     return Event(
         seq=row["seq"],
         id=row["id"],
         hlc=row["hlc"],
-        kind=row["kind"],
-        payload=json.loads(row["payload"]),
+        kind=kind,
+        payload=payload,
         provenance=Provenance(
             source=row["source"],
             actor=row["actor"],
@@ -90,6 +98,7 @@ class SqliteJournal:
 
     async def open(self) -> None:
         await self._sql.open()
+        await self._sql.run(self._migrate_sync)
 
     async def close(self) -> None:
         await self._sql.close()
@@ -139,11 +148,17 @@ class SqliteJournal:
 
     # --- synchronous internals, always run on the journal thread ---
 
+    def _migrate_sync(self) -> None:
+        """A journal from before event versions (D80): its events are all version 1."""
+        columns = {row["name"] for row in self._sql.db.execute("PRAGMA table_info(events)")}
+        if "version" not in columns:
+            self._sql.db.execute("ALTER TABLE events ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
+
     def _insert(self, db: sqlite3.Connection, new: NewEvent) -> Event:
         hlc = self._clock.now().encode()
         cur = db.execute(
             "INSERT INTO events (id, hlc, kind, payload, source, actor, derived_from, "
-            "trust, causation_id, correlation_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "trust, causation_id, correlation_id, version) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 new.id,
                 hlc,
@@ -155,6 +170,7 @@ class SqliteJournal:
                 int(new.trust),
                 new.causation_id,
                 new.correlation_id,
+                version_of(new.kind),
             ),
         )
         # sqlite always sets lastrowid after an INSERT into a rowid table.
@@ -169,13 +185,13 @@ class SqliteJournal:
             f"SELECT {_COLUMNS} FROM events WHERE seq > ? ORDER BY seq LIMIT ?",
             (after_seq, limit),
         )
-        return [_row_to_event(r) for r in rows]
+        return [event_from_row(r) for r in rows]
 
     def _get_sync(self, event_id: str) -> Event | None:
         row = self._sql.db.execute(
             f"SELECT {_COLUMNS} FROM events WHERE id = ?", (event_id,)
         ).fetchone()
-        return _row_to_event(row) if row else None
+        return event_from_row(row) if row else None
 
     def _last_seq_sync(self) -> int:
         row = self._sql.db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()

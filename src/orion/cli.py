@@ -37,6 +37,7 @@ def _provider(config: OrionConfig) -> Router | None:
             api_key.get_secret_value(),
             config.providers.openrouter.base_url,
             sort=config.providers.openrouter.sort,
+            image_hosts=config.providers.openrouter.image_hosts,
         )
     if config.providers.chatgpt.enabled:
         from orion.providers.chatgpt import ChatGPTProvider
@@ -568,6 +569,33 @@ def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -
     return 0
 
 
+async def _simulate(config: OrionConfig, days: int) -> int:
+    from orion.initiative.simulate import simulate
+
+    if not 1 <= days <= 60:
+        print("--days : entre 1 et 60")
+        return 1
+    week = await simulate(config, days)
+    print(week.render())
+    return 0
+
+
+def _check_backup(path: Path) -> int:
+    from orion.core.backup import BackupError, verify
+
+    files = sorted(path.glob("*.sqlite3")) if path.is_dir() else [path]
+    if not files:
+        print(f"Aucun journal dans {path}")
+        return 1
+    try:
+        for file in files:
+            print(f"{file} : {verify(file)} événements, tous relisibles")
+    except BackupError as exc:
+        print(f"Copie inutilisable : {exc}")
+        return 1
+    return 0
+
+
 async def _doctor(config: OrionConfig) -> int:
     print(f"orion {__version__}")
     print(f"instance:  {config.instance}")
@@ -782,6 +810,14 @@ def main(argv: list[str] | None = None) -> int:
     backup.add_argument(
         "--guardian", action="store_true", help="Copy the guardian's ledger instead"
     )
+    simulate = sub.add_parser(
+        "simulate", help="Play the next days of initiative on a copy: what Orion would send"
+    )
+    simulate.add_argument("--days", type=int, default=7, help="How many days ahead")
+    check_backup = sub.add_parser(
+        "check-backup", help="Check that a copy of the journal can be restored"
+    )
+    check_backup.add_argument("path", type=Path, help="The copy (a .sqlite3 file or its folder)")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -790,6 +826,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "hand":
         return asyncio.run(_hand(args))
+
+    if args.command == "check-backup":
+        return _check_backup(args.path)
 
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)
@@ -819,6 +858,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_chatgpt(config, args))
     if args.command == "backup":
         return _backup(config, args.destination, args.keep, args.guardian)
+    if args.command == "simulate":
+        return asyncio.run(_simulate(config, args.days))
     if args.command == "inkbox":
         if args.inkbox_command == "calls":
             return asyncio.run(_inkbox_calls(config))

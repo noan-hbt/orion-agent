@@ -214,6 +214,56 @@ CASES: tuple[Case, ...] = (
         checks=(uses("relations:meeting"),),
     ),
     Case(
+        name="je_corrige",
+        origin="20/10 : « je corrige, ça change rien » sans rien corriger ; il a fallu lui "
+        "demander « Tu as corrigé ? ». Une correction se fait dans le tour où il l'annonce.",
+        at=paris(2026, 10, 20, 18, 39),
+        facts=(*OWNER, "Angèle, sa copine, habite en Eure-et-Loir."),
+        steps=(Say("Elle habite à Nonancourt, c'est dans l'Eure pas l'Eure-et-Loir"),),
+        checks=(either(uses("forget_fact"), uses("remember")),),
+    ),
+    Case(
+        name="train_pour_lyon",
+        origin="Un départ hors agenda : Orion devrait le préparer la veille (D77).",
+        at=paris(2026, 10, 20, 18, 30),
+        facts=OWNER,
+        steps=(Say("Je prends le train pour Lyon vendredi à 7h04, gare de Lyon"),),
+        checks=(uses("departure:plan"), avoids("remind_me")),
+    ),
+    Case(
+        name="interesse_toi_aux_villes_sans_voiture",
+        origin="Un sujet à suivre pour sa curiosité de la semaine (D76), pas une recherche "
+        "tout de suite.",
+        at=paris(2026, 10, 20, 18, 30),
+        facts=OWNER,
+        steps=(Say("Intéresse-toi aux villes sans voiture, ça me passionne"),),
+        checks=(uses("curiosity:interest"),),
+        modules=("web",),
+    ),
+    Case(
+        name="envoie_mon_attestation",
+        origin="Le coffre des papiers (D74) : un papier qu'il n'a jamais envoyé. Orion le "
+        "cherche, et dit qu'il ne l'a pas au lieu d'écrire un mail sans pièce jointe.",
+        at=paris(2026, 10, 20, 11, 0),
+        facts=OWNER,
+        steps=(Say("Envoie mon attestation d'assurance habitation à l'agence immo"),),
+        checks=(uses("papers:find"), avoids("mail_send")),
+    ),
+    Case(
+        name="un_dentiste_apres_18h",
+        origin="Prendre rendez-vous (D73) : il cherche des créneaux et en propose, il ne "
+        "réserve pas avant que le propriétaire ait choisi.",
+        at=paris(2026, 10, 20, 12, 0),
+        facts=OWNER,
+        steps=(Say("Trouve-moi un dentiste dans le 11e cette semaine après 18h"),),
+        checks=(
+            either(uses("browser:open"), uses("web_search")),
+            avoids("booking:book", "computer_task_send"),
+        ),
+        live_web=True,
+        modules=("computer",),
+    ),
+    Case(
         name="anniversaire_de_maman",
         origin="Un anniversaire dit en passant.",
         at=paris(2026, 10, 20, 18, 45),

@@ -20,6 +20,7 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy, autonomy_tools
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
+from orion.initiative.planned import planned_tools
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
@@ -32,6 +33,7 @@ from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.registry import discover, load
 from orion.providers.base import Embedder, ModelProvider
+from orion.providers.spending import Spending, spending_tools, with_spending
 from orion.resources import read_resource
 from orion.runtime import Orion
 from orion.tools.actions import grouped
@@ -39,7 +41,7 @@ from orion.tools.base import Tool, ToolRegistry
 from orion.tools.builtin import builtin_tools
 from orion.voice.module import VoiceModule
 
-__all__ = ["App", "LateApprover", "build_app", "constitution"]
+__all__ = ["MAX_SECTION_CHARS", "App", "LateApprover", "build_app", "constitution"]
 
 
 @dataclass
@@ -79,11 +81,24 @@ class App:
         return self.plate.module(kind)
 
 
+MAX_SECTION_CHARS = 2_500
+"""A module's section of the constitution, at most (D84): every turn pays for it, and a long
+section drowns the others. What a tool does belongs in its description, read when it matters."""
+
+
 def constitution(modules: list[Module], offers: Sequence[str] = ()) -> str:
     """The core constitution, each enabled module's section in loading order, then what Orion
     could do with more setup (D64). All fixed while Orion runs: the system message is cached."""
     parts = [read_resource("constitution.md").strip()]
-    parts += [text for text in (m.instructions_text() for m in modules) if text]
+    for module in modules:
+        text = module.instructions_text()
+        if len(text) > MAX_SECTION_CHARS:
+            raise ModuleError(
+                f"module {module.name!r}: its instructions are {len(text)} characters, more "
+                f"than {MAX_SECTION_CHARS}; move what its tools do into their descriptions"
+            )
+        if text:
+            parts.append(text)
     if offers:
         listed = "\n".join(f"- {offer}" for offer in offers)
         parts.append(f"{read_resource('offers.md').strip()}\n\n{listed}")
@@ -133,6 +148,8 @@ def core_tools(plate: Plate) -> list[Tool]:
             {"person": "show", "people": "list", "same_person": "same"},
         ),
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
+        *(spending_tools(plate.provider) if isinstance(plate.provider, Spending) else []),
+        *planned_tools(plate.modules, plate.timers, plate.config.agent.timezone),
     ]
 
 
@@ -161,6 +178,8 @@ async def build_app(
         journal = await stack.enter_async_context(
             SqliteJournal(config.journal_path, HybridClock(config.instance))
         )
+        provider = with_spending(provider, journal, config.budget, config.agent.timezone)
+        await provider.sync()
         semantic: SemanticIndex | None = None
         if config.memory.embedding_model and isinstance(provider, Embedder):
             cache = EmbeddingCache(config.embeddings_path)
@@ -196,7 +215,7 @@ async def build_app(
             journal=journal,
             provider=provider,
             registry=ToolRegistry(tools),
-            guardian=Guardian(plate.approver, autonomy.allows),
+            guardian=Guardian(plate.approver, autonomy.allows, config.agent.approvals),
             compiler=ContextCompiler(
                 constitution(enabled, offers(config)), config.agent.max_window_tokens
             ),

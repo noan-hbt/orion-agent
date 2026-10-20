@@ -21,7 +21,7 @@ from typing import Any
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event, Trust
 from orion.core.hlc import Timestamp
-from orion.core.sqlite import SqliteWorker
+from orion.core.sqlite import SqliteWorker, dump
 from orion.memory.store import fts_query
 
 ADDED = "library.added"
@@ -124,6 +124,10 @@ class LibraryStore:
 
     async def reset(self) -> None:
         await self._sql.run(self._reset_sync)
+
+    async def snapshot(self) -> dict[str, list[tuple[object, ...]]]:
+        """Every row: what a rebuild from the journal must give back (D81)."""
+        return await self._sql.run(lambda: dump(self._sql.db, ("meta", "docs", "passages", "talk")))
 
     async def apply(self, event: Event) -> None:
         await self._sql.run(self._apply_sync, event)
