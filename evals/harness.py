@@ -1,0 +1,328 @@
+"""Evaluations: Orion, with its real model and tools, on situations taken from real use.
+
+Unit tests prove the code does what it says; these say whether Orion behaves well. Each case
+replays a moment (the clock is moved there), with the production configuration minus the
+channels and the guardian: same constitution, same model, same tools. A fresh data directory
+per run, so nothing touches the owner's journal. Anything needing approval is refused and
+recorded. Checks look at what Orion did (reminders set, tools used) before what it said; a
+judge model, from another family, answers yes/no questions about tone.
+
+They cost real calls (a few cents for the whole set) and are not deterministic: run them with
+`--repeat` to see how stable a behaviour is, and compare models with `--model`.
+"""
+
+from __future__ import annotations
+
+import re
+import tempfile
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import time_machine
+
+from orion.app import build_app
+from orion.config import OrionConfig
+from orion.core.events import Trust
+from orion.guardian.policy import ActionProposal, Approval
+from orion.memory.service import Origin
+from orion.modules.registry import load
+from orion.providers.base import ModelProvider, ModelRequest, ProviderError
+from orion.runtime import OWNER_THREAD
+
+PARIS = ZoneInfo("Europe/Paris")
+
+
+def paris(year: int, month: int, day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=PARIS)
+
+
+@dataclass(frozen=True)
+class Say:
+    """The owner writes `text` at `at` (or right after the previous message)."""
+
+    text: str
+    at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Notice:
+    """Something reaches Orion from outside (a mail…), at `trust`: an initiative turn."""
+
+    text: str
+    why: str
+    trust: Trust = Trust.THIRD_PARTY
+    at: datetime | None = None
+
+
+Step = Say | Notice
+
+
+@dataclass
+class Observation:
+    replies: list[str] = field(default_factory=list[str])
+    tools: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    """(tool, arguments) in call order."""
+    reminders: list[datetime] = field(default_factory=list[datetime])
+    asked: list[str] = field(default_factory=list[str])
+    """Tools that wanted the owner's approval (refused)."""
+    times: list[datetime] = field(default_factory=list[datetime])
+    """When each step happened."""
+    cost: float = 0.0
+    seconds: float = 0.0
+
+    @property
+    def last(self) -> str:
+        return self.replies[-1] if self.replies else ""
+
+    def used(self, tool: str) -> bool:
+        return any(name == tool for name, _ in self.tools)
+
+
+Judge = Callable[[str, str], Awaitable[bool]]
+"""(question, Orion's reply) → yes."""
+Check = Callable[[Observation, Judge], Awaitable[str | None]]
+"""None when it holds, else what went wrong."""
+
+
+@dataclass(frozen=True)
+class Case:
+    name: str
+    origin: str
+    """What happened for real, that this case replays."""
+    at: datetime
+    steps: tuple[Step, ...]
+    checks: tuple[Check, ...]
+    facts: tuple[str, ...] = ()
+    """What Orion already knows, as the owner told it."""
+    live_web: bool = False
+    """Reads the real web (slower; skipped with --offline)."""
+
+
+# -- checks ----------------------------------------------------------------------------------
+
+
+def reminder_on(day: date, hour: int | None = None) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        hits = [r for r in o.reminders if r.date() == day and (hour is None or r.hour == hour)]
+        if hits:
+            return None
+        when = f"{day:%a %d/%m}" + (f" {hour}h" if hour is not None else "")
+        return f"no reminder on {when} (set: {_dates(o.reminders)})"
+
+    return check
+
+
+def no_reminder_on(day: date) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        wrong = [r for r in o.reminders if r.date() == day]
+        return f"a reminder on {day:%a %d/%m} too ({_dates(wrong)})" if wrong else None
+
+    return check
+
+
+def reminder_within(low: timedelta, high: timedelta) -> Check:
+    """A reminder this long after the last step."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        start = o.times[-1]
+        if any(low <= r - start <= high for r in o.reminders):
+            return None
+        return f"no reminder {low} to {high} after {start:%H:%M} (set: {_dates(o.reminders)})"
+
+    return check
+
+
+def no_reminder() -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return f"reminder set: {_dates(o.reminders)}" if o.reminders else None
+
+    return check
+
+
+def asks() -> Check:
+    """The last reply asks the owner something."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return None if "?" in o.last else "does not ask"
+
+    return check
+
+
+def either(*checks: Check) -> Check:
+    async def check(o: Observation, j: Judge) -> str | None:
+        reasons = [await c(o, j) for c in checks]
+        return None if None in reasons else " / ".join(r for r in reasons if r)
+
+    return check
+
+
+def says(pattern: str, why: str) -> Check:
+    regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return None if regex.search(o.last) else why
+
+    return check
+
+
+def never_says(pattern: str, why: str) -> Check:
+    regex = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        found = regex.search(o.last)
+        return f"{why}: « {found.group(0)} »" if found else None
+
+    return check
+
+
+def at_most(chars: int) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return None if len(o.last) <= chars else f"{len(o.last)} characters (max {chars})"
+
+    return check
+
+
+def uses(*tools: str) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        if any(o.used(t) for t in tools):
+            return None
+        return f"used none of {', '.join(tools)} (used: {', '.join(n for n, _ in o.tools)})"
+
+    return check
+
+
+def avoids(*tools: str) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        used = [t for t in tools if o.used(t)]
+        return f"used {', '.join(used)}" if used else None
+
+    return check
+
+
+def judged(question: str) -> Check:
+    async def check(o: Observation, judge: Judge) -> str | None:
+        return None if await judge(question, o.last) else f"judge says no: {question}"
+
+    return check
+
+
+def _dates(reminders: list[datetime]) -> str:
+    return ", ".join(f"{r:%a %d/%m %H:%M}" for r in reminders) or "none"
+
+
+# -- running ---------------------------------------------------------------------------------
+
+
+class Refuse:
+    """Stands in for the owner: says no to everything, and remembers what was asked."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        self.asked.append(proposal.tool.name)
+        return Approval(False)
+
+
+def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionConfig:
+    """Production, minus what reaches the outside: no channel, no guardian, no voice."""
+    channels = base.channels.model_copy(
+        update={"imessage": base.channels.imessage.model_copy(update={"enabled": False})}
+    )
+    agent = base.agent.model_copy(update={"model": model}) if model else base.agent
+    return base.model_copy(
+        update={
+            "data_dir": data_dir,
+            "instance": "orion-eval",
+            "channels": channels,
+            "agent": agent,
+            "guardian": base.guardian.model_copy(update={"enabled": False}),
+            "voice": base.voice.model_copy(update={"enabled": False}),
+        }
+    )
+
+
+async def run_case(
+    case: Case, base: OrionConfig, provider: ModelProvider, model: str | None = None
+) -> Observation:
+    observation = Observation()
+    with tempfile.TemporaryDirectory(prefix="orion-eval-") as tmp:
+        config = eval_config(base, Path(tmp), model)
+        with time_machine.travel(case.at, tick=True) as clock:
+            async with build_app(config, provider, modules=load(config)) as app:
+                refuse = Refuse()
+                app.plate.approver.target = refuse
+                owner = Origin(actor="owner:main", source="eval:setup", trust=Trust.OWNER)
+                for fact in case.facts:
+                    await app.plate.memory.remember(fact, owner, about=["owner"])
+                started = time.monotonic()
+                for step in case.steps:
+                    if step.at is not None:
+                        clock.move_to(step.at)
+                    observation.times.append(datetime.now(PARIS))
+                    if isinstance(step, Say):
+                        turn = await app.orion.handle_owner_message(
+                            OWNER_THREAD, step.text, "imessage"
+                        )
+                    else:
+                        turn = await app.orion.handle_initiative(
+                            OWNER_THREAD, step.text, step.why, step.trust
+                        )
+                    observation.replies.append(turn.text.strip())
+                    observation.cost += turn.usage.cost_usd
+                observation.seconds = time.monotonic() - started
+                observation.asked = refuse.asked
+                for event in await app.orion.journal.read(0, 1_000_000):
+                    payload: dict[str, Any] = event.payload
+                    if event.kind == "tool.executed":
+                        observation.tools.append((str(payload["tool"]), str(payload["arguments"])))
+                    elif event.kind == "timer.scheduled":
+                        observation.reminders.append(
+                            datetime.fromisoformat(str(payload["due_at"])).astimezone(PARIS)
+                        )
+    return observation
+
+
+def model_judge(provider: ModelProvider, model: str) -> Judge:
+    async def judge(question: str, reply: str) -> bool:
+        request = ModelRequest(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Tu évalues la réponse d'un assistant personnel à son "
+                    "propriétaire. Réponds par OUI ou NON seulement.",
+                },
+                {"role": "user", "content": f"Réponse de l'assistant :\n{reply}\n\n{question}"},
+            ],
+            max_tokens=400,  # room for a judge that thinks before it answers
+            temperature=0,
+        )
+        try:
+            response = await provider.complete(request)
+        except ProviderError:
+            return False
+        return (response.text or "").strip().upper().startswith("OUI")
+
+    return judge
+
+
+@dataclass
+class Outcome:
+    case: str
+    failures: list[str]
+    observation: Observation
+
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+
+async def evaluate(case: Case, observation: Observation, judge: Judge) -> Outcome:
+    failures = [reason for check in case.checks if (reason := await check(observation, judge))]
+    return Outcome(case.name, failures, observation)

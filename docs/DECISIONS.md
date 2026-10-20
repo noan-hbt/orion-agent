@@ -959,3 +959,18 @@ La comparaison avec OpenClaw (MIT, code lu dans le dépôt) en apporte trois :
 
 Orion fait aussi des petits messages en cours de tour : ce que le modèle écrit à côté d'un
 appel d'outil part tout de suite, par la même sortie que la réponse.
+
+## D45 — Des évaluations tirées des vraies conversations
+
+*20/10/2026 · acceptée*
+
+`uv run python -m evals` rejoue des moments du journal avec le vrai modèle et les vrais
+outils : la configuration de production sans canaux, sans gardien et sans voix, dans un
+répertoire neuf, l'horloge déplacée au moment du cas. Tout ce qui demande un accord est refusé
+et noté. Les vérifications portent d'abord sur ce qu'Orion a fait (rappels posés, outils
+utilisés), ensuite sur ce qu'il a dit. Un juge d'une autre famille de modèles répond par oui
+ou non sur le ton.
+
+Les tests unitaires prouvent que le code fait ce qu'il dit ; les évaluations disent si Orion se
+comporte bien. Elles coûtent quelques centimes et ne sont pas déterministes : `--repeat` mesure
+la stabilité, `--model` compare les modèles sur les mêmes cas. Chaque vrai raté devient un cas.
