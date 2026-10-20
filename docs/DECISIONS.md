@@ -1074,3 +1074,19 @@ la question a été réglée entre-temps. La nuit ne relit que les tours de conf
 disait une page, un mail ou une photo n'oriente jamais sa réflexion. Les dates des moments
 sont demandées en absolu, calculées depuis la date de chaque message, et refusées si elles sont
 passées ou à plus de 90 jours.
+
+## D52 — La chronique
+
+*20/10/2026 · acceptée*
+
+Module `chronicle`, actif par défaut. Chaque dimanche à 19 h, Orion écrit la page de la
+semaine du propriétaire, à la deuxième personne, entre 120 et 350 mots : ce qui s'est passé, ce
+qu'il a décidé ou laissé en suspens, les gens, ce qui l'occupait. Rien d'inventé, et pas de
+tableau de bord : un texte qu'on a envie de lire.
+- Elle lui est envoyée par le moteur d'initiative, et rangée dans la bibliothèque (« Ma semaine
+  du 19 octobre 2026 »), où `library_search` la retrouve. `chronicle` relit la page de
+  n'importe quelle semaine.
+- La page de la même semaine, l'an dernier, est donnée à l'auteur : il les relie quand le
+  rapprochement dit quelque chose.
+- Comme la nuit (D51), seuls les tours de confiance sont lus. Une semaine de moins de six
+  échanges n'a pas de page.

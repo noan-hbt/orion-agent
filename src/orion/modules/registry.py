@@ -18,6 +18,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.adaptation.module import AdaptationModule
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
+    from orion.chronicle.module import ChronicleModule
     from orion.computer.module import ComputerModule
     from orion.console.module import ConsoleModule
     from orion.delegation.module import DelegationModule
@@ -51,6 +52,7 @@ def builtin_modules() -> list[type[Module]]:
         LibraryModule,
         PhotosModule,
         ThinkingModule,
+        ChronicleModule,
         ConsoleModule,
         HandsModule,
     ]

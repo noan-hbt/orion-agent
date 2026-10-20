@@ -127,6 +127,8 @@ d'autres personnes.
 - **Il continue de penser** (D51) : la nuit, il repense à ce qui est resté ouvert et ne te
   revient le matin que s'il a trouvé du neuf. Il te demande comment s'est passé ton entretien,
   ton rendez-vous, ta visite.
+- **La chronique** (D52) : chaque dimanche soir, la page de ta semaine, écrite pour toi et
+  gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

@@ -112,6 +112,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
         "library",
         "photos",
         "thinking",
+        "chronicle",
         "weather",
         "desk",
     ]
@@ -148,6 +149,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
             "consolidation",
             "missions.work",
             "thinking.night",
+            "chronicle.week",
             "weather.watch",
             "autonomy.ritual",
             "initiative",
