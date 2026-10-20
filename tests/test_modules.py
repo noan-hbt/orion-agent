@@ -109,6 +109,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
         "onboarding",
         "expert",
         "missions",
+        "library",
         "weather",
         "desk",
     ]

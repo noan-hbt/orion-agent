@@ -329,6 +329,46 @@ async def _contain(config: OrionConfig, source: str, apply: bool, reason: str) -
     return 0
 
 
+def _library_import(config: OrionConfig, folder: Path) -> int:
+    """Add a folder of notes to the library (embeddings are computed at the first search)."""
+    from orion.library.module import notes_in
+
+    if not folder.is_dir():
+        print(f"{folder} n'est pas un dossier.")
+        return 2
+    notes = [
+        (str(path.relative_to(folder)), path.resolve(), path.read_text("utf-8", "replace"))
+        for path in notes_in(folder)
+    ]
+    added = asyncio.run(_library_add(config, [n for n in notes if n[2].strip()]))
+    print(f"{added} document(s) ajouté(s) à la bibliothèque.")
+    return 0
+
+
+async def _library_add(config: OrionConfig, notes: list[tuple[str, Path, str]]) -> int:
+    from orion.core.events import Provenance
+    from orion.library.module import DOCUMENT_TRUST, Library
+    from orion.library.store import LibraryStore
+
+    store = LibraryStore(config.data_dir / "library.sqlite3")
+    await store.open()
+    added = 0
+    try:
+        async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+            library = Library(journal, store, None)
+            await library.sync()
+            known = {title for _, title, _, _ in await store.docs()}
+            for title, path, text in notes:
+                if title in known:
+                    continue
+                provenance = Provenance(source=f"file:{path}", actor="owner:cli")
+                await library.add(title, text, provenance, DOCUMENT_TRUST, None)
+                added += 1
+    finally:
+        await store.close()
+    return added
+
+
 async def _google_auth(client_id: str, secret_env: str) -> int:
     import os
     import secrets
@@ -540,6 +580,10 @@ def main(argv: list[str] | None = None) -> int:
     contain.add_argument("source", help="e.g. 'mail:perso:<id@x>' or 'web:https://…'")
     contain.add_argument("--apply", action="store_true")
     contain.add_argument("--reason", default="source suspecte")
+    library = sub.add_parser("library", help="Orion's library of the owner's notes")
+    library_sub = library.add_subparsers(dest="library_command", required=True)
+    library_import = library_sub.add_parser("import", help="Add a folder of notes (.md, .txt)")
+    library_import.add_argument("folder", type=Path)
     backup = sub.add_parser("backup", help="Copy the journal (everything else is rebuilt)")
     backup.add_argument("destination", type=Path, help="Folder that holds the copies")
     backup.add_argument("--keep", type=int, default=14, help="Copies kept, newest first")
@@ -569,6 +613,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_console_link(config))
     if args.command == "contain":
         return asyncio.run(_contain(config, args.source, args.apply, args.reason))
+    if args.command == "library":
+        return _library_import(config, args.folder)
     if args.command == "google":
         return asyncio.run(_google_auth(args.client_id, args.secret_env))
     if args.command == "backup":
