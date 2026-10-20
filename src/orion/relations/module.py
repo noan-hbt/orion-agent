@@ -495,8 +495,9 @@ class RelationsModule(Module):
         return [
             grouped(
                 "relations",
-                "Attention to the people in the owner's life: meetings to prepare, birthdays, "
-                "staying in touch.",
+                "Birthdays, meetings with someone, staying in touch: note a birthday as soon as "
+                "it comes up, a meeting the owner mentions, someone he wants to see more often, "
+                "and when they saw each other.",
                 relation_tools(self.relations),
                 {
                     "meeting_soon": "meeting",

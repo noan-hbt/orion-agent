@@ -118,7 +118,8 @@ def core_tools(plate: Plate) -> list[Tool]:
         ),
         grouped(
             "people",
-            "The people in the owner's life, as memory knows them.",
+            "What memory knows of the people in the owner's life (to note a birthday, a meeting "
+            "or staying in touch: `relations`).",
             people_tools(plate.memory, plate.config.memory.owner_names),
             {"person": "show", "people": "list", "same_person": "same"},
         ),
