@@ -728,3 +728,169 @@ rappelle d'ajouter le rendez-vous à son agenda.
 - Négociateur à modèle pour des cas plus ouverts (un prix, un lieu).
 - Instances d'un même propriétaire (`OWNER_INSTANCE`).
 - Écriture dans l'agenda.
+
+## D30 — Sur un serveur : installation, sauvegardes, le gardien veille sur le cœur
+
+*20/10/2026 · acceptée*
+
+Orion tourne sur un VPS (OVH chez le propriétaire). `deploy/install.sh` installe tout sur une
+Debian ou une Ubuntu neuve : deux utilisateurs, Caddy en HTTPS, systemd, pare-feu. Caddy ne
+laisse passer que le webhook Inkbox, la voix en direct, les mains et la console (vers le cœur),
+et la fédération (vers le gardien). Le webhook remplace le polling.
+
+- **Sauvegardes** : `orion backup` fait une copie SQLite en ligne du journal, vérifiée
+  (`integrity_check`), avec rotation. Un timer par nuit pour le cœur, un pour le gardien. Le
+  journal suffit : tout le reste se reconstruit.
+- **Le cœur ne peut pas dire qu'il est mort** : il envoie un battement au gardien chaque
+  minute. Après 5 minutes de silence, le gardien écrit lui-même au propriétaire, une fois, puis
+  quand le cœur repart.
+
+## D31 — Le web, par un intermédiaire
+
+*20/10/2026 · acceptée*
+
+Module `web` : `web_search` et `web_read`. Le modèle d'Orion ne lit jamais une page : un appel
+séparé, sans outils ni mémoire, répond à sa question sous une forme bornée (comme la quarantaine
+du mail). Le résultat porte `Trust.WEB`.
+
+- La recherche passe par la recherche web du fournisseur (plugin `web` d'OpenRouter) : aucun
+  compte de plus. Seules les pages réellement citées reviennent : l'intermédiaire ne peut pas
+  inventer d'adresse.
+- **Une URL est aussi un moyen de faire sortir des données** (`?q=<secrets>`). Orion n'ouvre
+  donc que les adresses que le propriétaire a écrites, qu'une recherche a renvoyées, ou que
+  l'intermédiaire a choisies sur une page lue. Les adresses privées sont refusées, à chaque
+  redirection.
+
+## D32 — Les mains d'Orion : agenda, mail, rendez-vous fédérés
+
+*20/10/2026 · acceptée*
+
+- `calendar_add` écrit en CalDAV (iCloud, Fastmail, Nextcloud) ou dans Google Agenda (jeton
+  obtenu par `orion google auth`). Aucun invité : personne n'est prévenu au nom du
+  propriétaire. L'événement s'affiche tout de suite, et reste tant que le flux iCal ne le montre
+  pas encore (Google a des heures de retard).
+- `mail_send` envoie en SMTP depuis le compte du propriétaire, dans le fil quand c'est une
+  réponse.
+- Le gardien rédige lui-même la demande d'accord : l'événement exact, le mail mot pour mot.
+  Il ne laisse passer que ce qui a été approuvé, une fois.
+- Répondre à un mail se fait forcément dans une conversation qui contient du contenu tiers. Ces
+  outils acceptent donc ce contexte (révise D26 pour eux seuls) : la demande d'accord le dit, et
+  le propriétaire voit tout.
+- Un rendez-vous que les deux Orion ont signé va dans les deux agendas sans second accord. Le
+  gardien le vérifie sur la confirmation qu'il a lui-même signée ou reçue.
+
+## D33 — L'ordinateur d'Orion
+
+*20/10/2026 · acceptée*
+
+Module `computer` : un Chromium sans écran (Playwright), avec un profil neuf à chaque tâche,
+conduit par un agent qui ne voit que la consigne. Il n'a accès ni à la mémoire ni à la
+conversation, et son compte rendu revient comme contenu du web.
+
+Les règles sont appliquées par la couche réseau, pas par le modèle :
+- aucune adresse privée ;
+- en lecture seule (`computer_task`), toute requête autre que GET ou HEAD est coupée, donc rien
+  ne part ;
+- une tâche qui doit envoyer (`computer_task_send`) fait approuver sa consigne exacte.
+
+Il remplace la délégation au CLI `claude`, qui dépend de ce qui est installé.
+
+## D34 — Faire connaissance
+
+*20/10/2026 · acceptée*
+
+Module `onboarding`, actif par défaut. Pendant trois semaines, Orion pose une question par jour
+au plus. Elle passe par le moteur d'initiative : heures calmes, budget et vérificateur
+s'appliquent. Jamais dans les 90 minutes qui suivent un message du propriétaire, et jamais sur
+ce que la mémoire sait déjà. `onboarding_stop` arrête tout.
+
+## D35 — Une autonomie qui se gagne
+
+*20/10/2026 · acceptée*
+
+Une action soumise à accord peut devenir une action qu'Orion fait seul :
+- seulement pour les actions listées dans `[guardian] autonomable` (par défaut `calendar_add`) ;
+- seulement dans une conversation sans contenu tiers ;
+- dans la limite d'un plafond quotidien tenu par le gardien.
+
+Après 5 accords de suite, Orion le propose au plus une fois par mois, à une heure calme. Le
+gardien rédige la question, vérifie le oui et enregistre l'autonomie lui-même. `autonomy_revoke`
+la retire d'un mot. Orion doit la rendre au premier regret du propriétaire.
+
+## D36 — Proactivité v1 : un arbitre et « ce que j'ai failli te dire »
+
+*20/10/2026 · acceptée*
+
+Après le portail (heures calmes, budget, expiration), un arbitre décide si le message vaut d'être
+envoyé maintenant :
+- l'urgence est l'importance du message, qui monte quand l'échéance approche et à mesure qu'il
+  attend ;
+- le dérangement coûte plus pendant un événement de l'agenda et quand le budget s'épuise, et
+  moins juste après la fin d'un événement.
+
+Un message qui peut attendre attend un meilleur moment : il n'est pas jeté, et le verdict est
+journalisé. Le dimanche soir, Orion dit ce qu'il a gardé pour lui dans la semaine.
+
+## D37 — Engagements v1
+
+*20/10/2026 · acceptée*
+
+La fiche de quarantaine relève la promesse que porte un mail (ce que le propriétaire doit, ou ce
+qu'on lui doit), jamais pour une publicité. Elle devient un engagement marqué contenu tiers.
+Répondre à ce mail clôt ce que le propriétaire lui devait, avec le mail envoyé comme preuve.
+`mail_send` et `calendar_add` clôturent les engagements qu'ils nomment (`closes`).
+
+## D38 — La provenance au travail
+
+*20/10/2026 · acceptée*
+
+`contain_source` et `orion contain` partent d'une source suspecte et rassemblent :
+- ses propres événements ;
+- les tours où elle a atteint le modèle ;
+- la suite de chaque fenêtre de conversation, jusqu'à ce qu'elle reparte à neuf ;
+- tout ce qui en dérive.
+
+L'outil montre d'abord la liste, puis invalide ce qui est encore actif : souvenirs,
+engagements, rappels, règles. Rien n'est effacé, à la différence de l'oubli. Ce qui est déjà
+parti est seulement listé. `provenance` remonte la lignée d'un souvenir ou d'un engagement.
+
+## D39 — La console
+
+*20/10/2026 · acceptée*
+
+Module `console` : une page HTML simple, servie par le cœur, lisible sur un téléphone. On y voit
+et corrige la mémoire, les engagements, le manuel et l'autonomie. On y suit l'activité (ce
+qu'Orion a fait, ce qu'il a tu, et pourquoi) et les sources suspectes.
+
+- **Entrée** : un lien à usage unique de 10 minutes, qu'Orion envoie (`console_link`), devient
+  un cookie signé HttpOnly, Secure et SameSite=Strict.
+- **Corrections** : chacune est un événement du propriétaire dans le journal, le même que
+  celui des outils.
+
+## D40 — Voix v1 : Orion au téléphone
+
+*20/10/2026 · acceptée · révise D23*
+
+Avec `[voice] live`, les appels avec le propriétaire passent par le flux média d'Inkbox. Inkbox
+écoute et parle. Chaque phrase du propriétaire passe par la boîte de réception (canal `voix`)
+sur son fil, avec la même mémoire et les mêmes outils, et la réponse est lue tout de suite. Une
+formule d'attente couvre les réponses lentes.
+
+Seul un flux signé avec le numéro du propriétaire entre. Le gardien ne diffuse un appel que vers
+l'adresse d'Orion, et seulement avec le propriétaire. Les appels aux autres gardent la voix
+hébergée et leur accord.
+
+## D41 — Les mains sur les appareils du propriétaire (D1)
+
+*20/10/2026 · acceptée*
+
+`orion hand` tourne sur un appareil du propriétaire et appelle le serveur : aucun port n'est
+ouvert sur l'appareil.
+- **Appairage** : un code à usage unique ; seules des empreintes sont journalisées.
+  `orion hands revoke` coupe un appareil.
+- **Actions** : typées, jamais un shell, et chaque main vérifie ce que son appareil permet :
+  - notification ;
+  - recherche et lecture de fichiers dans les dossiers partagés (chemins résolus, taille
+    plafonnée) ;
+  - ouverture d'une page, avec accord.
+- **Confiance** : le contenu d'un fichier reste sous la pleine confiance.

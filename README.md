@@ -84,6 +84,31 @@ d'autres personnes.
   le rendez-vous est noté de chaque côté. Les messages sont signés, et seul le gardien les
   envoie ou les reçoit. Un Orion inconnu est refusé avant même d'être lu.
 
+- **Sur un serveur** (D30) : `deploy/install.sh` installe Orion sur un VPS (Caddy en HTTPS,
+  systemd, pare-feu). Le journal est sauvegardé chaque nuit (`orion backup`). Si le cœur tombe,
+  le gardien te prévient lui-même.
+- **Le web** (D31) : Orion cherche et lit des pages par un intermédiaire. Il n'ouvre que des
+  adresses que tu as données ou qu'une recherche a trouvées.
+- **Ses mains** (D32) : il ajoute des événements à ton agenda (Google ou CalDAV) et envoie des
+  mails depuis ton compte, chaque fois avec ton accord, le texte exact sous les yeux. Les
+  rendez-vous calés avec un autre Orion vont dans les deux agendas.
+- **Son ordinateur** (D33) : un navigateur isolé, pour les tâches qui passent par des sites. En
+  lecture seule, rien ne peut partir ; pour envoyer un formulaire, tu approuves la consigne.
+- **Faire connaissance** (D34) : une question par jour au plus, les premières semaines.
+- **Autonomie** (D35) : après plusieurs oui, Orion te propose une fois par mois de faire seul
+  une action. Un mot suffit pour la lui retirer.
+- **Proactivité v1** (D36) : il attend la fin d'une réunion pour ce qui peut attendre. Le
+  dimanche soir, il te dit ce qu'il a failli te dire.
+- **Engagements v1** (D37) : les promesses lues dans tes mails rejoignent tes engagements. Elles
+  se clôturent avec une preuve (mail envoyé, événement ajouté).
+- **Provenance** (D38) : « comment tu sais ça ? » a une réponse. Un mail piégé se met en
+  quarantaine avec tout ce qu'il a touché.
+- **Console** (D39) : une page pour voir et corriger ce qu'il sait et fait. Demande-lui le lien.
+- **Voix v1** (D40) : au téléphone, c'est Orion lui-même qui répond, avec sa mémoire et ses
+  outils pendant l'appel.
+- **Mains sur tes appareils** (D41) : `orion hand` sur ton Mac ou ton PC. Il peut t'envoyer des
+  notifications et trouver ou lire des fichiers dans les dossiers que tu partages.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
