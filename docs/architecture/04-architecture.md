@@ -6,7 +6,7 @@
 > donne lieu à une nouvelle décision dans `DECISIONS.md`.
 >
 > Les sections 1 à 16 sont le plan d'origine. La section 17 dit ce qui est construit au
-> 20/10/2026 (jusqu'à D75), et où le code s'est écarté du plan.
+> 20/10/2026 (jusqu'à D77), et où le code s'est écarté du plan.
 
 ---
 
@@ -455,7 +455,7 @@ L'**évaluation** commence dès M1 et grossit à chaque jalon : chaque bug réel
 
 ---
 
-## 17. Ce qui est construit (au 20/10/2026, jusqu'à D75)
+## 17. Ce qui est construit (au 20/10/2026, jusqu'à D77)
 
 Le plan des sections 1 à 16 tient dans ses principes : journal append-only, projections
 reconstructibles, provenance et confiance, gardien séparé, initiative gouvernée, cache de prompt.
@@ -487,7 +487,7 @@ rendus pour l'initiative. Chaque module déclare ce qu'il permettrait s'il étai
 | Canaux | `imessage`, `voice`, `vocal` (vocaux dans les deux sens), `photos` (tout fichier reçu) | D18, D40, D50, D63, D71 |
 | Sources | `calendar`, `mail` (lecture seule stricte, quarantaine, rangement explicite), `web` | D25, D31, D75 |
 | Mains | `computer` (navigateur), `booking` (rendez-vous de bout en bout), `files`, `hands`, `delegation`, `expert` (modèle plus fort) | D33, D41, D46, D60, D61, D73 |
-| Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `chronicle`, `intentions`, `relations`, `places` | D47, D48, D51–D53, D56–D58, D67, D74 |
+| Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77 |
 | Le connaître | `adaptation` (le manuel), `onboarding`, `advice` (ses conseils assumés), `style` (écrire en son nom), `focus` | D21, D34, D65, D68, D70 |
 | Les autres | `federation`, `secretary` | D29, D54 |
 | Administration | `configure` (réglages par message), `console`, `night` (rangement de la mémoire) | D27, D39, D72 |
@@ -523,4 +523,4 @@ deploy/          installation sur un VPS : Caddy, systemd, sauvegardes
 | M7 | v0 : deux Orion calent un rendez-vous (D29) |
 
 Au-delà du plan : missions, bibliothèque, chronique, intentions, secrétaire, papiers,
-rendez-vous, rangement du mail, carnet d'erreurs.
+rendez-vous, rangement du mail, carnet d'erreurs, curiosité, veille des départs.

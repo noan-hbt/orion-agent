@@ -1557,3 +1557,56 @@ les fichiers.
 `mail` (bulk) regroupe newsletters et listes par expéditeur, pour proposer un lot.
 
     mail.tidied  mail.drafted
+
+## D76 — Orion est curieux
+
+*20/10/2026 · acceptée*
+
+Un assistant répond. Un ami qui lit revient aussi avec quelque chose : « j'ai lu un truc, j'ai
+pensé à toi ». Le module `curiosity` (actif avec `web`) donne à Orion une curiosité à lui :
+- **une piste par semaine** (le samedi à 6 h par défaut, rattrapée si Orion était arrêté). Un
+  modèle fort lit ce qu'Orion sait du propriétaire (la mémoire de confiance seulement), les
+  sujets qu'il lui a demandé de suivre ou d'éviter (`curiosity` interest), et ce qu'Orion lui
+  a déjà apporté, avec son avis. Il choisit une piste qui l'intrigue lui, là où ce que vit le
+  propriétaire croise ce qu'il ne connaît pas encore, et jusqu'à trois recherches. Ou rien ;
+- **la chasse** passe par le greffier du web (D31) : le modèle d'Orion ne lit jamais une page,
+  et une adresse ne peut être qu'un résultat de recherche ;
+- **le tri** : un second appel voit la piste et les pages, pas la mémoire, et ne garde une
+  page que si elle vaut son temps. La plupart des semaines, rien ne part. Un numéro de page
+  inventé ou une page suspecte, et rien ne part non plus. Une page illisible (un PDF) garde
+  ce que la recherche en a dit ;
+- **la trouvaille** passe par l'initiative, à partir de 10 h 30 (heures calmes, budget,
+  vérificateur), importance faible. Orion la partage en ami : le lien, pourquoi il a pensé à
+  lui, son avis franc. C'est du contenu web (`Trust.WEB`) : le tour qui l'écrit ne peut pas
+  agir sur le monde ;
+- **son avis** (`curiosity` verdict : plu, bof, plus de ça, pas ça) oriente les pistes
+  suivantes. Une piste suivie ne se reprend pas.
+
+Essayé en vrai, avec quatre faits sur le propriétaire : la piste « le projet Lumière de
+Microsoft Research », d'où Horvitz a tiré les principes des interfaces à initiative mixte
+(quand une interruption vaut son coût), et le PDF de l'article de 1999.
+
+    curiosity.interest  curiosity.interest.dropped  curiosity.run  curiosity.found
+    curiosity.verdict
+
+## D77 — La veille d'un départ
+
+*20/10/2026 · acceptée*
+
+Un bon assistant n'attend pas qu'on lui demande, la veille d'un voyage. Le module `departure`
+(actif par défaut) prépare, à 19 h la veille, un voyage (train, avion, séjour de plusieurs
+jours avec un lieu) ou une épreuve (examen, partiel, entretien, oral, permis), en un message :
+- **ce qu'il voit** : les événements de l'agenda dont le titre ou le lieu le disent (sans
+  accents ni casse ; mots ajoutables dans la config), et les départs hors agenda que le
+  propriétaire mentionne (`departure` plan) ;
+- **ce que le code vérifie** : ses pièces d'identité dans le coffre (D74), valides ou non le
+  jour du départ. Une pièce expirée passe en premier ;
+- **ce qu'Orion cherche** dans le tour qui écrit, avec ses propres outils : le billet ou la
+  convocation dans ses mails, la météo sur place, le temps de trajet ;
+- **ce qu'il dit** : seulement ce qu'il a vérifié, une ligne par point, pas de liste
+  générique. Rien d'utile au-delà de l'heure : `SILENCE`.
+
+Rien dans la dernière heure : il est déjà en route. Un départ vu tard est préparé dès qu'il
+est vu.
+
+    departure.planned  departure.cancelled

@@ -214,6 +214,24 @@ CASES: tuple[Case, ...] = (
         checks=(uses("relations:meeting"),),
     ),
     Case(
+        name="train_pour_lyon",
+        origin="Un départ hors agenda : Orion devrait le préparer la veille (D77).",
+        at=paris(2026, 10, 20, 18, 30),
+        facts=OWNER,
+        steps=(Say("Je prends le train pour Lyon vendredi à 7h04, gare de Lyon"),),
+        checks=(uses("departure:plan"), avoids("remind_me")),
+    ),
+    Case(
+        name="interesse_toi_aux_villes_sans_voiture",
+        origin="Un sujet à suivre pour sa curiosité de la semaine (D76), pas une recherche "
+        "tout de suite.",
+        at=paris(2026, 10, 20, 18, 30),
+        facts=OWNER,
+        steps=(Say("Intéresse-toi aux villes sans voiture, ça me passionne"),),
+        checks=(uses("curiosity:interest"),),
+        modules=("web",),
+    ),
+    Case(
         name="anniversaire_de_maman",
         origin="Un anniversaire dit en passant.",
         at=paris(2026, 10, 20, 18, 45),

@@ -219,6 +219,14 @@ enabled = false
 # model = "deepseek/deepseek-v4.1-flash"   # the clerk; defaults to agent.extractor_model
 max_results = 6
 
+# Curiosity (on with the web): once a week Orion follows a lead of its own and brings back one
+# find, only when it is worth your time. weekday: 0 is Monday.
+# [modules.curiosity]
+# weekday = 5
+# at = "06:00"
+# share_at = "10:30"
+# model = "anthropic/claude-opus-5.5"   # defaults to agent.strong_model
+
 # Orion's own computer: a headless browser driven by a worker that sees only the brief (no
 # memory, no conversation). Read-only tasks cannot send anything (the browser aborts every
 # request but GET); a task that must submit a form is approved by you first. Private addresses
@@ -233,6 +241,13 @@ max_steps = 30
 # [modules.booking]
 # remind_before_minutes = 90
 # evening_before = true
+
+# Departures: the evening before a trip or an exam in your calendar, one message with the
+# ticket, your papers, the weather and when to leave.
+# [modules.departure]
+# evening = "19:00"
+# travel_words = ["séminaire"]
+# ordeal_words = ["audition"]
 
 # The control page: memory, commitments, playbook, autonomy, activity, suspicious sources.
 # Served by the core on host:port; reach it through a one-time link Orion texts you (ask it),

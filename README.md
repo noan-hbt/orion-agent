@@ -172,6 +172,11 @@ d'autres personnes.
   ton accord et prépare ton dossier de location en un PDF.
 - **Ta boîte mail, rangée** (D75) : désabonnement des newsletters et archivage par lots
   (un seul oui par lot), brouillons de réponse dans ta voix, pièces jointes.
+- **Il est curieux** (D76) : une fois par semaine, il suit une piste à lui, là où ta vie
+  croise ce que tu ne connais pas encore, et te rapporte une trouvaille seulement si elle vaut
+  ton temps, avec son avis. Dis-lui ce qui t'intéresse, ou ce qui ne t'intéresse pas.
+- **La veille d'un départ** (D77) : un train, un vol, un examen ; la veille au soir, un seul
+  message avec le billet, tes papiers, la météo et l'heure à laquelle partir.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
