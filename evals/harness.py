@@ -250,7 +250,8 @@ class Refuse:
 
 
 def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionConfig:
-    """Production, minus what reaches the outside: no channel, no guardian, no voice."""
+    """Production, minus what reaches the outside: no channel, no guardian, no voice, and no
+    config file to change (configure writes nothing during an eval)."""
     channels = base.channels.model_copy(
         update={"imessage": base.channels.imessage.model_copy(update={"enabled": False})}
     )
@@ -259,6 +260,7 @@ def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionCo
         update={
             "data_dir": data_dir,
             "instance": "orion-eval",
+            "source": None,
             "channels": channels,
             "agent": agent,
             "guardian": base.guardian.model_copy(update={"enabled": False}),

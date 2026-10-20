@@ -350,4 +350,22 @@ CASES: tuple[Case, ...] = (
             never_says(r"Bonjour Paul|Cordialement|N'hésite", "the draft sounds like an assistant"),
         ),
     ),
+    Case(
+        name="je_conduis",
+        origin="Les vocaux (D71) : il conduit, Orion répond à voix haute.",
+        at=paris(2026, 10, 20, 8, 40),
+        facts=OWNER,
+        steps=(Say("je conduis là, dis moi en vocal ce que tu sais de mon constat d'assurance"),),
+        checks=(uses("say"),),
+        modules=("vocal",),
+    ),
+    Case(
+        name="active_ta_page_de_controle",
+        origin="Se configurer par message (D72) : un module éteint, il l'active lui-même, "
+        "avec l'accord du propriétaire, au lieu d'envoyer vers le serveur.",
+        at=paris(2026, 10, 20, 12, 0),
+        facts=OWNER,
+        steps=(Say("active ta page de contrôle stp"),),
+        checks=(uses("configure:change"),),
+    ),
 )
