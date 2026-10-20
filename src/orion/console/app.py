@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -27,6 +28,8 @@ from orion.guardian.autonomy import Autonomy, label
 from orion.memory.model import CommitmentStatus
 from orion.memory.provenance import Provenances
 from orion.memory.service import MemoryService, Origin
+from orion.modules.base import Planned
+from orion.providers.spending import Spending
 
 PREFIX = "/console"
 ACTIVITY = {
@@ -59,6 +62,9 @@ color:var(--fg);border:1px solid var(--line);border-radius:6px}
 """
 
 
+Plans = Callable[[datetime, datetime], Awaitable[list[Planned]]]
+
+
 @dataclass
 class Console:
     gate: Gate
@@ -68,6 +74,10 @@ class Console:
     provenances: Provenances
     timezone: str
     secure_cookie: bool = True
+    planned: Plans | None = None
+    """What Orion will do on its own (D78)."""
+    spending: Spending | None = None
+    """What it spent (D79)."""
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -79,6 +89,7 @@ def _page(title: str, body: str) -> HTMLResponse:
             ("commitments", "Engagements"),
             ("playbook", "Manuel"),
             ("autonomy", "Autonomie"),
+            ("planned", "Prévu"),
             ("activity", "Activité"),
             ("sources", "Sources"),
         )
@@ -157,7 +168,33 @@ def console_app(console: Console) -> Starlette:
                 else "<p>Je te demande avant chaque action.</p>"
             )
         )
+        if console.spending is not None:
+            await console.spending.sync()
+            spent = console.spending.summary(console.spending.clock().date())
+            body += (
+                "<h2>Ce que j'ai coûté</h2><p>"
+                + "<br>".join(escape(line) for line in spent.splitlines())
+                + "</p>"
+            )
         return _page("Ce que je sais et ce que je fais", body)
+
+    async def planned(_request: Request) -> Response:
+        if console.planned is None:
+            return _page("Ce que je vais faire", "<p>Rien à montrer.</p>")
+        zone = ZoneInfo(console.timezone)
+        now = datetime.now(zone)
+        rows = [
+            f"<tr><td class=muted>{p.at.astimezone(zone):%a %d/%m %H:%M}</td>"
+            f"<td>{escape(p.what)}</td>"
+            f"<td class=muted>{escape(p.undo) if p.undo else ''}</td></tr>"
+            for p in await console.planned(now, now + timedelta(days=14))
+        ]
+        body = (
+            "<p>Ce que je ferai de moi-même ces deux prochaines semaines. Pour annuler, "
+            "dis-le-moi ; la colonne de droite dit comment je le ferai.</p>"
+            + ("<table>" + "".join(rows) + "</table>" if rows else "<p>Rien de prévu.</p>")
+        )
+        return _page("Ce que je vais faire", body)
 
     async def memory(request: Request) -> Response:
         past = request.query_params.get("past") == "1"
@@ -332,6 +369,7 @@ def console_app(console: Console) -> Starlette:
             post("/rules/{id}/retire", retire_rule),
             get("/autonomy", autonomy),
             post("/autonomy/{action}/revoke", revoke),
+            get("/planned", planned),
             get("/activity", activity),
             get("/sources", sources),
             post("/contain", contain),

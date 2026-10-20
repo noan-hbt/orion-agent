@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -32,8 +33,10 @@ from tests.fakes import ScriptedProvider, reply
 SETTINGS = IMessageSettings(
     owner_number="+33 6 11 11 11 11",
     identity_id="ident-1",
-    approval_timeout_seconds=0.5,
+    approval_timeout_seconds=10.0,
 )
+"""Long enough that an answer the test sends always lands in time, even on a busy machine;
+the test of a missing answer uses its own, short one."""
 
 
 async def until(condition: Callable[[], bool], within: float = 2.0) -> None:
@@ -209,10 +212,22 @@ async def test_approval_by_word_is_not_a_new_turn(
 
 
 async def test_no_answer_means_no(
-    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
+    journal: SqliteJournal, fake: FakeInkbox, provider: ScriptedProvider
 ) -> None:
-    await _bind_owner(channel, fake, provider)
-    assert (await channel.approve(PROPOSAL)).granted is False
+    orion = make_orion(journal, provider)
+    await orion.start()
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
+    impatient = replace(SETTINGS, approval_timeout_seconds=0.3)
+    channel = IMessageChannel(fake.client(), journal, inbox, impatient)
+    await channel.start()
+    worker = asyncio.create_task(inbox.run())
+    try:
+        await _bind_owner(channel, fake, provider)
+        assert (await channel.approve(PROPOSAL)).granted is False
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
 
 
 async def test_approval_refused_when_owner_never_wrote(channel: IMessageChannel) -> None:

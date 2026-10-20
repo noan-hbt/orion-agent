@@ -105,3 +105,47 @@ async def test_a_source_can_be_traced_from_the_page(world: World) -> None:
     assert "1 souvenir(s)" in page.text and "Mettre en quarantaine" in page.text
     await http.post("/console/contain", data={"source": "mail:perso:<evil@x>"})
     assert await memory.store.facts() == []
+
+
+async def test_what_orion_will_do_and_what_it_cost(journal: SqliteJournal, tmp_path: Path) -> None:
+    from datetime import datetime, timedelta
+
+    from orion.config import BudgetConfig
+    from orion.modules.base import Planned
+    from orion.providers.spending import with_spending
+    from tests.fakes import ScriptedProvider
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    gate = Gate(journal, session_key(tmp_path))
+
+    async def plans(now: datetime, until: datetime) -> list[Planned]:
+        return [
+            Planned(
+                now + timedelta(days=1),
+                "te rappeler : appeler le garage",
+                "reminders (cancel, t_1)",
+            )
+        ]
+
+    spending = with_spending(ScriptedProvider(), journal, BudgetConfig(), "Europe/Paris")
+    app = console_app(
+        Console(
+            gate,
+            journal,
+            memory,
+            None,
+            Provenances(journal, memory, Timers(journal, TimerProjection())),
+            "Europe/Paris",
+            planned=plans,
+            spending=spending,
+        )
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE) as http:
+        await logged_in(http, gate)
+        page = (await http.get("/console/planned")).text
+        assert "appeler le garage" in page and "reminders (cancel, t_1)" in page
+        home = (await http.get("/console/")).text
+        assert "ai coûté" in home and "Ce mois-ci : 0.00 $" in home
+    await store.close()

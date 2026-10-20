@@ -42,6 +42,8 @@ Le socle (D78 à D84) :
 - **D83 Mémoire qui doute** : `memory/doubt.py`.
 - **D84 Budget du message système** : `MAX_SECTION_CHARS` dans `app.py`,
   `tests/test_prompt_budget.py`.
+- La console montre ce qui est prévu (page « Prévu », D78) et ce qu'Orion a coûté (accueil,
+  D79).
 
 Les problèmes connus de la passation précédente (« demain » à 1 h du matin, longueurs et
 ironie de DeepSeek, `computer_task` au lieu de `browser`, règles de contact d'exemple dans
@@ -77,13 +79,15 @@ Inkbox, envoi de fichiers par Inkbox) sont corrigés.
   test.
 - D80 : aucun type d'événement n'a encore eu besoin d'une conversion ; le mécanisme n'a
   servi que dans les tests.
-- Pas de cas d'évaluation pour D73, D74 et D75. Pas de série complète
-  (`python -m evals --repeat 2`) depuis D60.
+- Pas de cas d'évaluation pour D75 : le harnais n'a pas de fausse boîte mail, et les outils du
+  mail ont besoin d'un compte. D73 (`un_dentiste_apres_18h`) et D74 (`envoie_mon_attestation`)
+  en ont un, 2/2 sur DeepSeek.
 
 ## Connu
 
-- `tests/test_imessage.py::test_approval_by_tapback` échoue de temps en temps (une fois sur
-  plusieurs suites complètes, jamais seul) : un test qui dépend du temps, à rendre robuste.
+- `test_approval_by_tapback` échouait de temps en temps : le délai d'approbation des tests
+  (0,5 s) était trop court sur une machine chargée. Il est à 10 s, sauf pour le test d'une
+  absence de réponse, qui a le sien.
 
 ## Faire tourner Orion
 
