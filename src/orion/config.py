@@ -49,10 +49,20 @@ class OpenRouterConfig(BaseModel):
     )
 
 
+class ChatGPTConfig(BaseModel):
+    """The owner's ChatGPT plan (D62): models named `chatgpt:<slug>` are served through it, after
+    `orion chatgpt login`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     openrouter: OpenRouterConfig = OpenRouterConfig()
+    chatgpt: ChatGPTConfig = ChatGPTConfig()
 
 
 STRONG_MODEL = "anthropic/claude-opus-5.5"
@@ -351,6 +361,11 @@ class OrionConfig(BaseModel):
     def embeddings_path(self) -> Path:
         """A cache: safe to delete, recomputed on demand."""
         return self.data_dir / "embeddings.sqlite3"
+
+    @property
+    def chatgpt_path(self) -> Path:
+        """Sign in with ChatGPT credentials (owner-only, rotating; never backed up)."""
+        return self.data_dir / "chatgpt"
 
     @property
     def guardian_ledger_path(self) -> Path:
