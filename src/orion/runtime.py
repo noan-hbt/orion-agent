@@ -104,6 +104,8 @@ class Photo:
     description: str
     tag: str = "photo"
     attributes: tuple[tuple[str, str], ...] = ()
+    spoken: bool = False
+    """A voice message from the owner's own number, transcribed: his words, not content."""
 
 
 LATE_AFTER = timedelta(minutes=2)

@@ -16,6 +16,7 @@ from orion.providers.base import (
     ModelRequest,
     ModelResponse,
     ProviderError,
+    Speaker,
 )
 
 log = structlog.get_logger(__name__)
@@ -74,6 +75,15 @@ class Router:
         if not isinstance(provider, Embedder):
             raise ProviderError(f"provider {provider.name!r} cannot embed", retryable=False)
         return await provider.embed(name, texts)
+
+    async def speak(self, model: str, text: str, voice: str) -> bytes:
+        try:
+            provider, name = self._resolve(model)
+        except ValueError as exc:
+            raise ProviderError(str(exc), retryable=False) from exc
+        if not isinstance(provider, Speaker):
+            raise ProviderError(f"provider {provider.name!r} cannot speak", retryable=False)
+        return await provider.speak(name, text, voice)
 
     def _resolve(self, spec: str) -> tuple[ModelProvider, str]:
         name, model = parse_spec(spec, self._default)

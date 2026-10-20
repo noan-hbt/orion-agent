@@ -131,3 +131,10 @@ class Embedder(Protocol):
     """A provider that also turns texts into vectors (semantic memory search)."""
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]: ...
+
+
+@runtime_checkable
+class Speaker(Protocol):
+    """A provider that also says a text aloud, as raw 16-bit mono PCM at 24 kHz."""
+
+    async def speak(self, model: str, text: str, voice: str) -> bytes: ...

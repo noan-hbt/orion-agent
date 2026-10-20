@@ -202,10 +202,14 @@ class OwnerInbox:
                 await reply.deliver(text, correlation_id)
 
         async with showing:
-            photos = await self._look(batch)
+            looked = await self._look(batch)
+            # A voice message from his own number is him speaking: his words (D71).
+            said = [item.text for item in batch if item.text]
+            said += [f"(vocal) {p.description}" for p in looked if p.spoken]
+            photos = [p for p in looked if not p.spoken]
             turn = await self._orion.handle_owner_message(
                 OWNER_THREAD,
-                "\n".join(item.text for item in batch if item.text),
+                "\n".join(said),
                 first.channel,
                 refs=[i for item in batch for i in item.message_ids],
                 interjections=interjections,

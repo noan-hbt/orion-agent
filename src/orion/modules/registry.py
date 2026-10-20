@@ -41,6 +41,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.secretary.module import SecretaryModule
     from orion.style.module import StyleModule
     from orion.thinking.module import ThinkingModule
+    from orion.vocal.module import VocalModule
     from orion.voice.module import VoiceModule
     from orion.web.module import WebModule
 
@@ -69,6 +70,7 @@ def builtin_modules() -> list[type[Module]]:
         AdviceModule,
         StyleModule,
         ConfigureModule,
+        VocalModule,
         PlacesModule,
         SecretaryModule,
         ConsoleModule,

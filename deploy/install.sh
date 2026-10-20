@@ -24,7 +24,7 @@ echo "==> domain: $DOMAIN"
 
 echo "==> packages"
 apt-get update -qq
-apt-get install -y -qq git curl sqlite3 caddy ufw ca-certificates >/dev/null
+apt-get install -y -qq git curl sqlite3 caddy ufw ca-certificates ffmpeg >/dev/null
 if ! command -v uv >/dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 fi

@@ -8,6 +8,8 @@ route follow-up requests to the same host, so the prefix written by one turn is 
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -30,6 +32,12 @@ log = structlog.get_logger(__name__)
 
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
+
+SPEAK_PROMPT = (
+    "Tu lis à voix haute, en français naturel et chaleureux, exactement le texte que "
+    "l'utilisateur te donne : sans rien ajouter, retrancher ni commenter, sans répondre à ce "
+    "qu'il dit."
+)
 
 EXPLICIT_CACHE = ("anthropic/",)
 """Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
@@ -121,6 +129,47 @@ class OpenRouterProvider:
         return await self._retrying(
             lambda attempt: self._post({"model": model, "input": texts}, "/embeddings"), parse
         )
+
+    async def speak(self, model: str, text: str, voice: str) -> bytes:
+        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio."""
+        body: dict[str, Any] = {
+            "model": model,
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice, "format": "pcm16"},
+            "stream": True,
+            "messages": [
+                {"role": "system", "content": SPEAK_PROMPT},
+                {"role": "user", "content": text},
+            ],
+        }
+        chunks: list[bytes] = []
+        try:
+            async with self._client.stream("POST", "/chat/completions", json=body) as response:
+                if response.status_code >= 400:
+                    detail = (await response.aread()).decode("utf-8", "replace")[:300]
+                    raise ProviderError(
+                        f"HTTP {response.status_code}: {detail}",
+                        retryable=response.status_code in _RETRYABLE_STATUS,
+                        status=response.status_code,
+                    )
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: ") or line == "data: [DONE]":
+                        continue
+                    event = cast(dict[str, Any], json.loads(line[6:]))
+                    if "error" in event:
+                        raise ProviderError(f"provider error: {event['error']}", retryable=False)
+                    for choice in cast(list[dict[str, Any]], event.get("choices") or []):
+                        delta = cast(dict[str, Any], choice.get("delta") or {})
+                        audio = cast(dict[str, Any], delta.get("audio") or {})
+                        if audio.get("data"):
+                            chunks.append(base64.b64decode(str(audio["data"])))
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
+        except json.JSONDecodeError as exc:
+            raise ProviderError("invalid event from provider", retryable=True) from exc
+        if not chunks:
+            raise ProviderError("the speech model sent no audio", retryable=False)
+        return b"".join(chunks)
 
     async def _retrying[T](
         self,

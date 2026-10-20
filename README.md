@@ -147,6 +147,10 @@ d'autres personnes.
 - **Tes fichiers** (D63) : une photo (HEIC compris), un PDF, un document Word ou Excel, un
   fichier texte : il le lit à l'arrivée et le garde. Un fichier audio, vidéo ou une archive,
   il le garde sans le lire.
+- **Les vocaux** (D71) : envoie-lui un vocal, il le comprend ; demande-le-lui, ou dis-lui que
+  tu conduis, il te répond en vocal.
+- **Ses réglages par message** (D72) : « active le mail », « mets tes points à 9 h » ; tu
+  approuves le changement exact, ou tu le laisses faire seul.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 

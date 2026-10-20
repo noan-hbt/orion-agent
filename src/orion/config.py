@@ -72,6 +72,8 @@ class ProvidersConfig(BaseModel):
 STRONG_MODEL = "anthropic/claude-opus-5.5"
 VISION_MODEL = "google/gemini-3.8-flash"
 IMAGE_MODEL = "google/gemini-3.1-flash-image"
+AUDIO_MODEL = "google/gemini-3.8-flash"
+SPEECH_MODEL = "openai/gpt-audio-mini"
 
 
 class AgentConfig(BaseModel):
@@ -113,10 +115,16 @@ class AgentConfig(BaseModel):
     )
     vision_model: str = Field(
         default=VISION_MODEL,
-        description="Looks at the photos the owner sends (reads HEIC, the iPhone's format)",
+        description="Looks at the photos the owner sends, and reads the documents",
     )
     image_model: str = Field(
         default=IMAGE_MODEL, description="Makes the pictures the owner asks for"
+    )
+    audio_model: str = Field(
+        default=AUDIO_MODEL, description="Transcribes the voice messages the owner sends"
+    )
+    speech_model: str = Field(
+        default=SPEECH_MODEL, description="Says Orion's voice messages aloud (audio output)"
     )
     summary_model: str | None = Field(
         default=None, description="Summarizes what a rebase drops; default: extractor_model"

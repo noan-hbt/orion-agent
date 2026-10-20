@@ -262,4 +262,4 @@ async def test_a_text_file_is_its_own_words(journal: SqliteJournal, tmp_path: Pa
 def test_a_file_name_comes_from_its_link_or_its_type() -> None:
     assert kind_of("application/pdf") == "document"
     assert kind_of("text/calendar") == "text" and kind_of("application/ld+json") == "text"
-    assert kind_of("audio/mpeg") == "other" and kind_of("image/heic") == "image"
+    assert kind_of("audio/mpeg") == "audio" and kind_of("image/heic") == "image"

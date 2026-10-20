@@ -1460,3 +1460,26 @@ démarrage.
   d'environnement, et sa valeur se met sur le serveur.
 - Sur le serveur, le fichier appartient à root : le noyau ne peut pas l'écrire, et il le dit.
   Il faudra le rendre modifiable par l'utilisateur du noyau pour s'en servir en production.
+
+## D71 — Les vocaux, dans les deux sens
+
+*20/10/2026 · acceptée*
+
+**Les siens.** Un message vocal reçu sur iMessage est gardé, converti en MP3 mono par ffmpeg
+(l'iPhone envoie du CAF ou du M4A), puis transcrit par `agent.audio_model` (Gemini Flash sur
+OpenRouter, moins d'un dixième de centime). Les noms du propriétaire sont donnés au modèle
+pour l'orthographe. Venu de son propre numéro, un vocal, c'est lui qui parle : la
+transcription rejoint son message comme ses propres mots, avec la confiance du propriétaire
+(« (vocal) … »). Ce n'est pas du contenu venu d'ailleurs, comme le texte d'une photo, sinon
+« envoie un mail à Paul » dicté serait refusé.
+
+**Les siens à lui.** `say` fait dire le texte d'Orion à `agent.speech_model` (gpt-audio-mini
+sur OpenRouter, quelques centièmes de centime par phrase), mot pour mot. Le son est ensuite
+converti en M4A, qu'iMessage lit dans la conversation, puis envoyé comme un fichier, par la
+boîte d'envoi et au propriétaire seul. Orion répond en vocal quand on le lui demande, quand le
+propriétaire conduit ou a les mains prises, ou quand il lui a parlé et que la réponse est
+courte. Il écrit alors pour l'oreille et ne répète pas sa réponse par écrit. L'écrit reste la
+règle. ffmpeg est installé par `deploy/install.sh`.
+
+Vérifié en vrai : une phrase dite par Orion, puis transcrite, revient mot pour mot (« Noan,
+ton rendez-vous chez le dentiste est demain à 9h30 »).
