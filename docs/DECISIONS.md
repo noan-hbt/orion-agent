@@ -2016,3 +2016,19 @@ des choses, trois briques s'ajoutent :
 
 Limite : en mode séparé, le gardien relaie les appels MCP sans vérifier lui-même le oui du
 propriétaire. C'est la politique du cœur qui le demande.
+
+## D96 — Un shell sur le serveur, chaque commande approuvée
+
+*20/10/2026 · acceptée*
+
+`[modules.shell]` (éteint par défaut) donne à Orion l'outil `shell`, pour ce qu'aucun autre
+outil ne fait : convertir un fichier, vérifier quelque chose, lancer un script.
+- chaque commande est soumise au propriétaire telle quelle avant de tourner. Ce n'est pas une
+  action autonomable par défaut ;
+- l'allumer est un réglage du propriétaire (`modules.shell`, comme `modules.mcp`, D92) : son
+  oui, jamais seul ;
+- la commande tourne dans `<data_dir>/workspace`, sous l'utilisateur d'Orion, avec un
+  environnement nu (PATH, HOME, LANG) : aucune clé d'Orion ne l'atteint. En mode séparé, le
+  cœur n'a de toute façon que la clé du modèle ;
+- elle s'arrête après son délai (`max_seconds` au plus), avec tout son groupe de processus. La
+  sortie est bornée et compte comme du contenu venu d'ailleurs.

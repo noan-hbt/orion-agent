@@ -34,7 +34,8 @@ def fake_server() -> httpx.MockTransport:
             result = {"tools": [
                 {"name": "search", "description": "Search notes",
                  "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}},
-                {"name": "create-page", "description": "Create a page", "inputSchema": {"type": "object"}},
+                {"name": "create-page", "description": "Create a page",
+                 "inputSchema": {"type": "object"}},
             ]}  # fmt: skip
         else:
             q = body["params"]["arguments"].get("q")

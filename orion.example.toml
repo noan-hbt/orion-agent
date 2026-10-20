@@ -337,3 +337,9 @@ port = 8792
 # [[modules.mcp.servers]]
 # name = "fichiers"
 # command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/srv/partage"]  # serveur seulement
+
+# Le shell (D96) : Orion lance une commande sur son serveur, dans data/workspace, avec un
+# environnement sans aucune clé. Tu approuves chaque commande exacte. L'allumer : ton oui.
+# [modules.shell]
+# enabled = true
+# max_seconds = 120

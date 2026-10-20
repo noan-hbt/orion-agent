@@ -23,8 +23,9 @@ ORION_SECTIONS = ("agent", "initiative", "adaptation", "memory", "modules", "voi
 """Top-level sections that are Orion's own."""
 OWNER_SECTIONS = ("guardian", "channels", "federation", "budget", "logging", "providers")
 """Top-level sections only the owner's yes changes."""
-OWNER_PATHS = ("modules.secretary.contacts",)
-"""Inside Orion's sections, what is the owner's: who may write to Orion."""
+OWNER_PATHS = ("modules.secretary.contacts", "modules.shell", "modules.mcp")
+"""Inside Orion's sections, what is the owner's: who may write to Orion, what may run on the
+server or act through others' tools."""
 OWNER_KEYS = (
     "accounts",
     "env",

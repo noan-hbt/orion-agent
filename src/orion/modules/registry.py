@@ -47,6 +47,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.recap.module import RecapModule
     from orion.relations.module import RelationsModule
     from orion.secretary.module import SecretaryModule
+    from orion.shell.module import ShellModule
     from orion.skills.module import SkillsModule
     from orion.style.module import StyleModule
     from orion.thinking.module import ThinkingModule
@@ -93,6 +94,7 @@ def builtin_modules() -> list[type[Module]]:
         RecapModule,
         McpModule,
         SkillsModule,
+        ShellModule,
     ]
 
 
