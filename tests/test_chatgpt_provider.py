@@ -171,14 +171,28 @@ async def test_web_search_text_and_citations(tmp_path: Path) -> None:
             "content": [
                 {
                     "type": "output_text",
-                    "text": "PSG won.",
+                    "text": 'Voici :\n```json\n{"answer": "PSG won."}\n```',
                     "annotations": [
                         {"type": "url_citation", "url": "https://lemonde.fr/a", "title": "Le Monde"}
                     ],
                 }
             ],
         }
-        return _sse({"type": "response.output_item.done", "item": message}, _completed())
+        search = {
+            "type": "web_search_call",
+            "action": {
+                "type": "search",
+                "sources": [
+                    {"type": "url", "url": "https://lemonde.fr/a"},
+                    {"type": "url", "url": "https://lequipe.fr/b"},
+                ],
+            },
+        }
+        return _sse(
+            {"type": "response.output_item.done", "item": search},
+            {"type": "response.output_item.done", "item": message},
+            _completed(),
+        )
 
     provider = _provider(tmp_path, handler)
     response = await provider.complete(
@@ -191,9 +205,14 @@ async def test_web_search_text_and_citations(tmp_path: Path) -> None:
     )
     await provider.aclose()
     assert sent[0]["tools"] == [{"type": "web_search"}]
-    assert sent[0]["text"] == {"format": {"type": "json_object"}}
-    assert response.text == "PSG won."
-    assert response.citations[0].url == "https://lemonde.fr/a"
+    assert "text" not in sent[0]  # JSON mode and web search together: refused by OpenAI
+    assert response.text == '{"answer": "PSG won."}'
+    assert response.message["content"] == response.text
+    assert sent[0]["include"] == ["web_search_call.action.sources"]
+    assert [(c.url, c.title) for c in response.citations] == [
+        ("https://lemonde.fr/a", "Le Monde"),
+        ("https://lequipe.fr/b", ""),
+    ]
 
 
 async def test_used_up_plan_is_not_retried_and_pictures_are_refused(tmp_path: Path) -> None:

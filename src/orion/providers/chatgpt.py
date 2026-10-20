@@ -96,6 +96,12 @@ def to_input(messages: list[Message]) -> list[dict[str, Any]]:
     return items
 
 
+def _json_object(text: str) -> str:
+    """The JSON object in a reply asked for JSON without JSON mode (fences, a sentence around)."""
+    start, end = text.find("{"), text.rfind("}")
+    return text[start : end + 1] if 0 <= start < end else text
+
+
 async def plan_models(auth: ChatGPTAuth, http: httpx.AsyncClient) -> list[tuple[str, str]]:
     """The models the signed-in plan offers, as (slug, display name), in the server's order."""
     try:
@@ -149,7 +155,7 @@ class ChatGPTProvider:
         while True:
             attempt += 1
             try:
-                return await self._stream(body, attempt)
+                response = await self._stream(body, attempt)
             except ProviderError as exc:
                 if not exc.retryable or attempt >= self._max_attempts:
                     raise
@@ -164,6 +170,12 @@ class ChatGPTProvider:
                     error=str(exc),
                 )
                 await asyncio.sleep(delay)
+                continue
+            if request.json_output and request.web_search is not None:
+                text = _json_object(response.text)
+                message = {**response.message, "content": text}
+                response = response.model_copy(update={"text": text, "message": message})
+            return response
 
     def body(self, request: ModelRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -184,6 +196,8 @@ class ChatGPTProvider:
         ]
         if request.web_search is not None:
             tools.append({"type": "web_search"})
+            # The pages the search found: a JSON reply carries no citation marks.
+            body["include"] = ["web_search_call.action.sources"]
         if tools:
             body["tools"] = tools
             if request.no_tools:
@@ -195,7 +209,9 @@ class ChatGPTProvider:
         )
         if effort is not None:
             body["reasoning"] = {"effort": effort}
-        if request.json_output:
+        if request.json_output and request.web_search is None:
+            # With web search, OpenAI refuses JSON mode: the prompt asks for JSON, and the
+            # object is taken out of the reply (`_json_object`).
             body["text"] = {"format": {"type": "json_object"}}
         return body
 
@@ -264,6 +280,11 @@ class ChatGPTProvider:
                         arguments=str(item.get("arguments") or "{}"),
                     )
                 )
+            elif item.get("type") == "web_search_call":
+                action = cast(dict[str, Any], item.get("action") or {})
+                for source in cast(list[dict[str, Any]], action.get("sources") or []):
+                    if source.get("url"):
+                        citations.append(Citation(url=str(source["url"])))
             elif item.get("type") == "message":
                 for part in cast(list[dict[str, Any]], item.get("content") or []):
                     if part.get("type") == "output_text":
@@ -274,6 +295,7 @@ class ChatGPTProvider:
                                     Citation(url=str(note["url"]), title=str(note.get("title", "")))
                                 )
         text = "".join(texts)
+        citations = list({c.url: c for c in citations}.values())  # a titled mark wins
         message: Message = {"role": "assistant", "content": text}
         if tool_calls:
             message["tool_calls"] = [
