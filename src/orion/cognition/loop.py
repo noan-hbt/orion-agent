@@ -127,6 +127,12 @@ just changed (a running call is never interrupted)."""
 
 SKIPPED = "Not run: the owner wrote meanwhile; read their message first, then decide."
 
+SWITCH_MODEL = "switch_model"
+"""A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
+`SWITCH_COST` then sets the turn's cost cap. The conversation is unchanged, only the model that
+reads it, so each request still extends the previous one."""
+SWITCH_COST = "max_cost_usd"
+
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Finished
 
 
@@ -152,6 +158,8 @@ async def run_agent(
     last_text = ""
     steps = 0
     tool_seconds = 0.0
+    model = settings.model
+    max_cost = budget.max_cost_usd
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -166,7 +174,7 @@ async def run_agent(
         messages.append(note)
         yield MessageEmitted(note, Trust.SYSTEM)
         request = ModelRequest(
-            model=settings.model,
+            model=model,
             messages=messages,
             tools=registry.specs(),
             session_id=settings.session_id,
@@ -190,7 +198,7 @@ async def run_agent(
 
     for _step in range(budget.max_steps):
         request = ModelRequest(
-            model=settings.model,
+            model=model,
             messages=messages,
             tools=registry.specs(),
             session_id=settings.session_id,
@@ -221,7 +229,7 @@ async def run_agent(
         tool_calls_made += len(response.tool_calls)
         over = (
             "cost budget"
-            if usage.cost_usd > budget.max_cost_usd
+            if usage.cost_usd > max_cost
             else "tool budget"
             if tool_calls_made > budget.max_tool_calls
             else ""
@@ -259,6 +267,11 @@ async def run_agent(
         )
         tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
+            switch = result.data.get(SWITCH_MODEL)
+            if isinstance(switch, str) and switch and not result.is_error:
+                log.info("loop.model_switched", thread=settings.thread_id, model=switch)
+                model = switch
+                max_cost = max(max_cost, float(result.data.get(SWITCH_COST, max_cost)))
             context_trust = min(context_trust, result.trust)
             tool_message: Message = {
                 "role": "tool",
