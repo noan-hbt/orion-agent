@@ -309,7 +309,7 @@ class Photos:
         content_type = attachment.content_type.split(";")[0].strip().lower()
         if attachment.size is not None and attachment.size > MAX_BYTES:
             raise ValueError(f"trop lourde ({attachment.size} octets)")
-        data: bytes = await self._fetch(attachment)
+        data: bytes = await (attachment.fetch() if attachment.fetch else self._fetch(attachment))
         if len(data) > MAX_BYTES:
             raise ValueError(f"trop lourde ({len(data)} octets)")
         kind = kind_of(content_type)

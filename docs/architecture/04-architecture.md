@@ -321,17 +321,26 @@ Implémente D12 (détail dans `03-jarvis.md` §4).
 
 ## 10. Canaux
 
+Tout passe par la boîte de réception unifiée (`channels/inbox.py`, D88). Un canal est un module
+qui dépose les messages du propriétaire dans la boîte et lui fournit une sortie :
+
 ```python
-class Channel(Protocol):
-    id: str
-    async def inbound(self) -> AsyncIterator[InboundMessage]: ...
-    async def send(self, msg: OutboundMessage) -> DeliveryReceipt: ...  # appelé par le gardien
-    capabilities: ChannelCapabilities   # réactions, frappe, médias, groupes, voix…
+class Outlet(Protocol):              # ce que fait tout canal
+    name: str
+    async def available(self) -> bool: ...
+    async def deliver(self, text, correlation_id) -> None: ...   # par l'outbox du canal
+    def working(self, item): ...     # accusé de lecture, « en train d'écrire »
+class FileOutlet(Outlet): async def deliver_file(self, path, caption, correlation_id): ...
+class AskingOutlet(Outlet): async def approve(self, proposal) -> Approval: ...
 ```
 
-- **iMessage via Inkbox** (D9) : webhook entrant, envoi par API, indicateur de frappe, réactions,
-  regroupement des rafales entrantes (3 s).
-- **Telegram** : secours.
+Réponses, messages d'initiative, fichiers, vocaux et demandes d'accord partent par le canal d'où
+il a écrit en dernier, sinon le premier disponible. Ses réactions deviennent des
+`feedback.reaction`, quel que soit le canal.
+
+- **iMessage** (D9) : derrière une « ligne » (`channels/line.py`) ; Inkbox aujourd'hui, Blooio ou
+  BlueBubbles demain, une classe chacun. Indicateur de frappe, réactions, bulles.
+- **Telegram** (D88) : un bot à soi, gratuit et sans plafond ; boutons Oui / Non pour les accords.
 - **Terminal** : développement et administration.
 - **Voix** (D10) : `orion-voice` (Pipecat + Twilio) parle au noyau par des outils à deux vitesses
   (`consult_fast` < 1,5 s ; `start_task` → résultat dans l'appel ou par iMessage). Brief préparé
@@ -410,7 +419,7 @@ orion/
   tools/          contrat d'outil, outils intégrés, adaptateur MCP
   providers/      API (openrouter, anthropic, openai), cli_model, cli_agent, routeur
   guardian/       pare-feu, politiques, moniteur, coffre, outbox, approbations
-  channels/       imessage_inkbox, telegram, terminal
+  channels/       inbox, imessage + line (inkbox), telegram, terminal
   voice/          passerelle Pipecat, outils vocaux, brief de sonnerie
   federation/     identité, relations, capacités, négociateur, mandats, reçus, A2A
   exec/           sandboxes d'exécution
@@ -484,7 +493,7 @@ rendus pour l'initiative. Chaque module déclare ce qu'il permettrait s'il étai
 
 | Domaine | Modules | Décisions |
 |---|---|---|
-| Canaux | `imessage`, `voice`, `vocal` (vocaux dans les deux sens), `photos` (tout fichier reçu) | D18, D40, D50, D63, D71 |
+| Canaux | `imessage`, `telegram`, `voice`, `vocal` (vocaux dans les deux sens), `photos` (tout fichier reçu) | D18, D40, D50, D63, D71, D88 |
 | Sources | `calendar`, `mail` (lecture seule stricte, quarantaine, rangement explicite), `web` | D25, D31, D75 |
 | Mains | `computer` (navigateur), `booking` (rendez-vous de bout en bout), `files`, `hands`, `delegation`, `expert` (modèle plus fort) | D33, D41, D46, D60, D61, D73 |
 | Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77 |
@@ -515,7 +524,7 @@ src/orion/
   initiative/    moteur, arbitre, minuteurs, ce qui est prévu, simulation
   guardian/      politiques, autonomie, limites, outbox, sessions prêtées, coffre, service
   providers/     openrouter, chatgpt (+ connexion), routeur, dépense
-  channels/      boîte de réception unifiée, iMessage par Inkbox, webhook, terminal
+  channels/      boîte de réception unifiée, iMessage (ligne Inkbox), Telegram, webhook, terminal
   modules/       la plaque : base, registre (intégrés puis paquets `orion.modules`)
   tools/         contrat d'outil, outils intégrés
   resources/     consignes de la constitution, une par module

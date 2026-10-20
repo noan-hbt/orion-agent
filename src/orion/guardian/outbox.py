@@ -121,10 +121,13 @@ class Outbox:
         return await self._deliver(Pending(outbox_id, channel, to, text, correlation_id, media))
 
     async def resume(self) -> int:
-        """Retry sends left unsettled by a crash, with their original idempotency keys."""
+        """Retry sends left unsettled by a crash, with their original idempotency keys. Each
+        channel has its own outbox: another channel's sends are its own to retry."""
         await self._runner.catch_up()
         resumed = 0
         for item in list(self.projection.pending.values()):
+            if item.channel not in self._transports:
+                continue
             log.warning("outbox.resume", outbox_id=item.outbox_id, channel=item.channel)
             try:
                 await self._deliver(item)

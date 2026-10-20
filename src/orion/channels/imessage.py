@@ -1,4 +1,4 @@
-"""iMessage channel, through an Inkbox managed line.
+"""iMessage channel, through a line (`orion.channels.line`: Inkbox today, D88).
 
 Inbound messages arrive by webhook or by polling; both go through `receive`, which deduplicates
 by message id and journals the message before anything else happens (a webhook is acknowledged
@@ -35,12 +35,12 @@ from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
 from orion.channels.inkbox import (
     IMessage,
-    InkboxClient,
-    InkboxError,
+    LineError,
     MessageReaction,
     ReactionEvent,
     WebhookEvent,
 )
+from orion.channels.line import IMessageLine
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -231,7 +231,7 @@ class IMessageChannel:
 
     def __init__(
         self,
-        client: InkboxClient,
+        client: IMessageLine,
         journal: EventStore,
         inbox: OwnerInbox,
         settings: IMessageSettings,
@@ -249,7 +249,7 @@ class IMessageChannel:
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._polls = 0
         self._gone: set[str] = set()
-        """Conversations Inkbox no longer knows (another line): not polled again."""
+        """Conversations the line no longer knows (another line): not polled again."""
         self.others: Callable[[IMessage], None] | None = None
         """Gets the messages of anyone but the owner (the secretary, D54), once journaled."""
         inbox.register(self)
@@ -281,7 +281,7 @@ class IMessageChannel:
     async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
         try:
             sent = await self._client.send(to, text, idempotency_key, self._settings.identity_id)
-        except InkboxError as exc:
+        except LineError as exc:
             raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
         return sent.id
 
@@ -294,7 +294,7 @@ class IMessageChannel:
             sent = await self._client.send(
                 to, text, idempotency_key, self._settings.identity_id, media_url=url
             )
-        except InkboxError as exc:
+        except LineError as exc:
             raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
         except OSError as exc:
             raise SendError(f"the file cannot be read: {exc}", retryable=False) from exc
@@ -317,7 +317,7 @@ class IMessageChannel:
     @asynccontextmanager
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
         """Read receipt, then a typing indicator kept alive until the answer is ready. Both run
-        beside the turn: the model starts at once instead of waiting for Inkbox."""
+        beside the turn: the model starts at once instead of waiting for the line."""
         conversation = item.context or self.state.owner_conversation
         if conversation is None:
             yield
@@ -465,7 +465,7 @@ class IMessageChannel:
             return
         try:
             recent = await self._client.recent(conversation, self._settings.identity_id)
-        except InkboxError as exc:
+        except LineError as exc:
             if exc.status != 404:
                 raise
             # Another line's conversation (the identity changed), or one Inkbox dropped: the
@@ -520,7 +520,7 @@ class IMessageChannel:
         """Cosmetic calls (typing, read receipts) must never break a turn; failures are logged."""
         try:
             await call
-        except InkboxError:
+        except LineError:
             log.warning("imessage.cosmetic_failed", call=what, exc_info=True)
 
     # -- approvals ----------------------------------------------------------------------------

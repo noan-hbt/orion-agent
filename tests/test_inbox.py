@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 import pytest
 import structlog.testing
@@ -11,8 +13,9 @@ from pydantic import BaseModel
 from orion.channels.inbox import Inbound, OwnerInbox
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
+from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.guardian.policy import Guardian
+from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.runtime import Orion
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
 from tests.fakes import ScriptedProvider, call_tools, reply
@@ -244,3 +247,46 @@ async def test_a_turn_that_may_stay_silent_says_nothing_midway(
     await until(lambda: len(provider.requests) == 2)
     await asyncio.sleep(0.05)
     assert imessage.sent == []
+
+
+class Empty(BaseModel):
+    pass
+
+
+async def nothing(_args: Any, _ctx: ToolContext) -> ToolResult:
+    return ToolResult("")
+
+
+class FileOutletFake(Outlet):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.files: list[str] = []
+        self.asked: list[str] = []
+
+    async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
+        self.files.append(path.name)
+
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        self.asked.append(proposal.tool.name)
+        return Approval(True)
+
+
+async def test_files_and_questions_go_where_he_last_wrote_from(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    """D88: one way out for everything, whatever the channel; a channel is just a module."""
+    imessage, telegram, tui = FileOutletFake("imessage"), FileOutletFake("telegram"), Outlet("tui")
+    for outlet in (tui, imessage, telegram):
+        inbox.register(outlet)
+    await inbox.deliver_file(Path("vocal.m4a"), "", None)
+    assert imessage.files == ["vocal.m4a"]  # the first that carries files: not the terminal
+    provider.extend(reply("ok"))
+    inbox.submit(Inbound("telegram", ("t",), "salut"))
+    await until(lambda: bool(telegram.sent))
+    await inbox.deliver_file(Path("image.png"), "", None)
+    note = Tool(name="note", description="n", input_model=Empty, handler=nothing)
+    assert await inbox.approve(ActionProposal(note, Empty(), Trust.WEB, "owner"))
+    assert telegram.files == ["image.png"] and telegram.asked == ["note"]
+    telegram.up = False  # gone: the next one up
+    await inbox.deliver_file(Path("b.pdf"), "", None)
+    assert imessage.files == ["vocal.m4a", "b.pdf"]

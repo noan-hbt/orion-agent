@@ -10,7 +10,9 @@ that is the same whatever the channel:
 - while Orion thinks, the channel shows it is working (read receipt, typing indicator);
 - the reply goes back through the outlet the message asked for, unless Orion answers
   `SILENCE` (a call transcript that needs no follow-up, or a voice message already sent);
-- proactive messages go to the first available outlet, in order of preference.
+- proactive messages, files and questions for approval go where he last wrote from, or else
+  to the first available outlet, in order of preference (D88): a channel is one module, and
+  everything Orion sends goes through here, whatever the channel.
 """
 
 from __future__ import annotations
@@ -22,11 +24,14 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import structlog
 
 from orion.cognition.loop import StopReason
+from orion.guardian.outbox import SendError
+from orion.guardian.policy import ActionProposal, Approval
 from orion.runtime import OWNER_THREAD, Interjection, Orion, Photo, TurnResult, is_silence
 
 log = structlog.get_logger(__name__)
@@ -34,11 +39,13 @@ log = structlog.get_logger(__name__)
 
 @dataclass(frozen=True)
 class Attachment:
-    """A file sent with a message, fetchable at `url` for a while."""
+    """A file sent with a message, fetchable at `url` for a while, or by `fetch` when the
+    channel must fetch it itself (a link that would carry its key)."""
 
     url: str
     content_type: str = ""
     size: int | None = None
+    fetch: Callable[[], Awaitable[bytes]] | None = field(default=None, compare=False, repr=False)
 
 
 Eyes = Callable[[Sequence[Attachment], str, str], Awaitable[list[Photo]]]
@@ -65,7 +72,7 @@ class Inbound:
 
 
 class Outlet(Protocol):
-    """A channel's owner-facing side."""
+    """A channel's owner-facing side: what every channel does."""
 
     name: str
 
@@ -76,6 +83,20 @@ class Outlet(Protocol):
     def working(self, item: Inbound) -> AbstractAsyncContextManager[None]:
         """Shown while Orion handles `item`: read receipt, typing indicator…"""
         ...
+
+
+@runtime_checkable
+class FileOutlet(Outlet, Protocol):
+    """A channel that can carry a file to the owner (a picture, a PDF, a voice message)."""
+
+    async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None: ...
+
+
+@runtime_checkable
+class AskingOutlet(Outlet, Protocol):
+    """A channel where the owner can say yes or no to an action (D26)."""
+
+    async def approve(self, proposal: ActionProposal) -> Approval: ...
 
 
 @asynccontextmanager
@@ -99,9 +120,11 @@ class OwnerInbox:
         """Taken off the queue but kept for a later turn, in arrival order."""
         self._background: set[asyncio.Task[None]] = set()
         self.eyes: Eyes | None = None
+        self.last_channel: str | None = None
+        """The outlet he last wrote from: where Orion answers him first."""
 
     def register(self, outlet: Outlet) -> None:
-        """Outlets are tried for proactive messages in registration order."""
+        """Outlets are tried in registration order, after the one he last wrote from."""
         self._outlets[outlet.name] = outlet
 
     def submit(self, item: Inbound) -> None:
@@ -118,9 +141,27 @@ class OwnerInbox:
             raise RuntimeError("no owner channel is available")
         await outlet.deliver(text, correlation_id)
 
-    async def _preferred(self) -> Outlet | None:
-        for outlet in self._outlets.values():
-            if await outlet.available():
+    async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
+        """A file for the owner, on a channel that carries files."""
+        outlet = await self._preferred(lambda o: isinstance(o, FileOutlet))
+        if not isinstance(outlet, FileOutlet):
+            raise SendError("no owner channel can carry a file", retryable=False)
+        await outlet.deliver_file(path, caption, correlation_id)
+
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        """Put an action to the owner where he can answer it; nobody to ask means no."""
+        outlet = await self._preferred(lambda o: isinstance(o, AskingOutlet))
+        if not isinstance(outlet, AskingOutlet):
+            log.warning("inbox.approval_unreachable", tool=proposal.tool.name)
+            return Approval(False)
+        return await outlet.approve(proposal)
+
+    async def _preferred(self, can: Callable[[Outlet], bool] = lambda _: True) -> Outlet | None:
+        """Where he last wrote from, if it is up; else the first outlet up, in order."""
+        last = self._outlets.get(self.last_channel or "")
+        ordered = [*([last] if last is not None else []), *self._outlets.values()]
+        for outlet in ordered:
+            if can(outlet) and await outlet.available():
                 return outlet
         return None
 
@@ -187,6 +228,8 @@ class OwnerInbox:
         started = time.monotonic()
         source = self._outlets.get(first.channel)
         reply = self._outlets.get(first.reply_via or first.channel)
+        if reply is not None and not first.allow_silence:
+            self.last_channel = reply.name
         showing = source.working(batch[-1]) if source is not None else nothing_to_show()
 
         async def interjections() -> list[Interjection]:

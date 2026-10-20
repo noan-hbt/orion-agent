@@ -101,7 +101,7 @@ class IMessageModule(Module):
             desk=self._guardian,
         )
         await channel.start()
-        plate.approver.target = channel
+        plate.approver.target = inbox  # it asks where he last wrote from (D88)
         self.imessage = channel
         self.identity_id = identity.id
         return channel

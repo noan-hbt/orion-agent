@@ -1786,3 +1786,25 @@ prend les images : la photo est maintenant jointe au message, Orion la regarde d
 
 Lire le constat : 0,23 centime chez DeepInfra, contre 1,1 centime pour les deux regards de
 Gemini.
+
+## D88 — Un seul contrat de canal ; Telegram ; iMessage derrière une ligne
+
+*20/10/2026 · acceptée*
+
+La boîte de réception unifiée recevait tout, mais seul le texte en repartait de façon générique :
+fichiers, vocaux et demandes d'accord étaient branchés en dur sur iMessage, et le canal iMessage
+sur Inkbox. Le jour où le quota d'Inkbox (100 messages par 24 h) a coupé Orion, il n'y avait pas
+d'autre chemin. Désormais :
+- tout ce qui part passe par la boîte : texte, initiative, fichiers (`FileOutlet`), demandes
+  d'accord (`AskingOutlet`). Elle choisit le canal d'où il a écrit en dernier, sinon le premier
+  disponible. Un nouveau canal est un module, rien d'autre à brancher ;
+- chaque canal a son outbox, et une outbox ne reprend au redémarrage que ses propres envois ;
+- iMessage parle à une ligne (`channels/line.py`) : Inkbox aujourd'hui, une autre classe pour
+  Blooio ou BlueBubbles (`[channels.imessage] provider`) ;
+- Telegram (`[channels.telegram]`), par un bot à soi : gratuit, sans plafond. Photos, vocaux
+  (OGG), fichiers dans les deux sens, « en train d'écrire », réactions, boutons Oui / Non. Le
+  lien d'un fichier reçu porte le jeton du bot : le canal le télécharge lui-même, le lien ne
+  sort pas du module. Il ne passe pas encore par le processus gardien (D28) : avec le gardien
+  activé, le module refuse de se charger.
+
+    telegram.inbound

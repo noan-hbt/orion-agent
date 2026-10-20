@@ -207,6 +207,10 @@ class IMessageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    provider: Literal["inkbox"] = Field(
+        default="inkbox",
+        description="Who carries the line; another provider is one class (`channels.line`, D88)",
+    )
     api_key: SecretRef = SecretRef(env="INKBOX_API_KEY")
     base_url: str = "https://inkbox.ai"
     identity: str = Field(default="", description="Orion's Inkbox agent handle")
@@ -227,10 +231,27 @@ class IMessageConfig(BaseModel):
     approval_timeout_seconds: float = Field(default=900.0, gt=0)
 
 
+class TelegramConfig(BaseModel):
+    """Telegram, through a bot of one's own (D88): free, no daily cap."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    bot_token: SecretRef = SecretRef(env="TELEGRAM_BOT_TOKEN")
+    owner_id: int = Field(
+        default=0,
+        description="The owner's Telegram user id: anyone else is ignored. Unknown? Write to "
+        "the bot: Orion logs the id of whoever writes (`telegram.stranger`)",
+    )
+    poll_seconds: int = Field(default=25, ge=1, le=50, description="Long polling timeout")
+    approval_timeout_seconds: float = Field(default=900.0, gt=0)
+
+
 class ChannelsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     imessage: IMessageConfig = IMessageConfig()
+    telegram: TelegramConfig = TelegramConfig()
 
 
 class InitiativeConfig(BaseModel):

@@ -149,6 +149,16 @@ async def test_outbox_journals_and_resumes_with_the_same_key(journal: SqliteJour
     assert await Outbox(journal, {"imessage": transport}).resume() == 0
 
 
+async def test_each_channel_resumes_only_its_own_sends(journal: SqliteJournal) -> None:
+    """Two channels, two outboxes on one journal: one never fails the other's pending sends."""
+    down = FlakyTransport([SendError("network down", retryable=True)])
+    with pytest.raises(SendError):
+        await Outbox(journal, {"telegram": down}).send("telegram", "42", "hello")
+    assert await Outbox(journal, {"imessage": FlakyTransport([])}).resume() == 0
+    assert await Outbox(journal, {"telegram": down}).resume() == 1
+    assert FAILED not in [e.kind for e in await journal.read()]
+
+
 async def test_outbox_does_not_retry_a_definite_refusal(journal: SqliteJournal) -> None:
     transport = FlakyTransport([SendError("blocked", retryable=False)])
     outbox = Outbox(journal, {"imessage": transport})

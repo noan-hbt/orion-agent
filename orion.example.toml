@@ -72,6 +72,15 @@ signing_key = { env = "INKBOX_SIGNING_KEY" }
 coalesce_seconds = 0.5           # bursts become one message (adds this delay); later texts join the turn
 approval_timeout_seconds = 900   # no answer means no
 
+# Telegram through a bot of your own (D88): free, no daily cap, beside iMessage or instead of it.
+# Create the bot with @BotFather, set TELEGRAM_BOT_TOKEN on the server, write to the bot once:
+# Orion logs your user id (telegram.stranger), which goes in owner_id. Orion answers where you
+# wrote from. Not yet through the guardian process: it refuses to load with [guardian] enabled.
+[channels.telegram]
+enabled = false
+bot_token = { env = "TELEGRAM_BOT_TOKEN" }
+owner_id = 0                     # your Telegram user id; anyone else is ignored
+
 # When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
 [initiative]
 enabled = true

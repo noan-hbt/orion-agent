@@ -66,5 +66,17 @@ async def pcm_to_m4a(pcm: bytes, rate: int = SPEECH_RATE) -> bytes:
         return await asyncio.to_thread(out.read_bytes)
 
 
+async def to_voice_note(data: bytes) -> bytes:
+    """Any audio file, as OGG Opus: what Telegram plays as a voice message."""
+    with tempfile.TemporaryDirectory(prefix="orion-voice-") as folder:
+        source = Path(folder) / "voice"
+        await asyncio.to_thread(source.write_bytes, data)
+        return await _ffmpeg(
+            ["-i", str(source), "-ac", "1", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg",
+             "pipe:1"],
+            b"",
+        )  # fmt: skip
+
+
 def seconds_of_pcm(pcm: bytes, rate: int = SPEECH_RATE) -> float:
     return len(pcm) / (2 * rate)

@@ -32,15 +32,17 @@ def config(tmp_path: Path, **imessage: object) -> OrionConfig:
     )
 
 
-async def test_serve_wires_the_channel_as_approver_and_shares_the_registry(
+async def test_serve_asks_through_the_inbox_and_shares_the_registry(
     tmp_path: Path,
 ) -> None:
+    """D88: the inbox puts an action to the owner on the channel he last wrote from."""
     cfg = config(tmp_path)
     module = IMessageModule(cfg, FakeInkbox().client())
     async with build_app(cfg, ScriptedProvider(), [module]) as app:
-        channel = await module.connect(app.plate, owner_inbox(app))
+        inbox = owner_inbox(app)
+        channel = await module.connect(app.plate, inbox)
         assert isinstance(channel, IMessageChannel)
-        assert app.approver.target is channel
+        assert app.approver.target is inbox
         tools = {spec.name for spec in app.orion._registry.specs()}
         assert {"remind_me", "remember", "current_time"} <= tools
 

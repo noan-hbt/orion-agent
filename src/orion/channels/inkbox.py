@@ -33,11 +33,17 @@ GRANT_HEADER = "X-Orion-Grant"
 Reaction = Literal["love", "like", "dislike", "laugh", "emphasize", "question", "eyes", "custom"]
 
 
-class InkboxError(RuntimeError):
+class LineError(RuntimeError):
+    """A failed call to an iMessage line, whatever the provider (`orion.channels.line`)."""
+
     def __init__(self, message: str, status: int | None = None, retryable: bool = False) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
+
+
+class InkboxError(LineError):
+    pass
 
 
 class _Model(BaseModel):
