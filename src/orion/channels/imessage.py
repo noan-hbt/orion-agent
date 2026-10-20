@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import structlog
 
@@ -602,4 +603,15 @@ def _instant(stamp: str) -> datetime | None:
 
 
 def _attachments(message: IMessage) -> tuple[Attachment, ...]:
-    return tuple(Attachment(m.url, m.content_type, m.size) for m in message.media or [])
+    return tuple(
+        Attachment(m.url, m.content_type or _guessed_type(m.url), m.size)
+        for m in message.media or []
+    )
+
+
+def _guessed_type(url: str) -> str:
+    """Inkbox does not always know an attachment's type: its name usually tells."""
+    path = urlsplit(url).path.lower()
+    if path.endswith((".heic", ".heif")):
+        return "image/heic"
+    return mimetypes.guess_type(path)[0] or ""

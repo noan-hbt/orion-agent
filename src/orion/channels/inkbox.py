@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 log = structlog.get_logger(__name__)
 
@@ -77,6 +77,12 @@ class Media(_Model):
     url: str
     content_type: str = ""
     size: int | None = None
+
+    @field_validator("content_type", mode="before")
+    @classmethod
+    def _unknown_type(cls, value: object) -> object:
+        """Inkbox sends `null` for an attachment whose type it does not know: read by name."""
+        return "" if value is None else value
 
 
 class IMessage(_Model):
