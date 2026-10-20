@@ -75,6 +75,7 @@ async def test_sign_in_registers_then_stores_private_credentials(tmp_path: Path)
     assert params["agent_name_hint"] == "Orion"
     assert PLAN_SCOPE in params["scope"].split()
     assert params["code_challenge_method"] == "S256"
+    assert params["ext_agent_host_id"].startswith("urn:uuid:")  # anything else is refused
     server.nonce = params["nonce"]
 
     redirected = (

@@ -141,7 +141,7 @@ class ChatGPTAuth:
         known = self.load()
         pending = Pending(
             client_id=known.client_id if known else FIRST_CLIENT,
-            host_id=known.host_id if known else str(uuid.uuid4()),
+            host_id=known.host_id if known else f"urn:uuid:{uuid.uuid4()}",
             state=secrets.token_urlsafe(24),
             nonce=secrets.token_urlsafe(24),
             verifier=secrets.token_urlsafe(64),
