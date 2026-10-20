@@ -30,7 +30,8 @@ contradict them or add specifics neither contains: dates, weekdays, times, amoun
 places, deadlines, claims that something was done. Tone, wording, jokes, greetings, opinions,
 questions and offers to help are fine. Paraphrase and reasonable reading of the facts are fine
 (something "not marked as done" may be called "still not done"; "demain" for tomorrow's date).
-Flag only what would mislead the owner about a fact; when in doubt, it is ok.
+Flag only what would mislead the owner about a fact; when in doubt, it is ok. Leaving a fact
+out is never an issue: you check what the draft says, not what it could have said.
 
 Reply with ONE JSON object: {"ok": true|false, "issues": ["short description", ...]}.
 """
