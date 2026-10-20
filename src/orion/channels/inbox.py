@@ -130,6 +130,17 @@ class OwnerInbox:
             return self._held.popleft()
         return await self._queue.get()
 
+    def _waiting(self, first: Inbound) -> bool:
+        """Whether a message that would join the running turn has arrived (nothing is taken)."""
+        while True:
+            try:
+                self._held.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return bool(self._held) and (
+            self._held[0].channel == first.channel and not self._held[0].allow_silence
+        )
+
     def _arrived_meanwhile(self, first: Inbound) -> list[Inbound]:
         """Messages that can join the running turn: same channel, needing an answer, and not
         behind one that cannot (order is kept). Everything else waits for its own turn."""
@@ -173,6 +184,7 @@ class OwnerInbox:
                 refs=[i for item in batch for i in item.message_ids],
                 interjections=interjections,
                 progress=progress,
+                waiting=lambda: not first.allow_silence and self._waiting(first),
             )
         thought = time.monotonic() - started
         text = turn.text.strip()

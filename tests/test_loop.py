@@ -18,7 +18,7 @@ from orion.cognition.loop import (
 from orion.core.events import Trust
 from orion.guardian.policy import Guardian
 from orion.providers.base import Message
-from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
 from tests.fakes import ScriptedProvider, call_tools, echo_tool, fail, reply
 
@@ -218,3 +218,49 @@ async def test_untrusted_tool_output_taints_following_messages() -> None:
     trusts = [e.trust for e in events if isinstance(e, MessageEmitted)]
     # assistant call (system), tool output (web), final answer (tainted by the web content)
     assert trusts == [Trust.SYSTEM, Trust.WEB, Trust.WEB]
+
+
+async def test_calls_not_started_are_skipped_when_the_owner_writes() -> None:
+    """Like OpenClaw's steering: a running call finishes, the next ones wait for the owner."""
+
+    class _Step(BaseModel):
+        label: str
+
+    ran: list[str] = []
+    wrote = False
+
+    async def step(args: Any, _ctx: ToolContext) -> ToolResult:
+        nonlocal wrote
+        ran.append(args.label)
+        wrote = True  # the owner writes while this call runs
+        return ToolResult(args.label)
+
+    sequential = Tool(
+        name="step",
+        description="d",
+        input_model=_Step,
+        handler=step,
+        effect=Effect.NONE,
+        reversibility=Reversibility.REVERSIBLE,
+    )
+    provider = ScriptedProvider(
+        call_tools(("step", {"label": "a"}), ("step", {"label": "b"}), ("echo", {"text": "c"})),
+        reply("ok"),
+    )
+    messages: list[Message] = [{"role": "user", "content": "u"}]
+    events = [
+        e
+        async for e in run_agent(
+            provider,
+            ToolRegistry([sequential, echo_tool()]),
+            Guardian(),
+            messages,
+            SETTINGS,
+            waiting=lambda: wrote,
+        )
+    ]
+    assert ran == ["a"]
+    results = [m["content"] for m in messages if m["role"] == "tool"]
+    assert results[0] == "a" and all("owner wrote" in r for r in results[1:])
+    assert len(results) == 3  # every call still has its answer
+    assert finished(events).reason is StopReason.COMPLETED

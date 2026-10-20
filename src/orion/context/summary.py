@@ -77,5 +77,22 @@ async def summarize(
     return text or None
 
 
+def sides(messages: list[Message]) -> tuple[str, str]:
+    """What the owner said and what Orion said (with a glimpse of its tools), for the memory
+    extractor's last look at turns about to leave the window."""
+    owner: list[str] = []
+    orion: list[str] = []
+    for message in messages:
+        role = message.get("role")
+        content = str(message.get("content") or "")
+        if role == "user" and content:
+            owner.append(content)
+        elif role == "assistant" and content:
+            orion.append(content)
+        elif role == "tool" and content:
+            orion.append(f"[outil] {content[:TOOL_CHARS]}")
+    return "\n".join(owner)[-MAX_INPUT_CHARS:], "\n".join(orion)[-MAX_INPUT_CHARS:]
+
+
 def summary_block(text: str) -> str:
     return f"<plus-tot-dans-la-conversation>\n{text}\n</plus-tot-dans-la-conversation>"

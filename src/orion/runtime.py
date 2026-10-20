@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -27,12 +27,19 @@ from orion.cognition.loop import (
     ModelCalled,
     StopReason,
     ToolExecuted,
+    Waiting,
     run_agent,
 )
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, render_user_message
-from orion.context.summary import summarize, summary_block
-from orion.context.threads import MESSAGE_KIND, REBASED_KIND, Thread, ThreadProjection
+from orion.context.summary import sides, summarize, summary_block
+from orion.context.threads import (
+    MESSAGE_KIND,
+    PRUNED_KIND,
+    REBASED_KIND,
+    Thread,
+    ThreadProjection,
+)
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -47,6 +54,9 @@ from orion.providers.base import Message, ModelProvider, Usage
 from orion.tools.base import ToolRegistry
 
 log = structlog.get_logger(__name__)
+
+PRUNE_OVER = 2000
+"""Tool results longer than this are shortened after a pause."""
 
 OWNER_THREAD = "owner"
 """The owner's single conversation thread, shared by every owner channel."""
@@ -67,6 +77,10 @@ class TurnResult:
     tool_seconds: float = 0.0
     interjections: int = 0
     """Owner messages that arrived during the turn and were read before it ended."""
+    leaving: tuple[str, str] | None = None
+    """(owner, Orion) text of trusted turns this turn's rebase took out of the window: the
+    memory extractor gets a last look at them before they are gone (OpenClaw's pre-compaction
+    flush)."""
 
 
 @dataclass(frozen=True)
@@ -133,6 +147,7 @@ class Orion:
         refs: list[str] | None = None,
         interjections: Interjections | None = None,
         progress: Progress | None = None,
+        waiting: Waiting | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
         `refs` are the channel's own message ids, recorded so a restart knows they were handled.
@@ -153,6 +168,7 @@ class Orion:
             now=now,
             interjections=interjections,
             progress=progress,
+            waiting=waiting,
         )
 
     async def handle_initiative(
@@ -199,6 +215,7 @@ class Orion:
         owner_text: str | None = None,
         interjections: Interjections | None = None,
         progress: Progress | None = None,
+        waiting: Waiting | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -214,6 +231,7 @@ class Orion:
                 owner_text if owner_text is not None else body,
                 interjections,
                 progress,
+                waiting,
             )
 
     async def _turn_locked(
@@ -230,6 +248,7 @@ class Orion:
         owner_text: str,
         interjections: Interjections | None = None,
         progress: Progress | None = None,
+        waiting: Waiting | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -245,6 +264,19 @@ class Orion:
 
         events: list[NewEvent] = [received]
         stale = self._untrusted_and_idle(thread, when)
+        prune = [] if stale else self._prunable(thread, when)
+        if prune:
+            log.info("thread.prune", thread=thread_id, results=len(prune))
+            events.append(
+                self._event(
+                    PRUNED_KIND,
+                    {"thread_id": thread_id, "indexes": prune},
+                    Trust.SYSTEM,
+                    correlation_id,
+                    received.id,
+                )
+            )
+            thread = replace(thread, pruned=thread.pruned | set(prune))  # as it will be shown
         new_base = (
             len(thread.messages)
             if stale
@@ -252,10 +284,14 @@ class Orion:
         )
         window = thread.messages[new_base if new_base is not None else thread.base :]
         blocks = await self._memory_blocks(memory_query, window)
+        leaving: tuple[str, str] | None = None
         if new_base is not None and not stale:
             summary = await self._summarize_dropped(thread, new_base)
             if summary:
                 blocks.insert(0, summary_block(summary))
+            dropped = self._trusted_dropped(thread, new_base)
+            if dropped:
+                leaving = sides(dropped)
         user_message = render_user_message(body, when, channel, blocks)
         if new_base is not None:
             log.info(
@@ -361,6 +397,7 @@ class Orion:
             settings,
             context_trust=thread.window_trust(),
             steer=steer,
+            waiting=waiting,
         ):
             match event:
                 case MessageEmitted(message=message, trust=trust):
@@ -448,6 +485,7 @@ class Orion:
                         steps=steps,
                         tool_seconds=tool_seconds,
                         interjections=len(heard),
+                        leaving=leaving,
                     )
 
         await self._projections.catch_up()
@@ -468,14 +506,27 @@ class Orion:
         return self._journal
 
     async def consolidate(self, turn: TurnResult) -> ExtractionReport | None:
-        """Run background memory extraction for a finished turn (off the critical path)."""
-        if (
-            self._memory is None
-            or self._extractor is None
-            or turn.reason is not StopReason.COMPLETED
-            or not turn.owner_text
-        ):
+        """Run background memory extraction for a finished turn (off the critical path), and
+        for the turns its rebase took out of the window."""
+        if self._memory is None or self._extractor is None:
             return None
+        report: ExtractionReport | None = None
+        if turn.leaving is not None:
+            report = await self._extractor.consolidate(
+                *turn.leaving,
+                Origin(
+                    actor="orion:extractor",
+                    source=f"thread:{turn.thread_id}",
+                    trust=EXTRACTOR_TRUST,
+                    derived_from=(turn.origin_event_id,),
+                    correlation_id=turn.correlation_id,
+                ),
+                turn.day or date.today(),
+                [],
+            )
+            log.info("memory.flushed_before_rebase", applied=len(report.applied))
+        if turn.reason is not StopReason.COMPLETED or not turn.owner_text:
+            return report
         recorded: list[Fact] = []
         for event in await self._journal.read(0, 100_000):
             if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
@@ -489,21 +540,43 @@ class Orion:
             derived_from=(turn.origin_event_id,),
             correlation_id=turn.correlation_id,
         )
-        return await self._extractor.consolidate(
+        current = await self._extractor.consolidate(
             turn.owner_text, turn.text, origin, turn.day or date.today(), recorded
         )
+        if report is None:
+            return current
+        return ExtractionReport(
+            applied=[*report.applied, *current.applied],
+            rejected=[*report.rejected, *current.rejected],
+        )
+
+    @staticmethod
+    def _trusted_dropped(thread: Thread, new_base: int) -> list[Message]:
+        """The turns a rebase takes out of the window, if all of them were trusted: what came
+        from a page or a mail must not be carried past the rebase."""
+        dropped = thread.messages[thread.base : new_base]
+        trust = min(thread.trusts[thread.base : new_base], default=Trust.OWNER)
+        return dropped if trust >= TRUSTED_FLOOR else []
 
     async def _summarize_dropped(self, thread: Thread, new_base: int) -> str | None:
         """What the turns leaving the window were about, if they were all trusted."""
         if self._summary_model is None:
             return None
-        dropped = thread.messages[thread.base : new_base]
-        trust = min(thread.trusts[thread.base : new_base], default=Trust.OWNER)
-        if not dropped or trust < TRUSTED_FLOOR:
+        dropped = self._trusted_dropped(thread, new_base)
+        if not dropped:
             return None
         return await summarize(
             self._provider, self._summary_model, dropped, f"orion:{thread.id}:summary"
         )
+
+    def _prunable(self, thread: Thread, when: datetime) -> list[int]:
+        """Old bulky tool results to shorten, once the conversation paused long enough for the
+        provider's cache to have gone: shortening them then costs nothing (OpenClaw does the
+        same). The last two exchanges stay whole."""
+        idle = self._agent.prune_idle_minutes
+        if not idle or thread.last_at is None or when - thread.last_at < timedelta(minutes=idle):
+            return []
+        return thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)
 
     def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:
         """Untrusted content stays in the window, and everything written after it is tainted

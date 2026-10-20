@@ -15,6 +15,7 @@ max_window_tokens = 120000   # visible conversation window before a one-step reb
 max_steps = 40               # model calls per turn (cost and repeats stop it first)
 max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
+prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
 extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
 fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
 verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family

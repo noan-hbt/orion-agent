@@ -120,6 +120,13 @@ Steer = Callable[[], Awaitable[tuple[Message, Trust] | None]]
 Orion worked). The caller journals the message before returning it; the loop appends it to
 the conversation before the next model call."""
 
+Waiting = Callable[[], bool]
+"""Whether a message is waiting to join the turn. Checked before each tool call starts: calls not
+started yet are skipped, so Orion reads the owner before carrying on with a plan they may have
+just changed (a running call is never interrupted)."""
+
+SKIPPED = "Not run: the owner wrote meanwhile; read their message first, then decide."
+
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Finished
 
 
@@ -131,6 +138,7 @@ async def run_agent(
     settings: LoopSettings,
     context_trust: Trust = Trust.OWNER,
     steer: Steer | None = None,
+    waiting: Waiting | None = None,
 ) -> AsyncIterator[LoopEvent]:
     """Run until the model answers without tool calls, or a limit is reached.
 
@@ -240,7 +248,14 @@ async def run_agent(
 
         started = time.monotonic()
         executions = await _execute_calls(
-            response.tool_calls, registry, guardian, settings, context_trust, call_counts, budget
+            response.tool_calls,
+            registry,
+            guardian,
+            settings,
+            context_trust,
+            call_counts,
+            budget,
+            waiting,
         )
         tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
@@ -278,11 +293,22 @@ async def _execute_calls(
     context_trust: Trust,
     call_counts: Counter[tuple[str, str]],
     budget: Budget,
+    waiting: Waiting | None = None,
 ) -> list[tuple[ToolCall, ToolResult, str]]:
     """Run consecutive concurrency-safe calls in parallel, everything else one at a time,
-    and return results in the original call order."""
+    and return results in the original call order. Once the owner has written, calls not yet
+    started are answered as skipped."""
     results: list[tuple[ToolCall, ToolResult, str]] = []
     batch: list[ToolCall] = []
+    skipping = False
+
+    def owner_wrote() -> bool:
+        nonlocal skipping
+        skipping = skipping or (waiting is not None and waiting())
+        return skipping
+
+    def skip(call: ToolCall) -> tuple[ToolCall, ToolResult, str]:
+        return call, ToolResult(SKIPPED, is_error=True), "skipped: the owner wrote"
 
     async def run_one(call: ToolCall) -> tuple[ToolCall, ToolResult, str]:
         result, reason = await _execute_one(
@@ -292,7 +318,10 @@ async def _execute_calls(
 
     async def flush() -> None:
         if batch:
-            results.extend(await asyncio.gather(*(run_one(c) for c in batch)))
+            if owner_wrote():
+                results.extend(skip(c) for c in batch)
+            else:
+                results.extend(await asyncio.gather(*(run_one(c) for c in batch)))
             batch.clear()
 
     for call in calls:
@@ -301,7 +330,7 @@ async def _execute_calls(
             batch.append(call)
             continue
         await flush()
-        results.append(await run_one(call))
+        results.append(skip(call) if owner_wrote() else await run_one(call))
     await flush()
     return results
 

@@ -939,3 +939,23 @@ détection des appels répétés, reprises et modèles de secours. Trois écarts
 
 Restent hors de ce lot : la réponse en continu (utile surtout pour la voix) et l'effacement
 des anciens résultats d'outils, qui casserait le contrat de cache tel qu'il est écrit.
+
+## D44 — Trois idées reprises d'OpenClaw
+
+*20/10/2026 · acceptée · complète D43*
+
+La comparaison avec OpenClaw (MIT, code lu dans le dépôt) en apporte trois :
+- **Alléger sans perdre le cache.** Après dix minutes sans message, le cache du fournisseur a
+  expiré de toute façon : les vieux résultats d'outils volumineux (plus de 2 000 caractères,
+  avant les deux derniers échanges) sont alors montrés réduits à leur début. C'est un
+  événement `thread.pruned` du journal, comme un rebase : la projection se reconstruit, et le
+  journal garde chaque message entier. Le contrat de cache tient, le préfixe ne change qu'après
+  une pause.
+- **Lire le propriétaire avant de continuer.** Quand il écrit pendant un tour, les appels
+  d'outils pas encore lancés sont sautés avec un résultat « non exécuté, lis son message ». Un
+  appel en cours n'est jamais interrompu, et chaque appel garde sa réponse.
+- **Un dernier regard avant d'oublier.** Les tours de confiance qu'un rebase sort de la fenêtre
+  passent une dernière fois par l'extracteur de mémoire, en plus du résumé (D43).
+
+Orion fait aussi des petits messages en cours de tour : ce que le modèle écrit à côté d'un
+appel d'outil part tout de suite, par la même sortie que la réponse.
