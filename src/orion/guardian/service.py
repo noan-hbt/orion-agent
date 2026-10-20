@@ -342,11 +342,11 @@ class GuardianService:
         path = "/" + str(request.path_params["path"])
         params = list(request.query_params.multi_items())
         content = await request.body()
-        if request.method == "POST" and path == "/media":
+        if request.method == "POST" and path == "/imessage/media":
             # A file for Orion to send: uploading sends nothing; what goes out, and to whom, is
             # the message that names it, checked below like any other.
             if len(content) > MAX_MEDIA_BYTES:
-                return await self.deny("POST /media", "file too large")
+                return await self.deny("POST /imessage/media", "file too large")
             return await self._forward(request, path, [], content)
         try:
             loaded: Any = json.loads(content) if content else {}
