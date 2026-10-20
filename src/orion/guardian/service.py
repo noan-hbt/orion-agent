@@ -336,6 +336,7 @@ class GuardianService:
                 Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
                 Route("/v1/config", self._configure, methods=["POST"]),
+                Route("/v1/mcp/{name}", self._mcp, methods=["POST"]),
                 *self.routes,
             ]
         )
@@ -692,6 +693,40 @@ class GuardianService:
         )
         log.info("guardian.autonomy_granted", action=action, limits=limits.describe())
         return JSONResponse({"action": action})
+
+    # -- MCP servers (D95) --------------------------------------------------------------------
+
+    async def _mcp(self, request: Request) -> Response:
+        """Relay to an MCP server whose token the guardian holds: only to that server's own
+        address, the token added here. Which calls the owner approves is the core's policy."""
+        from orion.mcp.settings import McpSettings
+
+        name = str(request.path_params["name"])
+        settings = McpSettings.model_validate(self.config.modules.get("mcp", {}))
+        server = next((s for s in settings.servers if s.name == name and s.url), None)
+        if server is None or server.token is None or not settings.enabled:
+            return refused(f"no MCP server {name!r} with a token", 404)
+        try:
+            token = server.token.resolve().get_secret_value()
+        except LookupError as exc:
+            return refused(str(exc), 503)
+        headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k in ("accept", "content-type", "mcp-session-id", "mcp-protocol-version")
+        }
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=60.0)
+        try:
+            answer = await self._http.post(
+                server.url,
+                content=await request.body(),
+                headers={**headers, "authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            return refused(f"{name} unreachable: {exc!r}", 502)
+        back = {k: v for k, v in answer.headers.items() if k in ("content-type", "mcp-session-id")}
+        return Response(answer.content, status_code=answer.status_code, headers=back)
 
     # -- orion.toml (D92) -------------------------------------------------------------------
 

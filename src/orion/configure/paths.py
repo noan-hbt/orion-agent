@@ -25,7 +25,18 @@ OWNER_SECTIONS = ("guardian", "channels", "federation", "budget", "logging", "pr
 """Top-level sections only the owner's yes changes."""
 OWNER_PATHS = ("modules.secretary.contacts",)
 """Inside Orion's sections, what is the owner's: who may write to Orion."""
-OWNER_KEYS = ("accounts", "env", "password", "secret", "token", "host", "url", "server")
+OWNER_KEYS = (
+    "accounts",
+    "env",
+    "password",
+    "secret",
+    "token",
+    "host",
+    "url",
+    "urls",
+    "server",
+    "servers",
+)
 """Keys that are the owner's wherever they are, also as a suffix (`public_url`): where a secret
 goes and to whom (a mail account's server and the variable holding its password, a calendar's
 secret address), and where Orion sends him (the console's address)."""
@@ -39,6 +50,7 @@ FORBIDDEN_KEYS = (
     "socket",
     "data_dir",
     "path",
+    "command",
 )
 """Keys never changed by message, wherever they are: a secret, what runs on the server, where
 data lives."""

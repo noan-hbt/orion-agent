@@ -319,3 +319,21 @@ port = 8792
 # ce qu'Orion a fait pour toi aujourd'hui. Allumé par défaut.
 # [modules.recap]
 # enabled = false
+
+# Les skills (D95) : du savoir-faire en texte (data/skills/*.md), lu quand une tâche l'appelle.
+# « Retiens cette procédure comme skill », ou pioche dans le catalogue public (`catalog/`).
+# [modules.skills]
+# catalog_urls = ["https://exemple.org/orion-catalog/index.json"]   # d'autres catalogues
+
+# Les serveurs MCP (D95) : leurs outils deviennent ceux d'Orion. Chaque outil demande ton oui,
+# sauf ceux de `read_only`. Le jeton se saisit par le formulaire du gardien (D94).
+# [modules.mcp]
+# enabled = true
+# [[modules.mcp.servers]]
+# name = "github"
+# url = "https://api.githubcopilot.com/mcp/"
+# token = { env = "GITHUB_MCP_TOKEN" }
+# read_only = ["search_repositories", "get_file_contents"]
+# [[modules.mcp.servers]]
+# name = "fichiers"
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/srv/partage"]  # serveur seulement

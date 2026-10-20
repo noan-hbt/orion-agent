@@ -1,0 +1,5 @@
+name = "github"
+description = "GitHub : dépôts, issues, pull requests, code"
+url = "https://api.githubcopilot.com/mcp/"
+secret = "GITHUB_MCP_TOKEN"   # un jeton d'accès personnel GitHub (fine-grained)
+read_only = ["get_me", "search_repositories", "search_code", "search_issues", "get_file_contents", "list_issues", "list_pull_requests", "get_issue", "get_pull_request"]

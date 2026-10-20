@@ -174,6 +174,10 @@ class GuardianClient:
         )
         return str(data["message_id"])
 
+    def relay(self) -> httpx.AsyncClient:
+        """Calls to an MCP server whose token the guardian holds (`/v1/mcp/<name>`, D95)."""
+        return httpx.AsyncClient(base_url=BASE_URL, transport=self._transports(), timeout=60.0)
+
     async def ask_secret(self, name: str, why: str) -> None:
         """The guardian sends the owner its own form for this secret (D94)."""
         await self.post("/v1/secrets/ask", {"name": name, "why": why})

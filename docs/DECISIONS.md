@@ -1984,3 +1984,35 @@ connecter en SSH. Désormais :
     propriétaire (D92).
 
     guardian.secret.asked  guardian.secret.set
+
+## D95 — Brancher ce que d'autres ont fait : serveurs MCP, skills, catalogue public
+
+*20/10/2026 · acceptée · étend D24*
+
+Les modules Python (D24) restent le niveau développeur. Pour qu'un utilisateur normal branche
+des choses, trois briques s'ajoutent :
+- **les skills** (`[modules.skills]`, allumé par défaut) : du savoir-faire en texte, un fichier
+  Markdown avec un nom et une description dans `<data_dir>/skills/`. Orion voit la liste, et
+  lit une skill en entier quand une tâche l'appelle : le message système ne change pas. Il en
+  écrit une quand le propriétaire le lui demande, avec son oui sur le texte exact, parce qu'une
+  skill oriente Orion par la suite ;
+- **les serveurs MCP** (`[modules.mcp]`) : leurs outils deviennent ceux d'Orion
+  (`mcp_<serveur>_<outil>`), listés au démarrage. Le client est écrit à la main (HTTP « streamable »
+  et stdio, sans dépendance). Ce qui protège :
+  - chaque outil est une action sur le monde, soumise au oui du propriétaire, sauf ceux qu'il
+    a déclarés en lecture seule (`read_only`) ;
+  - ce qu'un outil renvoie est du contenu venu d'ailleurs (`THIRD_PARTY`) ;
+  - en mode séparé, le jeton d'un serveur distant est gardé par le gardien, qui relaie les
+    appels vers la seule adresse de ce serveur (`/v1/mcp/<nom>`) ;
+  - un serveur lancé par commande (`command`) ne se règle que sur le serveur ;
+  - un serveur qui ne répond pas au démarrage est laissé de côté : Orion démarre sans ses outils ;
+- **le catalogue public** (`catalog/`, livré avec le code, donc à jour à chaque mise à jour D94) :
+  - des skills et des fiches de serveurs MCP, où chaque Orion pioche (`skill` : catalog,
+    install) ; on y ajoute quelque chose par une pull request ;
+  - d'autres catalogues peuvent s'ajouter (`catalog_urls`, un `index.json`). Ce qui en vient
+    est du contenu venu d'ailleurs, et une skill installée de là est lue comme telle ;
+  - installer un serveur MCP, c'est un changement de réglages qu'Orion propose
+    (`configure_change`), avec son jeton demandé par le formulaire du gardien (`secret_ask`).
+
+Limite : en mode séparé, le gardien relaie les appels MCP sans vérifier lui-même le oui du
+propriétaire. C'est la politique du cœur qui le demande.
