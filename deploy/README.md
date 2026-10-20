@@ -74,7 +74,15 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
   - Pour une copie hors du serveur, avec rclone vers OVH Object Storage par exemple :
     `rclone sync /srv/orion/backups ovh:orion-backups` dans un timer à toi.
   - Le journal contient ta vie : chiffre le bucket.
-- **Mise à jour** : `sudo /srv/orion/app/deploy/install.sh orion.mondomaine.fr`.
+- **Mise à jour** : automatique (D94). Toutes les 15 minutes, `orion-update.timer` regarde
+  si la branche suivie a du nouveau. Si oui, il installe, vérifie la config, redémarre et
+  surveille les deux processus 75 s. Si quelque chose casse, il revient à la version d'avant,
+  écarte ce commit et te prévient sur Telegram ; il te prévient aussi quand ça s'est bien passé.
+  Journal : `journalctl -u orion-update`. Le couper : `sudo systemctl disable --now
+  orion-update.timer`. Changer de branche : `sudo git -C /srv/orion/app checkout <branche>`.
+- **Secrets depuis le téléphone** (D94) : « active mon mail » → Orion t'envoie sur Telegram un
+  bouton qui ouvre le formulaire du gardien (`/secrets/`). Tu y colles le mot de passe ; il va
+  directement au gardien (`/srv/orion/guardian/secrets.env`), jamais dans la conversation.
 - **Restaurer** : arrête les deux services, copie `journal.sqlite3` d'une sauvegarde dans
   `/srv/orion/data/`, supprime `memory.sqlite3` (reconstruit au démarrage), redémarre.
 

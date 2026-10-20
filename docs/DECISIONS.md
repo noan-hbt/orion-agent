@@ -1955,3 +1955,32 @@ Pouvoir écrire aux autres est essentiel ; jusqu'ici, il fallait un oui à chaqu
 
 Pas encore : un message programmé à une heure (« dis-lui à 18 h… »), ni Orion qui répond à sa
 place à un proche sur autre chose que ses disponibilités.
+
+## D94 — Le serveur se met à jour seul ; les secrets se saisissent depuis le téléphone
+
+*20/10/2026 · acceptée · étend D28 et D92*
+
+Reconfigurer le VPS à chaque changement est pénible, et ajouter un secret demandait de s'y
+connecter en SSH. Désormais :
+- **mise à jour automatique** (`deploy/orion-update`, `orion-update.timer`, toutes les 15 min) :
+  - quand la branche suivie avance, le serveur installe le nouveau code et vérifie la config
+    (`doctor`) ;
+  - puis il redémarre les deux processus et les surveille 75 s : actifs, et sans redémarrage
+    automatique ;
+  - si une étape échoue, il revient au commit d'avant et écarte le mauvais : il ne le retente
+    qu'à l'arrivée d'un commit plus récent ;
+  - il prévient le propriétaire dans les deux cas, par `orion notify`, qui écrit directement
+    avec le jeton du bot, même quand Orion ne démarre plus ;
+- **secrets depuis le téléphone** (`orion.guardian.vault`) :
+  - le cœur demande un nom de variable (`secret_ask`) ;
+  - le gardien envoie au propriétaire un bouton Telegram qui ouvre **son propre formulaire**
+    (Mini App, écouteur public à lui, `/secrets/`, jeton à usage unique de 15 min). Le cœur
+    n'est jamais devant ;
+  - le gardien vérifie la signature Telegram avec le jeton du bot et que c'est bien le
+    propriétaire. Il écrit la valeur dans `guardian/secrets.env` (0600) et ne journalise que le
+    nom. Puis il prévient le propriétaire et redémarre pour la charger ;
+  - une variable déjà posée sur le serveur n'est jamais remplacée de là ;
+  - le cœur ne fait que nommer la variable dans `orion.toml` (`{ env = … }`), avec le oui du
+    propriétaire (D92).
+
+    guardian.secret.asked  guardian.secret.set

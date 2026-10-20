@@ -711,6 +711,31 @@ async def _guardian_status(config: OrionConfig) -> str:
     return state + (f"; secrets visible here: {', '.join(visible)}" if visible else "")
 
 
+async def _notify(config: OrionConfig, text: str) -> int:
+    """Straight to the Bot API with the bot's token (the guardian's user has it): the
+    updater speaks even when the update broke Orion."""
+    from orion.channels.telegram import TelegramClient, TelegramError
+
+    telegram = config.channels.telegram
+    if not telegram.enabled or not telegram.owner_id:
+        print(text)
+        return 0
+    try:
+        token = telegram.bot_token.resolve().get_secret_value()
+    except LookupError as exc:
+        print(f"{text}\n(not sent: {exc})")
+        return 1
+    client = TelegramClient(token)
+    try:
+        await client.send_message(telegram.owner_id, text[:4000])
+    except TelegramError as exc:
+        print(f"{text}\n(not sent: {exc})")
+        return 1
+    finally:
+        await client.aclose()
+    return 0
+
+
 def _setup(config: Path | None, secrets: Path | None, server: bool) -> int:
     import getpass
 
@@ -750,6 +775,10 @@ def main(argv: list[str] | None = None) -> int:
     )  # fmt: skip
     setup_cmd.add_argument("--server", action="store_true", help="Run by deploy/install.sh")
     sub.add_parser("doctor", help="Check configuration and storage")
+    notify = sub.add_parser(
+        "notify", help="Text the owner on Telegram directly, even with Orion down (updates)"
+    )
+    notify.add_argument("text")
     sub.add_parser("chat", help="Talk to Orion in the terminal")
     sub.add_parser("serve", help="Run Orion: iMessage channel and initiative engine")
     sub.add_parser("guardian", help="Run the guardian process, which holds the secrets (D28)")
@@ -872,6 +901,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(config.logging.level, config.logging.json_output)
     if args.command == "doctor":
         return asyncio.run(_doctor(config))
+    if args.command == "notify":
+        return asyncio.run(_notify(config, args.text))
     if args.command == "memory":
         return asyncio.run(_memory(config))
     if args.command == "forget":

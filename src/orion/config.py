@@ -343,6 +343,13 @@ class GuardianConfig(BaseModel):
         "(the core can't say it is down); 0: never",
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
+    secrets_url: str = Field(
+        default="",
+        description="Public HTTPS address where the guardian's own form for secrets is reached "
+        "(`/secrets/`, D94); empty: secrets are only set on the server",
+    )
+    secrets_host: str = "127.0.0.1"
+    secrets_port: int = Field(default=8794, ge=1, le=65535)
     autonomable: list[str] = Field(
         default_factory=lambda: ["calendar_add", "configure_change", "contact_message"],
         description="Actions the owner may let Orion do alone, once earned (never calls or "

@@ -174,6 +174,10 @@ class GuardianClient:
         )
         return str(data["message_id"])
 
+    async def ask_secret(self, name: str, why: str) -> None:
+        """The guardian sends the owner its own form for this secret (D94)."""
+        await self.post("/v1/secrets/ask", {"name": name, "why": why})
+
     async def configure(
         self, changes: list[dict[str, Any]], why: str, grant: str | None
     ) -> dict[str, Any]:

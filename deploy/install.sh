@@ -93,8 +93,10 @@ install -m 0644 "$HERE"/orion-*.service "$HERE"/orion-*.timer /etc/systemd/syste
 sed "s/@DOMAIN@/$DOMAIN/g" "$HERE/Caddyfile" > /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl reload-or-restart caddy
-systemctl enable -q orion-guardian orion-core orion-backup-core.timer orion-backup-guardian.timer
-systemctl start orion-backup-core.timer orion-backup-guardian.timer
+systemctl enable -q orion-guardian orion-core orion-backup-core.timer orion-backup-guardian.timer \
+    orion-update.timer
+# From now on Orion follows its branch by itself, and goes back if a new version fails (D94).
+systemctl start orion-backup-core.timer orion-backup-guardian.timer orion-update.timer
 
 echo "==> firewall"
 ufw allow OpenSSH >/dev/null

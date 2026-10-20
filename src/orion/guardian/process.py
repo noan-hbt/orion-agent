@@ -27,6 +27,7 @@ from orion.guardian.federation import FederationEdge, admin_token
 from orion.guardian.ledger import Ledger
 from orion.guardian.service import GuardianError, GuardianService
 from orion.guardian.telegram import TelegramGate
+from orion.guardian.vault import Vault, load_vault
 
 log = structlog.get_logger(__name__)
 
@@ -125,10 +126,13 @@ async def run(config: OrionConfig) -> None:
     _private_dir(config.guardian.data_dir)
     clock = HybridClock(f"{config.instance}-guardian")
     async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
+        from_vault = load_vault(config)
         service = GuardianService(config, Ledger(journal), inkbox_client(config))
         service.restart = lambda: reexec(GUARDIAN_RESTART_AFTER)
         edge = federation_edge(service) if config.federation.enabled else None
         gate = telegram_gate(service) if config.channels.telegram.enabled else None
+        if gate is not None and config.guardian.secrets_url:
+            Vault(service, gate, from_vault).install()
         try:
             await service.start()
             async with asyncio.TaskGroup() as group:

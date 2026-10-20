@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Orion updates itself (D94): run by orion-update.timer, as root, every 15 minutes.
+#
+# When the branch the server follows has new commits: checkout, install, check the config with
+# the new code, restart both processes, and watch them for a while. If anything fails, it goes
+# back to the commit that ran before, restarts that, remembers the bad commit (it is not tried
+# again until a newer one arrives) and tells the owner on Telegram. It tells him too when an
+# update went well. Stop it: systemctl disable --now orion-update.timer
+{
+set -euo pipefail
+ROOT=/srv/orion
+APP="$ROOT/app"
+BAD="$ROOT/update.bad"
+WATCH="${ORION_UPDATE_WATCH:-75}"
+export UV_PYTHON_INSTALL_DIR="$ROOT/python"
+ADMIN="$APP/deploy/orion-admin"
+
+cd "$APP"
+branch="$(git rev-parse --abbrev-ref HEAD)"
+git fetch -q origin "$branch"
+old="$(git rev-parse HEAD)"
+new="$(git rev-parse "origin/$branch")"
+[ "$old" = "$new" ] && exit 0
+[ -f "$BAD" ] && [ "$(cat "$BAD")" = "$new" ] && exit 0
+
+notify() { "$ADMIN" notify "$1" >/dev/null 2>&1 || echo "$1"; }
+
+deploy() {
+    git checkout -q -B "$branch" "$1"
+    uv sync --frozen --no-dev -q
+    chmod -R a+rX "$APP" "$ROOT/python"
+    install -m 0644 "$APP"/deploy/orion-*.service "$APP"/deploy/orion-*.timer /etc/systemd/system/
+    systemctl daemon-reload
+}
+
+healthy() {
+    "$ADMIN" --core doctor >/dev/null 2>&1 || { echo "doctor failed"; return 1; }
+    systemctl restart orion-guardian orion-core
+    sleep "$WATCH"
+    for unit in orion-guardian orion-core; do
+        systemctl is-active -q "$unit" || { echo "$unit is down"; return 1; }
+        [ "$(systemctl show -p NRestarts --value "$unit")" = 0 ] \
+            || { echo "$unit keeps restarting"; return 1; }
+    done
+}
+
+subject="$(git log -1 --format=%s "$new")"
+count="$(git rev-list --count "$old..$new")"
+if deploy "$new" && why="$(healthy)"; then
+    rm -f "$BAD"
+    notify "Je me suis mis à jour ($count changement(s)) : $subject"
+    exit 0
+fi
+echo "$new" > "$BAD"
+deploy "$old"
+systemctl restart orion-guardian orion-core
+notify "Mise à jour ratée (${why:-installation impossible}) : je suis revenu à la version d'avant. Commit écarté : ${new:0:8} — $subject"
+exit 1
+}

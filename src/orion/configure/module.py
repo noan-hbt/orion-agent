@@ -326,6 +326,40 @@ class ShowInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SecretInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        pattern=r"^[A-Z][A-Z0-9_]{2,63}$",
+        description="The environment variable to set, e.g. MAIL_PERSO_PASSWORD",
+    )
+    why: str = Field(max_length=200, description="What it is, in a few words, for him")
+
+
+def secret_tool(guardian: GuardianClient) -> Tool:
+    async def ask(args: Any, _ctx: ToolContext) -> ToolResult:
+        try:
+            await guardian.ask_secret(args.name, args.why)
+        except GuardianUnavailableError as exc:
+            return ToolResult(f"Not asked: {exc}", is_error=True)
+        return ToolResult(
+            f"Il a reçu un bouton pour saisir {args.name} dans le formulaire du gardien. Tu ne "
+            "verras jamais la valeur : quand le gardien te dit qu'elle est enregistrée, nomme-la "
+            f'dans tes réglages ({{"env": "{args.name}"}}).'
+        )
+
+    return Tool(
+        name="secret_ask",
+        description="Ask the owner for a secret (a mailbox password, an API key) through the "
+        "guardian's own form on his phone: the value never goes through the conversation. "
+        "Never ask him to send a secret in a message.",
+        input_model=SecretInput,
+        handler=ask,
+        effect=Effect.INTERNAL,
+        reversibility=Reversibility.REVERSIBLE,
+    )
+
+
 def configure_tools(configurator: Configurator, config: OrionConfig) -> list[Tool]:
     async def show(_args: Any, _ctx: ToolContext) -> ToolResult:
         return ToolResult("Tes réglages, tels qu'ils sont :\n" + editable_view(config))
@@ -387,7 +421,10 @@ class ConfigureModule(Module):
         # Two tools, not one with actions: the owner's yes is checked against
         # `configure_change` by name, and autonomy is granted to it by name (D92).
         self.configurator = Configurator(plate.journal, self.config.source, plate.guardian)
-        return configure_tools(self.configurator, self.config)
+        tools = configure_tools(self.configurator, self.config)
+        if plate.guardian is not None and self.config.guardian.secrets_url:
+            tools.append(secret_tool(plate.guardian))
+        return tools
 
     async def serve(self, daemon: Daemon) -> None:
         if self.configurator is not None:

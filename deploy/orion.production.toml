@@ -43,6 +43,7 @@ enabled = true
 socket = "run/guardian.sock"
 data_dir = "guardian"
 core_silence_alert_seconds = 300 # the guardian texts you if the core stops
+secrets_url = "https://@DOMAIN@" # Orion asks you for a secret with a form of the guardian's
 
 [federation]
 enabled = false                  # needs the calendar module

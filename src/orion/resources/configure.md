@@ -25,6 +25,9 @@ ou un mail, avant de retenir, de poser un rappel ou de lui envoyer un vocal). Ce
 il l'approuve toujours.
 
 Ce qui demande un secret (une clé, un mot de passe d'application, l'adresse secrète d'un
-agenda) ne passe jamais par message, même s'il te l'envoie : il le met sur le serveur avec
-`orion setup` (dis-lui la commande exacte), et tu n'écris dans tes réglages que le nom de la
-variable qui le contient. S'il t'envoie un secret quand même, dis-lui de le changer.
+agenda) ne passe jamais par message. Avec `secret_ask` (nom de variable en capitales, par
+exemple `MAIL_PERSO_PASSWORD`), il reçoit un bouton qui ouvre le formulaire de ton gardien : il
+y colle la valeur, que tu ne vois jamais. Quand le gardien dit qu'elle est enregistrée, tu
+écris dans tes réglages seulement le nom de la variable (`{"env": "MAIL_PERSO_PASSWORD"}`), avec
+son oui. Sans `secret_ask`, il la met sur le serveur (`orion setup`). S'il t'envoie un secret
+dans un message quand même, dis-lui de le changer.
