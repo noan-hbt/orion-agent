@@ -24,6 +24,7 @@ from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
 from orion.memory.people import people_tools
+from orion.memory.provenance import Provenances, provenance_tools
 from orion.memory.semantic import EmbeddingCache, SemanticIndex
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
@@ -91,6 +92,7 @@ def core_tools(plate: Plate) -> list[Tool]:
         *reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None),
         *adaptation_tools(plate.memory),
         *people_tools(plate.memory, plate.config.memory.owner_names),
+        *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
     ]
 
 

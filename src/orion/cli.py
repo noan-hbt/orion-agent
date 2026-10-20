@@ -249,6 +249,30 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _contain(config: OrionConfig, source: str, apply: bool, reason: str) -> int:
+    from orion.initiative.timers import TimerProjection, Timers
+    from orion.memory.provenance import Provenances
+    from orion.memory.service import MemoryService
+
+    store = MemoryStore(config.memory_path)
+    await store.open()
+    try:
+        async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+            memory = MemoryService(journal, store)
+            await memory.sync()
+            provenances = Provenances(journal, memory, Timers(journal, TimerProjection()))
+            if apply:
+                found = await provenances.contain(source, reason, "owner:cli")
+            else:
+                found = await provenances.trace(source)
+    finally:
+        await store.close()
+    print(found.describe())
+    if not apply and not found.empty:
+        print("(rien n'a changé : relance avec --apply pour invalider)")
+    return 0
+
+
 async def _google_auth(client_id: str, secret_env: str) -> int:
     import os
     import secrets
@@ -433,6 +457,12 @@ def main(argv: list[str] | None = None) -> int:
     google_auth.add_argument(
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
     )
+    contain = sub.add_parser(
+        "contain", help="What depends on a suspicious source; --apply invalidates it"
+    )
+    contain.add_argument("source", help="e.g. 'mail:perso:<id@x>' or 'web:https://…'")
+    contain.add_argument("--apply", action="store_true")
+    contain.add_argument("--reason", default="source suspecte")
     backup = sub.add_parser("backup", help="Copy the journal (everything else is rebuilt)")
     backup.add_argument("destination", type=Path, help="Folder that holds the copies")
     backup.add_argument("--keep", type=int, default=14, help="Copies kept, newest first")
@@ -453,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "contain":
+        return asyncio.run(_contain(config, args.source, args.apply, args.reason))
     if args.command == "google":
         return asyncio.run(_google_auth(args.client_id, args.secret_env))
     if args.command == "backup":
