@@ -31,6 +31,7 @@ from orion.cognition.loop import (
 )
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, render_user_message
+from orion.context.summary import summarize, summary_block
 from orion.context.threads import MESSAGE_KIND, REBASED_KIND, Thread, ThreadProjection
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -93,8 +94,11 @@ class Orion:
         extractor: MemoryExtractor | None = None,
         snapshot_chars: int = 2400,
         recall_limit: int = 6,
+        summary_model: str | None = None,
     ) -> None:
         self._journal = journal
+        self._summary_model = summary_model
+        """Summarizes what a rebase drops (None: dropped turns are left to memory alone)."""
         self._memory = memory
         self._extractor = extractor
         self._snapshot_chars = snapshot_chars
@@ -239,9 +243,12 @@ class Orion:
             else self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
         )
         window = thread.messages[new_base if new_base is not None else thread.base :]
-        user_message = render_user_message(
-            body, when, channel, await self._memory_blocks(memory_query, window)
-        )
+        blocks = await self._memory_blocks(memory_query, window)
+        if new_base is not None and not stale:
+            summary = await self._summarize_dropped(thread, new_base)
+            if summary:
+                blocks.insert(0, summary_block(summary))
+        user_message = render_user_message(body, when, channel, blocks)
         if new_base is not None:
             log.info(
                 "thread.rebase",
@@ -473,6 +480,18 @@ class Orion:
         )
         return await self._extractor.consolidate(
             turn.owner_text, turn.text, origin, turn.day or date.today(), recorded
+        )
+
+    async def _summarize_dropped(self, thread: Thread, new_base: int) -> str | None:
+        """What the turns leaving the window were about, if they were all trusted."""
+        if self._summary_model is None:
+            return None
+        dropped = thread.messages[thread.base : new_base]
+        trust = min(thread.trusts[thread.base : new_base], default=Trust.OWNER)
+        if not dropped or trust < TRUSTED_FLOOR:
+            return None
+        return await summarize(
+            self._provider, self._summary_model, dropped, f"orion:{thread.id}:summary"
         )
 
     def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:

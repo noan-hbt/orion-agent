@@ -156,6 +156,8 @@ class OpenRouterProvider:
         }
         if request.tools:
             body["tools"] = [t.to_openai() for t in request.tools]
+            if request.no_tools:
+                body["tool_choice"] = "none"
         if request.session_id:
             body["session_id"] = request.session_id
         if request.max_tokens is not None:

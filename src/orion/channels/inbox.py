@@ -173,7 +173,8 @@ class OwnerInbox:
         text = turn.text.strip()
         if turn.reason is not StopReason.COMPLETED:
             log.warning("inbox.turn_incomplete", reason=turn.reason, detail=turn.detail)
-            text = (text + "\n\n" if text else "") + f"(je me suis arrêté : {turn.reason.value})"
+            if not text:  # a limit already gets a closing answer; this is for the rest
+                text = f"(je me suis arrêté : {turn.reason.value})"
         if first.allow_silence and is_silence(text):
             log.info("inbox.silence", channel=first.channel)
         elif text and reply is not None:

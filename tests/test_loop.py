@@ -136,9 +136,54 @@ async def test_max_steps_is_enforced() -> None:
     settings = LoopSettings(
         model="m", session_id="s", thread_id="t", correlation_id="c", budget=Budget(max_steps=3)
     )
-    events, _ = await collect(provider, settings=settings)
+    events, messages = await collect(provider, settings=settings)
     assert finished(events).reason is StopReason.MAX_STEPS
-    assert len(provider.requests) == 3
+    assert len(provider.requests) == 4  # three steps, then the closing answer
+    assert provider.requests[-1].no_tools
+    # The closing call asked for tools anyway: its calls are dropped, never run.
+    assert "tool_calls" not in messages[-1]
+    assert len([e for e in events if isinstance(e, ToolExecuted)]) == 3
+
+
+async def test_a_limit_ends_with_an_answer_not_a_cut() -> None:
+    """Like Claude Code reaching its turn limit: the owner hears where things stand."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "a"})),
+        call_tools(("echo", {"text": "b"})),
+        reply("J'ai trouvé a et b ; il reste c."),
+    )
+    settings = LoopSettings(
+        model="m", session_id="s", thread_id="t", correlation_id="c", budget=Budget(max_steps=2)
+    )
+    events, _ = await collect(provider, settings=settings)
+    end = finished(events)
+    assert end.reason is StopReason.MAX_STEPS
+    assert end.text == "J'ai trouvé a et b ; il reste c."
+    note = provider.requests[-1].messages[-1]
+    assert note["role"] == "user" and "limite du tour" in str(note["content"])
+    # Same tools, same prefix: the closing call still reads from the cache.
+    assert provider.requests[-1].tools == provider.requests[0].tools
+    assert provider.requests[-1].messages[: len(provider.requests[-2].messages)] == (
+        provider.requests[-2].messages
+    )
+
+
+async def test_calls_cut_by_a_budget_are_still_answered() -> None:
+    """Every tool call in the conversation has its result, or the next turn is malformed."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "a"}), ("echo", {"text": "b"}), cost=1.0),
+        reply("Trop cher, je m'arrête là."),
+    )
+    events, messages = await collect(provider)
+    assert finished(events).reason is StopReason.BUDGET_EXHAUSTED
+    calls: list[str] = []
+    for message in messages:
+        asked: list[dict[str, Any]] = message.get("tool_calls") or []
+        calls.extend(str(c["id"]) for c in asked)
+    answered = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
+    assert calls == answered
+    assert not [e for e in events if isinstance(e, ToolExecuted)]
+    assert finished(events).text == "Trop cher, je m'arrête là."
 
 
 async def test_cost_budget_is_enforced() -> None:

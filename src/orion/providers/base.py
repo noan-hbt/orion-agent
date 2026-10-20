@@ -73,6 +73,10 @@ class ModelRequest(BaseModel):
     temperature: float | None = None
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
     json_output: bool = Field(default=False, description="Ask for a single JSON object reply")
+    no_tools: bool = Field(
+        default=False,
+        description="Tools stay declared (the cached prefix is unchanged) but none may be called",
+    )
     web_search: int | None = Field(
         default=None,
         ge=1,

@@ -183,3 +183,19 @@ async def test_web_search_runs_on_the_provider_and_its_sources_come_back() -> No
     await provider.complete(request())
     assert "plugins" not in seen[1]
     await provider.aclose()
+
+
+async def test_a_closing_call_keeps_the_tools_but_forbids_them() -> None:
+    seen: list[dict[str, Any]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=OK_BODY)
+
+    provider = provider_with(handler)
+    await provider.complete(request())
+    await provider.complete(request().model_copy(update={"no_tools": True}))
+    await provider.aclose()
+    assert "tool_choice" not in seen[0]
+    assert seen[1]["tool_choice"] == "none"
+    assert seen[1]["tools"] == seen[0]["tools"]

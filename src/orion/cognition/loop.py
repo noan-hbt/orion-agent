@@ -5,7 +5,9 @@ supplies the compiled context and journals every message the loop emits, so a ru
 be reconstructed from the journal.
 
 Termination is typed, budgets are enforced in code, repeated identical tool calls are detected,
-and every tool call passes through the guardian before it runs.
+and every tool call passes through the guardian before it runs. When a limit stops the work,
+the model gets one last call without tools to tell the owner where things stand, rather than
+leaving them with a half-finished thought.
 """
 
 from __future__ import annotations
@@ -62,6 +64,20 @@ class LoopSettings:
     timezone: str = "Europe/Paris"
     max_tokens: int | None = None
     budget: Budget = field(default_factory=Budget)
+    wrap_up: bool = True
+    """On a limit, one more model call (no tools) to report what was done and what is left."""
+
+
+WRAP_UP = (
+    "[Orion · limite du tour atteinte ({why}). N'appelle plus d'outil : réponds maintenant, "
+    "brièvement, avec ce que tu as fait, ce que tu as trouvé et ce qui reste à faire.]"
+)
+_WHY = {
+    "max_steps": "trop d'étapes",
+    "tool budget": "trop d'appels d'outils",
+    "cost budget": "coût maximal",
+    "repeated identical calls": "appels répétés à l'identique",
+}
 
 
 # --- events emitted by the loop ---
@@ -132,6 +148,38 @@ async def run_agent(
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
 
+    async def wrap_up(reason: StopReason, detail: str) -> AsyncIterator[LoopEvent]:
+        nonlocal usage, steps
+        if not settings.wrap_up:
+            yield finished(reason, last_text, detail)
+            return
+        why = _WHY.get(detail or reason.value, detail or reason.value)
+        note: Message = {"role": "user", "content": WRAP_UP.format(why=why)}
+        messages.append(note)
+        yield MessageEmitted(note, Trust.SYSTEM)
+        request = ModelRequest(
+            model=settings.model,
+            messages=messages,
+            tools=registry.specs(),
+            session_id=settings.session_id,
+            max_tokens=settings.max_tokens,
+            no_tools=True,
+        )
+        try:
+            response = await provider.complete(request)
+        except ProviderError:
+            log.exception("loop.wrap_up_failed", thread=settings.thread_id)
+            yield finished(reason, last_text, detail)
+            return
+        usage = usage + response.usage
+        steps += 1
+        yield ModelCalled(response)
+        # A model that calls a tool anyway: keep its words, drop the calls (they never run).
+        message: Message = {"role": "assistant", "content": response.text or ""}
+        messages.append(message)
+        yield MessageEmitted(message, min(context_trust, Trust.SYSTEM))
+        yield finished(reason, response.text or last_text, detail)
+
     for _step in range(budget.max_steps):
         request = ModelRequest(
             model=settings.model,
@@ -162,13 +210,26 @@ async def run_agent(
             yield finished(reason, response.text)
             return
 
-        if usage.cost_usd > budget.max_cost_usd:
-            yield finished(StopReason.BUDGET_EXHAUSTED, last_text, "cost budget")
-            return
-
         tool_calls_made += len(response.tool_calls)
-        if tool_calls_made > budget.max_tool_calls:
-            yield finished(StopReason.BUDGET_EXHAUSTED, last_text, "tool budget")
+        over = (
+            "cost budget"
+            if usage.cost_usd > budget.max_cost_usd
+            else "tool budget"
+            if tool_calls_made > budget.max_tool_calls
+            else ""
+        )
+        if over:
+            # The calls asked for are answered (not run), so the conversation stays well formed.
+            for call in response.tool_calls:
+                skipped: Message = {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": "Not run: the turn's limit was reached.",
+                }
+                messages.append(skipped)
+                yield MessageEmitted(skipped, Trust.SYSTEM)
+            async for event in wrap_up(StopReason.BUDGET_EXHAUSTED, over):
+                yield event
             return
 
         stalled = False
@@ -194,7 +255,8 @@ async def run_agent(
             yield MessageEmitted(tool_message, result.trust)
 
         if stalled:
-            yield finished(StopReason.STALLED, last_text, "repeated identical calls")
+            async for event in wrap_up(StopReason.STALLED, "repeated identical calls"):
+                yield event
             return
 
         if steer is not None:
@@ -204,7 +266,8 @@ async def run_agent(
                 messages.append(message)
                 context_trust = min(context_trust, trust)
 
-    yield finished(StopReason.MAX_STEPS, last_text)
+    async for event in wrap_up(StopReason.MAX_STEPS, ""):
+        yield event
 
 
 async def _execute_calls(
