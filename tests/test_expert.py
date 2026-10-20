@@ -80,3 +80,14 @@ async def test_a_consultation_is_no_more_trusted_than_its_context(journal: Sqlit
     expert = Expert(journal, provider, ExpertSettings())
     result = await expert.consult("q ?", "", ToolContext("t", "c", context_trust=Trust.WEB))
     assert result.trust is Trust.WEB
+
+
+async def test_an_expert_that_only_thought_says_so(journal: SqliteJournal) -> None:
+    class Silent(Routed):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            answer = reply("")(request)
+            return answer.model_copy(update={"finish_reason": "length"})
+
+    expert = Expert(journal, Silent(), ExpertSettings())
+    result = await expert.consult("q ?", "", ToolContext("t", "c"))
+    assert result.is_error and "wrote nothing" in result.content

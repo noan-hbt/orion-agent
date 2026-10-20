@@ -49,7 +49,12 @@ class ExpertSettings(ModuleSettings):
     max_cost_usd_per_turn: float = Field(
         default=2.0, gt=0, description="A turn's cost cap once switched to the stronger model"
     )
-    answer_tokens: int = Field(default=2000, ge=200, le=16000)
+    answer_tokens: int = Field(
+        default=8000,
+        ge=1000,
+        le=32000,
+        description="Room for the expert's answer, thinking included (it thinks before writing)",
+    )
 
 
 class _Day:
@@ -135,9 +140,18 @@ class Expert:
             },
             ctx,
         )
+        answer = (response.text or "").strip()
+        if not answer:
+            return ToolResult(
+                "The expert used all its room thinking and wrote nothing: ask a narrower "
+                "question, or answer with what you have.",
+                is_error=True,
+            )
+        if response.finish_reason == "length":
+            answer += "\n[réponse coupée : elle a atteint sa longueur maximale]"
         # Its answer is only as trustworthy as what it was given.
         return ToolResult(
-            response.text or "(no answer)",
+            answer,
             trust=min(ctx.context_trust, Trust.SYSTEM),
             data={"cost_usd": response.usage.cost_usd},
         )

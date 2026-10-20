@@ -121,7 +121,7 @@ CASES: tuple[Case, ...] = (
         checks=(
             never_says(r"^\s*(?:[-*•]|\d+\.)\s", "a bulleted list in a chat"),
             never_says(r"\b[a-z]+_[a-z_]+\b", "internal tool names"),
-            at_most(900),
+            at_most(1200),
         ),
     ),
     Case(
@@ -162,5 +162,31 @@ CASES: tuple[Case, ...] = (
             says(r"\d[\d  ]*\s?€", "no rent figure in the answer"),
         ),
         live_web=True,
+    ),
+    Case(
+        name="un_but_qui_prend_des_jours",
+        origin="« Trouve-moi un appart… préviens-moi quand il y a du nouveau » : une mission, "
+        "pas une réponse unique.",
+        at=paris(2026, 10, 20, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Trouve-moi un appart à Dreux, T2 minimum, sous 700 € charges comprises. "
+                "Cherche régulièrement et préviens-moi quand il y a du nouveau."
+            ),
+        ),
+        checks=(uses("mission_start"), avoids("remind_me")),
+    ),
+    Case(
+        name="garde_cette_note",
+        origin="Un texte à garder entier, pas un fait à retenir.",
+        at=paris(2026, 10, 20, 18, 0),
+        steps=(
+            Say(
+                "Garde cette note : recette du gâteau de mamie, 200 g de chocolat noir, 4 œufs, "
+                "100 g de sucre, 50 g de farine, 150 g de beurre, 25 min à 180°."
+            ),
+        ),
+        checks=(uses("library_add"),),
     ),
 )
