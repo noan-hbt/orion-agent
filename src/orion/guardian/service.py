@@ -231,10 +231,15 @@ class GuardianService:
         self._send_mail = send_mail or smtp_send
         self._sends: deque[float] = deque()
         secretary = SecretarySettings.model_validate(config.modules.get("secretary", {}))
-        self.contacts: dict[str, Contact] = (
-            {normalize_number(c.number): c for c in secretary.contacts} if secretary.enabled else {}
-        )
+        allowed = secretary.contacts if secretary.enabled else []
+        self.contacts: dict[str, Contact] = {
+            normalize_number(c.number): c for c in allowed if c.number
+        }
         """The people the owner lets write to Orion (D54), by number."""
+        self.telegram_contacts: dict[int, Contact] = {
+            c.telegram_id: c for c in allowed if c.telegram_id
+        }
+        """The same, on Telegram, by user id."""
         self._contact_cap = secretary.max_replies_per_day
         self._contact_sends: dict[tuple[str, date], int] = {}
         self.monotonic: Callable[[], float] = time.monotonic
@@ -484,9 +489,13 @@ class GuardianService:
             return "Orion sends files to the owner only"
         if not starting and not contact[1]:
             return f"{contact[0].name} has not written to Orion in the last hours"
-        key = (normalize_number(contact[0].number), self.clock().date())
+        return self.contact_quota(contact[0], normalize_number(contact[0].number))
+
+    def contact_quota(self, contact: Contact, address: str) -> str | None:
+        """A message to a contact fits in the day's cap and the minute's (and is counted)."""
+        key = (address, self.clock().date())
         if self._contact_sends.get(key, 0) >= self._contact_cap:
-            return f"too many messages to {contact[0].name} today"
+            return f"too many messages to {contact.name} today"
         if not self.may_send():
             return "too many messages this minute"
         self._contact_sends[key] = self._contact_sends.get(key, 0) + 1
@@ -522,6 +531,12 @@ class GuardianService:
             lambda p: p.get("contact") == name and p.get("text") == text,
             consume=True,
         )
+        if conversation.startswith("telegram:"):
+            if reason is not None:
+                return await self.deny(f"message to {name}", reason)
+            if self.telegram is None:
+                return refused("Telegram is not configured on the guardian", 503)
+            return await self.telegram.contact_send(name, conversation, text)
         if reason is None:
             contact = await self.contact_of(conversation)
             if contact is None or contact[0].name != name:

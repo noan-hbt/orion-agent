@@ -4,7 +4,8 @@ Free and without a daily cap. It does what the iMessage channel does, through th
 
 - updates come by long polling (`getUpdates`); each one is journaled before anything else
   happens, so a restart resumes after the last one and requeues an owner message never
-  answered. Only the owner's user id is obeyed; anyone else is journaled and ignored;
+  answered. Only the owner's user id is obeyed; anyone else is journaled and handed to the
+  secretary (`others`), which answers the contacts he allowed and nobody else;
 - photos, voice messages and files reach the inbox as attachments the channel fetches itself:
   the download link carries the bot's token, which never leaves this module;
 - the reply goes through the outbox as one message (cut only past Telegram's 4 096
@@ -23,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import mimetypes
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -40,7 +41,7 @@ from orion.channels.imessage import (
     ApprovalDesk,
     answer_word,
 )
-from orion.channels.inbox import Attachment, OwnerInbox
+from orion.channels.inbox import Attachment, Incoming, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -297,6 +298,8 @@ class TelegramChannel:
         self.state = TelegramState()
         self._runner = ProjectionRunner(journal, [self.state])
         self._approvals: dict[int, asyncio.Future[tuple[bool, str, list[str]]]] = {}
+        self.others: Callable[[Incoming], None] | None = None
+        """Where a private message from someone else goes (the secretary, D54)."""
         inbox.register(self)
 
     async def start(self) -> None:
@@ -456,6 +459,7 @@ class TelegramChannel:
                 "text": text,
                 "date": message.get("date"),
                 "media": [m.__dict__ for m in media],
+                **({} if is_owner else {"name": _name(sender)}),
             },
             source=f"telegram:{chat.get('id')}",
             actor="owner:main" if is_owner else f"telegram:{sender.get('id')}",
@@ -467,6 +471,16 @@ class TelegramChannel:
                 name=sender.get("first_name"),
                 hint="the owner? put this id in [channels.telegram] owner_id",
             )
+            if self.others is not None and chat.get("type") == "private" and sender.get("id"):
+                self.others(
+                    Incoming(
+                        CHANNEL,
+                        f"{CHANNEL}:{sender['id']}",
+                        f"{CHANNEL}:{chat['id']}",
+                        ref,
+                        text or ("(une pièce jointe)" if media else ""),
+                    )
+                )
             return
         if not media and self._approvals and self._resolve_by_word(text, ref):
             return
@@ -645,6 +659,15 @@ def _media(message: dict[str, Any]) -> tuple[Media, ...]:
                 )
             )
     return tuple(found)
+
+
+def _name(sender: dict[str, Any]) -> str:
+    """How the owner will recognise them: « Angèle (@angele) »."""
+    full = " ".join(str(sender.get(k) or "") for k in ("first_name", "last_name")).strip()
+    handle = f"@{sender['username']}" if sender.get("username") else ""
+    if full and handle:
+        return f"{full} ({handle})"
+    return full or handle
 
 
 def _parts(text: str) -> list[str]:

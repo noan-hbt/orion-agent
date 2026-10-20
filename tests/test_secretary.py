@@ -12,10 +12,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from orion.calendar.ics import Occurrence, Standing
+from orion.channels.inbox import Incoming
 from orion.channels.inkbox import IMessage
 from orion.core.journal import SqliteJournal
 from orion.guardian.client import GuardianUnavailableError
-from orion.secretary.module import REPLIED, Secretary, secretary_tools
+from orion.secretary.module import REPLIED, Secretary, from_imessage, secretary_tools
 from orion.secretary.settings import Contact, SecretarySettings
 from orion.tools.base import ToolContext
 from tests.fake_guardian import guardian_config, running_guardian
@@ -58,14 +59,16 @@ def answer(**fields: object) -> ScriptedProvider:
     return ScriptedProvider(reply(json.dumps(fields, ensure_ascii=False)))
 
 
-def message(text: str, sender: str = MUM, conversation: str = MUM_CHAT, n: int = 1) -> IMessage:
-    return IMessage(
-        id=f"m{n}",
-        conversation_id=conversation,
-        direction="inbound",
-        remote_number=sender,
-        content=text,
-        created_at=NOW.isoformat(),
+def message(text: str, sender: str = MUM, conversation: str = MUM_CHAT, n: int = 1) -> Incoming:
+    return from_imessage(
+        IMessage(
+            id=f"m{n}",
+            conversation_id=conversation,
+            direction="inbound",
+            remote_number=sender,
+            content=text,
+            created_at=NOW.isoformat(),
+        )
     )
 
 
@@ -85,7 +88,7 @@ def secretary_with(
         lambda: NOW,
     )
 
-    async def send(conversation: str, text: str, cid: str) -> str:
+    async def send(channel: str, conversation: str, text: str, cid: str) -> str:
         sent.append((conversation, text))
         return "out-1"
 
@@ -222,3 +225,48 @@ async def test_writing_first_needs_the_owners_yes_to_that_text(tmp_path: Path) -
             await g.client.contact_send("Maman", MUM_CHAT, "Autre chose", grant)
         await g.client.contact_send("Maman", MUM_CHAT, "Je passe dimanche !", grant)
         assert g.fake.texts()[-1] == "Je passe dimanche !"
+
+
+async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
+    journal: SqliteJournal,
+) -> None:
+    from orion.channels.inbox import OwnerInbox
+    from orion.channels.telegram import TelegramChannel, TelegramSettings
+    from tests.fake_telegram import OWNER, STRANGER, FakeTelegram
+    from tests.test_imessage import make_orion
+
+    angele = 5151
+    settings = SecretarySettings(
+        enabled=True, contacts=[Contact(name="Angèle", telegram_id=angele, about="sa copine")]
+    )
+    sent: list[tuple[str, str, str]] = []
+    provider = answer(reply="Il est au boulot, je lui dis.", tell_owner="Angèle t'a cherché.")
+    secretary = Secretary(
+        journal, provider, settings, "m", "Noan", "Europe/Paris", None, lambda: NOW
+    )
+
+    async def send(channel: str, conversation: str, text: str, cid: str) -> str:
+        sent.append((channel, conversation, text))
+        return "1"
+
+    secretary.send = send
+    fake = FakeTelegram()
+    inbox = OwnerInbox(make_orion(journal, ScriptedProvider()), coalesce_seconds=0.05)
+    channel = TelegramChannel(fake.client(), journal, inbox, TelegramSettings(owner_id=OWNER))
+    heard: list[Incoming] = []
+    channel.others = heard.append
+    fake.write("il est où Noan ?", sender=angele)
+    fake.write("salut le bot", sender=STRANGER)
+    await channel.poll_once()
+
+    assert [m.address for m in heard] == [f"telegram:{angele}", f"telegram:{STRANGER}"]
+    exchange = await secretary.answer(heard[0])
+    assert exchange is not None and exchange.contact == "Angèle"
+    assert sent == [("telegram", f"telegram:{angele}", "Il est au boulot, je lui dis.")]
+    assert await secretary.answer(heard[1]) is None  # not his contact: never answered
+    assert "Telegram" in provider.requests[0].messages[0]["content"]
+
+    later = datetime.fromtimestamp(1_760_000_000, ZoneInfo("UTC")) + timedelta(minutes=1)
+    stranger = [a for a in await secretary.alerts(later) if "stranger" in a.key]
+    assert len(stranger) == 1 and f"telegram_id = {STRANGER}" in stranger[0].notice
+    assert "Noan" in stranger[0].notice  # FakeTelegram names everyone Noan

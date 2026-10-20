@@ -38,6 +38,20 @@ log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
+class Incoming:
+    """A message from someone other than the owner, whatever the channel: what the
+    secretary answers (D54)."""
+
+    channel: str
+    address: str
+    """Their number (iMessage) or `telegram:<user id>`: how contacts are keyed."""
+    conversation: str
+    """Where to answer: the Inkbox conversation, or `telegram:<chat id>`."""
+    message_id: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Attachment:
     """A file sent with a message, fetchable at `url` for a while, or by `fetch` when the
     channel must fetch it itself (a link that would carry its key)."""

@@ -112,7 +112,7 @@ async def test_a_module_that_could_not_start_is_refused(
     source.write_text(TOML, "utf-8")
     configurator = Configurator(journal, load_config(source).source)
     with pytest.raises(ConfigureError, match="would not start"):
-        await configurator.change([("modules.secretary.enabled", True)], "x", OWNER)
+        await configurator.change([("voice.enabled", True)], "x", OWNER)
 
 
 def test_show_lists_every_module_even_absent_from_the_file(tmp_path: Path) -> None:

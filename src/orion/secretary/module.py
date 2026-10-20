@@ -13,8 +13,10 @@ What keeps it safe is what the secretary does not have:
 - it commits the owner to nothing: no appointment, no promise, no « oui » on their behalf; it
   passes things on;
 - the guardian process sends only to the contacts the owner configured, only within hours of
-  their last message (Orion answers, it never starts), a few times a day; contacts can write on
-  iMessage, never call the line;
+  their last message (Orion answers, it never starts), a few times a day; contacts write on
+  iMessage (their number) or Telegram (their user id), never call the line;
+- someone unknown who writes to the bot is not answered: the owner is told once, with the id
+  that would let them in;
 - to write first, or to pass on the owner's answer, Orion asks the owner (`contact_message`),
   and the guardian checks that yes against the exact text.
 
@@ -34,8 +36,12 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from orion.channels.imessage import CHANNEL, INBOUND, normalize_number
+from orion.channels.imessage import CHANNEL as IMESSAGE
+from orion.channels.imessage import INBOUND, normalize_number
+from orion.channels.inbox import Incoming
 from orion.channels.inkbox import IMessage
+from orion.channels.telegram import CHANNEL as TELEGRAM
+from orion.channels.telegram import INBOUND as TELEGRAM_INBOUND
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -61,7 +67,7 @@ AVAILABILITY_DAYS = 14
 _DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 PROMPT = """Tu es Orion, l'assistant personnel de {owner}. Quelqu'un que {owner} connaît t'écrit
-par iMessage, et {owner} t'a autorisé à lui répondre, comme un secrétaire attentionné.
+par {channel}, et {owner} t'a autorisé à lui répondre, comme un secrétaire attentionné.
 
 Tu sais seulement ce qu'on te donne ici : qui est cette personne, votre conversation, et, si
 {owner} l'a permis, quand {owner} est occupé ou libre (jamais ce qu'il fait). Tu ne sais rien
@@ -89,6 +95,27 @@ class _Answer(BaseModel):
     urgent: bool = False
 
 
+def from_imessage(message: IMessage) -> Incoming:
+    return Incoming(
+        IMESSAGE,
+        normalize_number(message.sender or ""),
+        message.conversation_id,
+        message.id,
+        message.content or "",
+    )
+
+
+@dataclass(frozen=True)
+class Stranger:
+    """Someone the owner has not let in, who wrote to the bot."""
+
+    event_id: str
+    user_id: int
+    name: str
+    text: str
+    at: datetime
+
+
 @dataclass(frozen=True)
 class Exchange:
     event_id: str
@@ -114,6 +141,8 @@ class SecretaryState:
     heard: set[str] = field(default_factory=set[str])
     """The contacts' message ids already in `history`."""
     exchanges: list[Exchange] = field(default_factory=list[Exchange])
+    strangers: dict[int, Stranger] = field(default_factory=dict[int, Stranger])
+    """Telegram user id → their first message to the bot."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -125,6 +154,7 @@ class SecretaryState:
         self.heard.clear()
         self.replies.clear()
         self.exchanges.clear()
+        self.strangers.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -138,6 +168,26 @@ class SecretaryState:
             self.conversations[number] = str(payload["conversation_id"])
             self.heard.add(str(payload["message_id"]))
             self._said(number, at, "elle", str(payload.get("text") or ""))
+        elif event.kind == TELEGRAM_INBOUND:
+            if payload.get("is_owner") or payload.get("type") != "message":
+                return
+            if payload.get("chat_id") != payload.get("sender"):
+                return  # a group: never answered
+            sender = int(payload.get("sender") or 0)
+            address = f"telegram:{sender}"
+            stamp = payload.get("date")
+            at = (
+                datetime.fromtimestamp(stamp, ZoneInfo("UTC"))
+                if isinstance(stamp, int | float)
+                else _at(None, event.hlc)
+            )
+            text = str(payload.get("text") or "")
+            self.conversations[address] = f"telegram:{payload.get('chat_id')}"
+            self.heard.add(str(payload.get("ref")))
+            self._said(address, at, "elle", text)
+            if sender not in self.strangers:
+                name = str(payload.get("name") or "") or f"id {sender}"
+                self.strangers[sender] = Stranger(event.id, sender, name, text, at)
         elif event.kind == REPLIED:
             number = str(payload["number"])
             self.conversations[number] = str(payload["conversation_id"])
@@ -175,8 +225,9 @@ def _at(created_at: object, hlc: str) -> datetime:
         return datetime.now(ZoneInfo("UTC"))
 
 
-Send = Callable[[str, str, str], Awaitable[str]]
-"""(conversation, text, correlation id) → the sent message's id, through the outbox."""
+Send = Callable[[str, str, str, str], Awaitable[str]]
+"""(channel, conversation, text, correlation id) → the sent message's id, through the
+channel's outbox."""
 
 
 class Secretary:
@@ -201,10 +252,11 @@ class Secretary:
         self.focus: Callable[[datetime], Awaitable[str | None]] | None = None
         """The owner's focus, as a contact may be told it (the focus module)."""
         self.clock = clock or (lambda: datetime.now(self.zone))
-        self.contacts = {normalize_number(c.number): c for c in settings.contacts}
+        self.contacts = {a: c for c in settings.contacts for a in c.addresses()}
+        """Address (number, or `telegram:<id>`) → contact."""
         self.state = SecretaryState()
         self._runner = ProjectionRunner(journal, [self.state])
-        self._queue: asyncio.Queue[IMessage] = asyncio.Queue()
+        self._queue: asyncio.Queue[Incoming] = asyncio.Queue()
         self.send: Send | None = None
 
     async def sync(self) -> None:
@@ -213,26 +265,38 @@ class Secretary:
     def contact(self, name: str) -> Contact | None:
         return next((c for c in self.contacts.values() if c.name.lower() == name.lower()), None)
 
-    def receive(self, message: IMessage) -> None:
-        """From the channel's poll: answered by the worker, so polling never waits on it."""
+    def receive(self, message: Incoming) -> None:
+        """From a channel's poll: answered by the worker, so polling never waits on it."""
         self._queue.put_nowait(message)
+
+    def conversation_with(self, contact: Contact) -> str | None:
+        """Where they last wrote from, if they ever did."""
+        known = [
+            (self.state.history.get(a, [])[-1][0] if self.state.history.get(a) else None, a)
+            for a in contact.addresses()
+            if a in self.state.conversations
+        ]
+        if not known:
+            return None
+        latest = max(known, key=lambda k: k[0].timestamp() if k[0] else 0.0)
+        return self.state.conversations[latest[1]]
 
     async def run(self) -> None:
         while True:
             await self.answer(await self._queue.get())
 
-    async def answer(self, message: IMessage) -> Exchange | None:
+    async def answer(self, message: Incoming) -> Exchange | None:
         await self.sync()
-        number = normalize_number(message.sender or "")
+        number = message.address
         contact = self.contacts.get(number)
         if contact is None:
-            log.info("secretary.stranger_ignored", conversation=message.conversation_id)
+            log.info("secretary.stranger_ignored", conversation=message.conversation)
             return None
         now = self.clock()
         if self.state.replies.get((number, now.date()), 0) >= self.settings.max_replies_per_day:
             log.warning("secretary.daily_cap", contact=contact.name)
             return None
-        them = message.content or "(une pièce jointe)"
+        them = message.text or "(une pièce jointe)"
         try:
             answer = await self._think(contact, number, now, message, them)
         except (ProviderError, ValueError, ValidationError) as exc:
@@ -241,7 +305,7 @@ class Secretary:
         cid = new_id()
         reply = answer.reply.strip()
         if reply and self.send is not None:
-            await self.send(message.conversation_id, reply, cid)
+            await self.send(message.channel, message.conversation, reply, cid)
         await self._journal.append(
             [
                 NewEvent(
@@ -249,8 +313,9 @@ class Secretary:
                     payload={
                         "number": number,
                         "contact": contact.name,
-                        "conversation_id": message.conversation_id,
-                        "message_id": message.id,
+                        "conversation_id": message.conversation,
+                        "channel": message.channel,
+                        "message_id": message.message_id,
                         "them": them,
                         "reply": reply,
                         "tell_owner": answer.tell_owner.strip(),
@@ -258,7 +323,7 @@ class Secretary:
                         "at": now.isoformat(),
                     },
                     provenance=Provenance(
-                        source=f"imessage:{message.conversation_id}", actor="orion:secretary"
+                        source=f"{message.channel}:{message.conversation}", actor="orion:secretary"
                     ),
                     trust=Trust.THIRD_PARTY,
                     correlation_id=cid,
@@ -270,10 +335,10 @@ class Secretary:
         return self.state.exchanges[-1]
 
     async def _think(
-        self, contact: Contact, number: str, now: datetime, message: IMessage, them: str
+        self, contact: Contact, number: str, now: datetime, message: Incoming, them: str
     ) -> _Answer:
         said = self.state.history.get(number, [])[-HISTORY:]
-        if message.id not in self.state.heard:  # not journaled by the channel (a replay)
+        if message.message_id not in self.state.heard:  # not journaled by the channel (a replay)
             said = [*said, (now, "elle", them)]
         lines = "\n".join(
             f"[{_DAYS[at.astimezone(self.zone).weekday()]} {at.astimezone(self.zone):%d/%m %H:%M}]"
@@ -297,7 +362,13 @@ class Secretary:
             ModelRequest(
                 model=self._model,
                 messages=[
-                    {"role": "system", "content": PROMPT.format(owner=self.owner)},
+                    {
+                        "role": "system",
+                        "content": PROMPT.format(
+                            owner=self.owner,
+                            channel="Telegram" if message.channel == TELEGRAM else "iMessage",
+                        ),
+                    },
                     {"role": "user", "content": "\n\n".join(parts)},
                 ],
                 session_id=f"orion:secretary:{number}",
@@ -330,8 +401,13 @@ class Secretary:
             lines.append(f"{_DAYS[day.weekday()]} {day:%d/%m} : {state}")
         return "\n".join(lines)
 
-    async def relayed(self, contact: Contact, text: str, origin: Provenance, cid: str) -> None:
-        number = normalize_number(contact.number)
+    async def relayed(
+        self, contact: Contact, conversation: str, text: str, origin: Provenance, cid: str
+    ) -> None:
+        number = next(
+            (a for a in contact.addresses() if self.state.conversations.get(a) == conversation),
+            contact.addresses()[0],
+        )
         await self._journal.append(
             [
                 NewEvent(
@@ -354,7 +430,7 @@ class Secretary:
 
     async def alerts(self, now: datetime) -> list[Alert]:
         await self.sync()
-        found: list[Alert] = []
+        found: list[Alert] = self._strangers(now)
         for x in self.state.exchanges:
             if not (x.tell_owner or x.urgent) or not x.at <= now < x.at + TELL_EXPIRES:
                 continue
@@ -373,6 +449,25 @@ class Secretary:
                 )
             )
         return found
+
+    def _strangers(self, now: datetime) -> list[Alert]:
+        """Someone unknown wrote to the bot: the owner is told once, with what lets them in."""
+        return [
+            Alert(
+                key=f"secretary:stranger:{s.user_id}",
+                notice=f"Quelqu'un qu'il n'a pas autorisé a écrit au bot Telegram : {s.name} "
+                f"(id {s.user_id}) : « {s.text[:300]} ». Tu ne lui as pas répondu. Dis-le-lui en "
+                "une phrase ; s'il veut que tu lui répondes, il ajoute cette personne à "
+                f"`[modules.secretary]` avec `telegram_id = {s.user_id}`.",
+                why=f"{s.name} a écrit au bot",
+                fallback=f"{s.name} (id {s.user_id}) a écrit au bot : « {s.text[:200]} »",
+                trust=Trust.THIRD_PARTY,
+                expires_at=s.at + TELL_EXPIRES,
+                importance=0.4,
+            )
+            for s in self.state.strangers.values()
+            if f"telegram:{s.user_id}" not in self.contacts and s.at <= now < s.at + TELL_EXPIRES
+        ]
 
     async def digest(
         self, now: datetime, since: datetime, first_slot: bool, last_slot: bool
@@ -407,21 +502,23 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
         if contact is None:
             names = ", ".join(c.name for c in secretary.contacts.values())
             return ToolResult(f"No contact {args.contact!r} (contacts: {names}).", is_error=True)
-        conversation = secretary.state.conversations.get(normalize_number(contact.number))
+        conversation = secretary.conversation_with(contact)
         if conversation is None:
             return ToolResult(
-                f"{contact.name} has never written to Orion: they must first text Orion's "
-                "connect command (`orion inkbox setup` prints it).",
+                f"{contact.name} has never written to Orion: they must write first (to the "
+                "Telegram bot, or Orion's iMessage connect command, `orion inkbox setup`).",
                 is_error=True,
             )
+        channel = TELEGRAM if conversation.startswith("telegram:") else IMESSAGE
         if guardian is not None:
             await guardian.contact_send(contact.name, conversation, args.text, ctx.grant)
         elif secretary.send is not None:
-            await secretary.send(conversation, args.text, ctx.correlation_id)
+            await secretary.send(channel, conversation, args.text, ctx.correlation_id)
         else:  # pragma: no cover - serve sets it
-            return ToolResult("iMessage is not connected.", is_error=True)
+            return ToolResult("No channel is connected.", is_error=True)
         await secretary.relayed(
             contact,
+            conversation,
             args.text,
             Provenance(source=f"thread:{ctx.thread_id}", actor="orion:core"),
             ctx.correlation_id,
@@ -431,8 +528,15 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
         await secretary.sync()
         lines: list[str] = []
-        for number, contact in secretary.contacts.items():
-            said = secretary.state.history.get(number, [])[-3:]
+        listed: set[str] = set()
+        for contact in secretary.contacts.values():
+            if contact.name in listed:
+                continue
+            listed.add(contact.name)
+            said = [
+                line for a in contact.addresses() for line in secretary.state.history.get(a, [])
+            ]
+            said = sorted(said, key=lambda line: line[0])[-3:]
             last = " / ".join(f"{'elle' if w == 'elle' else 'toi'} : {t[:80]}" for _, w, t in said)
             share = " (peut savoir quand il est libre)" if contact.share else ""
             lines.append(f"- {contact.name}{share}" + (f" — {last}" if last else ""))
@@ -466,12 +570,12 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
 class SecretaryModule(Module):
     name = "secretary"
     offer = (
-        "Laisser ses proches t'écrire, selon ses règles : leurs numéros dans "
-        "`[modules.secretary]`, puis `orion inkbox setup`."
+        "Laisser ses proches t'écrire, selon ses règles : sur Telegram, leur id (tu le lui "
+        "donnes quand quelqu'un écrit au bot) dans `[modules.secretary]` ; sur iMessage, leur "
+        "numéro, puis `orion inkbox setup`."
     )
     instructions = "secretary.md"
     settings_model = SecretarySettings
-    requires = ("imessage",)
 
     def __init__(self, config: OrionConfig) -> None:
         super().__init__(config)
@@ -494,20 +598,31 @@ class SecretaryModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         from orion.calendar.module import CalendarModule
         from orion.channels.module import IMessageModule
+        from orion.channels.telegram_module import TelegramModule
 
         secretary = self.secretary
-        imessage = daemon.plate.module(IMessageModule)
-        if secretary is None or imessage is None or imessage.imessage is None:
-            return  # pragma: no cover - required, and connected first
-        channel = imessage.imessage
+        if secretary is None:  # pragma: no cover - assembled first
+            return
+        found = daemon.plate.module(IMessageModule)
+        imessage = found.imessage if found is not None else None
+        bot = daemon.plate.module(TelegramModule)
+        telegram = bot.telegram if bot is not None else None
 
-        async def send(conversation: str, text: str, cid: str) -> str:
-            return await channel.outbox.send(CHANNEL, conversation, text, cid)
+        async def send(channel: str, conversation: str, text: str, cid: str) -> str:
+            if channel == TELEGRAM and telegram is not None:
+                chat = conversation.removeprefix("telegram:")
+                return await telegram.outbox.send(TELEGRAM, chat, text, cid)
+            if channel == IMESSAGE and imessage is not None:
+                return await imessage.outbox.send(IMESSAGE, conversation, text, cid)
+            raise RuntimeError(f"secretary: no {channel} channel to answer on")
 
         secretary.send = send
         calendar = daemon.plate.module(CalendarModule)
         secretary.calendar = calendar.calendar if calendar is not None else None
-        channel.others = secretary.receive
+        if imessage is not None:
+            imessage.others = lambda message: secretary.receive(from_imessage(message))
+        if telegram is not None:
+            telegram.others = secretary.receive
         daemon.alerts.append(secretary)
         daemon.digests.append(secretary)
         daemon.add_service("secretary", secretary.run)

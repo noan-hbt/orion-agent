@@ -6,6 +6,9 @@ The core uses the same Telegram client as in a single process, pointed at the gu
 - reads are allowed (`getMe`, `getUpdates`, `getFile`, and the download of a file he sent);
 - a message, a file, « en train d'écrire » or the removal of buttons goes only to the owner's
   chat (`[channels.telegram] owner_id`), at most `max_sends_per_minute` messages a minute;
+- a contact the owner allowed (`[modules.secretary]`, `telegram_id`) gets a plain text answer,
+  only within `REPLY_WINDOW_HOURS` of their last message as the guardian saw it pass, a few a
+  day; writing to them first takes the owner's yes to that very text (`contact_message`);
 - nothing else: no webhook, no forwarding, no other chat, no change to the bot.
 
 **Approvals.** The guardian writes the question itself, with Oui / Non buttons. The Bot API
@@ -22,6 +25,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import structlog
@@ -33,6 +37,7 @@ from orion.channels.imessage import answer_word
 from orion.channels.telegram import MAX_TEXT, NO, REACTIONS, YES, TelegramClient, TelegramError
 from orion.core.events import Trust
 from orion.guardian.ledger import TELEGRAM_ANSWER
+from orion.secretary.settings import REPLY_WINDOW_HOURS
 
 if TYPE_CHECKING:
     from orion.guardian.ledger import PendingApproval
@@ -113,6 +118,9 @@ class TelegramGate:
         self.owner_id = service.config.channels.telegram.owner_id
         self.conversation = f"telegram:{self.owner_id}"
         """How approvals name the owner's chat (`ApprovalRequest.conversation_id`)."""
+        self.heard: dict[int, datetime] = {}
+        """Contact's user id → when they last wrote, as seen passing through here. Kept in
+        memory: after a restart, Orion answers them again once they write again."""
 
     def install(self) -> None:
         self.service.routes += [
@@ -156,6 +164,7 @@ class TelegramGate:
         await self.service.ledger.catch_up()
         questions = self._questions(open_only=True)
         for update in updates:
+            self._hear(update)
             update_id = int(update.get("update_id") or 0)
             if update_id in self.service.ledger.state.telegram_updates:
                 continue
@@ -164,6 +173,39 @@ class TelegramGate:
                 await self.service.ledger.record(
                     TELEGRAM_ANSWER, {"update_id": update_id, **found}, Trust.OWNER, "telegram"
                 )
+
+    def _hear(self, update: dict[str, Any]) -> None:
+        message = cast(dict[str, Any], update.get("message") or {})
+        sender = cast(dict[str, Any], message.get("from") or {}).get("id")
+        chat = cast(dict[str, Any], message.get("chat") or {})
+        if sender in self.service.telegram_contacts and chat.get("type") == "private":
+            self.heard[int(sender)] = self.service.clock()
+
+    def _answerable(self, user_id: int) -> str | None:
+        """Why Orion may not answer this contact now, if it may not."""
+        contact = self.service.telegram_contacts.get(user_id)
+        if contact is None:
+            return "only the owner's chat, or a contact's"
+        last = self.heard.get(user_id)
+        if last is None or self.service.clock() - last > timedelta(hours=REPLY_WINDOW_HOURS):
+            return f"{contact.name} has not written to Orion in the last hours"
+        return self.service.contact_quota(contact, f"telegram:{user_id}")
+
+    async def contact_send(self, name: str, conversation: str, text: str) -> Response:
+        """A message the owner approved for a contact (`contact_message`): it may start the
+        conversation, but only to the contact of that name."""
+        chat = conversation.removeprefix("telegram:")
+        contact = self.service.telegram_contacts.get(int(chat)) if chat.isdigit() else None
+        if contact is None or contact.name != name:
+            return await self.service.deny(f"message to {name}", f"that chat is not {name}'s")
+        reason = self.service.contact_quota(contact, f"telegram:{chat}")
+        if reason is not None:
+            return await self.service.deny(f"message to {name}", reason)
+        try:
+            sent = await self.client.send_message(contact.telegram_id, text[:MAX_TEXT])
+        except TelegramError as exc:
+            return JSONResponse({"error": f"Telegram: {exc}"}, status_code=502)
+        return JSONResponse({"message_id": str(sent)})
 
     # -- the core's requests ----------------------------------------------------------------
 
@@ -184,8 +226,15 @@ class TelegramGate:
             )
         if method not in TO_OWNER and method not in FILES:
             return await self._refuse(method, f"{method} is never allowed")
-        if not self.owner_id or params.get("chat_id") != self.owner_id:
-            return await self._refuse(method, "only the owner's chat")
+        chat = params.get("chat_id")
+        if not self.owner_id or chat != self.owner_id:
+            # Someone else: a plain answer to a contact who just wrote, nothing more.
+            if method != "sendMessage" or params.get("reply_markup") or not isinstance(chat, int):
+                return await self._refuse(method, "only the owner's chat")
+            reason = self._answerable(chat)
+            if reason is not None:
+                return await self._refuse(method, reason)
+            return await self._forward(method, params)
         if method in COUNTED and not self.service.may_send():
             return await self._refuse(method, "too many messages this minute")
         if method in FILES:

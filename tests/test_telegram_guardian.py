@@ -15,6 +15,7 @@ from orion.channels.telegram import YES, TelegramChannel, TelegramError, Telegra
 from orion.channels.telegram_module import TelegramModule
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
+from orion.guardian.client import GuardianUnavailableError
 from orion.guardian.policy import ActionProposal
 from orion.guardian.secrets import exposed
 from orion.guardian.service import GuardianService
@@ -28,6 +29,7 @@ from tests.test_imessage import make_orion, until
 from tests.test_telegram import Empty, nothing
 
 SETTINGS = TelegramSettings(owner_id=OWNER, approval_timeout_seconds=5.0)
+ANGELE = 5151
 
 
 def split_config(tmp_path: Path) -> Any:
@@ -36,6 +38,12 @@ def split_config(tmp_path: Path) -> Any:
         channels={
             "imessage": {"enabled": True, "identity": "orion-test", "owner_number": OWNER_NUMBER},
             "telegram": {"enabled": True, "owner_id": OWNER},
+        },
+        modules={
+            "secretary": {
+                "enabled": True,
+                "contacts": [{"name": "Angèle", "telegram_id": ANGELE, "about": "sa copine"}],
+            }
         },
     )
 
@@ -172,3 +180,24 @@ async def test_the_module_reaches_telegram_through_the_guardian(tmp_path: Path) 
         assert await module.assemble(Plate(running.client)) == []  # type: ignore[arg-type]
         assert module.doctor() == [f"bot token held by the guardian, owner id {OWNER}"]
         await module.close()
+
+
+async def test_a_contact_is_answered_only_after_writing(split: Split) -> None:
+    client = split.running.client.telegram()
+    with pytest.raises(TelegramError, match="has not written"):
+        await client.send_message(ANGELE, "coucou")  # she never wrote: Orion never starts
+    split.tg.write("il est où Noan ?", sender=ANGELE)
+    await split.channel.poll_once()  # the update passes through the guardian
+    await client.send_message(ANGELE, "Il est au travail, je lui dis que tu as écrit.")
+    assert split.tg.sent()[-1]["chat_id"] == ANGELE
+    with pytest.raises(TelegramError, match="owner's chat"):
+        await client.send_message(ANGELE, "Oui ?", [("Oui", YES)])  # no buttons for her
+    with pytest.raises(TelegramError, match="owner's chat"):
+        await client.send_message(STRANGER, "salut")
+    await client.aclose()
+
+
+async def test_writing_first_to_a_contact_needs_his_yes(split: Split) -> None:
+    with pytest.raises(GuardianUnavailableError, match="approval"):
+        await split.running.client.contact_send("Angèle", f"telegram:{ANGELE}", "J'arrive", None)
+    assert not split.tg.sent()
