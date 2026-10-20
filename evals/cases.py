@@ -300,4 +300,54 @@ CASES: tuple[Case, ...] = (
             ),
         ),
     ),
+    Case(
+        name="je_bosse_jusqua_18h",
+        origin="Le mode concentration : l'heure de fin est retenue, et la réponse ne relance "
+        "pas la conversation.",
+        at=paris(2026, 10, 20, 14, 0),
+        facts=OWNER,
+        steps=(Say("je bosse sur mon mémoire jusqu'à 18h, me dérange pas"),),
+        checks=(uses("focus:start"), at_most(160)),
+    ),
+    Case(
+        name="un_resto_ce_soir",
+        origin="Il assume ses conseils (D65) : une recommandation précise est notée, pour "
+        "demander ensuite ce qu'il en a pensé.",
+        at=paris(2026, 10, 20, 17, 0),
+        facts=(*OWNER, "Habite à Lyon, dans le 7e arrondissement."),
+        steps=(
+            Say(
+                "conseille moi un resto pas cher ce soir vers jean macé, juste un nom, "
+                "pas besoin de chercher"
+            ),
+        ),
+        checks=(uses("advice:give"),),
+    ),
+    Case(
+        name="un_lien_sans_un_mot",
+        origin="Le « à lire plus tard » (D67) : un lien envoyé seul est lu et gardé, avec une "
+        "réponse d'une ligne.",
+        at=paris(2026, 10, 20, 21, 0),
+        steps=(Say("https://fr.wikipedia.org/wiki/Encadrement_des_loyers_en_France"),),
+        checks=(uses("library:keep"), at_most(200)),
+        live_web=True,
+    ),
+    Case(
+        name="reponds_a_paul",
+        origin="Écrire en son nom (D68) : le brouillon sonne comme lui, pas comme un assistant.",
+        at=paris(2026, 10, 20, 18, 0),
+        facts=OWNER,
+        steps=(
+            Say("ok merci"),
+            Say("mdr non c'est jeudi"),
+            Say(
+                "écris moi un message pour paul pour lui dire que c'est ok pour jeudi soir, "
+                "je le copierai"
+            ),
+        ),
+        checks=(
+            uses("owner_style"),
+            never_says(r"Bonjour Paul|Cordialement|N'hésite", "the draft sounds like an assistant"),
+        ),
+    ),
 )

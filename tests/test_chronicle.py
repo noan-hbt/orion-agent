@@ -108,7 +108,7 @@ async def test_last_year_is_given_and_pages_are_read_back(journal: SqliteJournal
     await chronicle.tick()
     assert "emménageais à Dreux" in provider.requests[0].messages[1]["content"]
 
-    (tool,) = chronicle_tools(chronicle)
+    (_own, tool) = chronicle_tools(chronicle)
     ctx = ToolContext(OWNER_THREAD, "c")
     listing = await tool.handler(tool.parse("{}"), ctx)
     assert "Ma semaine du 20 octobre 2025" in listing.content
@@ -152,3 +152,53 @@ async def test_nothing_noticed_is_nothing_said(journal: SqliteJournal) -> None:
     assert "2026-11" in chronicle.state.noticed
     later = await chronicle.alerts(datetime(2026, 11, 2, 19, 45, tzinfo=PARIS))
     assert not any(a.key.startswith("chronicle-noticed") for a in later)
+
+
+async def test_the_page_ends_with_what_orion_got_wrong(tmp_path: Path) -> None:
+    """What Orion owned up to, and what failed on its side, close Sunday's page (D69)."""
+    from orion.core.hlc import HybridClock
+
+    thursday_ms = int(datetime(2026, 10, 22, 12, 0, tzinfo=PARIS).timestamp() * 1000)
+    async with SqliteJournal(
+        tmp_path / "j.sqlite3", HybridClock("test", lambda: thursday_ms)
+    ) as journal:
+        await a_week(journal)
+        provider = ScriptedProvider(reply(PAGE))
+        chronicle = chronicle_for(journal, provider, datetime(2026, 10, 20, 9, 0, tzinfo=PARIS))
+        (own, _read) = chronicle_tools(chronicle)
+        await own.handler(
+            own.parse(
+                json.dumps(
+                    {
+                        "what": "ton rappel pour l'assurance était au mercredi au lieu du mardi",
+                        "lesson": "à 1 h du matin, son « demain » est le jour qui commence",
+                    }
+                )
+            ),
+            ToolContext("owner", "c"),
+        )
+        for _ in range(2):
+            failed = NewEvent(
+                kind="outbox.failed",
+                payload={"channel": "imessage", "media": "c.jpg", "error": "POST /media 404"},
+                provenance=Provenance(source="orion:outbox", actor="orion:outbox"),
+                trust=Trust.SYSTEM,
+            )
+            await journal.append([failed])
+        chronicle.clock = lambda: SUNDAY_EVENING
+        assert await chronicle.tick() is not None
+
+    seen = provider.requests[0].messages[1]["content"]
+    errors = seen[seen.index("<tes-erreurs-de-la-semaine>") :]
+    assert "- mardi : ton rappel pour l'assurance était au mercredi au lieu du mardi" in errors
+    assert "(ce que j'en tire : à 1 h du matin" in errors
+    assert "un fichier pour toi n'est pas parti (POST /media 404) (2 fois)" in errors
+    assert "Où je me suis trompé cette semaine" in provider.requests[0].messages[0]["content"]
+
+
+async def test_a_clean_week_has_no_errors_block(journal: SqliteJournal) -> None:
+    await a_week(journal)
+    provider = ScriptedProvider(reply(PAGE))
+    chronicle = chronicle_for(journal, provider, SUNDAY_EVENING)
+    await chronicle.tick()
+    assert "<tes-erreurs-de-la-semaine>" not in provider.requests[0].messages[1]["content"]

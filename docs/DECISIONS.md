@@ -1354,3 +1354,84 @@ configuration : fixées au démarrage, elles ne cassent pas le cache. La consign
 demande en aurait besoin, dire en une phrase ce qui serait possible et la commande à lancer,
 une seule fois par sujet. Un refus du propriétaire est retenu avec `remember`. Pas de liste de
 fonctions, ni dans un message de bienvenue, ni ailleurs.
+
+## D65 — Il assume ses conseils
+
+*20/10/2026 · acceptée*
+
+Un ami qui t'a conseillé un resto te demande quelques jours plus tard comment c'était, et s'en
+souvient la fois suivante. Le module `advice` fait la même chose pour Orion :
+- une recommandation sur laquelle le propriétaire peut agir (un resto, un livre, un achat,
+  une façon de répondre à quelqu'un) est notée, avec le jour où il l'aura essayée ;
+- ce soir-là, Orion demande une seule fois comment c'était, par l'initiative (heures calmes
+  et budget comptent) ;
+- le verdict devient un goût en mémoire ;
+- avant de conseiller à nouveau dans un domaine, Orion regarde son bilan et l'assume à voix
+  haute.
+
+Il apprend ce que le propriétaire aime, pas ce qui est bien noté.
+
+## D66 — Le droit de le contredire
+
+*20/10/2026 · acceptée*
+
+Quand ce que le propriétaire s'apprête à faire va contre une de ses intentions (D53), Orion
+appelle `intention` (challenge), puis le dit une fois, sans morale, et le laisse décider.
+L'événement est journalisé :
+- au plus une fois par jour pour une même intention, l'outil refusant la deuxième : il ne
+  revient pas à la charge ;
+- le point de la semaine sait quand il a choisi autrement.
+
+Le cas `veille_de_partiel` passe 2 fois sur 2 sur le forfait. Orion y répond : « Tu m'as dit
+que le partiel de demain comptait vraiment pour ton master. Rentrer à 4 h risque de te coûter
+cher. Tu es sûr ? »
+
+## D67 — Le « à lire plus tard » qui revient
+
+*20/10/2026 · acceptée*
+
+Un lien envoyé sans un mot est lu, puis gardé dans la bibliothèque. Il est aussi noté en
+mémoire (`library` keep), avec l'essentiel et les sujets dans les mots d'une conversation
+future. La réponse tient en une ligne. Pas de liste de lectures en attente : le rappel de
+mémoire (recherche par le sens et par les mots, à chaque message) ramène le lien le jour où la
+conversation y touche, et Orion dit : « tu m'avais envoyé un article là-dessus ».
+
+## D68 — Écrire en son nom
+
+*20/10/2026 · acceptée*
+
+`owner_style` tire des messages du propriétaire, sans modèle, ce qui se compte :
+- sa longueur, ses majuscules, sa ponctuation, ses emojis et ses mots ;
+- quelques exemples réels ;
+- ce que la mémoire dit de sa façon de parler à la personne visée.
+
+C'est une projection du journal, donc reconstructible. Orion l'appelle avant tout texte qui
+partira en son nom, et met le brouillon seul dans son paragraphe, prêt à copier.
+
+## D69 — Le carnet d'erreurs
+
+*20/10/2026 · acceptée*
+
+Quand Orion s'est trompé et que ça a compté (un rappel le mauvais jour, un fait faux, un envoi
+raté), il le reconnaît en une phrase, corrige, et le note avec `mistake`, avec ce qu'il en
+tire. La chronique du dimanche s'achève alors sur « Où je me suis trompé cette semaine », à la
+première personne. Elle tient compte aussi de ce que le journal montre de ses pannes :
+- les messages et fichiers qui ne sont pas partis ;
+- les outils qui ont planté.
+
+Les refus du gardien et les appels mal formés ne comptent pas. Le propriétaire apprend où lui
+faire confiance et où vérifier.
+
+## D70 — Le mode concentration
+
+*20/10/2026 · acceptée*
+
+« Je bosse jusqu'à 18 h. » Le module `focus` le dit à l'arbitre d'initiative :
+- jusqu'à cette heure, seul passe ce qui ne peut pas attendre (urgence d'au moins 0,95 : un
+  rendez-vous dans dix minutes), et l'attente ne rend pas le reste plus urgent ;
+- à la fin, le moteur envoie ce qui est dû en même temps en un seul message, du plus important
+  au moins important, compté une seule fois dans le budget. Cela vaut pour tous les messages
+  dus ensemble, pas seulement après une concentration ;
+- un proche autorisé à connaître ses disponibilités (secrétaire) apprend jusqu'à quand il est
+  concentré, jamais pourquoi ;
+- les rappels qu'il a demandés sonnent quand même.
