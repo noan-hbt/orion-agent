@@ -8,7 +8,9 @@ with plain rules whose verdict is journaled with the message:
   of delay grows, so nothing waits forever);
 - interruption costs more while the owner is busy (a calendar event under way) and as the
   day's budget runs out, and less right after an event ended: the natural break where a
-  message lands best.
+  message lands best;
+- while the owner said they are focused (« je bosse jusqu'à 18 h »), only what cannot wait
+  gets through, and waiting does not make the rest more urgent: it all waits for the end.
 
 A message that is not worth it yet waits for a better moment (it is not dropped): the next
 tick asks again. Explicit requests (reminders, outcomes the owner asked for) never go through
@@ -31,6 +33,8 @@ class Moment:
     """The owner is in a calendar event right now."""
     free_since: datetime | None = None
     """When the owner's last event ended, if they are free."""
+    focus_until: datetime | None = None
+    """The owner asked not to be disturbed until then (the focus module)."""
 
 
 class PresenceSource(Protocol):
@@ -52,7 +56,12 @@ class Judgement:
 def merge(moments: list[Moment]) -> Moment:
     busy = any(m.busy for m in moments)
     ends = [m.free_since for m in moments if m.free_since is not None]
-    return Moment(busy, None if busy or not ends else max(ends))
+    focus = [m.focus_until for m in moments if m.focus_until is not None]
+    return Moment(busy, None if busy or not ends else max(ends), max(focus, default=None))
+
+
+FOCUS_COST = 0.95
+"""While the owner is focused, only a message that cannot wait (urgency 0.95 and above) goes."""
 
 
 def judge(
@@ -65,11 +74,12 @@ def judge(
     waiting_since: datetime | None = None,
 ) -> Judgement:
     urgency = importance
+    focused = moment.focus_until is not None and now < moment.focus_until
     if expires_at is not None:
         left = (expires_at - now).total_seconds() / 60
         if left < 30:
             urgency += 0.4 * (1 - max(left, 0) / 30)
-    if waiting_since is not None:
+    if waiting_since is not None and not focused:
         hours = (now - waiting_since).total_seconds() / 3600
         urgency += min(0.4, 0.1 * hours)
     cost = 0.3
@@ -79,5 +89,7 @@ def judge(
         cost -= 0.2
     if budget:
         cost += 0.2 * min(spent / budget, 1.0)
+    if focused:
+        cost = max(cost, FOCUS_COST)
     urgency, cost = min(urgency, 1.0), max(cost, 0.0)
     return Judgement(urgency >= cost, round(urgency, 2), round(cost, 2))

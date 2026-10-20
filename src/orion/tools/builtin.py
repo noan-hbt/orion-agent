@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.context.compiler import night_hint
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 _WEEKDAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
@@ -35,7 +36,7 @@ async def _current_time(args: Any, ctx: ToolContext) -> ToolResult:
     now = datetime.now(tz)
     weekday = _WEEKDAYS_FR[now.weekday()]
     return ToolResult(
-        f"{weekday} {now:%Y-%m-%d %H:%M} ({tz_name}, UTC{now:%z})",
+        f"{weekday} {now:%Y-%m-%d %H:%M} ({tz_name}, UTC{now:%z}){night_hint(now)}",
         data={"iso": now.isoformat(), "weekday": weekday, "timezone": tz_name},
     )
 

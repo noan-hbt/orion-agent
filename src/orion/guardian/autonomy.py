@@ -47,7 +47,9 @@ LABELS = {
     "calendar_add": "ajouter des événements à ton agenda",
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
+    "mail_tidy": "archiver tes mails et te désabonner des newsletters",
     "computer_task_send": "envoyer des formulaires sur des sites",
+    "configure_change": "changer tes propres réglages",
 }
 
 

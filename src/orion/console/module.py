@@ -32,6 +32,10 @@ class LinkInput(BaseModel):
 
 class ConsoleModule(Module):
     name = "console"
+    offer = (
+        "Une page de contrôle où il voit et corrige ce que tu sais de lui, tes engagements et "
+        "ton activité : `[modules.console] enabled = true`."
+    )
     instructions = "console.md"
     settings_model = ConsoleSettings
 

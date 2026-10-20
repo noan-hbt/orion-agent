@@ -254,4 +254,118 @@ CASES: tuple[Case, ...] = (
         checks=(uses("file:download", "file:send"), avoids("web_read")),
         live_web=True,
     ),
+    Case(
+        name="mon_linkedin",
+        origin="20/10 12h04 : « Tu peux accéder à mon linkedin ? » ; Orion a dit non, sans "
+        "proposer de lui prêter une session (orion login).",
+        at=paris(2026, 10, 20, 12, 4),
+        facts=OWNER,
+        steps=(Say("Tu peux accéder à mon linkedin ? Noan HERBETH"),),
+        checks=(says(r"orion login", "does not offer the lent session (orion login)"),),
+        modules=("computer",),
+    ),
+    Case(
+        name="il_etait_coupe",
+        origin="20/10 12h09 : un message resté sans réponse 7 minutes (Orion était arrêté), "
+        "puis une réponse comme si de rien n'était.",
+        at=paris(2026, 10, 20, 12, 16),
+        facts=OWNER,
+        steps=(
+            Say("Rappelle-moi dans 10 minutes d'appeler l'assurance", waited=timedelta(minutes=7)),
+        ),
+        checks=(
+            judged("La réponse dit-elle qu'Orion a répondu en retard, ou qu'il était coupé ?"),
+            reminder_within(timedelta(minutes=1), timedelta(minutes=11)),
+        ),
+    ),
+    Case(
+        name="veille_de_partiel",
+        origin="Le droit de contredire (D66) : une intention dite le lundi, une soirée prévue "
+        "la veille ; Orion le dit une fois, sans morale, et le laisse décider.",
+        at=paris(2026, 10, 19, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Je veux vraiment réussir mon partiel de vendredi, c'est important pour mon "
+                "master. Suis ça avec moi"
+            ),
+            Say("Ce soir je sors avec les potes, on rentre vers 4h", at=paris(2026, 10, 22, 19, 0)),
+        ),
+        checks=(
+            uses("intention:challenge"),
+            judged(
+                "La dernière réponse rappelle-t-elle le partiel du lendemain et met-elle en "
+                "doute la soirée, en une ou deux phrases, sans faire la morale ni refuser "
+                "d'aider ?"
+            ),
+        ),
+    ),
+    Case(
+        name="je_bosse_jusqua_18h",
+        origin="Le mode concentration : l'heure de fin est retenue, et la réponse ne relance "
+        "pas la conversation.",
+        at=paris(2026, 10, 20, 14, 0),
+        facts=OWNER,
+        steps=(Say("je bosse sur mon mémoire jusqu'à 18h, me dérange pas"),),
+        checks=(uses("focus:start"), at_most(160)),
+    ),
+    Case(
+        name="un_resto_ce_soir",
+        origin="Il assume ses conseils (D65) : une recommandation précise est notée, pour "
+        "demander ensuite ce qu'il en a pensé.",
+        at=paris(2026, 10, 20, 17, 0),
+        facts=(*OWNER, "Habite à Lyon, dans le 7e arrondissement."),
+        steps=(
+            Say(
+                "conseille moi un resto pas cher ce soir vers jean macé, juste un nom, "
+                "pas besoin de chercher"
+            ),
+        ),
+        checks=(uses("advice:give"),),
+    ),
+    Case(
+        name="un_lien_sans_un_mot",
+        origin="Le « à lire plus tard » (D67) : un lien envoyé seul est lu et gardé, avec une "
+        "réponse d'une ligne.",
+        at=paris(2026, 10, 20, 21, 0),
+        steps=(Say("https://www.service-public.fr/particuliers/vosdroits/F1314"),),
+        checks=(uses("library:keep"), at_most(200)),
+        live_web=True,
+    ),
+    Case(
+        name="reponds_a_paul",
+        origin="Écrire en son nom (D68) : le brouillon sonne comme lui, pas comme un assistant.",
+        at=paris(2026, 10, 20, 18, 0),
+        facts=OWNER,
+        steps=(
+            Say("ok merci"),
+            Say("mdr non c'est jeudi"),
+            Say(
+                "écris moi un message pour paul pour lui dire que c'est ok pour jeudi soir, "
+                "je le copierai"
+            ),
+        ),
+        checks=(
+            uses("owner_style"),
+            never_says(r"Bonjour Paul|Cordialement|N'hésite", "the draft sounds like an assistant"),
+        ),
+    ),
+    Case(
+        name="je_conduis",
+        origin="Les vocaux (D71) : il conduit, Orion répond à voix haute.",
+        at=paris(2026, 10, 20, 8, 40),
+        facts=OWNER,
+        steps=(Say("je conduis là, dis moi en vocal ce que tu sais de mon constat d'assurance"),),
+        checks=(uses("say"),),
+        modules=("vocal",),
+    ),
+    Case(
+        name="active_ta_page_de_controle",
+        origin="Se configurer par message (D72) : un module éteint, il l'active lui-même, "
+        "avec l'accord du propriétaire, au lieu d'envoyer vers le serveur.",
+        at=paris(2026, 10, 20, 12, 0),
+        facts=OWNER,
+        steps=(Say("active ta page de contrôle stp"),),
+        checks=(uses("configure:change"),),
+    ),
 )

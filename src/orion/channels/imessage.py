@@ -23,6 +23,7 @@ import unicodedata
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -167,6 +168,7 @@ class Inbound:
     media: tuple[Attachment, ...] = ()
     """Fresh links to its attachments (they expire: a requeued message fetches them again)."""
     with_media: int = 0
+    created_at: str = ""
 
 
 @dataclass
@@ -209,6 +211,7 @@ class ChannelState:
                     conversation,
                     str(payload.get("text") or ""),
                     with_media=len(payload.get("media") or []),
+                    created_at=str(payload.get("created_at") or ""),
                 )
         elif event.kind == FEEDBACK_REACTION:
             self.reactions.add(str(payload.get("reaction_id")))
@@ -267,6 +270,7 @@ class IMessageChannel:
             message.text,
             context=message.conversation_id,
             media=message.media,
+            sent_at=_instant(message.created_at),
         )
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
@@ -385,7 +389,9 @@ class IMessageChannel:
                 log.info("imessage.third_party_ignored", conversation=message.conversation_id)
             return
         media = _attachments(message)
-        inbound = Inbound(message.id, message.conversation_id, text, media, len(media))
+        inbound = Inbound(
+            message.id, message.conversation_id, text, media, len(media), message.created_at
+        )
         tapback = None if media else text_tapback(text)
         if tapback is not None:
             await self._text_tapback(inbound, tapback)
@@ -585,6 +591,14 @@ class IMessageChannel:
             ]
         )
         await self._runner.catch_up()
+
+
+def _instant(stamp: str) -> datetime | None:
+    try:
+        when = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
 
 
 def _attachments(message: IMessage) -> tuple[Attachment, ...]:

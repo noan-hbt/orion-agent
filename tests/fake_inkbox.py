@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -47,7 +48,11 @@ class FakeInkbox:
         )
 
     def inbound(
-        self, text: str, sender: str = OWNER, conversation: str = CONVERSATION
+        self,
+        text: str,
+        sender: str = OWNER,
+        conversation: str = CONVERSATION,
+        sent_at: datetime | None = None,
     ) -> dict[str, Any]:
         self._counter += 1
         message: dict[str, Any] = {
@@ -58,7 +63,8 @@ class FakeInkbox:
             "content": text,
             "service": "imessage",
             "is_read": False,
-            "created_at": f"2026-10-19T18:00:{self._counter:02d}+00:00",
+            # Sent just now, unless a test says otherwise: an old one would read as having waited.
+            "created_at": (sent_at or datetime.now(UTC)).isoformat(),
         }
         self.messages[message["id"]] = message
         return message
@@ -105,7 +111,7 @@ class FakeInkbox:
         path = request.url.path.removeprefix("/api/v1")
         self.calls.append((request.method, path))
         assert request.headers["X-API-Key"] == "test-key"
-        if path == "/media" and request.method == "POST":
+        if path == "/imessage/media" and request.method == "POST":
             self.uploads.append(request.content)
             return httpx.Response(
                 201, json={"media_url": f"https://media.inkbox.test/{len(self.uploads)}"}

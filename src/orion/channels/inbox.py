@@ -21,6 +21,7 @@ from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
 import structlog
@@ -59,6 +60,8 @@ class Inbound:
     context: str = field(default="", compare=False)
     """Opaque per-channel data, e.g. the conversation to show typing in."""
     media: tuple[Attachment, ...] = ()
+    sent_at: datetime | None = field(default=None, compare=False)
+    """When the owner sent it, if the channel knows: a message that waited is said to have."""
 
 
 class Outlet(Protocol):
@@ -199,16 +202,21 @@ class OwnerInbox:
                 await reply.deliver(text, correlation_id)
 
         async with showing:
-            photos = await self._look(batch)
+            looked = await self._look(batch)
+            # A voice message from his own number is him speaking: his words (D71).
+            said = [item.text for item in batch if item.text]
+            said += [f"(vocal) {p.description}" for p in looked if p.spoken]
+            photos = [p for p in looked if not p.spoken]
             turn = await self._orion.handle_owner_message(
                 OWNER_THREAD,
-                "\n".join(item.text for item in batch if item.text),
+                "\n".join(said),
                 first.channel,
                 refs=[i for item in batch for i in item.message_ids],
                 interjections=interjections,
                 progress=progress,
                 waiting=lambda: not first.allow_silence and self._waiting(first),
                 photos=photos,
+                sent_at=min((i.sent_at for i in batch if i.sent_at), default=None),
             )
         thought = time.monotonic() - started
         text = turn.text.strip()

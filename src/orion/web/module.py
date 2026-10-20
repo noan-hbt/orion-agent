@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 class WebModule(Module):
     name = "web"
+    offer = "Chercher sur le web et lire des pages : `[modules.web] enabled = true`."
     instructions = "web.md"
     settings_model = WebSettings
 

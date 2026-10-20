@@ -8,7 +8,7 @@ thread.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
@@ -30,7 +30,7 @@ from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
-from orion.modules.registry import load
+from orion.modules.registry import discover, load
 from orion.providers.base import Embedder, ModelProvider
 from orion.resources import read_resource
 from orion.runtime import Orion
@@ -79,11 +79,20 @@ class App:
         return self.plate.module(kind)
 
 
-def constitution(modules: list[Module]) -> str:
-    """The core constitution, then each enabled module's section, in loading order."""
+def constitution(modules: list[Module], offers: Sequence[str] = ()) -> str:
+    """The core constitution, each enabled module's section in loading order, then what Orion
+    could do with more setup (D64). All fixed while Orion runs: the system message is cached."""
     parts = [read_resource("constitution.md").strip()]
     parts += [text for text in (m.instructions_text() for m in modules) if text]
+    if offers:
+        listed = "\n".join(f"- {offer}" for offer in offers)
+        parts.append(f"{read_resource('offers.md').strip()}\n\n{listed}")
     return "\n\n".join(parts) + "\n"
+
+
+def offers(config: OrionConfig) -> list[str]:
+    """Every installed module's offer, in discovery order."""
+    return [offer for kind in discover() for offer in kind(config).offers()]
 
 
 def core_tools(plate: Plate) -> list[Tool]:
@@ -188,7 +197,9 @@ async def build_app(
             provider=provider,
             registry=ToolRegistry(tools),
             guardian=Guardian(plate.approver, autonomy.allows),
-            compiler=ContextCompiler(constitution(enabled), config.agent.max_window_tokens),
+            compiler=ContextCompiler(
+                constitution(enabled, offers(config)), config.agent.max_window_tokens
+            ),
             agent=config.agent,
             memory=memory,
             extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),

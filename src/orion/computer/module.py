@@ -64,6 +64,23 @@ class StatusInput(BaseModel):
 
 class ComputerModule(Module):
     name = "computer"
+    offer = (
+        "Un navigateur à toi, pour faire des démarches sur des sites : `[modules.computer] "
+        "enabled = true`."
+    )
+
+    def offers(self) -> list[str]:
+        if not self.enabled:
+            return super().offers()
+        lend = (
+            "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) avec une session qu'il te "
+            "prête, pour un site où tu ne l'as pas déjà : sur son Mac, `orion login <site>`, puis "
+            "`orion sessions add` sur le serveur"
+        )
+        if not self.config.guardian.enabled:
+            lend += " (il faut d'abord le gardien séparé, `[guardian] enabled = true`)"
+        return [lend + "."]
+
     instructions = "computer.md"
     settings_model = ComputerSettings
 

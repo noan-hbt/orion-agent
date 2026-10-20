@@ -48,6 +48,8 @@ class Say:
 
     text: str
     at: datetime | None = None
+    waited: timedelta | None = None
+    """Sent this long before Orion takes it up (Orion was down)."""
 
 
 @dataclass(frozen=True)
@@ -248,7 +250,8 @@ class Refuse:
 
 
 def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionConfig:
-    """Production, minus what reaches the outside: no channel, no guardian, no voice."""
+    """Production, minus what reaches the outside: no channel, no guardian, no voice, and no
+    config file to change (configure writes nothing during an eval)."""
     channels = base.channels.model_copy(
         update={"imessage": base.channels.imessage.model_copy(update={"enabled": False})}
     )
@@ -257,6 +260,7 @@ def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionCo
         update={
             "data_dir": data_dir,
             "instance": "orion-eval",
+            "source": None,
             "channels": channels,
             "agent": agent,
             "guardian": base.guardian.model_copy(update={"enabled": False}),
@@ -287,8 +291,9 @@ async def run_case(
                         clock.move_to(step.at)
                     observation.times.append(datetime.now(PARIS))
                     if isinstance(step, Say):
+                        sent = datetime.now(PARIS) - step.waited if step.waited else None
                         turn = await app.orion.handle_owner_message(
-                            OWNER_THREAD, step.text, "imessage"
+                            OWNER_THREAD, step.text, "imessage", sent_at=sent
                         )
                     else:
                         turn = await app.orion.handle_initiative(

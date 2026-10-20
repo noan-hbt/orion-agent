@@ -13,7 +13,12 @@ They last, and nobody keeps them by being reminded at a fixed time. So Orion:
   drift said frankly, with tact, and a question about what gets in the way. Through the
   initiative engine, like any message Orion starts.
 
-    intention.set  intention.noted  intention.dropped
+When what the owner is about to do goes against one (a night out before the exam he said
+mattered), Orion says so once, without a lecture, and lets him decide (`intention` challenge,
+D66): the challenge is journaled, at most one a day per intention, so Orion never nags, and the
+weekly check-in knows when he chose otherwise.
+
+    intention.set  intention.noted  intention.challenged  intention.dropped
 """
 
 from __future__ import annotations
@@ -43,6 +48,8 @@ if TYPE_CHECKING:
 SET = "intention.set"
 NOTED = "intention.noted"
 DROPPED = "intention.dropped"
+CHALLENGED = "intention.challenged"
+CHALLENGE_EVERY = timedelta(hours=20)
 CHECK_WINDOW = timedelta(hours=20)
 _DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
@@ -59,6 +66,12 @@ class Note:
     at: datetime
 
 
+@dataclass(frozen=True)
+class Challenge:
+    plan: str
+    at: datetime
+
+
 @dataclass
 class Intention:
     id: str
@@ -70,6 +83,7 @@ class Intention:
     fact_id: str
     trust: Trust
     notes: list[Note] = field(default_factory=list[Note])
+    challenges: list[Challenge] = field(default_factory=list[Challenge])
 
     def check_ins(self, now: datetime, at: time) -> tuple[int, datetime] | None:
         """The check-in due now, if one is: its number and when it was due."""
@@ -132,6 +146,12 @@ class IntentionState:
                     )
                 )
                 intention.trust = min(intention.trust, event.trust)
+        elif event.kind == CHALLENGED:
+            intention = self.active.get(str(payload["intention_id"]))
+            if intention is not None:
+                intention.challenges.append(
+                    Challenge(str(payload["plan"]), datetime.fromisoformat(str(payload["at"])))
+                )
         elif event.kind == DROPPED:
             self.active.pop(str(payload["intention_id"]), None)
 
@@ -196,6 +216,18 @@ class Intentions:
             origin,
         )
 
+    async def challenge(self, intention: Intention, plan: str, origin: Origin) -> bool:
+        """Say it once: False if Orion already did today about this intention."""
+        now = self.clock()
+        if any(now - c.at < CHALLENGE_EVERY for c in intention.challenges):
+            return False
+        await self._append(
+            CHALLENGED,
+            {"intention_id": intention.id, "plan": plan, "at": now.isoformat()},
+            origin,
+        )
+        return True
+
     async def drop(self, intention: Intention, why: str, origin: Origin) -> None:
         if self._memory is not None and intention.fact_id:
             await self._memory.invalidate(
@@ -251,6 +283,12 @@ class Intentions:
                 for n in recent
             )
             why = f" (ce qui compte pour lui : {intention.why})" if intention.why else ""
+            start = now - timedelta(days=intention.every_days)
+            pushed = [c for c in intention.challenges if c.at >= start]
+            if pushed:
+                lines += "\nTu lui as fait remarquer que ça allait contre :\n" + "\n".join(
+                    f"- {_DAYS[c.at.weekday()]} {c.at:%d/%m} : {c.plan}" for c in pushed
+                )
             found.append(
                 Alert(
                     key=f"intention:{intention.id}:{number}",
@@ -292,6 +330,15 @@ class NoteInput(BaseModel):
     kept: bool = Field(description="True if it goes the way he wants, false for a lapse")
 
 
+class ChallengeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intention: str = Field(description="The intention id (i_…) it goes against")
+    plan: str = Field(
+        min_length=3, max_length=300, description="What he is about to do, in a few words"
+    )
+
+
 class DropInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -330,6 +377,22 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
         await intentions.note(intention.id, args.happened, args.kept, origin(ctx))
         return ToolResult(f"Noté. {intentions.progress(intention, intentions.clock())}.")
 
+    async def challenge(args: Any, ctx: ToolContext) -> ToolResult:
+        await intentions.sync()
+        intention = intentions.state.active.get(args.intention)
+        if intention is None:
+            return ToolResult(f"No intention {args.intention}.", is_error=True)
+        if not await intentions.challenge(intention, args.plan, origin(ctx)):
+            return ToolResult(
+                "Tu le lui as déjà fait remarquer aujourd'hui pour cette intention : ne "
+                "reviens pas dessus, c'est sa décision."
+            )
+        why = f" (ce qui compte pour lui : {intention.why})" if intention.why else ""
+        return ToolResult(
+            f"Dis-le-lui une fois, en une ou deux phrases, sans morale : ça va contre "
+            f"« {intention.what} »{why}. Puis laisse-le décider, et aide-le quoi qu'il choisisse."
+        )
+
     async def drop(args: Any, ctx: ToolContext) -> ToolResult:
         await intentions.sync()
         intention = intentions.state.active.get(args.intention)
@@ -364,6 +427,16 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
             "couru ce matin »: kept; « encore un resto »: a lapse).",
             input_model=NoteInput,
             handler=note,
+            effect=Effect.INTERNAL,
+            reversibility=Reversibility.REVERSIBLE,
+        ),
+        Tool(
+            name="intention_challenge",
+            description="What he is about to do goes against one of his intentions (a night "
+            "out before the exam he said mattered, a purchase after « je mets de côté »): call "
+            "it before saying so, once.",
+            input_model=ChallengeInput,
+            handler=challenge,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
         ),
@@ -411,6 +484,7 @@ class IntentionsModule(Module):
                 {
                     "intention_set": "set",
                     "intention_note": "note",
+                    "intention_challenge": "challenge",
                     "intention_drop": "drop",
                     "intentions": "list",
                 },

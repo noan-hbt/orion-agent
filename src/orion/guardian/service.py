@@ -159,10 +159,20 @@ def _calendar_add(params: dict[str, Any]) -> str:
 
 def _mail_send(params: dict[str, Any]) -> str:
     cc = f"\nCc : {', '.join(params['cc'])}" if params.get("cc") else ""
+    files = list(params.get("attachments") or [])
+    attached = f"\n\nPièce(s) jointe(s) : {', '.join(files)}" if files else ""
     return (
         f"Avant que je l'envoie, voici le mail :\nÀ : {', '.join(params.get('to', []))}{cc}\n"
-        f"Objet : {params.get('subject')}\n\n{params.get('body')}\n"
+        f"Objet : {params.get('subject')}\n\n{params.get('body')}{attached}\n"
     )
+
+
+def _mail_tidy(params: dict[str, Any]) -> str:
+    what = "archiver" if params.get("action") == "archive" else "me désabonner de"
+    cards = list(params.get("cards") or [])
+    given: list[Any] = list(params.get("senders") or [])
+    senders = ", ".join(str(s) for s in given) or "(non précisé)"
+    return f"Je peux {what} ces {len(cards)} mail(s) ? Expéditeurs : {senders}"
 
 
 def _when(value: object) -> str:
@@ -230,6 +240,7 @@ class GuardianService:
             "contact_message": _contact_message,
             "calendar_add": _calendar_add,
             "mail_send": _mail_send,
+            "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
             "computer_task_send": _computer_task_send,
         }
@@ -277,6 +288,8 @@ class GuardianService:
                 Route("/v1/calendar/{account}/events", self._calendar_add, methods=["POST"]),
                 Route("/v1/mail/{account}", self._mail, methods=["POST"]),
                 Route("/v1/mail/{account}/send", self._mail_send, methods=["POST"]),
+                Route("/v1/mail/{account}/tidy", self._mail_tidy, methods=["POST"]),
+                Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
                 *self.routes,
             ]
@@ -342,11 +355,11 @@ class GuardianService:
         path = "/" + str(request.path_params["path"])
         params = list(request.query_params.multi_items())
         content = await request.body()
-        if request.method == "POST" and path == "/media":
+        if request.method == "POST" and path == "/imessage/media":
             # A file for Orion to send: uploading sends nothing; what goes out, and to whom, is
             # the message that names it, checked below like any other.
             if len(content) > MAX_MEDIA_BYTES:
-                return await self.deny("POST /media", "file too large")
+                return await self.deny("POST /imessage/media", "file too large")
             return await self._forward(request, path, [], content)
         try:
             loaded: Any = json.loads(content) if content else {}
@@ -814,6 +827,56 @@ class GuardianService:
         )
         return JSONResponse({"message_id": message_id})
 
+    async def _mail_tidy(self, request: Request) -> Response:
+        """Archiving or unsubscribing, by uid: the guardian reads the unsubscribe addresses
+        from the server itself. Approved as a batch (the number of mails must match), or done
+        alone within an autonomy the owner granted."""
+        from orion.mail.tidy import local_tidy
+
+        name = str(request.path_params["account"])
+        settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
+        account = next((a for a in settings.accounts if a.name == name), None)
+        if account is None:
+            return refused(f"no mail account {name!r}", 404)
+        params = await _body(request)
+        action = str(params.get("action"))
+        raw: list[Any] = list(params.get("uids") or [])
+        uids = [int(u) for u in raw]
+        if action not in ("archive", "unsubscribe") or not uids:
+            return refused("malformed tidy request", 400)
+        grant = request.headers.get(GRANT_HEADER)
+        if grant or not await self.autonomous("mail_tidy", {"action": action}):
+            reason = await self.use_grant(
+                grant,
+                "mail_tidy",
+                lambda p: p.get("action") == action and len(p.get("cards") or []) >= len(uids),
+                consume=True,
+            )
+            if reason is not None:
+                return await self.deny(f"mail tidy {name}", reason)
+        outcome = await local_tidy(account, cast(Any, action), uids)
+        log.info("guardian.mail_tidied", account=name, action=action, done=outcome.done)
+        return JSONResponse(outcome.payload())
+
+    async def _mail_draft(self, request: Request) -> Response:
+        from orion.mail.tidy import local_draft
+
+        name = str(request.path_params["account"])
+        settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
+        account = next((a for a in settings.accounts if a.name == name), None)
+        if account is None or not account.drafts_folder:
+            return refused(f"mail account {name!r} has no drafts folder", 404)
+        try:
+            mail = Outgoing.model_validate_json(await request.body())
+        except ValidationError:
+            return refused("malformed draft", 400)
+        try:
+            await local_draft(account, mail)
+        except (LookupError, OSError, imaplib.IMAP4.error, SendError) as exc:
+            log.warning("guardian.draft_failed", account=name, error=repr(exc))
+            return refused(f"draft not written: {exc}", 502)
+        return JSONResponse({"ok": True})
+
     async def _mail(self, request: Request) -> Response:
         name = str(request.path_params["account"])
         settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
@@ -862,6 +925,7 @@ def _same_mail(params: dict[str, Any], mail: Outgoing) -> bool:
         and list(params.get("cc", [])) == mail.cc
         and str(params.get("subject")) == mail.subject
         and str(params.get("body")) == mail.body
+        and list(params.get("attachments") or []) == [a.file_id for a in mail.attachments]
     )
 
 

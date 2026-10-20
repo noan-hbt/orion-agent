@@ -144,6 +144,22 @@ d'autres personnes.
   PDF ; il te l'envoie dans la conversation.
 - **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
   sur ton ordinateur, tel quel, jusqu'à 10 Mo.
+- **Tes fichiers** (D63) : une photo (HEIC compris), un PDF, un document Word ou Excel, un
+  fichier texte : il le lit à l'arrivée et le garde. Un fichier audio, vidéo ou une archive,
+  il le garde sans le lire.
+- **Les vocaux** (D71) : envoie-lui un vocal, il le comprend ; demande-le-lui, ou dis-lui que
+  tu conduis, il te répond en vocal.
+- **Ses réglages par message** (D72) : « active le mail », « mets tes points à 9 h » ; tu
+  approuves le changement exact, ou tu le laisses faire seul.
+- **Tes rendez-vous** (D73) : « trouve-moi un dentiste après 18 h » ; il propose trois
+  créneaux, réserve celui que tu choisis, et le met dans ton agenda avec ses rappels.
+- **Tes papiers** (D74) : envoie-lui ta carte d'identité, tes fiches de paie, ton
+  attestation d'assurance ; il les range, te prévient avant qu'ils expirent, les envoie sur
+  ton accord et prépare ton dossier de location en un PDF.
+- **Ta boîte mail, rangée** (D75) : désabonnement des newsletters et archivage par lots
+  (un seul oui par lot), brouillons de réponse dans ta voix, pièces jointes.
+- **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
+  dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

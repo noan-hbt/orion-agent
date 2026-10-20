@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import BaseModel
@@ -299,3 +301,32 @@ def test_text_tapbacks_are_recognized_and_ordinary_texts_are_not() -> None:
     assert found is not None and found.emoji == "😂"
     assert text_tapback("Rappelle-moi « ça » demain") is None
     assert text_tapback("J'aime bien ton idée") is None
+
+
+async def test_a_message_that_waited_says_so(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider, journal: SqliteJournal
+) -> None:
+    """Orion was down for a while: the message says when it was sent, so the answer can too."""
+    provider.extend(reply("J'étais coupé un moment. Oui, à 9 h."))
+    sent = datetime.now(UTC) - timedelta(minutes=7)
+    fake.inbound("tu peux me rappeler mon rdv ?", sent_at=sent)
+    await channel.poll_once()
+    await until(lambda: len(fake.sent) == 1)
+
+    user = provider.requests[0].messages[-1]["content"]
+    local = sent.astimezone(ZoneInfo(AgentConfig().timezone))
+    assert f'<attente envoyé="{local:%Y-%m-%d %H:%M}" depuis="7 min"/>' in user
+    assert user.endswith("tu peux me rappeler mon rdv ?")
+    received = next(e for e in await journal.read() if e.kind == "message.received")
+    assert received.payload["sent_at"] == sent.isoformat()
+    assert received.payload["text"] == "tu peux me rappeler mon rdv ?"  # the owner's own words
+
+
+async def test_a_fresh_message_carries_no_wait(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
+) -> None:
+    provider.extend(reply("ok"))
+    fake.inbound("salut", sent_at=datetime.now(UTC) - timedelta(seconds=30))
+    await channel.poll_once()
+    await until(lambda: len(fake.sent) == 1)
+    assert "<attente" not in provider.requests[0].messages[-1]["content"]

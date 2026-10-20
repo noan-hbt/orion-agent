@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from orion.mail.quarantine import Quarantine
 from orion.mail.service import Fetch, Mailbox, MailSettings
 from orion.mail.smtp import Postman, Send
+from orion.mail.tidy import local_draft, local_tidy
 from orion.mail.tools import mail_tools
 from orion.modules.base import Daemon, Module, Plate
 
@@ -17,6 +18,10 @@ if TYPE_CHECKING:
 
 class MailModule(Module):
     name = "mail"
+    offer = (
+        "Lire ses mails (Gmail, iCloud) en quarantaine, lui signaler l'important et répondre "
+        "avec son accord : un mot de passe d'application dans `[modules.mail]`."
+    )
     instructions = "mail.md"
     settings_model = MailSettings
 
@@ -46,7 +51,25 @@ class MailModule(Module):
             memory=plate.memory,
             send=self._send or (plate.guardian.mail_send if plate.guardian else None),
         )
-        return mail_tools(self.mailbox, postman)
+        from orion.files.module import FilesModule
+
+        files = plate.module(FilesModule)
+
+        def lookup(file_id: str) -> tuple[str, str, bytes] | None:
+            store = files.store if files is not None else None
+            made = store.get(file_id) if store is not None else None
+            if made is None:
+                return None
+            return made.name, made.content_type, made.path.read_bytes()
+
+        guardian = plate.guardian
+        return mail_tools(
+            self.mailbox,
+            postman,
+            files=lookup,
+            tidy=guardian.mail_tidy if guardian else local_tidy,
+            draft=guardian.mail_draft if guardian else local_draft,
+        )
 
     async def serve(self, daemon: Daemon) -> None:
         mailbox = self.mailbox

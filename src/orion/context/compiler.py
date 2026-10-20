@@ -34,8 +34,21 @@ def render_user_message(
     """The owner's message with its context: a time/channel line, optional memory blocks, then
     the text itself. Rendered once and journaled verbatim, so it never changes afterwards."""
     weekday = _WEEKDAYS_FR[when.weekday()]
-    parts = [f"[{weekday} {when:%Y-%m-%d %H:%M} · {channel}]", *(blocks or []), text]
+    line = f"[{weekday} {when:%Y-%m-%d %H:%M} · {channel}{night_hint(when)}]"
+    parts = [line, *(blocks or []), text]
     return {"role": "user", "content": "\n".join(parts)}
+
+
+NIGHT_ENDS = 5
+"""Before this hour, the owner has not slept yet: their « demain » is the day that starts."""
+
+
+def night_hint(when: datetime) -> str:
+    """At 1 a.m. on a Tuesday, « demain » means Tuesday, after the night, not Wednesday (a
+    reminder was once set a day late)."""
+    if when.hour >= NIGHT_ENDS:
+        return ""
+    return f" · nuit : son « demain » est sans doute ce {_WEEKDAYS_FR[when.weekday()]} {when.day}"
 
 
 @dataclass(frozen=True)

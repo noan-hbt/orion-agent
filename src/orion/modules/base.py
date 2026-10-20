@@ -72,6 +72,9 @@ class Module:
     """A built-in module's constitution section (a packaged resource of `orion.resources`).
     Third-party modules override `instructions_text` instead."""
     settings_model: ClassVar[type[ModuleSettings]] = ModuleSettings
+    offer: ClassVar[str | None] = None
+    """What the module would let Orion do, and how the owner turns it on, in one French line:
+    while the module is off, Orion proposes it when a request needs it (D64)."""
     channel: ClassVar[bool] = False
     """An owner channel (Orion can be talked to through it): `orion serve` needs one."""
 
@@ -86,6 +89,11 @@ class Module:
     @property
     def settings(self) -> Any:
         return self.settings_model.model_validate(self.config.modules.get(self.name, {}))
+
+    def offers(self) -> list[str]:
+        """What Orion could do with a little more setup: the `offer` while the module is off; a
+        module that is on may name what it still lacks. Read once at startup (cache)."""
+        return [self.offer] if self.offer and not self.enabled else []
 
     def instructions_text(self) -> str:
         """Appended to the constitution, so it must not change while Orion runs (cache)."""

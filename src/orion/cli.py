@@ -21,22 +21,41 @@ if TYPE_CHECKING:
 
 
 def _provider(config: OrionConfig) -> Router | None:
+    from orion.providers.base import ModelProvider
     from orion.providers.openrouter import OpenRouterProvider
     from orion.providers.router import Router
 
+    providers: dict[str, ModelProvider] = {}
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
-        print(f"Impossible de démarrer : {exc}")
-        return None
-    openrouter = OpenRouterProvider(
-        api_key.get_secret_value(),
-        config.providers.openrouter.base_url,
-        sort=config.providers.openrouter.sort,
-    )
+        if not config.providers.chatgpt.enabled:
+            print(f"Impossible de démarrer : {exc}")
+            return None
+    else:
+        providers["openrouter"] = OpenRouterProvider(
+            api_key.get_secret_value(),
+            config.providers.openrouter.base_url,
+            sort=config.providers.openrouter.sort,
+        )
+    if config.providers.chatgpt.enabled:
+        from orion.providers.chatgpt import ChatGPTProvider
+        from orion.providers.chatgpt_auth import ChatGPTAuth
+
+        auth = ChatGPTAuth(config.chatgpt_path)
+        if auth.load() is None:
+            print("Impossible de démarrer : pas connecté à ChatGPT (orion chatgpt login).")
+            return None
+        providers["chatgpt"] = ChatGPTProvider(
+            auth, default_effort=config.providers.chatgpt.reasoning_effort
+        )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
-    return Router({"openrouter": openrouter}, "openrouter", chains)
+    try:
+        return Router(providers, next(iter(providers)), chains)
+    except ValueError as exc:
+        print(f"Impossible de démarrer : {exc}")
+        return None
 
 
 def _inkbox(config: OrionConfig) -> InkboxClient | None:
@@ -474,6 +493,66 @@ async def _google_auth(client_id: str, secret_env: str) -> int:
     return 0
 
 
+async def _chatgpt(config: OrionConfig, args: argparse.Namespace) -> int:
+    from orion.providers.chatgpt_auth import ChatGPTAuth, ChatGPTAuthError
+
+    auth = ChatGPTAuth(config.chatgpt_path)
+    try:
+        if args.chatgpt_command == "logout":
+            gone = auth.sign_out()
+            print(
+                "Jetons effacés. Pour couper l'accès, retire aussi Orion dans les réglages de "
+                "ChatGPT (applications connectées)."
+                if gone
+                else "Orion n'était pas connecté."
+            )
+            return 0
+        if args.chatgpt_command == "models":
+            import httpx
+
+            from orion.providers.base import ProviderError
+            from orion.providers.chatgpt import plan_models
+
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                try:
+                    models = await plan_models(auth, http)
+                except ProviderError as exc:
+                    print(f"Échec : {exc}")
+                    return 1
+            for slug, name in models:
+                print(f"chatgpt:{slug}  ({name})")
+            return 0
+        if args.chatgpt_command == "status":
+            known = auth.load()
+            if known is None:
+                print("Pas connecté : orion chatgpt login")
+                return 1
+            print(f"Connecté : {known.email or known.subject}")
+            print(f"Usage du forfait accordé : {'oui' if known.can_use_plan else 'non'}")
+            return 0 if known.can_use_plan else 1
+        redirected = args.callback
+        if redirected is None:
+            print("1. Ouvre cette adresse dans ton navigateur, connecte-toi et accepte :\n")
+            print(auth.start())
+            print("\n2. Tu es renvoyé vers une page 127.0.0.1 qui ne s'affiche pas : c'est normal.")
+            if not sys.stdin.isatty():
+                print("   Ensuite : orion chatgpt login --callback '<adresse de cette page>'")
+                return 0
+            redirected = await asyncio.to_thread(
+                input, "   Colle ici l'adresse complète de cette page : "
+            )
+        credentials = await auth.finish(redirected)
+    except ChatGPTAuthError as exc:
+        print(f"Échec : {exc}")
+        return 1
+    print(f"Connecté : {credentials.email or credentials.subject}.")
+    if not credentials.can_use_plan:
+        print("L'usage du forfait n'a pas été accordé : relance la connexion et coche-le.")
+        return 1
+    print("Orion peut utiliser ton forfait ChatGPT : modèles `chatgpt:<modèle>` dans orion.toml.")
+    return 0
+
+
 def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -> int:
     from orion.core.backup import BackupError, backup
 
@@ -500,6 +579,15 @@ async def _doctor(config: OrionConfig) -> int:
         print("openrouter: api key present")
     except LookupError as exc:
         print(f"openrouter: {exc}")
+    if config.providers.chatgpt.enabled:
+        from orion.providers.chatgpt_auth import ChatGPTAuth
+
+        known = ChatGPTAuth(config.chatgpt_path).load()
+        if known is None:
+            print("chatgpt:    not signed in (orion chatgpt login)")
+        else:
+            plan = "plan use granted" if known.can_use_plan else "plan use NOT granted"
+            print(f"chatgpt:    {known.email or known.subject}, {plan}")
     if config.guardian.enabled:
         print(f"guardian:  {await _guardian_status(config)}")
     from orion.modules.base import ModuleError
@@ -630,6 +718,15 @@ def main(argv: list[str] | None = None) -> int:
     google_auth.add_argument(
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
     )
+    chatgpt = sub.add_parser("chatgpt", help="Use your ChatGPT plan for Orion's models (D62)")
+    chatgpt_sub = chatgpt.add_subparsers(dest="chatgpt_command", required=True)
+    chatgpt_login = chatgpt_sub.add_parser("login", help="Sign in with ChatGPT")
+    chatgpt_login.add_argument(
+        "--callback", default=None, help="The 127.0.0.1 address the browser was sent back to"
+    )
+    chatgpt_sub.add_parser("status", help="Who is signed in, and whether plan use is granted")
+    chatgpt_sub.add_parser("models", help="The models your plan offers")
+    chatgpt_sub.add_parser("logout", help="Forget the tokens")
     hands = sub.add_parser("hands", help="Orion's hands on your machines (server side)")
     hands_sub = hands.add_subparsers(dest="hands_command", required=True)
     hands_pair = hands_sub.add_parser("pair", help="A one-time code to pair a machine")
@@ -718,6 +815,8 @@ def main(argv: list[str] | None = None) -> int:
         return _library_import(config, args.folder)
     if args.command == "google":
         return asyncio.run(_google_auth(args.client_id, args.secret_env))
+    if args.command == "chatgpt":
+        return asyncio.run(_chatgpt(config, args))
     if args.command == "backup":
         return _backup(config, args.destination, args.keep, args.guardian)
     if args.command == "inkbox":

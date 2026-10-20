@@ -13,8 +13,9 @@ from orion.channels.inbox import Attachment, OwnerInbox
 from orion.config import VISION_MODEL
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.photos.module import SEEN, Photos, PhotoSettings, photo_tools
-from orion.runtime import PHOTO_TRUST
+from orion.photos.module import KEPT, SEEN, Photos, PhotoSettings, kind_of, photo_tools
+from orion.providers.base import ProviderError
+from orion.runtime import PHOTO_TRUST, photo_block
 from orion.tools.base import ToolContext
 from tests.fake_inkbox import FakeInkbox
 from tests.fakes import ScriptedProvider, reply
@@ -97,7 +98,7 @@ async def test_orion_can_look_again_and_forgetting_removes_the_file(
     (seen,) = await photos.look([attachment], "", "imessage:owner")
     (tool,) = photo_tools(photos)
     result = await tool.handler(
-        tool.parse(f'{{"photo": "{seen.id}", "question": "À quelle heure ?"}}'),
+        tool.parse(f'{{"id": "{seen.id}", "question": "À quelle heure ?"}}'),
         ToolContext("owner", "c"),
     )
     assert result.content == "20 h, porte à 19 h." and result.trust == PHOTO_TRUST
@@ -109,22 +110,32 @@ async def test_orion_can_look_again_and_forgetting_removes_the_file(
     await photos.sync()
     assert list(photos.folder.iterdir()) == []
     gone = await tool.handler(
-        tool.parse(f'{{"photo": "{seen.id}", "question": "Et le prix ?"}}'),
+        tool.parse(f'{{"id": "{seen.id}", "question": "Et le prix ?"}}'),
         ToolContext("owner", "c"),
     )
     assert gone.is_error
 
 
-async def test_what_cannot_be_seen_is_said(journal: SqliteJournal, tmp_path: Path) -> None:
+async def test_what_cannot_be_read_is_kept_and_said(journal: SqliteJournal, tmp_path: Path) -> None:
     provider = ScriptedProvider()
     got: list[str] = []
     photos = photos_for(journal, provider, tmp_path / "photos", got)
-    video = Attachment("https://media.inkbox.test/v.mov", "video/quicktime", 10)
+    video = Attachment("https://media.inkbox.test/u/IMG_0042.MOV", "video/quicktime", 103)
     huge = Attachment("https://media.inkbox.test/b.jpg", "image/jpeg", 50 * 1024 * 1024)
     first, second = await photos.look([video, huge], "", "imessage:owner")
-    assert "video/quicktime" in first.description and not first.id
+    assert first.tag == "file" and first.id.startswith("at_")
+    attributes = dict(first.attributes)
+    assert attributes["name"] == "IMG_0042.MOV" and attributes["type"] == "video/quicktime"
+    assert _bytes(attributes["path"]) == JPEG
+    assert "ne peux pas lire" in first.description
     assert "illisible" in second.description
-    assert got == [] and provider.requests == []  # nothing fetched, no model asked
+    assert got == [video.url] and provider.requests == []  # kept; no model asked, huge not fetched
+    (tool,) = photo_tools(photos)
+    result = await tool.handler(
+        tool.parse(f'{{"id": "{first.id}", "question": "Que dit-il ?"}}'),
+        ToolContext("owner", "c"),
+    )
+    assert result.is_error
 
 
 async def test_a_requeued_photo_is_fetched_again(journal: SqliteJournal, tmp_path: Path) -> None:
@@ -145,3 +156,110 @@ async def test_a_requeued_photo_is_fetched_again(journal: SqliteJournal, tmp_pat
     restarted.submit = lambda item: queued.append(item.media)  # type: ignore[method-assign]
     await IMessageChannel(fake.client(), journal, restarted, SETTINGS).start()
     assert [a.url for media in queued for a in media] == ["https://media.inkbox.test/fresh.jpg"]
+
+
+def _bytes(path: str) -> bytes:
+    return Path(path).read_bytes()
+
+
+def files_for(
+    journal: SqliteJournal, provider: ScriptedProvider, folder: Path, data: bytes
+) -> Photos:
+    async def fetch(attachment: Attachment) -> bytes:
+        return data
+
+    return Photos(journal, provider, PhotoSettings(), folder, fetch)
+
+
+async def test_a_heic_photo_is_turned_into_jpeg_first(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    import io
+
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()  # pyright: ignore[reportUnknownMemberType]
+    out = io.BytesIO()
+    Image.new("RGB", (16, 12), (200, 30, 30)).save(out, "HEIF")
+    provider = ScriptedProvider(reply("Un carré rouge."))
+    photos = files_for(journal, provider, tmp_path / "photos", out.getvalue())
+    attachment = Attachment("https://media.inkbox.test/IMG_1.HEIC", "image/heic", None)
+    (seen,) = await photos.look([attachment], "", "imessage:owner")
+    image = provider.requests[0].messages[1]["content"][1]["image_url"]["url"]
+    assert image.startswith("data:image/jpeg;base64,")  # models refuse HEIC
+    event = next(e for e in await journal.read() if e.kind == SEEN)
+    assert event.payload["content_type"] == "image/jpeg"
+    assert (photos.folder / event.payload["file"]).read_bytes()[:3] == b"\xff\xd8\xff"
+    assert seen.description == "Un carré rouge."
+
+
+async def test_a_document_is_read_once_from_the_file_itself(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    pdf = b"%PDF-1.7 facture"
+    bill = "Une facture EDF : 87,40 €, à payer avant le 12 novembre 2026."
+    provider = ScriptedProvider(reply(bill), reply("Référence 4471-AB."))
+    photos = files_for(journal, provider, tmp_path / "photos", pdf)
+    attachment = Attachment("https://media.inkbox.test/x/facture.pdf", "application/pdf", 16)
+    (seen,) = await photos.look([attachment], "à payer ?", "imessage:owner")
+
+    part = provider.requests[0].messages[1]["content"][1]
+    assert part["type"] == "file" and part["file"]["filename"] == "facture.pdf"
+    assert part["file"]["file_data"].startswith("data:application/pdf;base64,")
+    assert "à payer ?" in provider.requests[0].messages[0]["content"]
+    assert seen.tag == "file" and seen.description == bill
+    block = photo_block(seen)
+    assert block.startswith(f'<file id="{seen.id}" name="facture.pdf" type="application/pdf"')
+    kept = next(e for e in await journal.read() if e.kind == KEPT)
+    assert kept.trust == PHOTO_TRUST and kept.payload["kind"] == "document"
+
+    (tool,) = photo_tools(photos)
+    result = await tool.handler(
+        tool.parse(f'{{"id": "{seen.id}", "question": "La référence ?"}}'),
+        ToolContext("owner", "c"),
+    )
+    assert result.content == "Référence 4471-AB."
+    assert provider.requests[1].messages[1]["content"][1]["type"] == "file"
+
+    await journal.redact([kept.id], "forget", "owner:main")
+    await photos.sync()
+    assert list(photos.folder.iterdir()) == []
+
+
+async def test_an_unread_document_is_still_kept(journal: SqliteJournal, tmp_path: Path) -> None:
+    provider = ScriptedProvider()  # no answer scripted: the model call fails
+
+    async def broken(_request: object) -> object:
+        raise ProviderError("refused", retryable=False)
+
+    provider.complete = broken  # type: ignore[method-assign]
+    photos = files_for(journal, provider, tmp_path / "photos", b"PK docx")
+    word = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    (seen,) = await photos.look(
+        [Attachment("https://media.inkbox.test/contrat.docx", word, 7)], "", "imessage:owner"
+    )
+    assert "pas pu être lu" in seen.description and seen.id.startswith("at_")
+    assert _bytes(dict(seen.attributes)["path"]) == b"PK docx"
+
+
+async def test_a_text_file_is_its_own_words(journal: SqliteJournal, tmp_path: Path) -> None:
+    text = "nom,montant\nLoyer,850\n" + "x" * 20_000
+    provider = ScriptedProvider(reply("850 €."))
+    photos = files_for(journal, provider, tmp_path / "photos", text.encode())
+    (seen,) = await photos.look(
+        [Attachment("https://media.inkbox.test/budget.csv", "text/csv", None)], "", "imessage:o"
+    )
+    assert provider.requests == []  # read as it is, no model in between
+    assert seen.description.startswith("nom,montant\nLoyer,850") and "coupé" in seen.description
+    (tool,) = photo_tools(photos)
+    await tool.handler(
+        tool.parse(f'{{"id": "{seen.id}", "question": "Le loyer ?"}}'), ToolContext("owner", "c")
+    )
+    assert "Loyer,850" in str(provider.requests[0].messages)
+
+
+def test_a_file_name_comes_from_its_link_or_its_type() -> None:
+    assert kind_of("application/pdf") == "document"
+    assert kind_of("text/calendar") == "text" and kind_of("application/ld+json") == "text"
+    assert kind_of("audio/mpeg") == "audio" and kind_of("image/heic") == "image"

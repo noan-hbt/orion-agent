@@ -7,6 +7,7 @@ for word: the recipients, the subject and the text it showed them.
 from __future__ import annotations
 
 import asyncio
+import base64
 import smtplib
 import ssl
 from collections.abc import Awaitable, Callable
@@ -24,6 +25,17 @@ from orion.memory.service import MemoryService, Origin
 ADDRESS = r"^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$"
 
 
+class MailFile(BaseModel):
+    """A file from Orion's store, attached to a mail (a paper, a dossier, a letter)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    file_id: str
+    name: str
+    content_type: str
+    data: str = Field(description="Base64")
+
+
 class Outgoing(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -32,6 +44,7 @@ class Outgoing(BaseModel):
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=20_000)
     in_reply_to: str | None = Field(default=None, max_length=300)
+    attachments: list[MailFile] = Field(default_factory=list[MailFile], max_length=5)
 
     def recipients(self) -> list[str]:
         return [*self.to, *self.cc]
@@ -58,6 +71,14 @@ def build(account: MailAccount, mail: Outgoing, sender_name: str = "") -> EmailM
         message["In-Reply-To"] = mail.in_reply_to
         message["References"] = mail.in_reply_to
     message.set_content(mail.body)
+    for attached in mail.attachments:
+        maintype, _, subtype = attached.content_type.partition("/")
+        message.add_attachment(
+            base64.b64decode(attached.data),
+            maintype=maintype or "application",
+            subtype=subtype or "octet-stream",
+            filename=attached.name,
+        )
     return message
 
 

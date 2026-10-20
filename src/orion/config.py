@@ -49,15 +49,31 @@ class OpenRouterConfig(BaseModel):
     )
 
 
+class ChatGPTConfig(BaseModel):
+    """The owner's ChatGPT plan (D62): models named `chatgpt:<slug>` are served through it, after
+    `orion chatgpt login`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+        default="low",
+        description="How long the models think when a call asks nothing; none: the model's own",
+    )
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     openrouter: OpenRouterConfig = OpenRouterConfig()
+    chatgpt: ChatGPTConfig = ChatGPTConfig()
 
 
 STRONG_MODEL = "anthropic/claude-opus-5.5"
 VISION_MODEL = "google/gemini-3.8-flash"
 IMAGE_MODEL = "google/gemini-3.1-flash-image"
+AUDIO_MODEL = "google/gemini-3.8-flash"
+SPEECH_MODEL = "openai/gpt-audio-mini"
 
 
 class AgentConfig(BaseModel):
@@ -99,10 +115,16 @@ class AgentConfig(BaseModel):
     )
     vision_model: str = Field(
         default=VISION_MODEL,
-        description="Looks at the photos the owner sends (reads HEIC, the iPhone's format)",
+        description="Looks at the photos the owner sends, and reads the documents",
     )
     image_model: str = Field(
         default=IMAGE_MODEL, description="Makes the pictures the owner asks for"
+    )
+    audio_model: str = Field(
+        default=AUDIO_MODEL, description="Transcribes the voice messages the owner sends"
+    )
+    speech_model: str = Field(
+        default=SPEECH_MODEL, description="Says Orion's voice messages aloud (audio output)"
     )
     summary_model: str | None = Field(
         default=None, description="Summarizes what a rebase drops; default: extractor_model"
@@ -280,7 +302,7 @@ class GuardianConfig(BaseModel):
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
     autonomable: list[str] = Field(
-        default_factory=lambda: ["calendar_add"],
+        default_factory=lambda: ["calendar_add", "configure_change"],
         description="Actions the owner may let Orion do alone, once earned (never calls or "
         "mail to strangers unless listed here)",
     )
@@ -338,6 +360,9 @@ class OrionConfig(BaseModel):
         description="Third-party modules' [modules.<name>] sections, validated by each module",
     )
 
+    source: Path | None = Field(default=None, exclude=True)
+    """The orion.toml this was read from (None: defaults); Orion edits it to configure itself."""
+
     @property
     def journal_path(self) -> Path:
         return self.data_dir / "journal.sqlite3"
@@ -351,6 +376,11 @@ class OrionConfig(BaseModel):
     def embeddings_path(self) -> Path:
         """A cache: safe to delete, recomputed on demand."""
         return self.data_dir / "embeddings.sqlite3"
+
+    @property
+    def chatgpt_path(self) -> Path:
+        """Sign in with ChatGPT credentials (owner-only, rotating; never backed up)."""
+        return self.data_dir / "chatgpt"
 
     @property
     def guardian_ledger_path(self) -> Path:
@@ -374,6 +404,7 @@ def load_config(path: Path | None = None) -> OrionConfig:
     config = OrionConfig.model_validate(data)
     return config.model_copy(
         update={
+            "source": target.resolve(),
             "data_dir": _beside(target, config.data_dir),
             "guardian": config.guardian.model_copy(
                 update={

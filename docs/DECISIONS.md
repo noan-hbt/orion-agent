@@ -1267,3 +1267,293 @@ nom (`config.xml`, pas un identifiant). Un `.php` téléchargé depuis un site n
 le site renvoie la page qu'il produit. Évaluation `envoie_moi_ce_xml` : 2/2 sur Haiku et 2/2 sur
 DeepSeek. L'arrivée d'un type quelconque (pas une image ni un PDF) sur l'iPhone via Inkbox reste
 à vérifier pour de vrai.
+
+## D62 — Le forfait ChatGPT du propriétaire comme fournisseur de modèles
+
+*20/10/2026 · acceptée*
+
+Orion peut faire ses appels de modèle sur le forfait ChatGPT (Plus ou Pro) du propriétaire, à
+la place d'OpenRouter ou à côté. C'est la voie officielle d'OpenAI, « Sign in with ChatGPT »,
+ouverte depuis fin septembre 2026 aux projets open source et personnels :
+- `orion chatgpt login` enregistre Orion auprès d'OpenAI (`client_id=dynamic_agent_client`,
+  puis l'identifiant attribué est gardé), avec un identifiant d'hôte `urn:uuid:…` (OpenAI
+  refuse un UUID nu). Le propriétaire se connecte dans son navigateur (OAuth, PKCE) et accorde
+  `chatgpt.tokens.use.direct`. La page de retour, sur 127.0.0.1, ne s'affiche pas sur un
+  serveur : il colle son adresse, le code qu'elle contient suffit.
+- Les jetons tournent à chaque rafraîchissement : ils ne peuvent pas vivre dans une variable
+  d'environnement. Ils sont écrits dans `data/chatgpt/` (dossier 0700, fichier 0600, écriture
+  atomique), jamais journalisés ni sauvegardés.
+- Un modèle `chatgpt:<modèle>` passe par l'API publique Responses d'OpenAI, en streaming et
+  sans stockage (`store: false`), comme l'exige OpenAI. Les messages restent au format chat
+  qu'Orion journalise ; ils sont traduits seulement à l'envoi, toujours de la même façon
+  (contrat du cache de prompt).
+
+On n'a pas pris la voie « Codex » de Hermes ou de Cline (l'identifiant OAuth du CLI Codex et le
+serveur privé `chatgpt.com/backend-api`) : OpenAI l'interdit désormais explicitement.
+
+Vérifié en vrai sur le forfait : appel d'outils aller-retour, images reçues, recherche web avec
+ses sources, réponse JSON. Limites constatées :
+- `temperature` est refusée, `max_output_tokens` aussi d'après la doc : on les ignore.
+- Le cache de prompt n'est pas appliqué : le serveur remplace `prompt_cache_key` à chaque
+  requête. Sans coût par jeton, cela ne coûte que de la latence.
+- Pas de génération d'images ni d'embeddings : `image_model` et `embedding_model` restent sur
+  OpenRouter, ou s'éteignent. Une demande d'image sur le forfait échoue, et le routeur passe
+  au modèle de secours.
+- Le coût d'un appel est compté zéro. La limite est le quota hebdomadaire du forfait : quand
+  il est épuisé (`subscription_sharing_usage_limit_exceeded`), l'appel échoue sans nouvel
+  essai, et le routeur passe au modèle de secours.
+- Le vérificateur devait venir d'une autre famille que le modèle principal. Sur le seul
+  forfait, ce sont deux modèles OpenAI différents : c'est moins bien.
+- OpenAI réserve les applications hébergées à distance à une liste d'attente. Orion n'a qu'un
+  utilisateur, son propriétaire, mais tourne sur un serveur : c'est une zone grise.
+
+## D63 — Orion reçoit n'importe quel fichier (étend D50)
+
+*20/10/2026 · acceptée*
+
+Le module `photos` prend désormais tout fichier joint à un message, jusqu'à 20 Mo, et le traite
+une seule fois, à son arrivée, selon son type :
+- **Image** : comme avant (D50). Un modèle qui voit la décrit. Le HEIC des iPhone est d'abord
+  converti en JPEG (Pillow et pillow-heif) : l'API d'OpenAI ne prend que JPEG, PNG, GIF et
+  WebP, et Orion utilise maintenant ce modèle (D62).
+- **Document** (PDF, Word, Excel, PowerPoint, OpenDocument, RTF) : le même modèle reçoit le
+  fichier lui-même (une partie `file` au format chat, `input_file` chez OpenAI) et en fait le
+  résumé : ce que c'est, l'essentiel, les dates, montants et échéances. C'est vérifié sur le
+  forfait ChatGPT avec un PDF et un fichier Word.
+- **Texte** (texte brut, CSV, JSON, XML, agenda, fiche contact, code) : ses propres mots,
+  montrés tels quels jusqu'à 12 000 caractères ; au-delà, `attachment_look` lit la suite.
+- **Le reste** (audio, vidéo, archive) : seulement nommé, avec son type et sa taille. Le forfait
+  ne transcrit pas l'audio.
+
+Chaque fichier est gardé avant d'être lu : un document que le modèle n'arrive pas à lire reste
+au propriétaire, et son bloc le dit. Le contenu arrive dans un bloc
+`<file id name type size path>` ; ce qui y est écrit est une information (`PHOTO_TRUST`),
+jamais un ordre. `photo_look` devient `attachment_look` (photo ou fichier). Le chemin donné
+dans le bloc permet de renvoyer le fichier avec `file` (server). Un nouvel événement,
+`attachment.kept`, nomme chaque fichier qui n'est pas une image ; l'oubli suit la même règle
+qu'une photo : un fichier n'est gardé que tant qu'un événement le nomme.
+
+Inkbox ne donne pas le nom du fichier. On le reprend de son adresse quand elle en porte un ;
+sinon, le fichier s'appelle `fichier` avec l'extension de son type. Reste à vérifier en vrai
+quels types Inkbox laisse passer jusqu'à Orion.
+
+## D64 — Orion sait ce qu'il pourrait faire de plus
+
+*20/10/2026 · acceptée*
+
+Le 20 octobre, à « tu peux accéder à mon LinkedIn ? », Orion a répondu non. Le gardien sait
+pourtant garder une session que le propriétaire lui prête (`orion login`), mais Orion ne savait
+pas que cette possibilité existait, puisqu'elle était éteinte. Il en allait de même pour
+l'agenda, le mail, la voix et les mains sur le Mac.
+
+Chaque module déclare désormais son `offer` : une ligne qui dit ce qu'il permettrait et comment
+l'activer. Un module allumé peut aussi nommer ce qui lui manque encore (`offers()`) : un agenda
+qu'Orion peut lire mais pas écrire, ou un navigateur sans session prêtée. Ces lignes ferment le
+message système, sous « Ce que tu pourrais faire de plus ». Elles ne dépendent que de la
+configuration : fixées au démarrage, elles ne cassent pas le cache. La consigne : quand une
+demande en aurait besoin, dire en une phrase ce qui serait possible et la commande à lancer,
+une seule fois par sujet. Un refus du propriétaire est retenu avec `remember`. Pas de liste de
+fonctions, ni dans un message de bienvenue, ni ailleurs.
+
+## D65 — Il assume ses conseils
+
+*20/10/2026 · acceptée*
+
+Un ami qui t'a conseillé un resto te demande quelques jours plus tard comment c'était, et s'en
+souvient la fois suivante. Le module `advice` fait la même chose pour Orion :
+- une recommandation sur laquelle le propriétaire peut agir (un resto, un livre, un achat,
+  une façon de répondre à quelqu'un) est notée, avec le jour où il l'aura essayée ;
+- ce soir-là, Orion demande une seule fois comment c'était, par l'initiative (heures calmes
+  et budget comptent) ;
+- le verdict devient un goût en mémoire ;
+- avant de conseiller à nouveau dans un domaine, Orion regarde son bilan et l'assume à voix
+  haute.
+
+Il apprend ce que le propriétaire aime, pas ce qui est bien noté.
+
+## D66 — Le droit de le contredire
+
+*20/10/2026 · acceptée*
+
+Quand ce que le propriétaire s'apprête à faire va contre une de ses intentions (D53), Orion
+appelle `intention` (challenge), puis le dit une fois, sans morale, et le laisse décider.
+L'événement est journalisé :
+- au plus une fois par jour pour une même intention, l'outil refusant la deuxième : il ne
+  revient pas à la charge ;
+- le point de la semaine sait quand il a choisi autrement.
+
+Le cas `veille_de_partiel` passe 2 fois sur 2 sur le forfait. Orion y répond : « Tu m'as dit
+que le partiel de demain comptait vraiment pour ton master. Rentrer à 4 h risque de te coûter
+cher. Tu es sûr ? »
+
+## D67 — Le « à lire plus tard » qui revient
+
+*20/10/2026 · acceptée*
+
+Un lien envoyé sans un mot est lu, puis gardé dans la bibliothèque. Il est aussi noté en
+mémoire (`library` keep), avec l'essentiel et les sujets dans les mots d'une conversation
+future. La réponse tient en une ligne. Pas de liste de lectures en attente : le rappel de
+mémoire (recherche par le sens et par les mots, à chaque message) ramène le lien le jour où la
+conversation y touche, et Orion dit : « tu m'avais envoyé un article là-dessus ».
+
+## D68 — Écrire en son nom
+
+*20/10/2026 · acceptée*
+
+`owner_style` tire des messages du propriétaire, sans modèle, ce qui se compte :
+- sa longueur, ses majuscules, sa ponctuation, ses emojis et ses mots ;
+- quelques exemples réels ;
+- ce que la mémoire dit de sa façon de parler à la personne visée.
+
+C'est une projection du journal, donc reconstructible. Orion l'appelle avant tout texte qui
+partira en son nom, et met le brouillon seul dans son paragraphe, prêt à copier.
+
+## D69 — Le carnet d'erreurs
+
+*20/10/2026 · acceptée*
+
+Quand Orion s'est trompé et que ça a compté (un rappel le mauvais jour, un fait faux, un envoi
+raté), il le reconnaît en une phrase, corrige, et le note avec `mistake`, avec ce qu'il en
+tire. La chronique du dimanche s'achève alors sur « Où je me suis trompé cette semaine », à la
+première personne. Elle tient compte aussi de ce que le journal montre de ses pannes :
+- les messages et fichiers qui ne sont pas partis ;
+- les outils qui ont planté.
+
+Les refus du gardien et les appels mal formés ne comptent pas. Le propriétaire apprend où lui
+faire confiance et où vérifier.
+
+## D70 — Le mode concentration
+
+*20/10/2026 · acceptée*
+
+« Je bosse jusqu'à 18 h. » Le module `focus` le dit à l'arbitre d'initiative :
+- jusqu'à cette heure, seul passe ce qui ne peut pas attendre (urgence d'au moins 0,95 : un
+  rendez-vous dans dix minutes), et l'attente ne rend pas le reste plus urgent ;
+- à la fin, le moteur envoie ce qui est dû en même temps en un seul message, du plus important
+  au moins important, compté une seule fois dans le budget. Cela vaut pour tous les messages
+  dus ensemble, pas seulement après une concentration ;
+- un proche autorisé à connaître ses disponibilités (secrétaire) apprend jusqu'à quand il est
+  concentré, jamais pourquoi ;
+- les rappels qu'il a demandés sonnent quand même.
+
+## D72 — Orion se configure par message
+
+*20/10/2026 · acceptée*
+
+Le propriétaire est sur son téléphone, pas sur le serveur. « Active le mail », « mets tes
+points à 9 h et 18 h » : le module `configure` modifie le fichier `orion.toml` qu'Orion a lu au
+démarrage.
+- `configure` (change) est un effet externe : le gardien soumet le changement exact au
+  propriétaire. `configure_change` est autonomable : il peut laisser Orion le faire seul,
+  comme pour l'agenda.
+- Seules quelques sections sont modifiables : `agent`, `initiative`, `adaptation`, `memory`,
+  `modules`, `voice`, `delegation`. Ne se changent jamais par message : le gardien (ce qu'Orion
+  peut faire seul, ses limites), la fédération, la ligne iMessage (qui il écoute), les clés, ce
+  qui s'exécute sur le serveur (`allow_bash`, `binary`), et qui peut écrire à Orion
+  (`modules.secretary.contacts`).
+- Le nouveau fichier est vérifié en entier avant d'être écrit, comme Orion démarrerait avec
+  (modèle de config, puis chargement des modules). Les commentaires et la mise en page sont
+  gardés (tomlkit), l'ancien fichier est gardé à côté (`orion.toml.previous`), et le
+  changement est journalisé (`config.changed`).
+- Orion redémarre ensuite seul, en place, après avoir répondu.
+- Un secret ne passe jamais par message : on n'écrit que le nom de la variable
+  d'environnement, et sa valeur se met sur le serveur.
+- Sur le serveur, le fichier appartient à root : le noyau ne peut pas l'écrire, et il le dit.
+  Il faudra le rendre modifiable par l'utilisateur du noyau pour s'en servir en production.
+
+## D71 — Les vocaux, dans les deux sens
+
+*20/10/2026 · acceptée*
+
+**Les siens.** Un message vocal reçu sur iMessage est gardé, converti en MP3 mono par ffmpeg
+(l'iPhone envoie du CAF ou du M4A), puis transcrit par `agent.audio_model` (Gemini Flash sur
+OpenRouter, moins d'un dixième de centime). Les noms du propriétaire sont donnés au modèle
+pour l'orthographe. Venu de son propre numéro, un vocal, c'est lui qui parle : la
+transcription rejoint son message comme ses propres mots, avec la confiance du propriétaire
+(« (vocal) … »). Ce n'est pas du contenu venu d'ailleurs, comme le texte d'une photo, sinon
+« envoie un mail à Paul » dicté serait refusé.
+
+**Les siens à lui.** `say` fait dire le texte d'Orion à `agent.speech_model` (gpt-audio-mini
+sur OpenRouter, quelques centièmes de centime par phrase), mot pour mot. Le son est ensuite
+converti en M4A, qu'iMessage lit dans la conversation, puis envoyé comme un fichier, par la
+boîte d'envoi et au propriétaire seul. Orion répond en vocal quand on le lui demande, quand le
+propriétaire conduit ou a les mains prises, ou quand il lui a parlé et que la réponse est
+courte. Il écrit alors pour l'oreille et ne répète pas sa réponse par écrit. L'écrit reste la
+règle. ffmpeg est installé par `deploy/install.sh`.
+
+Vérifié en vrai : une phrase dite par Orion, puis transcrite, revient mot pour mot (« Noan,
+ton rendez-vous chez le dentiste est demain à 9h30 »).
+
+## D73 — Prendre rendez-vous, de bout en bout
+
+*20/10/2026 · acceptée*
+
+« Trouve-moi un dentiste cette semaine après 18 h. » Le navigateur, les sessions prêtées et
+l'approbation existaient ; il manquait l'enchaînement. Le module `booking` (actif avec
+`computer`) le tient :
+- Orion cherche les créneaux lui-même (Doctolib, TheFork, SNCF Connect se lisent sans compte)
+  et en propose au plus trois ;
+- quand le propriétaire choisit, `booking` (book) note le créneau exact, puis
+  `computer_task_send` réserve, dans le même tour : la tâche est liée à la réservation par
+  l'identifiant de corrélation du tour, dans un ordre ou dans l'autre ;
+- quand la tâche se termine, c'est le code qui conclut, pas le modèle. Réussie : le
+  rendez-vous va dans l'agenda et deux rappels sont programmés (la veille à 19 h, et 90 min
+  avant). Échouée : la réservation est marquée échouée et Orion le dit ;
+- le oui donné à la réservation vaut pour l'agenda. Quand le gardien tient l'agenda, il
+  n'écrit sans approbation que si `calendar_add` est autonome ; sinon Orion propose de
+  l'ajouter ;
+- annuler retire les rappels ; le site est prévenu par une autre tâche d'envoi.
+
+    booking.tracked  booking.confirmed  booking.failed  booking.cancelled
+
+## D74 — Le coffre de ses papiers
+
+*20/10/2026 · acceptée*
+
+Ce que le propriétaire envoie en photo ou en PDF est déjà gardé (D63). Le module `papers`
+(actif par défaut) en fait des papiers :
+- `papers` (file) range une pièce jointe, avec son type (carte d'identité, passeport, fiche
+  de paie, quittance, attestation d'assurance, RIB…), un libellé, son titulaire et ses dates.
+  Le fichier est copié dans le magasin de fichiers : un papier est un fichier comme un autre,
+  qu'Orion envoie au propriétaire (`file` send) ou joint à un mail (`mail_send`
+  `attachments`), que le propriétaire approuve ;
+- seul ce qui identifie le papier est journalisé (type, libellé, titulaire, dates), jamais
+  ses numéros. Ces champs viennent d'un document écrit par une administration ou un
+  employeur et lu par un modèle : confiance `THIRD_PARTY`. Oublier le fichier retire le
+  papier ;
+- une pièce d'identité, un titre de séjour, un permis ou une attestation d'assurance qui
+  expire déclenche une alerte trois mois, puis un mois avant ;
+- `papers` (dossier) fait un seul PDF (pypdf ; les images deviennent des pages) : une page
+  de garde qui dit ce qui y est et ce qui manque, puis les papiers dans l'ordre qu'attend un
+  bailleur (identité, trois fiches de paie, contrat ou attestation employeur, avis
+  d'imposition, justificatifs de domicile, RIB).
+
+    paper.filed  paper.removed
+
+## D75 — Sa boîte mail, rangée
+
+*20/10/2026 · acceptée*
+
+La lecture reste strictement en lecture seule (D-mail : EXAMINE, BODY.PEEK). Trois écritures
+s'ajoutent, chacune explicite (`orion.mail.tidy`) :
+- **archiver** : les mails passent du dossier lu au `archive_folder` du compte (UID MOVE, ou
+  copie puis suppression du dossier d'origine). Rien n'est jamais supprimé pour de bon ;
+- **se désabonner** : l'adresse List-Unsubscribe est relue sur le serveur, par uid, pas prise
+  dans ce que le modèle écrit. Un lien en un clic (RFC 8058) reçoit son POST, un `mailto:`
+  un court mail depuis le compte du propriétaire ; une page à visiter revient en lien ;
+- **brouillon** : une réponse dans sa voix est déposée dans `drafts_folder`. Elle ne part
+  jamais : il la relit et l'envoie lui-même. Pas d'approbation.
+
+Archiver et se désabonner se valident par lot : `mail_tidy` porte toutes les fiches et les
+expéditeurs, et le propriétaire dit oui une fois. `mail_tidy` est autonomable. Quand Orion
+tourne séparé, c'est le gardien qui le fait, avec les mots de passe ; il vérifie que le lot
+ne dépasse pas ce qui a été approuvé.
+
+`mail_send` joint des fichiers du magasin (`attachments`, au plus cinq, 15 Mio) : un papier
+(D74), un dossier, une lettre. Le gardien affiche les fichiers dans l'approbation et vérifie
+que ceux joints sont ceux approuvés. Il ne voit pas leur contenu : c'est le noyau qui garde
+les fichiers.
+
+`mail` (bulk) regroupe newsletters et listes par expéditeur, pour proposer un lot.
+
+    mail.tidied  mail.drafted

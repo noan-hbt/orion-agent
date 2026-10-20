@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 
 class VoiceModule(Module):
     name = "voice"
+    offer = (
+        "Lui parler au téléphone, sur la même ligne qu'iMessage : `[voice] enabled = true` dans"
+        " orion.toml, puis `orion inkbox setup`."
+    )
     requires = ("imessage",)
     instructions = "voice.md"
 

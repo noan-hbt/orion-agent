@@ -16,15 +16,19 @@ ENTRY_POINT_GROUP = "orion.modules"
 def builtin_modules() -> list[type[Module]]:
     # Imported here: a module's dependencies load only when modules are listed.
     from orion.adaptation.module import AdaptationModule
+    from orion.advice.module import AdviceModule
+    from orion.booking.module import BookingModule
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
     from orion.chronicle.module import ChronicleModule
     from orion.computer.module import ComputerModule
+    from orion.configure.module import ConfigureModule
     from orion.console.module import ConsoleModule
     from orion.delegation.module import DelegationModule
     from orion.expert.module import ExpertModule
     from orion.federation.module import FederationModule
     from orion.files.module import FilesModule
+    from orion.focus.module import FocusModule
     from orion.hands.module import HandsModule
     from orion.intentions.module import IntentionsModule
     from orion.library.module import LibraryModule
@@ -32,11 +36,14 @@ def builtin_modules() -> list[type[Module]]:
     from orion.memory.night import NightModule
     from orion.missions.module import MissionsModule
     from orion.onboarding.module import OnboardingModule
+    from orion.papers.module import PapersModule
     from orion.photos.module import PhotosModule
     from orion.places.module import PlacesModule
     from orion.relations.module import RelationsModule
     from orion.secretary.module import SecretaryModule
+    from orion.style.module import StyleModule
     from orion.thinking.module import ThinkingModule
+    from orion.vocal.module import VocalModule
     from orion.voice.module import VoiceModule
     from orion.web.module import WebModule
 
@@ -52,15 +59,22 @@ def builtin_modules() -> list[type[Module]]:
         WebModule,
         FilesModule,
         ComputerModule,
+        BookingModule,
         OnboardingModule,
+        FocusModule,
         ExpertModule,
         MissionsModule,
         LibraryModule,
         PhotosModule,
+        PapersModule,
         ThinkingModule,
         ChronicleModule,
         IntentionsModule,
         RelationsModule,
+        AdviceModule,
+        StyleModule,
+        ConfigureModule,
+        VocalModule,
         PlacesModule,
         SecretaryModule,
         ConsoleModule,
