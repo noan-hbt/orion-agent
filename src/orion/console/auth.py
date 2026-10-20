@@ -5,7 +5,10 @@ The page shows the owner's whole life, so nothing gets in without a link Orion s
 and becomes a session cookie (HttpOnly, Secure, SameSite=Strict) signed with a key only the
 core holds; deleting the key file logs every browser out.
 
-    console.link.created  console.link.used
+Inside Telegram (D91), the console opens as a Mini App: Telegram signs who opened it, the
+signature is checked with the bot's token, and only the owner's user id gets the cookie.
+
+    console.link.created  console.link.used  console.login.telegram
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from orion.core.projections import ProjectionRunner
 
 LINK_CREATED = "console.link.created"
 LINK_USED = "console.link.used"
+TELEGRAM_LOGIN = "console.login.telegram"
 LINK_TTL = timedelta(minutes=10)
 SESSION_DAYS = 7
 COOKIE = "orion_console"
@@ -87,6 +91,11 @@ class Gate:
         if expires is None or (now or datetime.now(UTC)) > expires:
             return None
         await self._record(LINK_USED, {"hash": digest})
+        return self.sign(time.time() + SESSION_DAYS * 86400)
+
+    async def telegram_session(self, user_id: int) -> str:
+        """A session cookie value for the owner, who opened the console from Telegram."""
+        await self._record(TELEGRAM_LOGIN, {"user_id": user_id})
         return self.sign(time.time() + SESSION_DAYS * 86400)
 
     def sign(self, until: float) -> str:

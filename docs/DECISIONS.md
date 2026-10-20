@@ -1858,3 +1858,32 @@ désormais **demandée** au lieu d'être refusée :
 Le risque que D26 voulait écarter (le propriétaire qui apprend à dire oui sans lire) est réduit
 par la question elle-même. Elle n'arrive que pour une vraie action, et pas pour chaque rappel
 (D85). Elle est écrite par le gardien à partir des paramètres réels (D28), pas par le modèle.
+
+## D91 — Les proches sur Telegram ; la console dans Telegram
+
+*20/10/2026 · acceptée · étend D54 et D88*
+
+Il faut que d'autres personnes puissent parler à Orion, et le propriétaire n'utilise plus que
+Telegram. Désormais :
+- **un contact** de `[modules.secretary]` se déclare par son numéro (iMessage), son
+  `telegram_id`, ou les deux. Ses messages au bot vont au secrétaire, comme sur iMessage :
+  c'est un modèle à part, sans outils, qui ne voit pas la mémoire du propriétaire. La réponse
+  part sur le canal d'où il a écrit ;
+- **un inconnu** qui écrit au bot n'a pas de réponse. Le propriétaire est prévenu une fois, avec
+  le nom et l'id qui permettraient de l'ajouter ;
+- **en mode séparé**, le gardien laisse partir vers un contact une réponse en texte seul,
+  seulement dans les 12 h qui suivent un message de lui qu'il a vu passer, et dans le plafond
+  du jour. Il garde ce moment en mémoire : après un redémarrage, Orion répond de nouveau dès
+  que le contact réécrit. Pour écrire le premier, il faut toujours le oui du propriétaire sur
+  ce texte exact (`contact_message`) ;
+- **la console** s'ouvre dans Telegram (Mini App), par un bouton « Console » dans la
+  conversation avec le bot. Telegram signe l'identité de qui l'ouvre ; la signature est vérifiée
+  avec le jeton du bot, par le gardien en mode séparé. Seul l'id du propriétaire reçoit le
+  cookie de session, et chaque ouverture est journalisée (`console.login.telegram`). Il faut
+  une adresse HTTPS publique (`[modules.console] public_url`), et le gardien ne pose le bouton
+  que vers cette adresse.
+
+Ajouter un contact demande encore de modifier `orion.toml` sur le serveur : la liste de ceux
+qui peuvent écrire reste celle du propriétaire, hors de portée du cœur.
+
+    console.login.telegram

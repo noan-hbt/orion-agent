@@ -78,6 +78,10 @@ class Console:
     """What Orion will do on its own (D78)."""
     spending: Spending | None = None
     """What it spent (D79)."""
+    telegram_login: Callable[[str], Awaitable[int | None]] | None = None
+    """Who opened the console from Telegram, from the Mini App's signed launch data (D91):
+    checked with the bot's token, by the Telegram module or the guardian that holds it."""
+    owner_telegram: int = 0
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -141,6 +145,44 @@ def console_app(console: Console) -> Starlette:
         response.set_cookie(
             COOKIE,
             cookie,
+            max_age=SESSION_DAYS * 86400,
+            httponly=True,
+            secure=console.secure_cookie,
+            samesite="strict",
+            path=PREFIX,
+        )
+        return response
+
+    async def from_telegram(_request: Request) -> Response:
+        """The Mini App: Telegram's script hands over the signed launch data, posted back."""
+        script = (
+            "const d=window.Telegram&&Telegram.WebApp?Telegram.WebApp.initData:'';"
+            "if(Telegram.WebApp)Telegram.WebApp.ready();"
+            f"fetch('{PREFIX}/telegram',{{method:'POST',body:d,credentials:'same-origin'}})"
+            f".then(r=>{{if(r.ok)location.replace('{PREFIX}/');else "
+            "document.getElementById('m').textContent="
+            "'Seul le propriétaire peut ouvrir la console.';}});"
+        )
+        html = (
+            '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<script src="https://telegram.org/js/telegram-web-app.js"></script>'
+            f"<title>Orion</title><style>{STYLE}</style></head>"
+            f'<body><main><p id="m">Un instant…</p></main><script>{script}</script></body></html>'
+        )
+        return HTMLResponse(html, headers={"cache-control": "no-store"})
+
+    async def telegram_login(request: Request) -> Response:
+        check = console.telegram_login
+        if check is None or not console.owner_telegram:
+            return Response("Telegram is not connected", status_code=404)
+        user = await check((await request.body()).decode(errors="replace"))
+        if user is None or user != console.owner_telegram:
+            return Response("not the owner", status_code=403)
+        response = Response("ok")
+        response.set_cookie(
+            COOKIE,
+            await console.gate.telegram_session(user),
             max_age=SESSION_DAYS * 86400,
             httponly=True,
             secure=console.secure_cookie,
@@ -360,6 +402,8 @@ def console_app(console: Console) -> Starlette:
     return Starlette(
         routes=[
             Route(f"{PREFIX}/login", login, methods=["GET"]),
+            Route(f"{PREFIX}/telegram", from_telegram, methods=["GET"]),
+            Route(f"{PREFIX}/telegram", telegram_login, methods=["POST"]),
             get("/", home),
             get("/memory", memory),
             post("/facts/{id}/forget", forget_fact),

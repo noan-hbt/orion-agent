@@ -9,7 +9,11 @@ The core uses the same Telegram client as in a single process, pointed at the gu
 - a contact the owner allowed (`[modules.secretary]`, `telegram_id`) gets a plain text answer,
   only within `REPLY_WINDOW_HOURS` of their last message as the guardian saw it pass, a few a
   day; writing to them first takes the owner's yes to that very text (`contact_message`);
+- the console's button in his chat (`setChatMenuButton`), only to the console's own address;
 - nothing else: no webhook, no forwarding, no other chat, no change to the bot.
+
+**The console in Telegram** (D91): the guardian checks the Mini App's signed launch data with
+the token and tells the core who opened it (`/v1/telegram-login`); the token stays here.
 
 **Approvals.** The guardian writes the question itself, with Oui / Non buttons. The Bot API
 keeps no history the guardian could read back, as it does with Inkbox: instead every update the
@@ -25,6 +29,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -34,7 +39,15 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from orion.channels.imessage import answer_word
-from orion.channels.telegram import MAX_TEXT, NO, REACTIONS, YES, TelegramClient, TelegramError
+from orion.channels.telegram import (
+    MAX_TEXT,
+    NO,
+    REACTIONS,
+    YES,
+    TelegramClient,
+    TelegramError,
+    check_init_data,
+)
 from orion.core.events import Trust
 from orion.guardian.ledger import TELEGRAM_ANSWER
 from orion.secretary.settings import REPLY_WINDOW_HOURS
@@ -124,6 +137,7 @@ class TelegramGate:
 
     def install(self) -> None:
         self.service.routes += [
+            Route("/v1/telegram-login", self._login, methods=["POST"]),
             Route("/v1/telegram/file/{path:path}", self._download, methods=["GET"]),
             Route("/v1/telegram/{method}", self._call, methods=["POST"]),
         ]
@@ -224,6 +238,8 @@ class TelegramGate:
             return await self._forward(
                 method, {"callback_query_id": params.get("callback_query_id")}
             )
+        if method == "setChatMenuButton":
+            return await self._menu(params)
         if method not in TO_OWNER and method not in FILES:
             return await self._refuse(method, f"{method} is never allowed")
         chat = params.get("chat_id")
@@ -240,6 +256,24 @@ class TelegramGate:
         if method in FILES:
             return await self._send_file(method, params)
         return await self._forward(method, params)
+
+    async def _menu(self, params: dict[str, Any]) -> Response:
+        """The console's button, in his chat only, opening the console only."""
+        console = str((self.service.config.modules.get("console") or {}).get("public_url") or "")
+        button = cast(dict[str, Any], params.get("menu_button") or {})
+        url = str(cast(dict[str, Any], button.get("web_app") or {}).get("url") or "")
+        home = console.rstrip("/") + "/console/"
+        if not self.owner_id or params.get("chat_id") != self.owner_id:
+            return await self._refuse("setChatMenuButton", "only the owner's chat")
+        if not console.startswith("https://") or not url.startswith(home):
+            return await self._refuse("setChatMenuButton", "only the console's own address")
+        return await self._forward("setChatMenuButton", params)
+
+    async def _login(self, request: Request) -> Response:
+        """Who opened the console from Telegram, if Telegram signed it (D91)."""
+        init_data = (await request.body()).decode(errors="replace")
+        user = check_init_data(init_data, self.client.token, time.time())
+        return JSONResponse({"user_id": user})
 
     async def _send_file(self, method: str, params: dict[str, Any]) -> Response:
         file = cast(dict[str, Any], params.get("file") or {})

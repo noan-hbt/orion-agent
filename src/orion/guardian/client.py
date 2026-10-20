@@ -69,6 +69,15 @@ class GuardianClient:
         """A Telegram client without the bot's token: the guardian adds it (D89)."""
         return GuardedTelegramClient(f"{BASE_URL}/v1/telegram", self._transports())
 
+    async def telegram_login(self, init_data: str) -> int | None:
+        """Who opened the console from Telegram: the guardian checks the signature (D91)."""
+        try:
+            response = await self._http.post("/v1/telegram-login", content=init_data.encode())
+        except httpx.TransportError as exc:
+            raise GuardianUnavailableError(f"guardian unreachable: {exc!r}") from exc
+        found = _json(response).get("user_id")
+        return found if isinstance(found, int) else None
+
     async def request_approval(
         self, action: str, params: dict[str, Any], reason: str, conversation_id: str
     ) -> tuple[str, str]:

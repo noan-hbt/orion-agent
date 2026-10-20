@@ -201,3 +201,30 @@ async def test_writing_first_to_a_contact_needs_his_yes(split: Split) -> None:
     with pytest.raises(GuardianUnavailableError, match="approval"):
         await split.running.client.contact_send("Angèle", f"telegram:{ANGELE}", "J'arrive", None)
     assert not split.tg.sent()
+
+
+async def test_the_console_button_and_login_go_through_the_guardian(tmp_path: Path) -> None:
+    import time
+
+    from tests.test_console import signed
+
+    tg = FakeTelegram()
+    config = split_config(tmp_path).model_copy(
+        update={"modules": {"console": {"enabled": True, "public_url": "https://o.test"}}}
+    )
+
+    def gate(service: GuardianService) -> None:
+        TelegramGate(service, tg.client()).install()
+
+    async with running_guardian(config, prepare=gate) as running:
+        client = running.client.telegram()
+        await client.menu_button(OWNER, "Console", "https://o.test/console/telegram")
+        assert [n for n, _ in tg.calls] == ["setChatMenuButton"]
+        with pytest.raises(TelegramError, match="console's own address"):
+            await client.menu_button(OWNER, "Console", "https://evil.test/console/")
+        with pytest.raises(TelegramError, match="owner's chat"):
+            await client.menu_button(STRANGER, "Console", "https://o.test/console/telegram")
+        now = time.time()
+        assert await running.client.telegram_login(signed(TOKEN, OWNER, now)) == OWNER
+        assert await running.client.telegram_login(signed("1:other", OWNER, now)) is None
+        await client.aclose()

@@ -149,3 +149,64 @@ async def test_what_orion_will_do_and_what_it_cost(journal: SqliteJournal, tmp_p
         home = (await http.get("/console/")).text
         assert "ai coûté" in home and "Ce mois-ci : 0.00 $" in home
     await store.close()
+
+
+def signed(token: str, user: int, at: float) -> str:
+    """Launch data as Telegram signs it for a Mini App (core.telegram.org/bots/webapps)."""
+    import hashlib
+    import hmac
+    import json
+    from urllib.parse import urlencode
+
+    fields = {"auth_date": str(int(at)), "query_id": "q1", "user": json.dumps({"id": user})}
+    check = "\n".join(f"{k}={v}" for k, v in sorted(fields.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    digest = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode({**fields, "hash": digest})
+
+
+def test_only_what_telegram_signed_names_a_user() -> None:
+    import time
+
+    from orion.channels.telegram import check_init_data
+
+    now = time.time()
+    assert check_init_data(signed("123:T", 42, now), "123:T", now) == 42
+    assert check_init_data(signed("123:T", 42, now), "999:other", now) is None  # another bot
+    assert check_init_data(signed("123:T", 42, now - 7200), "123:T", now) is None  # too old
+    forged = signed("123:T", 42, now).replace("%22id%22%3A+42", "%22id%22%3A+7")
+    assert check_init_data(forged, "123:T", now) is None
+    assert check_init_data("", "123:T", now) is None
+
+
+async def test_the_owner_opens_the_console_from_telegram(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    await memory.remember("Aime le jazz", OWNER)
+    console = Console(
+        Gate(journal, session_key(tmp_path)),
+        journal,
+        memory,
+        None,
+        Provenances(journal, memory, Timers(journal, TimerProjection())),
+        "Europe/Paris",
+    )
+    app = console_app(console)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE) as http:
+        assert "telegram-web-app.js" in (await http.get("/console/telegram")).text
+        assert (await http.post("/console/telegram", content="x")).status_code == 404
+
+        async def who(init_data: str) -> int | None:
+            return {"owner": 4242, "angele": 5151}.get(init_data)
+
+        console.telegram_login, console.owner_telegram = who, 4242
+        refused = await http.post("/console/telegram", content="angele")
+        assert refused.status_code == 403 and COOKIE not in refused.cookies
+        opened = await http.post("/console/telegram", content="owner")
+        assert opened.status_code == 200
+        http.cookies.set(COOKIE, opened.cookies[COOKIE], domain="orion.test", path="/console")
+        assert "jazz" in (await http.get("/console/memory")).text
+    await store.close()

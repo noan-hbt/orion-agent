@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
+import json
 import mimetypes
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
@@ -30,6 +33,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import parse_qsl
 
 import httpx
 import structlog
@@ -102,6 +106,12 @@ class TelegramClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    @property
+    def token(self) -> str:
+        """For checking what Telegram signed with it (a Mini App's launch data), in the
+        process that holds it."""
+        return self._token
+
     def method_url(self, method: str) -> str:
         return f"{self._base}/bot{self._token}/{method}"
 
@@ -172,6 +182,15 @@ class TelegramClient:
             caption=caption[:MAX_CAPTION] or None,
         )
         return int(cast(dict[str, Any], sent)["message_id"])
+
+    async def menu_button(self, chat_id: int, text: str, url: str) -> None:
+        """The button beside his message field that opens a page inside Telegram (a Mini
+        App): the console (D91)."""
+        await self.call(
+            "setChatMenuButton",
+            chat_id=chat_id,
+            menu_button={"type": "web_app", "text": text, "web_app": {"url": url}},
+        )
 
     async def typing(self, chat_id: int) -> None:
         await self.call("sendChatAction", chat_id=chat_id, action="typing")
@@ -659,6 +678,33 @@ def _media(message: dict[str, Any]) -> tuple[Media, ...]:
                 )
             )
     return tuple(found)
+
+
+LOGIN_MAX_AGE = 3600.0
+"""Seconds a Mini App's signed launch data stays good for logging in."""
+
+
+def check_init_data(init_data: str, token: str, now: float) -> int | None:
+    """The Telegram user a Mini App was opened by, if Telegram really signed its launch data
+    with this bot's token, less than an hour ago (core.telegram.org/bots/webapps)."""
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+    given = pairs.pop("hash", "")
+    if not given:
+        return None
+    check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, given):
+        return None
+    signed = pairs.get("auth_date", "")
+    if not signed.isdigit() or now - int(signed) > LOGIN_MAX_AGE:
+        return None
+    try:
+        user: Any = json.loads(pairs.get("user") or "{}")
+    except json.JSONDecodeError:
+        return None
+    found = cast(dict[str, Any], user).get("id") if isinstance(user, dict) else None
+    return found if isinstance(found, int) and found > 0 else None
 
 
 def _name(sender: dict[str, Any]) -> str:

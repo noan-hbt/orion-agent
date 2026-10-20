@@ -11,16 +11,24 @@ holds the token and asks for approvals itself (D89): run `orion serve` without
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING
 
 import structlog
 
 from orion.channels.imessage import ApprovalDesk
-from orion.channels.telegram import TelegramChannel, TelegramClient, TelegramSettings
+from orion.channels.telegram import (
+    TelegramChannel,
+    TelegramClient,
+    TelegramError,
+    TelegramSettings,
+    check_init_data,
+)
 from orion.modules.base import Daemon, Module, ModuleError, Plate
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+    from orion.guardian.client import GuardianClient
     from orion.tools.base import Tool
 
 log = structlog.get_logger(__name__)
@@ -34,6 +42,7 @@ class TelegramModule(Module):
         super().__init__(config)
         self._client = client
         self._desk: ApprovalDesk | None = None
+        self._guardian: GuardianClient | None = None
         self.telegram: TelegramChannel | None = None
 
     @property
@@ -47,6 +56,7 @@ class TelegramModule(Module):
             # The guardian holds the token, and writes and checks the approvals itself (D89).
             self._client = self._client or plate.guardian.telegram()
             self._desk = plate.guardian
+            self._guardian = plate.guardian
         if self._client is None:
             try:
                 token = self.config.channels.telegram.bot_token.resolve()
@@ -78,6 +88,34 @@ class TelegramModule(Module):
             )
         elif not await channel.available():
             log.warning("telegram.owner_not_connected", hint=f"write to @{me.get('username')}")
+        await self._console(daemon)
+
+    async def _console(self, daemon: Daemon) -> None:
+        """The console in his chat, as a Mini App (D91): Telegram tells who opened it."""
+        from orion.console.app import PREFIX
+        from orion.console.module import ConsoleModule
+
+        found = daemon.plate.module(ConsoleModule)
+        owner = self.config.channels.telegram.owner_id
+        if found is None or found.console is None or not owner or self._client is None:
+            return
+        client, guardian = self._client, self._guardian
+
+        async def login(init_data: str) -> int | None:
+            if guardian is not None:
+                return await guardian.telegram_login(init_data)
+            return check_init_data(init_data, client.token, time.time())
+
+        found.console.telegram_login = login
+        found.console.owner_telegram = owner
+        url = f"{found.base_url()}{PREFIX}/telegram"
+        if not url.startswith("https://"):
+            log.info("telegram.console_button_skipped", hint="needs [modules.console] public_url")
+            return
+        try:
+            await client.menu_button(owner, "Console", url)
+        except TelegramError:
+            log.warning("telegram.console_button_failed", exc_info=True)
 
     async def close(self) -> None:
         if self._client is not None:

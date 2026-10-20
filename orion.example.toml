@@ -279,7 +279,8 @@ max_steps = 30
 # The control page: memory, commitments, playbook, autonomy, activity, suspicious sources.
 # Served by the core on host:port; reach it through a one-time link Orion texts you (ask it),
 # or `orion console link`. Put it behind your HTTPS proxy and set public_url to use it from
-# your phone.
+# your phone. With Telegram, a « Console » button then sits in your chat with the bot: it opens
+# the console inside Telegram, no link needed (D91).
 [modules.console]
 enabled = false
 host = "127.0.0.1"
@@ -288,20 +289,26 @@ port = 8790
 
 # Orion's hands (D1): `orion hand` on your own machines dials out to the server and offers what
 # you allow there (notifications, finding and reading files in chosen folders, opening pages
-# with your approval). Pair a machine: `orion hands pair mac` on the server gives a code, then
-# on the Mac: `uv tool install git+https://github.com/noan-hbt/orion-agent` and
+# with your approval). Pair a machine: `orion hands pair <name>` on the server gives a code,
+# then on that machine (Windows, Linux or Mac): `uv tool install git+https://github.com/noan-hbt/orion-agent` and
 # `orion hand pair https://orion.example.com <code> --root ~/Documents`, then `orion hand run`.
 [modules.hands]
 enabled = false
 host = "127.0.0.1"               # behind your HTTPS proxy at /hands/
 port = 8792
 
-# Le secrétaire (D54) : les proches qui peuvent écrire à Orion. Relance `orion inkbox setup`
-# après chaque changement, puis demande-leur d'envoyer la commande de connexion qu'il affiche.
+# Le secrétaire (D54, D91) : les proches qui peuvent écrire à Orion. Sur Telegram, ils écrivent
+# au bot ; Orion te donne leur id la première fois (`telegram_id`). Sur iMessage, leur numéro,
+# puis relance `orion inkbox setup` et demande-leur d'envoyer la commande de connexion.
 # [modules.secretary]
 # enabled = true
 # [[modules.secretary.contacts]]
 # name = "Maman"
 # number = "+33600000001"
 # about = "ma mère, elle s'inquiète vite"
+# share = ["availability"]
+# [[modules.secretary.contacts]]
+# name = "Angèle"
+# telegram_id = 123456789
+# about = "ma copine"
 # share = ["availability"]
