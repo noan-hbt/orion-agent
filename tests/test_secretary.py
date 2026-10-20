@@ -315,7 +315,8 @@ async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
 
     secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
     payload = {"type": "message", "is_owner": False, "chat_id": 777, "sender": 777,
-               "name": "Victor (@v)", "text": "ww", "date": 1_760_000_000, "ref": "telegram:777:1"}  # fmt: skip
+               "name": "Victor (@v)", "text": "ww", "date": 1_760_000_000,
+               "ref": "telegram:777:1"}  # fmt: skip
     await journal.append(
         [
             NewEvent(
