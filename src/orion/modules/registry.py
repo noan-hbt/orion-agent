@@ -23,6 +23,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.federation.module import FederationModule
     from orion.mail.module import MailModule
     from orion.memory.night import NightModule
+    from orion.onboarding.module import OnboardingModule
     from orion.voice.module import VoiceModule
     from orion.web.module import WebModule
 
@@ -37,6 +38,7 @@ def builtin_modules() -> list[type[Module]]:
         FederationModule,
         WebModule,
         ComputerModule,
+        OnboardingModule,
     ]
 
 

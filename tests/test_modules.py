@@ -106,6 +106,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
     assert [m.name for m in load(both, THIRD_PARTY)] == [
         "adaptation",
         "consolidation",
+        "onboarding",
         "weather",
         "desk",
     ]
