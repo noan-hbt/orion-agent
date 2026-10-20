@@ -113,3 +113,13 @@ async def test_a_module_that_could_not_start_is_refused(
     configurator = Configurator(journal, load_config(source).source)
     with pytest.raises(ConfigureError, match="would not start"):
         await configurator.change([("modules.secretary.enabled", True)], "x", OWNER)
+
+
+def test_show_lists_every_module_even_absent_from_the_file(tmp_path: Path) -> None:
+    from orion.configure.module import editable_view
+
+    source = tmp_path / "orion.toml"
+    source.write_text(TOML, "utf-8")
+    view = editable_view(load_config(source))
+    assert "- console : éteint" in view and "- web : éteint" in view
+    assert "guardian" not in view and "channels" not in view

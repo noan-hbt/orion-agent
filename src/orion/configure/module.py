@@ -125,8 +125,23 @@ def validate(text: str, source: Path) -> OrionConfig:
 
 
 def editable_view(config: OrionConfig) -> str:
-    data = config.model_dump(mode="json", include=set(EDITABLE))
-    return json.dumps(data, ensure_ascii=False, indent=1)
+    """The editable sections, and every installed module with whether it is on: a module
+    absent from the file can be turned on all the same (`modules.<name>.enabled`)."""
+    from orion.modules.registry import discover
+
+    sections: set[str] = {name for name in EDITABLE if name != "modules"}
+    data = config.model_dump(mode="json", include=sections)
+    modules = {kind.name: kind(config).enabled for kind in discover()}
+    lines = [
+        json.dumps(data, ensure_ascii=False, indent=1),
+        "Modules (chacun s'active ou s'éteint par `modules.<nom>.enabled`, même absent du "
+        "fichier ; `voice` et `delegation` par `voice.enabled`, `delegation.enabled`) :",
+        *(f"- {name} : {'allumé' if on else 'éteint'}" for name, on in modules.items()),
+    ]
+    if config.modules:
+        lines.append("Réglages de modules écrits dans le fichier :")
+        lines.append(json.dumps(config.modules, ensure_ascii=False, indent=1))
+    return "\n".join(lines)
 
 
 def _digest(text: str) -> str:
