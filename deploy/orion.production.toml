@@ -56,3 +56,6 @@ enabled = true                   # Orion's own browser, for tasks that go throug
 [modules.console]
 enabled = true                   # ask Orion for the link, or `orion-admin --core console link`
 public_url = "https://@DOMAIN@"
+
+[modules.hands]
+enabled = true                   # `orion-admin --core hands pair mac`, then on the Mac: orion hand pair

@@ -214,3 +214,13 @@ enabled = false
 host = "127.0.0.1"
 port = 8790
 # public_url = "https://orion.example.com"
+
+# Orion's hands (D1): `orion hand` on your own machines dials out to the server and offers what
+# you allow there (notifications, finding and reading files in chosen folders, opening pages
+# with your approval). Pair a machine: `orion hands pair mac` on the server gives a code, then
+# on the Mac: `uv tool install git+https://github.com/noan-hbt/orion-agent` and
+# `orion hand pair https://orion.example.com <code> --root ~/Documents`, then `orion hand run`.
+[modules.hands]
+enabled = false
+host = "127.0.0.1"               # behind your HTTPS proxy at /hands/
+port = 8792

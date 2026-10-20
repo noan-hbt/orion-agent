@@ -252,6 +252,46 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
+    from orion.hands.desk import HandsDesk
+
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        desk = HandsDesk(journal)
+        await desk.start()
+        if args.hands_command == "revoke":
+            await desk.revoke(args.device)
+            print(f"{args.device} ne peut plus se connecter (redémarre orion serve s'il l'est).")
+            return 0
+        code = await desk.new_code(args.device)
+    print(f"Code pour {args.device} (une fois, 10 minutes) : {code}")
+    print(f"Sur la machine : orion hand pair <adresse d'Orion> {code} --root ~/Documents")
+    return 0
+
+
+async def _hand(args: argparse.Namespace) -> int:
+    from orion.hands.hand import DEFAULT_ACTIONS, Hand, HandConfig, Refused, pair
+
+    configure_logging("INFO", False)
+    if args.hand_command == "pair":
+        actions = [*DEFAULT_ACTIONS, *(["open_url"] if args.allow_open else [])]
+        try:
+            config = await pair(args.server, args.code, args.root, actions)
+        except Refused as exc:
+            print(f"Échec : {exc}")
+            return 1
+        config.save()
+        print(f"Relié comme « {config.device} ». Lance maintenant : orion hand run")
+        return 0
+    try:
+        await Hand(HandConfig.load()).run_forever()
+    except Refused as exc:
+        print(str(exc))
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
 async def _console_link(config: OrionConfig) -> int:
     from orion.console.app import PREFIX
     from orion.console.auth import Gate, session_key
@@ -473,6 +513,24 @@ def main(argv: list[str] | None = None) -> int:
     google_auth.add_argument(
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
     )
+    hands = sub.add_parser("hands", help="Orion's hands on your machines (server side)")
+    hands_sub = hands.add_subparsers(dest="hands_command", required=True)
+    hands_pair = hands_sub.add_parser("pair", help="A one-time code to pair a machine")
+    hands_pair.add_argument("device", help="A name for the machine, e.g. 'mac'")
+    hands_revoke = hands_sub.add_parser("revoke", help="Cut a machine off")
+    hands_revoke.add_argument("device")
+    hand = sub.add_parser("hand", help="Run on your machine: Orion's hand there")
+    hand_sub = hand.add_subparsers(dest="hand_command", required=True)
+    hand_pairing = hand_sub.add_parser("pair", help="Pair this machine with your Orion")
+    hand_pairing.add_argument("server", help="Your Orion's address, e.g. https://orion.example.com")
+    hand_pairing.add_argument("code", help="From `orion hands pair <device>` on the server")
+    hand_pairing.add_argument(
+        "--root", action="append", default=[], help="A folder Orion may search and read"
+    )
+    hand_pairing.add_argument(
+        "--allow-open", action="store_true", help="Let Orion open web pages (each one approved)"
+    )
+    hand_sub.add_parser("run", help="Connect and serve (keep it running)")
     console = sub.add_parser("console", help="The control page")
     console_sub = console.add_subparsers(dest="console_command", required=True)
     console_sub.add_parser("link", help="A one-time login link")
@@ -494,6 +552,9 @@ def main(argv: list[str] | None = None) -> int:
         print(__version__)
         return 0
 
+    if args.command == "hand":
+        return asyncio.run(_hand(args))
+
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)
     if args.command == "doctor":
@@ -502,6 +563,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "hands":
+        return asyncio.run(_hands(config, args))
     if args.command == "console":
         return asyncio.run(_console_link(config))
     if args.command == "contain":

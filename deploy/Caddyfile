@@ -16,6 +16,10 @@
 	handle /voice/live {
 		reverse_proxy 127.0.0.1:8791
 	}
+	# Orion's hands on your machines dial in here (paired secret required).
+	handle /hands/* {
+		reverse_proxy 127.0.0.1:8792
+	}
 	# The control page: reachable only with a one-time link Orion sends you.
 	handle /console/* {
 		reverse_proxy 127.0.0.1:8790
