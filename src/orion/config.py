@@ -294,7 +294,7 @@ class GuardianConfig(BaseModel):
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
     autonomable: list[str] = Field(
-        default_factory=lambda: ["calendar_add"],
+        default_factory=lambda: ["calendar_add", "configure_change"],
         description="Actions the owner may let Orion do alone, once earned (never calls or "
         "mail to strangers unless listed here)",
     )
@@ -352,6 +352,9 @@ class OrionConfig(BaseModel):
         description="Third-party modules' [modules.<name>] sections, validated by each module",
     )
 
+    source: Path | None = Field(default=None, exclude=True)
+    """The orion.toml this was read from (None: defaults); Orion edits it to configure itself."""
+
     @property
     def journal_path(self) -> Path:
         return self.data_dir / "journal.sqlite3"
@@ -393,6 +396,7 @@ def load_config(path: Path | None = None) -> OrionConfig:
     config = OrionConfig.model_validate(data)
     return config.model_copy(
         update={
+            "source": target.resolve(),
             "data_dir": _beside(target, config.data_dir),
             "guardian": config.guardian.model_copy(
                 update={

@@ -1435,3 +1435,28 @@ faire confiance et où vérifier.
 - un proche autorisé à connaître ses disponibilités (secrétaire) apprend jusqu'à quand il est
   concentré, jamais pourquoi ;
 - les rappels qu'il a demandés sonnent quand même.
+
+## D72 — Orion se configure par message
+
+*20/10/2026 · acceptée*
+
+Le propriétaire est sur son téléphone, pas sur le serveur. « Active le mail », « mets tes
+points à 9 h et 18 h » : le module `configure` modifie le fichier `orion.toml` qu'Orion a lu au
+démarrage.
+- `configure` (change) est un effet externe : le gardien soumet le changement exact au
+  propriétaire. `configure_change` est autonomable : il peut laisser Orion le faire seul,
+  comme pour l'agenda.
+- Seules quelques sections sont modifiables : `agent`, `initiative`, `adaptation`, `memory`,
+  `modules`, `voice`, `delegation`. Ne se changent jamais par message : le gardien (ce qu'Orion
+  peut faire seul, ses limites), la fédération, la ligne iMessage (qui il écoute), les clés, ce
+  qui s'exécute sur le serveur (`allow_bash`, `binary`), et qui peut écrire à Orion
+  (`modules.secretary.contacts`).
+- Le nouveau fichier est vérifié en entier avant d'être écrit, comme Orion démarrerait avec
+  (modèle de config, puis chargement des modules). Les commentaires et la mise en page sont
+  gardés (tomlkit), l'ancien fichier est gardé à côté (`orion.toml.previous`), et le
+  changement est journalisé (`config.changed`).
+- Orion redémarre ensuite seul, en place, après avoir répondu.
+- Un secret ne passe jamais par message : on n'écrit que le nom de la variable
+  d'environnement, et sa valeur se met sur le serveur.
+- Sur le serveur, le fichier appartient à root : le noyau ne peut pas l'écrire, et il le dit.
+  Il faudra le rendre modifiable par l'utilisateur du noyau pour s'en servir en production.

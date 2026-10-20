@@ -16,6 +16,7 @@ dependencies = [
     "recurring-ical-events>=3",
     "starlette>=1.9,<2",
     "structlog>=24.1",
+    "tomlkit>=0.13",
     "tzdata>=2024.1",
     "uvicorn>=0.54,<1",
     "websockets>=13",

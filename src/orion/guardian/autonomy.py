@@ -48,6 +48,7 @@ LABELS = {
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
     "computer_task_send": "envoyer des formulaires sur des sites",
+    "configure_change": "changer tes propres réglages",
 }
 
 

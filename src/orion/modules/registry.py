@@ -21,6 +21,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.channels.module import IMessageModule
     from orion.chronicle.module import ChronicleModule
     from orion.computer.module import ComputerModule
+    from orion.configure.module import ConfigureModule
     from orion.console.module import ConsoleModule
     from orion.delegation.module import DelegationModule
     from orion.expert.module import ExpertModule
@@ -67,6 +68,7 @@ def builtin_modules() -> list[type[Module]]:
         RelationsModule,
         AdviceModule,
         StyleModule,
+        ConfigureModule,
         PlacesModule,
         SecretaryModule,
         ConsoleModule,
