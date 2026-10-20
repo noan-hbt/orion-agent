@@ -328,7 +328,7 @@ CASES: tuple[Case, ...] = (
         origin="Le « à lire plus tard » (D67) : un lien envoyé seul est lu et gardé, avec une "
         "réponse d'une ligne.",
         at=paris(2026, 10, 20, 21, 0),
-        steps=(Say("https://fr.wikipedia.org/wiki/Encadrement_des_loyers_en_France"),),
+        steps=(Say("https://www.service-public.fr/particuliers/vosdroits/F1314"),),
         checks=(uses("library:keep"), at_most(200)),
         live_web=True,
     ),
