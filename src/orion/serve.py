@@ -78,6 +78,7 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
             caller=daemon.caller,
             alerts=daemon.alerts,
             digests=daemon.digests,
+            presence=daemon.presence,
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
     log.info(

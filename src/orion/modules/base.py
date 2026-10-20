@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from orion.guardian.autonomy import Autonomy
     from orion.guardian.client import GuardianClient
     from orion.guardian.policy import ActionProposal, Approval, Approver
+    from orion.initiative.arbiter import PresenceSource
     from orion.initiative.engine import AlertSource, Caller, DigestSource, ReportSource
     from orion.initiative.timers import Timers
     from orion.memory.service import MemoryService
@@ -162,6 +163,8 @@ class Daemon:
     """Unrequested messages (quiet hours and the budget apply)."""
     digests: list[DigestSource] = field(default_factory=list["DigestSource"])
     """Lines for the daily digests."""
+    presence: list[PresenceSource] = field(default_factory=list["PresenceSource"])
+    """Whether the owner is busy now (the arbiter waits for a break)."""
     caller: Caller | None = None
 
     def add_service(self, name: str, run: Service) -> None:

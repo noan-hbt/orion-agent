@@ -214,6 +214,7 @@ class Onboarding:
                 why="on se connaît depuis peu et j'aimerais mieux te connaître",
                 fallback=f"Petite question pour mieux te connaître : {topic.question}",
                 expires_at=end,
+                importance=0.2,
             )
         ]
 

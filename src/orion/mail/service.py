@@ -326,6 +326,7 @@ class Mailbox:
                 fallback=f"Mail important de {c.sender} : « {c.subject} »",
                 trust=Trust.THIRD_PARTY,
                 expires_at=c.received_at + timedelta(hours=12),
+                importance=0.7,
             )
             for c in self.recent(now - timedelta(hours=12), worth_it=True)
             if c.card.importance is Importance.HIGH

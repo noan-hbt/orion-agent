@@ -36,6 +36,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.initiative.arbiter import Moment
 from orion.initiative.engine import Alert, DigestLine
 from orion.modules.base import ModuleSettings
 
@@ -384,9 +385,20 @@ class Calendar:
                     why=f"ça commence dans {minutes} min",
                     fallback=f"Dans {minutes} min : {o.title}{where}",
                     expires_at=o.start,
+                    importance=0.9,
                 )
             )
         return found
+
+    async def presence(self, now: datetime) -> Moment:
+        """Busy during a timed event; otherwise, when the last one ended (today)."""
+        await self._runner.catch_up()
+        today = datetime.combine(now.date(), datetime.min.time(), self._zone)
+        timed = [o for _, o in self.between(today, now + timedelta(minutes=1)) if not o.all_day]
+        if any(o.start <= now < o.end for o in timed):
+            return Moment(busy=True)
+        ended = [o.end for o in timed if o.end <= now]
+        return Moment(free_since=max(ended) if ended else None)
 
     async def digest(
         self, now: datetime, since: datetime, first_slot: bool, last_slot: bool

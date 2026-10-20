@@ -51,6 +51,7 @@ class CalendarModule(Module):
         daemon.add_service("calendar.sync", calendar.run)
         daemon.alerts.append(calendar)
         daemon.digests.append(calendar)
+        daemon.presence.append(calendar)
 
     async def close(self) -> None:
         if self.calendar is not None:
