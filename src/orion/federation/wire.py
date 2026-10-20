@@ -86,7 +86,8 @@ class Confirm(_Body):
 
 
 class Decline(_Body):
-    reason: Literal["no_slot", "declined"]
+    reason: Literal["no_slot", "declined", "unreachable"]
+    """`unreachable`: nobody could be asked on that side; nothing was refused (D98)."""
 
 
 BODIES: dict[str, type[_Body]] = {

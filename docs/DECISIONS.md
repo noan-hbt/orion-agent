@@ -2072,3 +2072,12 @@ Désormais :
   connexion inactive avait été coupée, et l'action a été refusée. Seules les pannes de la
   connexion elle-même sont réessayées, pas les refus de Telegram. La longue attente des messages
   (`getUpdates`) reprend déjà d'elle-même.
+- **ne pas avoir pu demander n'est pas un refus** : le 20/10 à 23 h 38, l'Orion de Victor ne
+  pouvait pas joindre son propriétaire (il n'avait jamais écrit à son bot). Il a donc répondu
+  « décliné », deux fois, et l'Orion de Noan a annoncé deux refus. Une approbation porte
+  désormais `reached`, faux quand personne n'a pu être interrogé (aucun canal, ou la question
+  n'est pas partie). Un rendez-vous reçu est alors refusé avec la raison `unreachable`, et les
+  deux propriétaires l'apprennent comme tel ;
+- **l'appairage dit d'où il vient** : une invitation créée sur le serveur et acceptée par
+  l'autre Orion. Orion ne peut ni créer ni accepter une invitation, et le disait mal quand on
+  lui demandait.

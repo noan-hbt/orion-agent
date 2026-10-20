@@ -169,6 +169,14 @@ class MeetingState:
             self.meetings[meeting_id] = replace(
                 invited, slot=_at(p.get("slot")) if p["accepted"] else None
             )
+            if p.get("reason") == "unreachable":
+                self._report(
+                    event,
+                    f"L'Orion de {p['label']} a proposé « {p['title']} », mais je n'ai pas pu te "
+                    "joindre pour te demander : j'ai répondu que tu n'étais pas joignable, sans "
+                    "rien refuser. Dis-le-lui ; il peut redemander à son Orion de reproposer.",
+                    f"l'Orion de {p['label']} a proposé un rendez-vous",
+                )
             if p.get("reason") == "no_slot":
                 self._report(
                     event,
@@ -190,11 +198,11 @@ class MeetingState:
             )
         elif kind == DECLINED and known is not None:
             self.meetings[meeting_id] = replace(known, status="declined")
-            why = (
-                "aucun des créneaux ne lui va"
-                if p.get("reason") == "no_slot"
-                else "son propriétaire a décliné"
-            )
+            why = {
+                "no_slot": "aucun des créneaux ne lui va",
+                "unreachable": "son Orion n'a pas pu le joindre pour lui demander. Rien n'est "
+                "refusé : il pourra reproposer plus tard, ou lui demander directement",
+            }.get(str(p.get("reason")), "son propriétaire a décliné")
             self._report(
                 event,
                 f"L'Orion de {known.label} a répondu pour « {known.title} » : {why}. "
@@ -212,7 +220,10 @@ class MeetingState:
             self._report(
                 event,
                 f"Ton Orion est maintenant relié à celui de {p['label']} : vous pouvez caler "
-                "des rendez-vous ensemble.",
+                "des rendez-vous ensemble. Le lien s'est fait par une invitation créée sur ton "
+                "serveur (`orion federation invite`) et acceptée par l'Orion de "
+                f"{p['label']} : pas par toi, Orion, qui ne peux ni créer ni accepter une "
+                "invitation. Ses empreintes : `orion federation peers` sur le serveur.",
                 f"l'Orion de {p['label']} vient de se présenter avec ton invitation",
             )
 
@@ -465,7 +476,8 @@ class MeetingDesk:
                 grant=approval.grant,
             )
         else:
-            await self._answer(message, base, DECLINE, {"reason": "declined"}, accepted=False)
+            reason = "declined" if approval.reached else "unreachable"
+            await self._answer(message, base, DECLINE, {"reason": reason}, accepted=False)
 
     async def _answer(
         self,

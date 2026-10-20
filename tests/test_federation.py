@@ -139,8 +139,11 @@ class Owner:
     side: Side
     says: bool = True
     asked: list[str] = field(default_factory=list[str])
+    reachable: bool = True
 
     async def approve(self, proposal: ActionProposal) -> Approval:
+        if not self.reachable:  # he never wrote to his bot: nobody to ask
+            return Approval(False, reached=False)
         g = self.side.guardian
         grant, message_id = await g.client.request_approval(
             proposal.tool.name,
@@ -414,6 +417,25 @@ async def test_the_invited_owner_can_say_no(tmp_path: Path) -> None:
         assert DECLINED in await kinds(noan)
         assert any("son propriétaire a décliné" in r.notice for r in await noan.desk.reports())
         assert await noan.app.memory.store.commitments() == []
+
+
+async def test_an_owner_who_could_not_be_asked_did_not_refuse(tmp_path: Path) -> None:
+    """20/10 23:38: Victor never wrote to his bot, and Noan was told Victor said no, twice."""
+    async with two_orions(tmp_path) as (noan, paul):
+        paul.owner.reachable = False
+        await propose(noan)
+        await paul.step()
+        answered = next(e for e in await paul.app.journal.read(0, 10_000) if e.kind == ANSWERED)
+        assert answered.payload["reason"] == "unreachable"
+        assert any("pas pu te joindre" in r.notice for r in await paul.desk.reports())
+        await noan.step()
+        told = [
+            r.notice
+            for r in await noan.desk.reports()
+            if "Café" in r.notice or "a répondu" in r.notice
+        ]
+        assert any("n'a pas pu le joindre" in t for t in told), told
+        assert not any("a décliné" in t for t in told)
 
 
 async def test_no_common_slot_is_declined_without_bothering_the_owner(tmp_path: Path) -> None:

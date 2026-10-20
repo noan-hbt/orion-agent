@@ -49,6 +49,9 @@ class Approval:
 
     granted: bool
     grant: str | None = None
+    reached: bool = True
+    """False when nobody could be asked (no channel up, the question never left): a no that
+    is not his, which an answer to someone else must not pass for a refusal (D98)."""
 
     def __bool__(self) -> bool:
         return self.granted

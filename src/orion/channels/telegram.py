@@ -592,7 +592,7 @@ class TelegramChannel:
     async def approve(self, proposal: ActionProposal) -> Approval:
         chat = self.state.owner_chat
         if chat is None:
-            return Approval(False)
+            return Approval(False, reached=False)
         approval_id = f"a_{new_id()}"
         arguments = proposal.arguments.model_dump(mode="json")
         await self._approval_event(
@@ -642,7 +642,7 @@ class TelegramChannel:
                 **({"grant": grant} if grant else {}),
             },
         )
-        return Approval(approved, grant if approved else None)
+        return Approval(approved, grant if approved else None, reached=how != "unsent")
 
     def _resolve_by_word(self, text: str, ref: str) -> bool:
         answer = answer_word(text)

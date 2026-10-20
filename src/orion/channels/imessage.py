@@ -529,7 +529,7 @@ class IMessageChannel:
         conversation = self.state.owner_conversation
         if conversation is None:
             log.warning("imessage.approval_unreachable", tool=proposal.tool.name)
-            return Approval(False)
+            return Approval(False, reached=False)
         approval_id = f"a_{new_id()}"
         arguments = proposal.arguments.model_dump(mode="json")
         grant: str | None = None

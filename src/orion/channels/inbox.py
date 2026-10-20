@@ -167,7 +167,7 @@ class OwnerInbox:
         outlet = await self._preferred(lambda o: isinstance(o, AskingOutlet))
         if not isinstance(outlet, AskingOutlet):
             log.warning("inbox.approval_unreachable", tool=proposal.tool.name)
-            return Approval(False)
+            return Approval(False, reached=False)
         return await outlet.approve(proposal)
 
     async def _preferred(self, can: Callable[[Outlet], bool] = lambda _: True) -> Outlet | None:
