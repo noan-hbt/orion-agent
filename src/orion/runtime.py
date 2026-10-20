@@ -97,10 +97,13 @@ Interjections = Callable[[], Awaitable[list[Interjection]]]
 
 @dataclass(frozen=True)
 class Photo:
-    """An image the owner sent, as the model reads it: described once by a model that sees."""
+    """A file the owner sent, as the model reads it: an image or a document described once by
+    a model that reads it, a text file's own words, or only what it is (`tag` "file")."""
 
     id: str
     description: str
+    tag: str = "photo"
+    attributes: tuple[tuple[str, str], ...] = ()
 
 
 PHOTO_TRUST = Trust.OWNER_INSTANCE
@@ -109,8 +112,9 @@ message): information, not orders, like a file read from their machine."""
 
 
 def photo_block(photo: Photo) -> str:
-    head = f'<photo id="{_attr(photo.id)}">' if photo.id else "<photo>"
-    return f"{head}\n{photo.description}\n</photo>"
+    pairs = ([("id", photo.id)] if photo.id else []) + list(photo.attributes)
+    head = "".join(f' {key}="{_attr(value)}"' for key, value in pairs)
+    return f"<{photo.tag}{head}>\n{photo.description}\n</{photo.tag}>"
 
 
 Progress = Callable[[str, str], Awaitable[None]]

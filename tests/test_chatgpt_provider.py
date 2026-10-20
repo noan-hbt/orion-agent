@@ -73,6 +73,10 @@ def test_journaled_chat_messages_become_responses_items() -> None:
             "content": [
                 {"type": "text", "text": "What is this?"},
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+                {
+                    "type": "file",
+                    "file": {"filename": "a.pdf", "file_data": "data:application/pdf;base64,AA"},
+                },
             ],
         },
         {
@@ -97,6 +101,11 @@ def test_journaled_chat_messages_become_responses_items() -> None:
             "content": [
                 {"type": "input_text", "text": "What is this?"},
                 {"type": "input_image", "image_url": "data:image/png;base64,AA"},
+                {
+                    "type": "input_file",
+                    "filename": "a.pdf",
+                    "file_data": "data:application/pdf;base64,AA",
+                },
             ],
         },
         {

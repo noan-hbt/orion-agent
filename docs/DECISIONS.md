@@ -1306,3 +1306,33 @@ ses sources, réponse JSON. Limites constatées :
   forfait, ce sont deux modèles OpenAI différents : c'est moins bien.
 - OpenAI réserve les applications hébergées à distance à une liste d'attente. Orion n'a qu'un
   utilisateur, son propriétaire, mais tourne sur un serveur : c'est une zone grise.
+
+## D63 — Orion reçoit n'importe quel fichier (étend D50)
+
+*20/10/2026 · acceptée*
+
+Le module `photos` prend désormais tout fichier joint à un message, jusqu'à 20 Mo, et le traite
+une seule fois, à son arrivée, selon son type :
+- **Image** : comme avant (D50). Un modèle qui voit la décrit. Le HEIC des iPhone est d'abord
+  converti en JPEG (Pillow et pillow-heif) : l'API d'OpenAI ne prend que JPEG, PNG, GIF et
+  WebP, et Orion utilise maintenant ce modèle (D62).
+- **Document** (PDF, Word, Excel, PowerPoint, OpenDocument, RTF) : le même modèle reçoit le
+  fichier lui-même (une partie `file` au format chat, `input_file` chez OpenAI) et en fait le
+  résumé : ce que c'est, l'essentiel, les dates, montants et échéances. C'est vérifié sur le
+  forfait ChatGPT avec un PDF et un fichier Word.
+- **Texte** (texte brut, CSV, JSON, XML, agenda, fiche contact, code) : ses propres mots,
+  montrés tels quels jusqu'à 12 000 caractères ; au-delà, `attachment_look` lit la suite.
+- **Le reste** (audio, vidéo, archive) : seulement nommé, avec son type et sa taille. Le forfait
+  ne transcrit pas l'audio.
+
+Chaque fichier est gardé avant d'être lu : un document que le modèle n'arrive pas à lire reste
+au propriétaire, et son bloc le dit. Le contenu arrive dans un bloc
+`<file id name type size path>` ; ce qui y est écrit est une information (`PHOTO_TRUST`),
+jamais un ordre. `photo_look` devient `attachment_look` (photo ou fichier). Le chemin donné
+dans le bloc permet de renvoyer le fichier avec `file` (server). Un nouvel événement,
+`attachment.kept`, nomme chaque fichier qui n'est pas une image ; l'oubli suit la même règle
+qu'une photo : un fichier n'est gardé que tant qu'un événement le nomme.
+
+Inkbox ne donne pas le nom du fichier. On le reprend de son adresse quand elle en porte un ;
+sinon, le fichier s'appelle `fichier` avec l'extension de son type. Reste à vérifier en vrai
+quels types Inkbox laisse passer jusqu'à Orion.

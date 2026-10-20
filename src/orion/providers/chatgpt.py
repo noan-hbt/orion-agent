@@ -56,6 +56,15 @@ def _content(content: object) -> object:
         elif kind == "image_url":
             image = cast(dict[str, Any], part.get("image_url") or {})
             parts.append({"type": "input_image", "image_url": image.get("url", "")})
+        elif kind == "file":
+            file = cast(dict[str, Any], part.get("file") or {})
+            parts.append(
+                {
+                    "type": "input_file",
+                    "filename": file.get("filename", ""),
+                    "file_data": file.get("file_data", ""),
+                }
+            )
         else:
             raise ProviderError(f"unsupported message part {kind!r}", retryable=False)
     return parts

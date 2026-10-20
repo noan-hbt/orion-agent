@@ -144,6 +144,9 @@ d'autres personnes.
   PDF ; il te l'envoie dans la conversation.
 - **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
   sur ton ordinateur, tel quel, jusqu'à 10 Mo.
+- **Tes fichiers** (D63) : une photo (HEIC compris), un PDF, un document Word ou Excel, un
+  fichier texte : il le lit à l'arrivée et le garde. Un fichier audio, vidéo ou une archive,
+  il le garde sans le lire.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
