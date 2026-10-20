@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform
 import shutil
 import subprocess
@@ -34,6 +35,9 @@ log = structlog.get_logger(__name__)
 CONFIG = Path.home() / ".config" / "orion" / "hand.json"
 MAX_READ = 200_000
 MAX_FOUND = 50
+MAX_VISITED = 20_000
+"""Entries looked at per search: a shared home folder must not keep the call waiting."""
+SKIPPED = frozenset({"node_modules", "__pycache__", "Library"})
 DEFAULT_ACTIONS = ("notify", "find_files", "read_file")
 
 
@@ -111,14 +115,20 @@ class Hand:
         if not words:
             raise Refused("empty query")
         found: list[str] = []
+        visited = 0
         for root in self._roots:
-            for path in root.rglob("*"):
-                if any(part.startswith(".") for part in path.relative_to(root).parts):
-                    continue
-                if path.is_file() and all(w in path.name.casefold() for w in words):
-                    found.append(str(path))
-                    if len(found) >= MAX_FOUND:
+            # Hidden and bulky folders are pruned rather than walked; links are not followed.
+            for folder, dirs, files in os.walk(root):
+                dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIPPED)
+                for name in sorted(files):
+                    visited += 1
+                    if visited > MAX_VISITED:
                         return {"content": "\n".join(found), "truncated": True}
+                    if not name.startswith(".") and all(w in name.casefold() for w in words):
+                        found.append(os.path.join(folder, name))
+                        if len(found) >= MAX_FOUND:
+                            return {"content": "\n".join(found), "truncated": True}
+                visited += len(dirs)
         return {"content": "\n".join(found)}
 
     def read_file(self, path: str) -> dict[str, Any]:

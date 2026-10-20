@@ -149,3 +149,41 @@ async def test_where_a_memory_comes_from(world: World) -> None:
     )
     assert "2 souvenir(s)" in report.content
     assert len(await world.memory.store.facts()) == 3  # a report changes nothing
+
+
+async def test_a_source_does_not_catch_its_neighbours(world: World) -> None:
+    """`uid:12` is not `uid:123`, and a page is not the page next to it."""
+    for source, card in [
+        ("mail:perso:uid:12", "m_TWELVE01"),
+        ("mail:perso:uid:123", "m_ONETWO03"),
+        ("web:https://a.fr/x", "https://a.fr/x"),
+        ("web:https://a.fr/x2", "https://a.fr/x2"),
+    ]:
+        await world.journal.append(
+            [
+                NewEvent(
+                    kind="mail.card" if source.startswith("mail") else "web.read",
+                    payload={"card_id": card} if source.startswith("mail") else {"url": card},
+                    provenance=Provenance(source=source, actor="orion:quarantine"),
+                    trust=Trust.THIRD_PARTY,
+                )
+            ]
+        )
+    await world.journal.append(
+        [
+            event("message.received", "t9", Trust.OWNER, text="lis"),
+            event(
+                MESSAGE_KIND,
+                "t9",
+                Trust.THIRD_PARTY,
+                message={"role": "tool", "content": "(mail:perso:uid:123) https://a.fr/x2"},
+            ),
+        ]
+    )
+    assert len((await world.provenances.trace("mail:perso:uid:12")).origins) == 1
+    assert (await world.provenances.trace("mail:perso:uid:12")).turns == []
+    assert (await world.provenances.trace("mail:perso:uid:123")).turns == ["t9"]
+    assert (await world.provenances.trace("web:https://a.fr/x")).turns == []
+    assert (await world.provenances.trace("web:https://a.fr/x2")).turns == ["t9"]
+    # A whole account still holds its mails; a full stop after a mention still counts.
+    assert len((await world.provenances.trace("mail:perso")).origins) == 2

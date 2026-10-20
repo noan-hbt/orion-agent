@@ -17,6 +17,7 @@ the message or document it was derived from.
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -100,25 +101,39 @@ def _markers(origins: list[Event], source: str) -> set[str]:
     return found
 
 
-def _mentions(event: Event, markers: set[str]) -> bool:
-    text = str(event.payload)
-    return any(marker in text for marker in markers)
+_AFTER = r"(?![\w@-]|[.:/][\w])"
+"""What may not follow a marker: `mail:perso:uid:12` is not `mail:perso:uid:123`, and
+`web:https://a.fr/x` is not `web:https://a.fr/x2` (a sentence's full stop is fine)."""
+
+
+def _owned_by(source: str, wanted: str) -> bool:
+    """`wanted` itself, or something under it (`mail:perso` holds `mail:perso:<id>`)."""
+    return source == wanted or source.startswith(wanted + ":")
+
+
+def _pattern(markers: set[str]) -> re.Pattern[str]:
+    longest_first = sorted(markers, key=len, reverse=True)
+    return re.compile("(?:" + "|".join(map(re.escape, longest_first)) + ")" + _AFTER)
+
+
+def _mentions(event: Event, pattern: re.Pattern[str]) -> bool:
+    return pattern.search(str(event.payload)) is not None
 
 
 def trace(events: list[Event], source: str) -> Trace:
     result = Trace(source)
     live = [e for e in events if not e.redacted]
-    result.origins = [e for e in live if e.provenance.source.startswith(source)]
+    result.origins = [e for e in live if _owned_by(e.provenance.source, source)]
     if result.empty:
         return result
-    markers = _markers(result.origins, source)
+    pattern = _pattern(_markers(result.origins, source))
 
     # The turns that saw it, then the rest of each window, until the thread was rebased.
     seen: set[str] = set()
     for e in live:
         if e.correlation_id and (
-            (e.kind == MESSAGE_KIND and _mentions(e, markers))
-            or (e.kind == "initiative.triggered" and _mentions(e, markers))
+            (e.kind == MESSAGE_KIND and _mentions(e, pattern))
+            or (e.kind == "initiative.triggered" and _mentions(e, pattern))
         ):
             seen.add(e.correlation_id)
     tainted: set[str] = set()

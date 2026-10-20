@@ -146,3 +146,26 @@ async def test_the_live_voice_is_served_for_real(journal: SqliteJournal) -> None
             }
             await call.send(json.dumps({"event": "stop", "reason": "remote"}))
     assert items[0].text == "Salut Orion"
+
+
+def test_a_search_stops_walking_a_big_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A home folder full of caches answers fast instead of keeping the call waiting."""
+    import orion.hands.hand as hand_module
+
+    for i in range(30):
+        (tmp_path / f"note-{i}.txt").write_text("x")
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    (tmp_path / "node_modules" / "pkg" / "bail.txt").write_text("x")
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "bail.txt").write_text("x")
+    (tmp_path / "zz").mkdir()
+    (tmp_path / "zz" / "bail.txt").write_text("x")
+    hand = Hand(HandConfig("http://x", "mac", "s", [str(tmp_path)]))
+
+    found = hand.find_files("bail")
+    assert found["content"] == str(tmp_path / "zz" / "bail.txt")  # caches are not walked
+
+    monkeypatch.setattr(hand_module, "MAX_VISITED", 10)
+    assert hand.find_files("bail") == {"content": "", "truncated": True}
