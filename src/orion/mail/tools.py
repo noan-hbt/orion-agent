@@ -40,6 +40,10 @@ class MailSendInput(BaseModel):
     reply_to: str | None = Field(
         default=None, description="The card id (m_…) of the mail this answers, to thread it"
     )
+    closes: list[str] = Field(
+        default_factory=list[str],
+        description="Commitment ids (c_…) this mail fulfils: closed with the mail as proof",
+    )
 
 
 def mail_tools(mailbox: Mailbox, postman: Postman | None = None) -> list[Tool]:
@@ -74,7 +78,9 @@ def mail_tools(mailbox: Mailbox, postman: Postman | None = None) -> list[Tool]:
             return ToolResult(f"No mail card {args.reply_to}.", is_error=True)
         mail = Outgoing(to=args.to, cc=args.cc, subject=args.subject, body=args.body)
         try:
-            account, _ = await postman.send(mail, card, ctx.grant, ctx.correlation_id)
+            account, _ = await postman.send(
+                mail, card, ctx.grant, ctx.correlation_id, closes=args.closes
+            )
         except (SendError, GuardianUnavailableError) as exc:
             return ToolResult(f"Not sent: {exc}", is_error=True)
         return ToolResult(f"Envoyé depuis « {account} » à {', '.join(args.to)}.")

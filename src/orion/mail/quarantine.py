@@ -18,7 +18,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, cast
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -47,7 +47,15 @@ Reply with ONE JSON object and nothing else:
  "amount": number or null,
  "currency": "EUR" or another ISO code, or null,
  "summary": "at most 160 characters, in French, third person, factual: who wants what",
+ "commitment": null or {"by": "owner" | "sender",
+                        "what": "at most 100 characters, in French, starting with a verb",
+                        "due": "YYYY-MM-DD" or null},
  "suspicious": true | false}
+
+"commitment" is a promise this mail creates or reminds of: something the person must do
+("by": "owner", e.g. pay a bill, send a document, answer by Friday) or something the sender
+promised them ("by": "sender", e.g. deliver, refund, send a quote). null when there is none;
+never for ads or newsletters.
 
 "high" is for what the person would regret missing today (a real person waiting, a deadline,
 money, travel changes). Ads, newsletters and automated notifications are "low".
@@ -72,6 +80,19 @@ class Importance(StrEnum):
     HIGH = "high"
 
 
+class _Promise(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    by: Literal["owner", "sender"]
+    what: str = Field(min_length=3)
+    due: date | None = None
+
+    @field_validator("due", mode="before")
+    @classmethod
+    def _empty_is_none(cls, value: object) -> object:
+        return None if value in ("", "null") else value
+
+
 class _Answer(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -82,12 +103,25 @@ class _Answer(BaseModel):
     amount: float | None = Field(default=None, ge=0, le=10_000_000)
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
     summary: str = ""
+    commitment: _Promise | None = None
     suspicious: bool = False
+
+    @field_validator("commitment", mode="before")
+    @classmethod
+    def _unreadable_promise_is_none(cls, value: object) -> object:
+        return cast(dict[str, Any], value) if isinstance(value, dict) else None
 
     @field_validator("due", "amount", "currency", mode="before")
     @classmethod
     def _empty_is_none(cls, value: object) -> object:
         return None if value in ("", "null") else value
+
+
+@dataclass(frozen=True)
+class Promise:
+    by: Literal["owner", "sender"]
+    what: str
+    due: date | None = None
 
 
 @dataclass(frozen=True)
@@ -102,9 +136,22 @@ class Card:
     suspicious: bool
     read: Literal["model", "bulk", "failed"]
     """How the card was made: by the quarantine model, from headers alone, or not at all."""
+    promise: Promise | None = None
 
     def payload(self) -> dict[str, object]:
+        promise = self.promise
         return {
+            **(
+                {
+                    "promise": {
+                        "by": promise.by,
+                        "what": promise.what,
+                        "due": promise.due.isoformat() if promise.due else None,
+                    }
+                }
+                if promise
+                else {}
+            ),
             "category": self.category.value,
             "importance": self.importance.value,
             "needs_reply": self.needs_reply,
@@ -120,6 +167,15 @@ class Card:
     def from_payload(cls, payload: dict[str, object]) -> Card:
         due = payload.get("due")
         amount = payload.get("amount")
+        found = payload.get("promise")
+        promise: Promise | None = None
+        if isinstance(found, dict):
+            raw = cast(dict[str, Any], found)
+            promise = Promise(
+                "owner" if raw.get("by") == "owner" else "sender",
+                str(raw["what"]),
+                date.fromisoformat(str(raw["due"])) if raw.get("due") else None,
+            )
         return cls(
             category=Category(str(payload["category"])),
             importance=Importance(str(payload["importance"])),
@@ -130,6 +186,7 @@ class Card:
             summary=str(payload.get("summary", "")),
             suspicious=bool(payload.get("suspicious", False)),
             read=str(payload.get("read", "model")),  # type: ignore[arg-type]
+            promise=promise,
         )
 
 
@@ -188,4 +245,15 @@ class Quarantine:
             summary=_clip(answer.summary, SUMMARY_CHARS),
             suspicious=False,
             read="model",
+            promise=_promise(answer),
         )
+
+
+_PROMISING = {Category.PERSONAL, Category.WORK, Category.BILL, Category.TRAVEL, Category.DELIVERY}
+
+
+def _promise(answer: _Answer) -> Promise | None:
+    found = answer.commitment
+    if found is None or answer.category not in _PROMISING:
+        return None
+    return Promise(found.by, _clip(found.what, 100), found.due)

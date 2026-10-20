@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.mail.service import MailAccount, Mailbox, MailCard
+from orion.memory.model import CommitmentStatus
+from orion.memory.service import MemoryService, Origin
 
 ADDRESS = r"^[^@\s<>,;]+@[^@\s<>,;]+\.[^@\s<>,;]+$"
 
@@ -90,10 +92,17 @@ SENT = "mail.sent"
 class Postman:
     """Sends approved mail from the owner's account and journals it (`mail.sent`)."""
 
-    def __init__(self, journal: EventStore, mailbox: Mailbox, send: Send | None = None) -> None:
+    def __init__(
+        self,
+        journal: EventStore,
+        mailbox: Mailbox,
+        send: Send | None = None,
+        memory: MemoryService | None = None,
+    ) -> None:
         self._journal = journal
         self._mailbox = mailbox
         self._send = send or smtp_send
+        self._memory = memory
 
     def account(self, reply_to: MailCard | None) -> MailAccount | None:
         accounts = [a for a in self._mailbox.settings.accounts if a.smtp_host]
@@ -114,8 +123,10 @@ class Postman:
         reply_to: MailCard | None,
         grant: str | None,
         correlation_id: str | None = None,
+        closes: list[str] | None = None,
     ) -> tuple[str, str]:
-        """(account name, Message-ID)."""
+        """(account name, Message-ID). Commitments the mail fulfils are closed with it as
+        proof: those it names in `closes`, and what the owner owed the mail it answers."""
         account = self.account(reply_to)
         if account is None:
             raise SendError("no mail account can send (add smtp_host to one)")
@@ -140,4 +151,37 @@ class Postman:
                 )
             ]
         )
+        await self._fulfil(reply_to, closes or [], message_id, correlation_id)
         return account.name, message_id
+
+    async def _fulfil(
+        self,
+        reply_to: MailCard | None,
+        closes: list[str],
+        message_id: str,
+        correlation_id: str | None,
+    ) -> None:
+        if self._memory is None:
+            return
+        await self._mailbox.start()
+        owed = self._mailbox.state.promises.get(reply_to.id, []) if reply_to else []
+        wanted = set(closes) | set(owed)
+        if not wanted:
+            return
+        for commitment in await self._memory.store.commitments():
+            if (
+                commitment.id in wanted
+                and commitment.status is CommitmentStatus.OPEN
+                and (commitment.id in closes or commitment.debtor == "owner")
+            ):
+                await self._memory.close_commitment(
+                    commitment.id,
+                    CommitmentStatus.DONE,
+                    Origin(
+                        actor="orion:core",
+                        source=f"mail:sent:{message_id}",
+                        trust=Trust.SYSTEM,
+                        correlation_id=correlation_id,
+                    ),
+                    evidence=f"mail envoyé {message_id}",
+                )

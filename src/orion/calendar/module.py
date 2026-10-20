@@ -42,7 +42,7 @@ class CalendarModule(Module):
             plate.guardian.calendar_add if plate.guardian else None,
         )
         await self.calendar.start()
-        return calendar_tools(self.calendar)
+        return calendar_tools(self.calendar, plate.memory)
 
     async def serve(self, daemon: Daemon) -> None:
         calendar = self.calendar

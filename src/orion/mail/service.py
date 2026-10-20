@@ -28,6 +28,8 @@ from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert, DigestLine
 from orion.mail.imap import Batch, RawMail, fetch_since
 from orion.mail.quarantine import Card, Category, Importance, Quarantine
+from orion.memory.model import COMMITMENT_CREATED
+from orion.memory.service import MemoryService, Origin
 from orion.modules.base import ModuleSettings
 
 log = structlog.get_logger(__name__)
@@ -113,6 +115,8 @@ class MailState:
     cursors: dict[str, tuple[int, int]] = field(default_factory=dict[str, tuple[int, int]])
     """account → (uidvalidity, last uid read)"""
     synced: dict[str, datetime] = field(default_factory=dict[str, datetime])
+    promises: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    """card id → commitments it created (closed with proof when the owner answers)."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -122,6 +126,7 @@ class MailState:
         self.cards.clear()
         self.cursors.clear()
         self.synced.clear()
+        self.promises.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -141,6 +146,9 @@ class MailState:
                 message_id=str(payload.get("message_id", "")),
             )
             self.cards[card.id] = card
+        elif event.kind == COMMITMENT_CREATED and (event.correlation_id or "").startswith("m_"):
+            card = str(event.correlation_id)
+            self.promises.setdefault(card, []).append(str(payload["commitment_id"]))
         elif event.kind == SYNCED:
             account = str(payload["account"])
             self.cursors[account] = (int(payload["uidvalidity"]), int(payload["last_uid"]))
@@ -185,10 +193,12 @@ class Mailbox:
         timezone: str,
         fetch: Fetch | None = None,
         clock: Callable[[], datetime] | None = None,
+        memory: MemoryService | None = None,
     ) -> None:
         self._journal = journal
         self.settings = settings
         self._quarantine = quarantine
+        self._memory = memory
         self._zone = ZoneInfo(timezone)
         self._fetch = fetch or imap_fetch
         self._clock = clock or (lambda: datetime.now(self._zone))
@@ -265,9 +275,32 @@ class Mailbox:
         )
         await self._journal.append(events)
         await self._runner.catch_up()
+        for event in events:
+            if event.kind == CARD:
+                await self._promise(event.payload)
         if len(events) > 1:
             log.info("mail.synced", account=account, new=len(events) - 1)
         return len(events) - 1
+
+    async def _promise(self, payload: dict[str, Any]) -> None:
+        """A promise the mail carries joins the commitments ledger, marked as third-party."""
+        card = Card.from_payload(payload["card"])
+        if self._memory is None or card.promise is None or card.suspicious:
+            return
+        sender = str(payload["from_name"]) or str(payload["from_addr"])
+        owner_owes = card.promise.by == "owner"
+        await self._memory.add_commitment(
+            f"{card.promise.what} (d'après un mail de {sender})",
+            Origin(
+                actor="orion:quarantine",
+                source=f"mail:{payload['account']}:{payload['message_id']}",
+                trust=Trust.THIRD_PARTY,
+                correlation_id=str(payload["card_id"]),
+            ),
+            debtor="owner" if owner_owes else sender,
+            creditor=sender if owner_owes else "owner",
+            due=card.promise.due.isoformat() if card.promise.due else None,
+        )
 
     async def _card_event(self, account: str, mail: RawMail, correlation: str) -> NewEvent:
         card = await self._quarantine.card(mail)

@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.service import Calendar, describe_day
 from orion.calendar.write import CalendarWriteError, NewCalendarEvent
+from orion.core.events import Trust
 from orion.guardian.client import GuardianUnavailableError
+from orion.memory.model import CommitmentStatus
+from orion.memory.service import MemoryService, Origin
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 
@@ -31,6 +34,11 @@ class CalendarAddInput(BaseModel):
     end: datetime = Field(description="Local time, ISO")
     location: str = Field(default="", max_length=200)
     notes: str = Field(default="", max_length=1000)
+    closes: list[str] = Field(
+        default_factory=list[str],
+        description="Commitment ids (c_…) this event fulfils (e.g. 'book the dentist'): "
+        "closed with the event as proof",
+    )
 
 
 def local(moment: datetime, timezone: str) -> datetime:
@@ -38,7 +46,7 @@ def local(moment: datetime, timezone: str) -> datetime:
     return moment.replace(tzinfo=ZoneInfo(timezone)) if moment.tzinfo is None else moment
 
 
-def calendar_tools(calendar: Calendar) -> list[Tool]:
+def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> list[Tool]:
     async def agenda(args: Any, ctx: ToolContext) -> ToolResult:
         zone = ZoneInfo(ctx.timezone)
         try:
@@ -68,9 +76,22 @@ def calendar_tools(calendar: Calendar) -> list[Tool]:
             title=args.title, start=start, end=end, location=args.location, notes=args.notes
         )
         try:
-            account, _ = await calendar.add(event, ctx.grant, ctx.correlation_id)
+            account, occurrence = await calendar.add(event, ctx.grant, ctx.correlation_id)
         except (CalendarWriteError, GuardianUnavailableError) as exc:
             return ToolResult(f"Not added: {exc}", is_error=True)
+        if memory is not None:
+            for commitment_id in args.closes:
+                await memory.close_commitment(
+                    commitment_id,
+                    CommitmentStatus.DONE,
+                    Origin(
+                        actor="orion:core",
+                        source=f"calendar:{account}",
+                        trust=Trust.SYSTEM,
+                        correlation_id=ctx.correlation_id,
+                    ),
+                    evidence=f"événement ajouté : {occurrence.title}, {start:%d/%m %H:%M}",
+                )
         return ToolResult(f"Ajouté à l'agenda « {account} » : {args.title}, {start:%d/%m %H:%M}.")
 
     tools = [

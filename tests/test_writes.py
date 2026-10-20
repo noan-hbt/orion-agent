@@ -278,3 +278,49 @@ async def test_the_google_consent_gives_a_refresh_token() -> None:
         assert await google_refresh_token(http, "cid", "sec", back, "st8") == "r-1"
         with pytest.raises(CalendarWriteError, match="does not come from"):
             await google_refresh_token(http, "cid", "sec", back, "other")
+
+
+async def test_an_event_closes_the_commitment_it_fulfils(journal: SqliteJournal) -> None:
+    from orion.calendar.tools import calendar_tools
+    from orion.memory.model import CommitmentStatus
+    from orion.memory.service import MemoryService, Origin
+    from orion.memory.store import MemoryStore
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    owed = await memory.add_commitment(
+        "Prendre rendez-vous chez le dentiste",
+        Origin(actor="orion:core", source="imessage:owner", trust=Trust.OWNER),
+        debtor="owner",
+        creditor="owner",
+    )
+
+    async def write(account: str, event: NewCalendarEvent, grant: str | None) -> str:
+        return "u-1"
+
+    settings = CalendarSettings.model_validate(
+        {
+            "enabled": True,
+            "accounts": [
+                {
+                    "name": "perso",
+                    "url": {"env": "X"},
+                    "write": {
+                        "kind": "caldav",
+                        "url": "https://d/",
+                        "username": "n",
+                        "password": {"env": "P"},
+                    },
+                }
+            ],
+        }
+    )
+    calendar = Calendar(journal, settings, "Europe/Paris", None, lambda: START, write)
+    add = {t.name: t for t in calendar_tools(calendar, memory)}["calendar_add"]
+    args = add.parse(json.dumps({**DENTIST, "closes": [owed]}))
+    result = await add.handler(args, ToolContext("owner", "c1", grant="g"))
+    assert not result.is_error
+    [done] = await store.commitments(CommitmentStatus.DONE)
+    assert done.id == owed and "Dentiste, 23/10 14:00" in str(done.evidence)
+    await store.close()

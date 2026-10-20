@@ -37,12 +37,14 @@ class MailModule(Module):
             Quarantine(plate.provider, model),
             self.config.agent.timezone,
             self._fetch or (plate.guardian.mail if plate.guardian else None),
+            memory=plate.memory,
         )
         await self.mailbox.start()
         postman = Postman(
             plate.journal,
             self.mailbox,
-            self._send or (plate.guardian.mail_send if plate.guardian else None),
+            memory=plate.memory,
+            send=self._send or (plate.guardian.mail_send if plate.guardian else None),
         )
         return mail_tools(self.mailbox, postman)
 
