@@ -181,3 +181,24 @@ def test_a_long_answer_is_cut_at_paragraphs() -> None:
     long = "a" * 3000 + "\n\n" + "b" * 3000
     assert [len(p) for p in _parts(long)] == [3000, 3000]
     assert _parts("court") == ["court"]
+
+
+async def test_a_dropped_connection_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20/10 23:16: an approval never left because the network dropped an idle connection."""
+    import httpx
+
+    import orion.channels.telegram as telegram
+
+    monkeypatch.setattr(telegram, "RETRY_PAUSES", (0.0, 0.0))
+    tries: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        tries.append(request.url.path)
+        if len(tries) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 9}})
+
+    client = telegram.TelegramClient("t", transport=httpx.MockTransport(handle))
+    assert await client.send_message(1, "Oui ou non ?") == 9
+    assert len(tries) == 2
+    await client.aclose()

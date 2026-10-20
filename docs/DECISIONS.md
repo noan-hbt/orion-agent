@@ -2067,3 +2067,8 @@ Désormais :
   d'ailleurs : il cite les messages des autres ;
 - **les heures calmes ne retiennent plus Orion** quand le propriétaire a écrit il y a moins de
   20 minutes. Elles sont là pour son sommeil, pas pour interrompre une conversation.
+- **une connexion coupée par le réseau est réessayée** (`TelegramClient.call`, deux fois, après
+  0,5 puis 2 s) : le 20/10 à 23 h 16, une demande d'accord n'est jamais partie parce qu'une
+  connexion inactive avait été coupée, et l'action a été refusée. Seules les pannes de la
+  connexion elle-même sont réessayées, pas les refus de Telegram. La longue attente des messages
+  (`getUpdates`) reprend déjà d'elle-même.

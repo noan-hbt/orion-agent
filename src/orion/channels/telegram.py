@@ -87,6 +87,11 @@ class TelegramError(RuntimeError):
         self.retryable = retryable
 
 
+RECONNECT = (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.WriteError)
+"""Failures of the connection itself, before Telegram answered: worth one more try."""
+RETRY_PAUSES = (0.5, 2.0)
+
+
 class TelegramClient:
     """The Bot API, as little of it as Orion needs. The token is in every URL: errors never
     carry a URL, so it cannot reach a log."""
@@ -122,17 +127,31 @@ class TelegramClient:
         self, method: str, files: dict[str, tuple[str, bytes, str]] | None = None, **params: Any
     ) -> Any:
         url = self.method_url(method)
-        try:
-            if files:
-                data = {k: str(v) for k, v in params.items() if v is not None}
-                response = await self._client.post(url, data=data, files=files)
-            else:
-                body = {k: v for k, v in params.items() if v is not None}
-                response = await self._client.post(url, json=body)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            raise TelegramError(
-                f"{method}: transport error ({type(exc).__name__})", retryable=True
-            ) from None
+        attempt = 0
+        while True:
+            try:
+                if files:
+                    data = {k: str(v) for k, v in params.items() if v is not None}
+                    response = await self._client.post(url, data=data, files=files)
+                else:
+                    body = {k: v for k, v in params.items() if v is not None}
+                    response = await self._client.post(url, json=body)
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                # A connection the network dropped while idle (the 23:16 approval that never
+                # left, D98): tried again on a fresh one. The long poll retries on its own.
+                if (
+                    method != "getUpdates"
+                    and isinstance(exc, RECONNECT)
+                    and attempt < len(RETRY_PAUSES)
+                ):
+                    log.info("telegram.retry", method=method, error=type(exc).__name__)
+                    await asyncio.sleep(RETRY_PAUSES[attempt])
+                    attempt += 1
+                    continue
+                raise TelegramError(
+                    f"{method}: transport error ({type(exc).__name__})", retryable=True
+                ) from None
         try:
             answer = cast(dict[str, Any], response.json())
         except ValueError:
