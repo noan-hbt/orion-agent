@@ -66,7 +66,11 @@ class Router:
         raise last_error
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
-        provider, name = self._resolve(model)
+        try:
+            provider, name = self._resolve(model)
+        except ValueError as exc:
+            # Memory search falls back to words; an unreachable embedder must not stop Orion.
+            raise ProviderError(str(exc), retryable=False) from exc
         if not isinstance(provider, Embedder):
             raise ProviderError(f"provider {provider.name!r} cannot embed", retryable=False)
         return await provider.embed(name, texts)

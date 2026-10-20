@@ -1267,3 +1267,42 @@ nom (`config.xml`, pas un identifiant). Un `.php` téléchargé depuis un site n
 le site renvoie la page qu'il produit. Évaluation `envoie_moi_ce_xml` : 2/2 sur Haiku et 2/2 sur
 DeepSeek. L'arrivée d'un type quelconque (pas une image ni un PDF) sur l'iPhone via Inkbox reste
 à vérifier pour de vrai.
+
+## D62 — Le forfait ChatGPT du propriétaire comme fournisseur de modèles
+
+*20/10/2026 · acceptée*
+
+Orion peut faire ses appels de modèle sur le forfait ChatGPT (Plus ou Pro) du propriétaire, à
+la place d'OpenRouter ou à côté. C'est la voie officielle d'OpenAI, « Sign in with ChatGPT »,
+ouverte depuis fin septembre 2026 aux projets open source et personnels :
+- `orion chatgpt login` enregistre Orion auprès d'OpenAI (`client_id=dynamic_agent_client`,
+  puis l'identifiant attribué est gardé), avec un identifiant d'hôte `urn:uuid:…` (OpenAI
+  refuse un UUID nu). Le propriétaire se connecte dans son navigateur (OAuth, PKCE) et accorde
+  `chatgpt.tokens.use.direct`. La page de retour, sur 127.0.0.1, ne s'affiche pas sur un
+  serveur : il colle son adresse, le code qu'elle contient suffit.
+- Les jetons tournent à chaque rafraîchissement : ils ne peuvent pas vivre dans une variable
+  d'environnement. Ils sont écrits dans `data/chatgpt/` (dossier 0700, fichier 0600, écriture
+  atomique), jamais journalisés ni sauvegardés.
+- Un modèle `chatgpt:<modèle>` passe par l'API publique Responses d'OpenAI, en streaming et
+  sans stockage (`store: false`), comme l'exige OpenAI. Les messages restent au format chat
+  qu'Orion journalise ; ils sont traduits seulement à l'envoi, toujours de la même façon
+  (contrat du cache de prompt).
+
+On n'a pas pris la voie « Codex » de Hermes ou de Cline (l'identifiant OAuth du CLI Codex et le
+serveur privé `chatgpt.com/backend-api`) : OpenAI l'interdit désormais explicitement.
+
+Vérifié en vrai sur le forfait : appel d'outils aller-retour, images reçues, recherche web avec
+ses sources, réponse JSON. Limites constatées :
+- `temperature` est refusée, `max_output_tokens` aussi d'après la doc : on les ignore.
+- Le cache de prompt n'est pas appliqué : le serveur remplace `prompt_cache_key` à chaque
+  requête. Sans coût par jeton, cela ne coûte que de la latence.
+- Pas de génération d'images ni d'embeddings : `image_model` et `embedding_model` restent sur
+  OpenRouter, ou s'éteignent. Une demande d'image sur le forfait échoue, et le routeur passe
+  au modèle de secours.
+- Le coût d'un appel est compté zéro. La limite est le quota hebdomadaire du forfait : quand
+  il est épuisé (`subscription_sharing_usage_limit_exceeded`), l'appel échoue sans nouvel
+  essai, et le routeur passe au modèle de secours.
+- Le vérificateur devait venir d'une autre famille que le modèle principal. Sur le seul
+  forfait, ce sont deux modèles OpenAI différents : c'est moins bien.
+- OpenAI réserve les applications hébergées à distance à une liste d'attente. Orion n'a qu'un
+  utilisateur, son propriétaire, mais tourne sur un serveur : c'est une zone grise.

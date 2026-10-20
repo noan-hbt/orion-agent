@@ -240,6 +240,11 @@ class ChatGPTAuth:
             log.info("chatgpt.refreshed", expires_in=round(refreshed.expires_at - time.time()))
             return refreshed.access_token
 
+    def expire(self) -> None:
+        """The server refused the access token: the next call refreshes it."""
+        if self._current is not None:
+            self._current = self._current.model_copy(update={"expires_at": 0.0})
+
     def sign_out(self) -> bool:
         """Forgets the tokens; the plan stays linked until removed in ChatGPT's settings."""
         self._current = None

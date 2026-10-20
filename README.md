@@ -144,6 +144,8 @@ d'autres personnes.
   PDF ; il te l'envoie dans la conversation.
 - **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
   sur ton ordinateur, tel quel, jusqu'à 10 Mo.
+- **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
+  dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

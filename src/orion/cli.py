@@ -21,22 +21,41 @@ if TYPE_CHECKING:
 
 
 def _provider(config: OrionConfig) -> Router | None:
+    from orion.providers.base import ModelProvider
     from orion.providers.openrouter import OpenRouterProvider
     from orion.providers.router import Router
 
+    providers: dict[str, ModelProvider] = {}
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
-        print(f"Impossible de démarrer : {exc}")
-        return None
-    openrouter = OpenRouterProvider(
-        api_key.get_secret_value(),
-        config.providers.openrouter.base_url,
-        sort=config.providers.openrouter.sort,
-    )
+        if not config.providers.chatgpt.enabled:
+            print(f"Impossible de démarrer : {exc}")
+            return None
+    else:
+        providers["openrouter"] = OpenRouterProvider(
+            api_key.get_secret_value(),
+            config.providers.openrouter.base_url,
+            sort=config.providers.openrouter.sort,
+        )
+    if config.providers.chatgpt.enabled:
+        from orion.providers.chatgpt import ChatGPTProvider
+        from orion.providers.chatgpt_auth import ChatGPTAuth
+
+        auth = ChatGPTAuth(config.chatgpt_path)
+        if auth.load() is None:
+            print("Impossible de démarrer : pas connecté à ChatGPT (orion chatgpt login).")
+            return None
+        providers["chatgpt"] = ChatGPTProvider(
+            auth, default_effort=config.providers.chatgpt.reasoning_effort
+        )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
-    return Router({"openrouter": openrouter}, "openrouter", chains)
+    try:
+        return Router(providers, next(iter(providers)), chains)
+    except ValueError as exc:
+        print(f"Impossible de démarrer : {exc}")
+        return None
 
 
 def _inkbox(config: OrionConfig) -> InkboxClient | None:
@@ -488,6 +507,21 @@ async def _chatgpt(config: OrionConfig, args: argparse.Namespace) -> int:
                 else "Orion n'était pas connecté."
             )
             return 0
+        if args.chatgpt_command == "models":
+            import httpx
+
+            from orion.providers.base import ProviderError
+            from orion.providers.chatgpt import plan_models
+
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                try:
+                    models = await plan_models(auth, http)
+                except ProviderError as exc:
+                    print(f"Échec : {exc}")
+                    return 1
+            for slug, name in models:
+                print(f"chatgpt:{slug}  ({name})")
+            return 0
         if args.chatgpt_command == "status":
             known = auth.load()
             if known is None:
@@ -545,6 +579,15 @@ async def _doctor(config: OrionConfig) -> int:
         print("openrouter: api key present")
     except LookupError as exc:
         print(f"openrouter: {exc}")
+    if config.providers.chatgpt.enabled:
+        from orion.providers.chatgpt_auth import ChatGPTAuth
+
+        known = ChatGPTAuth(config.chatgpt_path).load()
+        if known is None:
+            print("chatgpt:    not signed in (orion chatgpt login)")
+        else:
+            plan = "plan use granted" if known.can_use_plan else "plan use NOT granted"
+            print(f"chatgpt:    {known.email or known.subject}, {plan}")
     if config.guardian.enabled:
         print(f"guardian:  {await _guardian_status(config)}")
     from orion.modules.base import ModuleError
@@ -682,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
         "--callback", default=None, help="The 127.0.0.1 address the browser was sent back to"
     )
     chatgpt_sub.add_parser("status", help="Who is signed in, and whether plan use is granted")
+    chatgpt_sub.add_parser("models", help="The models your plan offers")
     chatgpt_sub.add_parser("logout", help="Forget the tokens")
     hands = sub.add_parser("hands", help="Orion's hands on your machines (server side)")
     hands_sub = hands.add_subparsers(dest="hands_command", required=True)

@@ -56,6 +56,10 @@ class ChatGPTConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+        default="low",
+        description="How long the models think when a call asks nothing; none: the model's own",
+    )
 
 
 class ProvidersConfig(BaseModel):

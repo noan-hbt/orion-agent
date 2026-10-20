@@ -34,6 +34,14 @@ api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"
 sort = "throughput"              # the fastest host for the model ("latency", "price"; remove: none)
 
+# Your ChatGPT Plus or Pro plan (D62), through OpenAI's "Sign in with ChatGPT": run
+# `uv run orion chatgpt login` once, then name models `chatgpt:<model>` anywhere above, e.g.
+# model = "chatgpt:gpt-6-luna" (`orion chatgpt models` lists yours). Calls draw on the plan's
+# allowance, not on money. Not available through it: pictures (image_model) and embeddings.
+[providers.chatgpt]
+enabled = false
+reasoning_effort = "low"         # when a call asks nothing; "medium", "high"
+
 # iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
 # connect command it prints from your phone: Orion can only write to you after you wrote first.
 [channels.imessage]
