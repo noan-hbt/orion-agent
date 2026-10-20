@@ -79,6 +79,9 @@ class Interjection:
 
 
 Interjections = Callable[[], Awaitable[list[Interjection]]]
+Progress = Callable[[str, str], Awaitable[None]]
+"""(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
+mid-turn, instead of holding everything for the final answer."""
 
 
 class Orion:
@@ -129,6 +132,7 @@ class Orion:
         now: datetime | None = None,
         refs: list[str] | None = None,
         interjections: Interjections | None = None,
+        progress: Progress | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
         `refs` are the channel's own message ids, recorded so a restart knows they were handled.
@@ -148,6 +152,7 @@ class Orion:
             channel=channel,
             now=now,
             interjections=interjections,
+            progress=progress,
         )
 
     async def handle_initiative(
@@ -193,6 +198,7 @@ class Orion:
         memory_query: str | None = None,
         owner_text: str | None = None,
         interjections: Interjections | None = None,
+        progress: Progress | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -207,6 +213,7 @@ class Orion:
                 memory_query if memory_query is not None else body,
                 owner_text if owner_text is not None else body,
                 interjections,
+                progress,
             )
 
     async def _turn_locked(
@@ -222,6 +229,7 @@ class Orion:
         memory_query: str,
         owner_text: str,
         interjections: Interjections | None = None,
+        progress: Progress | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -364,6 +372,9 @@ class Orion:
                         ]
                     )
                 case ModelCalled(response=response):
+                    said = (response.text or "").strip()
+                    if progress is not None and response.tool_calls and said:
+                        await progress(said, correlation_id)
                     await self._journal.append(
                         [
                             self._event(

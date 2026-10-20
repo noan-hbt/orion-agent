@@ -185,3 +185,48 @@ async def test_a_message_sent_while_orion_works_joins_the_running_turn(
     assert received[1].payload["during_turn"] is True
     assert received[1].correlation_id == received[0].correlation_id
     assert_prefix_stable(provider)
+
+
+async def test_orion_can_say_a_word_before_it_has_finished(
+    journal: SqliteJournal, provider: ScriptedProvider
+) -> None:
+    """What Orion writes beside a tool call goes out at once; the answer follows."""
+    from orion.tools.builtin import builtin_tools
+
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry(builtin_tools()),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    inbox = OwnerInbox(orion, coalesce_seconds=0.01)
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(
+        call_tools(("current_time", {}), text="Je regarde l'heure."),
+        call_tools(("current_time", {})),  # nothing written beside it: nothing sent
+        reply("Il est 17h."),
+    )
+    worker = asyncio.create_task(inbox.run())
+    inbox.submit(Inbound("imessage", ("a",), "il est quelle heure ?"))
+    await until(lambda: len(imessage.sent) == 2)
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+    assert imessage.sent == ["Je regarde l'heure.", "Il est 17h."]
+    # Sent once, kept once: the conversation replays it as the model wrote it.
+    assert_prefix_stable(provider)
+
+
+async def test_a_turn_that_may_stay_silent_says_nothing_midway(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(call_tools(("nope", {}), text="Hmm, voyons."), reply("SILENCE"))
+    inbox.submit(Inbound("appel", ("c",), "…", reply_via="imessage", allow_silence=True))
+    await until(lambda: len(provider.requests) == 2)
+    await asyncio.sleep(0.05)
+    assert imessage.sent == []

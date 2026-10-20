@@ -161,6 +161,10 @@ class OwnerInbox:
                 for item in self._arrived_meanwhile(first)
             ]
 
+        async def progress(text: str, correlation_id: str) -> None:
+            if reply is not None and not first.allow_silence and not is_silence(text):
+                await reply.deliver(text, correlation_id)
+
         async with showing:
             turn = await self._orion.handle_owner_message(
                 OWNER_THREAD,
@@ -168,6 +172,7 @@ class OwnerInbox:
                 first.channel,
                 refs=[i for item in batch for i in item.message_ids],
                 interjections=interjections,
+                progress=progress,
             )
         thought = time.monotonic() - started
         text = turn.text.strip()
