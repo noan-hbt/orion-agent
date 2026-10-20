@@ -198,6 +198,8 @@ class Secretary:
         self.owner = owner
         self.zone = ZoneInfo(timezone)
         self.calendar = calendar
+        self.focus: Callable[[datetime], Awaitable[str | None]] | None = None
+        """The owner's focus, as a contact may be told it (the focus module)."""
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.contacts = {normalize_number(c.number): c for c in settings.contacts}
         self.state = SecretaryState()
@@ -285,7 +287,9 @@ class Secretary:
             + "</personne>",
         ]
         if "availability" in contact.share:
-            parts.append(f"<disponibilites>\n{self._busy(now)}\n</disponibilites>")
+            focused = await self.focus(now) if self.focus is not None else None
+            now_line = f"Maintenant : {focused}\n" if focused else ""
+            parts.append(f"<disponibilites>\n{now_line}{self._busy(now)}\n</disponibilites>")
         else:
             parts.append(f"(Tu ne peux pas dire quand {self.owner} est libre ou occupé.)")
         parts.append(f"<conversation>\n{lines}\n</conversation>")

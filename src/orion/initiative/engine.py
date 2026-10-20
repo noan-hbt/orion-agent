@@ -226,7 +226,7 @@ class Ledger:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
                 self.last_mention[str(item)] = day
-            if not payload.get("explicit"):
+            if not payload.get("explicit") and not payload.get("bundled"):
                 self.spent[day] = self.spent.get(day, 0) + 1
         self._seq = event.seq
 
@@ -340,9 +340,21 @@ class InitiativeEngine:
             self._settings = effective_settings(self._base, await self._memory.settings())
         now = self._clock().astimezone(self._zone)
         delivered: list[str] = []
+        ready: list[tuple[Candidate, str]] = []
         for candidate in await self._candidates(now):
-            if await self._process(candidate, now):
+            if candidate.explicit:
+                if await self._deliver(candidate, now, None):
+                    delivered.append(candidate.key)
+                continue
+            why_now = await self._admit(candidate, now)
+            if why_now is not None:
+                ready.append((candidate, why_now))
+        if len(ready) == 1:
+            candidate, why_now = ready[0]
+            if await self._deliver(candidate, now, why_now):
                 delivered.append(candidate.key)
+        elif ready:
+            delivered += await self._deliver_together(ready, now)
         return delivered
 
     async def _candidates(self, now: datetime) -> list[Candidate]:
@@ -495,29 +507,58 @@ class InitiativeEngine:
     async def _moment(self, now: datetime) -> Moment:
         return merge([await source.presence(now) for source in self._presence])
 
-    async def _process(self, candidate: Candidate, now: datetime) -> bool:
-        why_now: str | None = None
-        if not candidate.explicit:
-            reason = self._gate(candidate, now)
-            if reason is not None:
-                if reason != "quiet hours":
-                    self._waiting.pop(candidate.key, None)
-                    await self._record(SUPPRESSED, candidate, now, reason=reason)
-                return False
-            judgement = judge(
-                candidate.importance,
-                now,
-                await self._moment(now),
-                self.ledger.spent.get(now.date(), 0),
-                self._settings.daily_budget,
-                candidate.expires_at,
-                self._waiting.get(candidate.key),
-            )
-            if not judgement.now:
-                self._waiting.setdefault(candidate.key, now)
-                return False
-            self._waiting.pop(candidate.key, None)
-            why_now = judgement.reason
+    async def _admit(self, candidate: Candidate, now: datetime) -> str | None:
+        """The gate, then the arbiter: why it should go now, or None (dropped or waiting)."""
+        reason = self._gate(candidate, now)
+        if reason is not None:
+            if reason != "quiet hours":
+                self._waiting.pop(candidate.key, None)
+                await self._record(SUPPRESSED, candidate, now, reason=reason)
+            return None
+        judgement = judge(
+            candidate.importance,
+            now,
+            await self._moment(now),
+            self.ledger.spent.get(now.date(), 0),
+            self._settings.daily_budget,
+            candidate.expires_at,
+            self._waiting.get(candidate.key),
+        )
+        if not judgement.now:
+            self._waiting.setdefault(candidate.key, now)
+            return None
+        self._waiting.pop(candidate.key, None)
+        return judgement.reason
+
+    async def _deliver_together(
+        self, ready: list[tuple[Candidate, str]], now: datetime
+    ) -> list[str]:
+        """Several messages due at once (the owner's focus just ended, a break after a long
+        meeting): one message, most important first, that counts once against the budget."""
+        ready = sorted(ready, key=lambda pair: -pair[0].importance)
+        parts = [c for c, _ in ready]
+        joined = Candidate(
+            key=parts[0].key,
+            notice="Plusieurs choses l'attendaient. Un seul message, court, de la plus "
+            "importante à la moins importante :\n"
+            + "\n".join(f"- {c.notice} (pourquoi : {c.why})" for c in parts),
+            why="plusieurs choses t'attendaient",
+            fallback="\n".join(c.fallback for c in parts),
+            trust=min(c.trust for c in parts),
+            mentions=tuple(m for c in parts for m in c.mentions),
+            importance=parts[0].importance,
+        )
+        if not await self._deliver(joined, now, ready[0][1], together=parts[1:]):
+            return []
+        return [c.key for c in parts]
+
+    async def _deliver(
+        self,
+        candidate: Candidate,
+        now: datetime,
+        why_now: str | None,
+        together: Sequence[Candidate] = (),
+    ) -> bool:
         if not await self._notifier.available():
             if not self._unavailable_logged:
                 log.warning("initiative.no_channel", key=candidate.key)
@@ -529,13 +570,18 @@ class InitiativeEngine:
             return True
         text, how = await self._compose(candidate, now)
         if text is None:
-            await self._record(SUPPRESSED, candidate, now, reason="model chose silence")
+            for item in (candidate, *together):
+                await self._record(SUPPRESSED, item, now, reason="model chose silence")
             return False
         correlation_id = new_id()
         await self._notifier.notify(text, correlation_id)
         await self._record(
             DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
         )
+        for item in together:
+            await self._record(
+                DELIVERED, item, now, correlation_id=correlation_id, how="together", bundled=True
+            )
         if candidate.timer is not None:
             await self._timers.fired(candidate.timer.id, correlation_id)
         return True
@@ -614,6 +660,7 @@ class InitiativeEngine:
         correlation_id: str | None = None,
         how: str | None = None,
         arbiter: str | None = None,
+        bundled: bool = False,
     ) -> None:
         payload: dict[str, object] = {
             "key": candidate.key,
@@ -628,6 +675,8 @@ class InitiativeEngine:
             payload["how"] = how
         if arbiter is not None:
             payload["arbiter"] = arbiter
+        if bundled:
+            payload["bundled"] = True
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)
