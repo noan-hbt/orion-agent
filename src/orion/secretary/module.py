@@ -554,7 +554,22 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
             last = " / ".join(f"{'elle' if w == 'elle' else 'toi'} : {t[:80]}" for _, w, t in said)
             share = " (peut savoir quand il est libre)" if contact.share else ""
             lines.append(f"- {contact.name}{share}" + (f" — {last}" if last else ""))
-        return ToolResult("\n".join(lines) or "Aucun contact déclaré.")
+        known = "\n".join(lines) or "Aucun proche déclaré pour l'instant."
+        strangers = [
+            f"- {s.name} (telegram_id {s.user_id}), le "
+            f"{s.at.astimezone(secretary.zone):%d/%m à %H:%M} : « {s.text[:120]} »"
+            for s in sorted(secretary.state.strangers.values(), key=lambda s: s.at, reverse=True)
+            if f"telegram:{s.user_id}" not in secretary.contacts
+        ][:10]
+        others = (
+            "\nOnt écrit au bot sans être autorisés (pas de réponse ; à ajouter avec "
+            "`configure_change` s'il le veut) :\n" + "\n".join(strangers)
+            if strangers
+            else "\nPersonne d'autre n'a écrit au bot."
+        )
+        return ToolResult(
+            f"Le secrétaire est allumé.\nSes proches :\n{known}{others}", trust=Trust.THIRD_PARTY
+        )
 
     return [
         Tool(
@@ -572,7 +587,9 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
         ),
         Tool(
             name="contacts",
-            description="The people allowed to write to Orion, and their last messages.",
+            description="Who wrote to you besides him: the people allowed to (his contacts, "
+            "their last messages) and anyone who wrote to the bot without being let in, with "
+            "their Telegram id. Check here before saying nobody wrote.",
             input_model=ListInput,
             handler=listing,
             effect=Effect.NONE,

@@ -45,6 +45,9 @@ from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
 
+AWAKE = timedelta(minutes=20)
+"""The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
+
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
 _OWNER_SIDE = {"owner", "orion"}
@@ -646,12 +649,17 @@ class InitiativeEngine:
         await self._timers.fired(candidate.timer.id, correlation_id)
         return True
 
+    def _owner_is_up(self, now: datetime) -> bool:
+        """He wrote a moment ago: quiet hours are for his sleep, not for a conversation."""
+        wrote = getattr(self._orion, "owner_wrote_at", None)
+        return isinstance(wrote, datetime) and timedelta(0) <= now - wrote < AWAKE
+
     def _gate(self, candidate: Candidate, now: datetime) -> str | None:
         if not candidate.notice:
             return "nothing to say"
         if candidate.expires_at is not None and now > candidate.expires_at:
             return "missed its window"
-        if self._settings.is_quiet(now.time()):
+        if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
             return "quiet hours"
         if self.ledger.spent.get(now.date(), 0) >= self._settings.daily_budget:
             return "daily attention budget spent"

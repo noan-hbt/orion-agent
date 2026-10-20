@@ -2033,7 +2033,7 @@ outil ne fait : convertir un fichier, vérifier quelque chose, lancer un script.
 - elle s'arrête après son délai (`max_seconds` au plus), avec tout son groupe de processus. La
   sortie est bornée et compte comme du contenu venu d'ailleurs.
 
-## D97 — Un plan pendant le tour, et des messages en cours de route
+## D97 — Un plan pendant le tour
 
 *20/10/2026 · acceptée*
 
@@ -2043,11 +2043,27 @@ sans savoir où il en était. Désormais :
   à faire, en cours ou faite. Il renvoie la liste entière à chaque avancée : le plan vit dans la
   conversation, nulle part ailleurs, et se rejoue avec elle. Une seule étape en cours à la fois.
   `show` envoie le plan au propriétaire au départ ;
-- `tell` : un message court au propriétaire maintenant, pendant qu'Orion continue (« je regarde
-  les horaires »). Ce n'est jamais la réponse finale ;
-- ces deux outils passent **avant les autres appels de la même étape** : ce qu'ils disent part
-  avant qu'un outil lent tourne (événement `Told`). Leurs résultats restent dans l'ordre des
-  appels. Rien n'est envoyé quand personne n'attend (un tour d'initiative).
+- `plan` passe **avant les autres appels de la même étape** : le plan montré part avant qu'un
+  outil lent tourne (événement `Told`). Les résultats restent dans l'ordre des appels. Rien
+  n'est envoyé quand personne n'attend (un tour d'initiative).
 
-Le texte qu'Orion écrit à côté d'un appel d'outil était déjà envoyé ; `tell` le rend explicite,
-pour les modèles qui n'écrivent rien en appelant un outil.
+Le texte qu'Orion écrit à côté d'un appel d'outil est envoyé tout de suite. Un outil `tell`
+pour écrire en cours de route a été essayé, puis retiré à la demande du propriétaire.
+
+## D98 — Qui a écrit au bot ; les heures calmes quand il est réveillé
+
+*20/10/2026 · acceptée · corrige D91*
+
+Le 20/10 à 23 h 25, un ami du propriétaire a écrit au bot. Le message a bien été reçu, mais
+deux choses ont manqué :
+- l'alerte « quelqu'un a écrit au bot » attendait la fin des heures calmes (8 h), alors que le
+  propriétaire était en train de parler à Orion ;
+- quand il a demandé « tu as reçu des messages de Victor ? », `contacts` ne listait que les
+  proches déclarés. Orion a répondu « rien », puis a inventé que le secrétaire était éteint.
+
+Désormais :
+- **`contacts`** liste aussi ceux qui ont écrit au bot sans être autorisés, avec leur id, la
+  date et leur message, et dit que le secrétaire est allumé. Son contenu est du contenu venu
+  d'ailleurs : il cite les messages des autres ;
+- **les heures calmes ne retiennent plus Orion** quand le propriétaire a écrit il y a moins de
+  20 minutes. Elles sont là pour son sommeil, pas pour interrompre une conversation.

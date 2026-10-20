@@ -306,3 +306,28 @@ async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
     stranger = [a for a in await secretary.alerts(later) if "stranger" in a.key]
     assert len(stranger) == 1 and f"`telegram_id` = {STRANGER}" in stranger[0].notice
     assert "Noan" in stranger[0].notice  # FakeTelegram names everyone Noan
+
+
+async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
+    journal: SqliteJournal,
+) -> None:
+    from orion.core.events import NewEvent, Provenance, Trust
+
+    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    payload = {"type": "message", "is_owner": False, "chat_id": 777, "sender": 777,
+               "name": "Victor (@v)", "text": "ww", "date": 1_760_000_000, "ref": "telegram:777:1"}  # fmt: skip
+    await journal.append(
+        [
+            NewEvent(
+                kind="telegram.inbound",
+                payload=payload,
+                provenance=Provenance(source="telegram:777", actor="telegram"),
+                trust=Trust.THIRD_PARTY,
+            )
+        ]
+    )
+    tool = {t.name: t for t in secretary_tools(secretary, None)}["contacts"]
+    listed = await tool.handler(tool.parse("{}"), ToolContext("owner", "c"))
+    assert "Le secrétaire est allumé" in listed.content
+    assert "Victor (@v) (telegram_id 777)" in listed.content and "« ww »" in listed.content
+    assert listed.trust is Trust.THIRD_PARTY  # it quotes others' messages

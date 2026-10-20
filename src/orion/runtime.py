@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -160,6 +160,9 @@ class Orion:
         itself, D87): same input, same bytes, so the prompt cache holds."""
         self._agent = agent
         self.threads = ThreadProjection()
+        self.owner_wrote_at: datetime | None = None
+        """When the owner last wrote (this run): quiet hours do not hold Orion back while he
+        is up and talking (`initiative.engine`)."""
         self._projections = ProjectionRunner(journal, [self.threads])
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -193,6 +196,7 @@ class Orion:
         and their words never count as the owner's (`owner_text`). `sent_at`, when the channel
         knows it: a message that waited (Orion was down) says so, so the answer can too."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
+        self.owner_wrote_at = now or datetime.now(UTC)
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
             payload["refs"] = refs

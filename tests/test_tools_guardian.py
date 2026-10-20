@@ -35,7 +35,7 @@ async def test_current_time_uses_requested_timezone() -> None:
 
 def test_registry_is_sorted_and_rejects_duplicates() -> None:
     registry = ToolRegistry(builtin_tools())
-    assert [s.name for s in registry.specs()] == ["current_time", "plan", "tell"]
+    assert [s.name for s in registry.specs()] == ["current_time", "plan"]
     with pytest.raises(ValueError):
         ToolRegistry([*builtin_tools(), *builtin_tools()])
 

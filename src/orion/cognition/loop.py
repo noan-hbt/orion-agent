@@ -137,12 +137,12 @@ SWITCH_COST = "max_cost_usd"
 
 @dataclass(frozen=True)
 class Told:
-    """Words for the owner now, mid-turn (`tell`, a plan shown): the caller delivers them."""
+    """Words for the owner now, mid-turn (a plan shown): the caller delivers them."""
 
     text: str
 
 
-EARLY = ("tell", "plan")
+EARLY = ("plan",)
 """Run before a step's other calls, so what they tell leaves before a slow tool runs."""
 
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished

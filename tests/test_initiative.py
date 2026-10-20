@@ -264,3 +264,17 @@ def test_digest_lines_rules() -> None:
 def test_quiet_hours_wrap_midnight() -> None:
     assert SETTINGS.is_quiet(time(23, 0)) and SETTINGS.is_quiet(time(7, 59))
     assert not SETTINGS.is_quiet(time(8, 0)) and not SETTINGS.is_quiet(time(22, 29))
+
+
+def test_quiet_hours_do_not_hold_orion_back_while_the_owner_is_up() -> None:
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+
+    from orion.initiative.engine import InitiativeEngine
+
+    night = datetime(2026, 10, 20, 23, 30, tzinfo=ZoneInfo("Europe/Paris"))
+    engine = object.__new__(InitiativeEngine)
+    engine._orion = SimpleNamespace(owner_wrote_at=night - timedelta(minutes=5))  # pyright: ignore[reportAttributeAccessIssue]
+    assert engine._owner_is_up(night)  # pyright: ignore[reportPrivateUsage]
+    engine._orion = SimpleNamespace(owner_wrote_at=night - timedelta(hours=2))  # pyright: ignore[reportAttributeAccessIssue]
+    assert not engine._owner_is_up(night)  # pyright: ignore[reportPrivateUsage]

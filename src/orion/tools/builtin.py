@@ -5,9 +5,9 @@ cache, and the model never has to guess the date. Date arithmetic is left to the
 that take a date (`remind_me`) echo the exact weekday back so a mistake shows.
 
 During a long turn (D97), Orion keeps a plan (`plan`: every step with its status, the whole
-list each time, so the plan lives in the conversation and nowhere else) and tells the owner
-where it is without waiting for the end (`tell`). Both hand their words to the runtime through
-`TELL`, which delivers them now, on the channel the owner wrote from.
+list each time, so the plan lives in the conversation and nowhere else). Shown, the plan is
+handed to the runtime through `TELL`, which delivers it now, on the channel the owner wrote
+from.
 """
 
 from __future__ import annotations
@@ -49,16 +49,6 @@ async def _current_time(args: Any, ctx: ToolContext) -> ToolResult:
 TELL = "tell"
 """A tool result whose data holds text under this key: the runtime sends it to the owner now,
 mid-turn (nothing is sent when no one is waiting, e.g. an initiative turn)."""
-
-
-class TellInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=1, max_length=600, description="One or two short sentences")
-
-
-async def _tell(args: Any, _ctx: ToolContext) -> ToolResult:
-    return ToolResult("Dit. Continue.", data={TELL: args.text.strip()})
 
 
 class Step(BaseModel):
@@ -113,16 +103,6 @@ def builtin_tools() -> list[Tool]:
             description="Current date, weekday and time. Use it instead of guessing the date.",
             input_model=CurrentTimeInput,
             handler=_current_time,
-            **common,
-        ),
-        Tool(
-            name="tell",
-            description="Tell him something now, while you keep working: what you are about "
-            "to do when it will take a while (« je regarde les horaires, deux secondes »), or "
-            "a first finding before you go on. One short message, not one per step; never "
-            "your final answer.",
-            input_model=TellInput,
-            handler=_tell,
             **common,
         ),
         Tool(
