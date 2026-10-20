@@ -414,6 +414,15 @@ class Photos:
         log.info("photos.heard", attachment=kept.id, chars=len(heard))
         return replace(kept, description=heard, tag="vocal", spoken=True)
 
+    async def file(self, file_id: str) -> tuple[bytes, str, str] | None:
+        """A kept file's bytes, content type and stored name (the papers vault files it)."""
+        await self.sync()
+        kept = self._kept.files.get(file_id)
+        if kept is None:
+            return None
+        stored, content_type, _ = kept
+        return (self.folder / stored).read_bytes(), content_type, stored
+
     async def ask(self, file_id: str, question: str) -> str:
         await self.sync()
         kept = self._kept.files.get(file_id)

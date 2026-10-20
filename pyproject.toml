@@ -13,6 +13,7 @@ dependencies = [
     "pillow-heif>=1",
     "playwright>=1.56",
     "pydantic>=2.8,<3",
+    "pypdf>=6.21.1",
     "recurring-ical-events>=3",
     "starlette>=1.9,<2",
     "structlog>=24.1",

@@ -1505,3 +1505,27 @@ l'approbation existaient ; il manquait l'enchaînement. Le module `booking` (act
 - annuler retire les rappels ; le site est prévenu par une autre tâche d'envoi.
 
     booking.tracked  booking.confirmed  booking.failed  booking.cancelled
+
+## D74 — Le coffre de ses papiers
+
+*20/10/2026 · acceptée*
+
+Ce que le propriétaire envoie en photo ou en PDF est déjà gardé (D63). Le module `papers`
+(actif par défaut) en fait des papiers :
+- `papers` (file) range une pièce jointe, avec son type (carte d'identité, passeport, fiche
+  de paie, quittance, attestation d'assurance, RIB…), un libellé, son titulaire et ses dates.
+  Le fichier est copié dans le magasin de fichiers : un papier est un fichier comme un autre,
+  qu'Orion envoie au propriétaire (`file` send) ou joint à un mail (`mail_send`
+  `attachments`), que le propriétaire approuve ;
+- seul ce qui identifie le papier est journalisé (type, libellé, titulaire, dates), jamais
+  ses numéros. Ces champs viennent d'un document écrit par une administration ou un
+  employeur et lu par un modèle : confiance `THIRD_PARTY`. Oublier le fichier retire le
+  papier ;
+- une pièce d'identité, un titre de séjour, un permis ou une attestation d'assurance qui
+  expire déclenche une alerte trois mois, puis un mois avant ;
+- `papers` (dossier) fait un seul PDF (pypdf ; les images deviennent des pages) : une page
+  de garde qui dit ce qui y est et ce qui manque, puis les papiers dans l'ordre qu'attend un
+  bailleur (identité, trois fiches de paie, contrat ou attestation employeur, avis
+  d'imposition, justificatifs de domicile, RIB).
+
+    paper.filed  paper.removed

@@ -153,6 +153,9 @@ d'autres personnes.
   approuves le changement exact, ou tu le laisses faire seul.
 - **Tes rendez-vous** (D73) : « trouve-moi un dentiste après 18 h » ; il propose trois
   créneaux, réserve celui que tu choisis, et le met dans ton agenda avec ses rappels.
+- **Tes papiers** (D74) : envoie-lui ta carte d'identité, tes fiches de paie, ton
+  attestation d'assurance ; il les range, te prévient avant qu'ils expirent, les envoie sur
+  ton accord et prépare ton dossier de location en un PDF.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
