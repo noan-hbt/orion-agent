@@ -200,3 +200,13 @@ max_results = 6
 enabled = false
 # model = "anthropic/claude-haiku-5.5"   # the worker; defaults to agent.model
 max_steps = 30
+
+# The control page: memory, commitments, playbook, autonomy, activity, suspicious sources.
+# Served by the core on host:port; reach it through a one-time link Orion texts you (ask it),
+# or `orion console link`. Put it behind your HTTPS proxy and set public_url to use it from
+# your phone.
+[modules.console]
+enabled = false
+host = "127.0.0.1"
+port = 8790
+# public_url = "https://orion.example.com"

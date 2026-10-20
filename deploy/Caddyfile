@@ -1,5 +1,5 @@
-# Orion's public face: the Inkbox webhook (to the core) and the federation (to the guardian).
-# Nothing else is reachable from outside.
+# Orion's public face: the Inkbox webhook and the control page (to the core), the federation
+# (to the guardian). Nothing else is reachable from outside.
 @DOMAIN@ {
 	encode gzip
 
@@ -11,6 +11,10 @@
 	}
 	handle /a2a {
 		reverse_proxy 127.0.0.1:8788
+	}
+	# The control page: reachable only with a one-time link Orion sends you.
+	handle /console/* {
+		reverse_proxy 127.0.0.1:8790
 	}
 	handle {
 		respond 404

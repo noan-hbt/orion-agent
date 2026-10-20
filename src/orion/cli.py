@@ -249,6 +249,19 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _console_link(config: OrionConfig) -> int:
+    from orion.console.app import PREFIX
+    from orion.console.auth import Gate, session_key
+    from orion.console.module import ConsoleModule
+
+    module = ConsoleModule(config)
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        token = await Gate(journal, session_key(config.data_dir)).new_link()
+    print(f"{module.base_url()}{PREFIX}/login?t={token}")
+    print("(une seule fois, pendant 10 minutes)")
+    return 0
+
+
 async def _contain(config: OrionConfig, source: str, apply: bool, reason: str) -> int:
     from orion.initiative.timers import TimerProjection, Timers
     from orion.memory.provenance import Provenances
@@ -457,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
     google_auth.add_argument(
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
     )
+    console = sub.add_parser("console", help="The control page")
+    console_sub = console.add_subparsers(dest="console_command", required=True)
+    console_sub.add_parser("link", help="A one-time login link")
     contain = sub.add_parser(
         "contain", help="What depends on a suspicious source; --apply invalidates it"
     )
@@ -483,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "console":
+        return asyncio.run(_console_link(config))
     if args.command == "contain":
         return asyncio.run(_contain(config, args.source, args.apply, args.reason))
     if args.command == "google":

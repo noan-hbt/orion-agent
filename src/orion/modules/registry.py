@@ -19,6 +19,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
     from orion.computer.module import ComputerModule
+    from orion.console.module import ConsoleModule
     from orion.delegation.module import DelegationModule
     from orion.federation.module import FederationModule
     from orion.mail.module import MailModule
@@ -39,6 +40,7 @@ def builtin_modules() -> list[type[Module]]:
         WebModule,
         ComputerModule,
         OnboardingModule,
+        ConsoleModule,
     ]
 
 
