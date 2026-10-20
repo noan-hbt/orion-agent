@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from orion.calendar.service import Calendar, CalendarSettings, Fetch
@@ -18,16 +20,29 @@ class CalendarModule(Module):
     instructions = "calendar.md"
     settings_model = CalendarSettings
 
-    def __init__(self, config: OrionConfig, fetch: Fetch | None = None) -> None:
+    def __init__(
+        self,
+        config: OrionConfig,
+        fetch: Fetch | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         super().__init__(config)
         self._fetch = fetch
+        self._clock = clock
         self.calendar: Calendar | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         fetch = self._fetch or (plate.guardian.calendar if plate.guardian else None)
-        self.calendar = Calendar(plate.journal, self.settings, self.config.agent.timezone, fetch)
+        self.calendar = Calendar(
+            plate.journal,
+            self.settings,
+            self.config.agent.timezone,
+            fetch,
+            self._clock,
+            plate.guardian.calendar_add if plate.guardian else None,
+        )
         await self.calendar.start()
-        return calendar_tools(self.calendar)
+        return calendar_tools(self.calendar, plate.memory)
 
     async def serve(self, daemon: Daemon) -> None:
         calendar = self.calendar
@@ -36,6 +51,7 @@ class CalendarModule(Module):
         daemon.add_service("calendar.sync", calendar.run)
         daemon.alerts.append(calendar)
         daemon.digests.append(calendar)
+        daemon.presence.append(calendar)
 
     async def close(self) -> None:
         if self.calendar is not None:

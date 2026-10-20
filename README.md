@@ -77,6 +77,74 @@ d'autres personnes.
 
   `orion serve` ne garde que la clé du modèle, et refuse de démarrer s'il voit un autre secret.
 
+- **M7 v0 — les autres Orion** (D29) : ton Orion se relie à celui d'une autre personne par une
+  invitation à usage unique, échangée entre vous deux. Ensuite, « cale un déjeuner avec Paul la
+  semaine prochaine » suffit. Orion propose tes créneaux libres, et rien d'autre de ton agenda.
+  L'Orion de Paul choisit le premier qui lui va, et le soumet à Paul. Quand les deux ont dit oui,
+  le rendez-vous est noté de chaque côté. Les messages sont signés, et seul le gardien les
+  envoie ou les reçoit. Un Orion inconnu est refusé avant même d'être lu.
+
+- **Sur un serveur** (D30) : `deploy/install.sh` installe Orion sur un VPS (Caddy en HTTPS,
+  systemd, pare-feu). Le journal est sauvegardé chaque nuit (`orion backup`). Si le cœur tombe,
+  le gardien te prévient lui-même.
+- **Le web** (D31) : Orion cherche et lit des pages par un intermédiaire. Il n'ouvre que des
+  adresses que tu as données ou qu'une recherche a trouvées.
+- **Ses mains** (D32) : il ajoute des événements à ton agenda (Google ou CalDAV) et envoie des
+  mails depuis ton compte, chaque fois avec ton accord, le texte exact sous les yeux. Les
+  rendez-vous calés avec un autre Orion vont dans les deux agendas.
+- **Son ordinateur** (D33) : un navigateur isolé, pour les tâches qui passent par des sites. En
+  lecture seule, rien ne peut partir ; pour envoyer un formulaire, tu approuves la consigne.
+- **Faire connaissance** (D34) : une question par jour au plus, les premières semaines.
+- **Autonomie** (D35) : après plusieurs oui, Orion te propose une fois par mois de faire seul
+  une action. Un mot suffit pour la lui retirer.
+- **Proactivité v1** (D36) : il attend la fin d'une réunion pour ce qui peut attendre. Le
+  dimanche soir, il te dit ce qu'il a failli te dire.
+- **Engagements v1** (D37) : les promesses lues dans tes mails rejoignent tes engagements. Elles
+  se clôturent avec une preuve (mail envoyé, événement ajouté).
+- **Provenance** (D38) : « comment tu sais ça ? » a une réponse. Un mail piégé se met en
+  quarantaine avec tout ce qu'il a touché.
+- **Console** (D39) : une page pour voir et corriger ce qu'il sait et fait. Demande-lui le lien.
+- **Voix v1** (D40) : au téléphone, c'est Orion lui-même qui répond, avec sa mémoire et ses
+  outils pendant l'appel.
+- **Mains sur tes appareils** (D41) : `orion hand` sur ton Mac ou ton PC. Il peut t'envoyer des
+  notifications et trouver ou lire des fichiers dans les dossiers que tu partages.
+- **Il conduit son navigateur** (D42) : il ouvre une page, la lit, clique, utilise la recherche
+  d'un site, et décide de chaque étape lui-même. Rien ne part de ce navigateur.
+- **Une boucle qui finit proprement** (D43) : à court d'étapes ou de budget, il te dit où il en
+  est. Quand une longue conversation sort de sa fenêtre, il en garde un résumé.
+- **Un modèle plus fort quand c'est dur** (D46) : il consulte Opus pour une question
+  difficile, ou passe dessus pour la fin du tour.
+- **Des missions** (D47) : « trouve-moi un appart » devient un but qu'il poursuit seul pendant
+  des jours ; il ne t'écrit que s'il y a du neuf, et retient ce que tu écartes.
+- **Une bibliothèque** (D48) : tes notes et documents gardés entiers, et toute votre
+  conversation, datée et retrouvable.
+- **Agir sur tes comptes, dans tes limites** (D49) : des mails ou des formulaires seul, mais
+  seulement aux destinataires et sur les sites que tu as nommés ; tes sessions connectées
+  restent chez le gardien, prêtées pour une tâche approuvée.
+- **Des photos** (D50) : envoie-lui une affiche, une ordonnance, un ticket ou une capture
+  d'écran ; il la lit, texte compris, et fait ce qu'elle appelle (agenda, rappel,
+  bibliothèque, réponse). Ce qui est écrit sur une photo n'est jamais un ordre.
+- **Il continue de penser** (D51) : la nuit, il repense à ce qui est resté ouvert et ne te
+  revient le matin que s'il a trouvé du neuf. Il te demande comment s'est passé ton entretien,
+  ton rendez-vous, ta visite.
+- **La chronique** (D52) : chaque dimanche soir, la page de ta semaine, écrite pour toi et
+  gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir. Une fois par mois, ce qu'il
+  a vu revenir au fil des semaines (D58).
+- **Tes intentions** (D53) : ce que tu veux devenir (courir plus, dépenser moins). Il les
+  garde en tête, te le dit quand tu t'en éloignes, et fait le point chaque semaine.
+- **Le secrétaire** (D54, à activer) : les proches que tu choisis peuvent écrire à Orion. Il
+  leur répond sans rien savoir de ta vie (au plus, tes créneaux occupés), te transmet ce qui
+  compte, et ne leur écrit en premier qu'avec ton accord.
+- **Les gens de ta vie** (D56) : avant de voir quelqu'un, ce qui compte sur lui ; les
+  anniversaires à temps ; et un mot quand ça fait trop longtemps que tu n'as pas vu quelqu'un
+  qui compte.
+- **Rappels de lieu** (D57, à activer) : « quand je passe à la boulangerie ». Ton iPhone ne
+  lui dit que le nom du lieu où tu arrives, pour les lieux que tu as choisis.
+- **Des fichiers** (D60) : demande-lui une image, une capture de la page qu'il regarde ou un
+  PDF ; il te l'envoie dans la conversation.
+- **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
+  sur ton ordinateur, tel quel, jusqu'à 10 Mo.
+
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
 
@@ -110,6 +178,21 @@ https://…` et place la clé de signature affichée dans `INKBOX_SIGNING_KEY`.
 Mets `[guardian] enabled = true`. Ensuite, lance `orion guardian`, avec les secrets d'Inkbox,
 des agendas et du mail, et `orion serve`, avec la seule clé OpenRouter. Le mieux est de les
 lancer sous deux utilisateurs différents : voir [`deploy/`](deploy/).
+
+### Relier ton Orion à celui de quelqu'un
+
+Il faut le gardien séparé, le module `calendar` et `[federation] enabled = true`, avec une adresse
+publique en HTTPS (`public_url`, un proxy inverse devant `listen_port`). Ensuite :
+
+```bash
+uv run orion federation keygen            # la clé va dans l'environnement du gardien
+# sous l'utilisateur du gardien, une fois `orion guardian` lancé :
+uv run orion federation invite --name Paul    # donne le code à Paul
+uv run orion federation accept <code> --name Paul   # ou accepte le sien
+uv run orion federation peers             # ton empreinte et tes Orion reliés
+```
+
+Vérifiez vos empreintes de vive voix.
 
 ## Documentation
 

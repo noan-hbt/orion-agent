@@ -33,7 +33,9 @@ def reply(text: str, *, prompt_tokens: int = 100, cached: int = 0, cost: float =
     return make
 
 
-def call_tools(*calls: tuple[str, dict[str, object]], cost: float = 0.0001) -> Script:
+def call_tools(
+    *calls: tuple[str, dict[str, object]], cost: float = 0.0001, text: str = ""
+) -> Script:
     def make(request: ModelRequest) -> ModelResponse:
         offset = len(request.messages)
         tool_calls = [
@@ -42,7 +44,7 @@ def call_tools(*calls: tuple[str, dict[str, object]], cost: float = 0.0001) -> S
         ]
         message: Message = {
             "role": "assistant",
-            "content": "",
+            "content": text,
             "tool_calls": [
                 {
                     "id": c.id,
@@ -54,7 +56,7 @@ def call_tools(*calls: tuple[str, dict[str, object]], cost: float = 0.0001) -> S
         }
         return ModelResponse(
             message=message,
-            text="",
+            text=text,
             tool_calls=tool_calls,
             finish_reason="tool_calls",
             usage=Usage(prompt_tokens=100, cost_usd=cost),

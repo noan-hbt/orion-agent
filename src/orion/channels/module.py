@@ -131,7 +131,8 @@ class IMessageModule(Module):
             triage = await self.client.triage_number()
             log.warning(
                 "imessage.owner_not_connected",
-                hint=f"text '{triage.connect_command}' to {triage.number} from {cfg.owner_number}",
+                hint=f"text '{triage.command_for(cfg.identity)}' to {triage.number} "
+                f"from {cfg.owner_number}",
             )
 
     async def close(self) -> None:

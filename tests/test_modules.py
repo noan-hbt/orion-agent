@@ -106,6 +106,16 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
     assert [m.name for m in load(both, THIRD_PARTY)] == [
         "adaptation",
         "consolidation",
+        "files",
+        "onboarding",
+        "expert",
+        "missions",
+        "library",
+        "photos",
+        "thinking",
+        "chronicle",
+        "intentions",
+        "relations",
         "weather",
         "desk",
     ]
@@ -140,7 +150,11 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
             "inbox",
             "adaptation",
             "consolidation",
+            "missions.work",
+            "thinking.night",
+            "chronicle.week",
             "weather.watch",
+            "autonomy.ritual",
             "initiative",
         ]
         assert daemon.reports == [app.module(Weather)]

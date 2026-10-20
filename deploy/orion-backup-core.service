@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up Orion's core journal (everything else is rebuilt from it)
+
+[Service]
+Type=oneshot
+User=orion-core
+Group=orion
+WorkingDirectory=/srv/orion
+ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml backup /srv/orion/backups/core --keep 30
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/orion/backups/core /srv/orion/data

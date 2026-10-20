@@ -11,6 +11,8 @@ in French; code, identifiers and comments are in English.
 - `uv run ruff format . && uv run ruff check .` — format and lint
 - `uv run pyright` — strict type check (must stay at 0 errors)
 - `uv run orion doctor` — check config and storage
+- `uv run python -m evals` — behavioural evaluations on the real model (costs cents; `--model`,
+  `--case`, `--repeat`, `--offline`). Add a case when Orion gets something wrong for real.
 
 ## Rules
 

@@ -3,7 +3,7 @@ Unix socket, in front of the in-memory Inkbox."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,14 +42,20 @@ class Running:
 
 @asynccontextmanager
 async def running_guardian(
-    config: OrionConfig, fake: FakeInkbox | None = None, **kwargs: Any
+    config: OrionConfig,
+    fake: FakeInkbox | None = None,
+    prepare: Callable[[GuardianService], None] | None = None,
+    **kwargs: Any,
 ) -> AsyncGenerator[Running]:
+    """`prepare` runs before the app is built (the federation edge installs its routes)."""
     fake = fake or FakeInkbox()
     async with SqliteJournal(
         config.guardian_ledger_path, HybridClock(f"{config.instance}-guardian")
     ) as journal:
         service = GuardianService(config, Ledger(journal), fake.client(), **kwargs)
         await service.start()
+        if prepare is not None:
+            prepare(service)
         app = service.app()
         client = GuardianClient(lambda: httpx.ASGITransport(app=app))
         try:

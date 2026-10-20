@@ -653,3 +653,617 @@ raisonnement de l'agent.
   sont refusées.
 - Le mode à un seul processus reste disponible (`enabled = false`, par défaut). Il est commode
   pour essayer Orion, mais n'offre pas ces garanties.
+
+## D29 — M7 v0 : deux Orion calent un rendez-vous
+
+*19/10/2026 · acceptée · réalise D8 et D13 pour un premier cas*
+
+**Identité.** Chaque instance a une clé Ed25519 (`orion federation keygen`). Elle vit seulement
+dans l'environnement du gardien, et la fédération exige donc le gardien séparé (D28). Le gardien
+publie une carte d'agent A2A (`/.well-known/agent-card.json`), qui contient l'instance, la clé
+publique et une empreinte courte à lire à voix haute.
+
+**Présentation entre humains.** Personne ne peut écrire à ton Orion sans y avoir été invité.
+- Tu crées une invitation : `orion federation invite --name Paul`. Elle vaut une seule fois,
+  pendant 7 jours. Tu donnes le code à Paul de la main à la main ou par message.
+- Paul l'accepte : `orion federation accept <code> --name Noan`. Son Orion se présente au tien,
+  signé, avec le jeton.
+- Chacun épingle la clé et l'adresse de l'autre. La relation porte des compétences ;
+  `scheduling` est la seule pour l'instant.
+- Ces commandes demandent le jeton d'administration du gardien. Il est rangé dans son dossier,
+  que le noyau ne peut pas lire. Un noyau compromis ne peut donc pas relier ton Orion à un
+  inconnu.
+- Une relation se révoque avec `orion federation revoke`.
+
+**Le fil.** Chaque message est une enveloppe signée qui couvre tous les champs : expéditeur,
+destinataire, type, négociation, heure, corps. Elle voyage comme un `message/send` JSON-RPC
+d'A2A, avec une partie de données. La couche de transport est isolée dans
+`orion.federation.wire`, pour suivre la spécification A2A au fur et à mesure qu'elle se fixe. Les
+corps de message sont typés et bornés : le seul texte libre est un titre de 80 caractères.
+
+**Le gardien, seul à parler aux autres Orion.**
+- **À l'entrée**, il vérifie dans l'ordre :
+  - que l'expéditeur est un pair actif et que la signature correspond à sa clé épinglée ;
+  - que le message t'est bien destiné ;
+  - l'horloge, à ±10 min près ;
+  - qu'il ne s'agit pas d'un rejeu (chaque id une seule fois) ;
+  - que le type est permis par la relation et que le corps est bien formé ;
+  - un quota par pair.
+
+  Ce qui passe va dans son registre, et le noyau vient le chercher. Ce qui ne passe pas est
+  refusé avant toute lecture, et journalisé.
+- **À la sortie**, il signe et n'envoie qu'à l'adresse épinglée d'un pair, en HTTPS. Il
+  n'envoie que ce que le propriétaire a accepté :
+  - une **proposition** exige son approbation, que le gardien vérifie lui-même (D28) : même
+    pair, même titre, même durée, même fenêtre, et chaque créneau dans la fenêtre ;
+  - une **acceptation** exige l'approbation de ce créneau, pour une proposition réellement reçue
+    qui le contenait ;
+  - une **confirmation** doit correspondre à la proposition approuvée et à l'acceptation reçue ;
+  - un **refus** ne révèle rien, et ne peut que répondre à une proposition reçue.
+
+**Le négociateur est du code, pas un modèle** (`orion.federation.meetings`). Ce qu'envoie un
+autre Orion est une donnée que le code vérifie : rien ne peut y orienter une décision. Le
+déroulé :
+1. Tu demandes à Orion de caler un rendez-vous (`meeting_propose` : avec qui, quoi, combien de
+   temps, dans quelle fenêtre). Tu approuves la proposition.
+2. Ton Orion envoie au plus 8 créneaux libres de cette fenêtre, au plus 2 par jour, à 2 h
+   d'écart minimum, dans tes heures (`meeting_start`, `meeting_end`, `weekends`). Un créneau
+   est libre s'il ne chevauche ni tes événements visibles ni un rendez-vous déjà calé. Rien
+   d'autre de ton agenda ne part.
+3. L'Orion de Paul garde le premier de ces créneaux qui est libre pour lui, et le soumet à Paul.
+   S'il n'y en a aucun, il refuse sans le déranger.
+4. Paul dit oui : l'acceptation part, ton Orion confirme. De chaque côté, le rendez-vous devient
+   un engagement daté du propriétaire (avec l'alerte qui précède), et un compte rendu passe par
+   le moteur d'initiative. Les deux signatures sont gardées comme reçus.
+
+**Confiance.** Ce qui vient d'un autre Orion est `TRUSTED_PEER`, en dessous du plancher
+`SYSTEM`. Ses comptes rendus contaminent donc la conversation comme un mail (D26), et
+l'engagement garde cette confiance. Les agendas sont en lecture seule : le compte rendu
+rappelle d'ajouter le rendez-vous à son agenda.
+
+**Pas encore.**
+- Contre-propositions et expiration des propositions sans réponse.
+- Mandats et capacités Biscuit : la relation porte pour l'instant une simple liste de
+  compétences.
+- Négociateur à modèle pour des cas plus ouverts (un prix, un lieu).
+- Instances d'un même propriétaire (`OWNER_INSTANCE`).
+- Écriture dans l'agenda.
+
+## D30 — Sur un serveur : installation, sauvegardes, le gardien veille sur le cœur
+
+*20/10/2026 · acceptée*
+
+Orion tourne sur un VPS (OVH chez le propriétaire). `deploy/install.sh` installe tout sur une
+Debian ou une Ubuntu neuve : deux utilisateurs, Caddy en HTTPS, systemd, pare-feu. Caddy ne
+laisse passer que le webhook Inkbox, la voix en direct, les mains et la console (vers le cœur),
+et la fédération (vers le gardien). Le webhook remplace le polling.
+
+- **Sauvegardes** : `orion backup` fait une copie SQLite en ligne du journal, vérifiée
+  (`integrity_check`), avec rotation. Un timer par nuit pour le cœur, un pour le gardien. Le
+  journal suffit : tout le reste se reconstruit.
+- **Le cœur ne peut pas dire qu'il est mort** : il envoie un battement au gardien chaque
+  minute. Après 5 minutes de silence, le gardien écrit lui-même au propriétaire, une fois, puis
+  quand le cœur repart.
+
+## D31 — Le web, par un intermédiaire
+
+*20/10/2026 · acceptée*
+
+Module `web` : `web_search` et `web_read`. Le modèle d'Orion ne lit jamais une page : un appel
+séparé, sans outils ni mémoire, répond à sa question sous une forme bornée (comme la quarantaine
+du mail). Le résultat porte `Trust.WEB`.
+
+- La recherche passe par la recherche web du fournisseur (plugin `web` d'OpenRouter) : aucun
+  compte de plus. Seules les pages réellement citées reviennent : l'intermédiaire ne peut pas
+  inventer d'adresse.
+- **Une URL est aussi un moyen de faire sortir des données** (`?q=<secrets>`). Orion n'ouvre
+  donc que les adresses que le propriétaire a écrites, qu'une recherche a renvoyées, ou que
+  l'intermédiaire a choisies sur une page lue. Les adresses privées sont refusées, à chaque
+  redirection.
+
+## D32 — Les mains d'Orion : agenda, mail, rendez-vous fédérés
+
+*20/10/2026 · acceptée*
+
+- `calendar_add` écrit en CalDAV (iCloud, Fastmail, Nextcloud) ou dans Google Agenda (jeton
+  obtenu par `orion google auth`). Aucun invité : personne n'est prévenu au nom du
+  propriétaire. L'événement s'affiche tout de suite, et reste tant que le flux iCal ne le montre
+  pas encore (Google a des heures de retard).
+- `mail_send` envoie en SMTP depuis le compte du propriétaire, dans le fil quand c'est une
+  réponse.
+- Le gardien rédige lui-même la demande d'accord : l'événement exact, le mail mot pour mot.
+  Il ne laisse passer que ce qui a été approuvé, une fois.
+- Répondre à un mail se fait forcément dans une conversation qui contient du contenu tiers. Ces
+  outils acceptent donc ce contexte (révise D26 pour eux seuls) : la demande d'accord le dit, et
+  le propriétaire voit tout.
+- Un rendez-vous que les deux Orion ont signé va dans les deux agendas sans second accord. Le
+  gardien le vérifie sur la confirmation qu'il a lui-même signée ou reçue.
+
+## D33 — L'ordinateur d'Orion
+
+*20/10/2026 · acceptée*
+
+Module `computer` : un Chromium sans écran (Playwright), avec un profil neuf à chaque tâche,
+conduit par un agent qui ne voit que la consigne. Il n'a accès ni à la mémoire ni à la
+conversation, et son compte rendu revient comme contenu du web.
+
+Les règles sont appliquées par la couche réseau, pas par le modèle :
+- aucune adresse privée ;
+- en lecture seule (`computer_task`), toute requête autre que GET ou HEAD est coupée, donc rien
+  ne part ;
+- une tâche qui doit envoyer (`computer_task_send`) fait approuver sa consigne exacte.
+
+Il remplace la délégation au CLI `claude`, qui dépend de ce qui est installé.
+
+## D34 — Faire connaissance
+
+*20/10/2026 · acceptée*
+
+Module `onboarding`, actif par défaut. Pendant trois semaines, Orion pose une question par jour
+au plus. Elle passe par le moteur d'initiative : heures calmes, budget et vérificateur
+s'appliquent. Jamais dans les 90 minutes qui suivent un message du propriétaire, et jamais sur
+ce que la mémoire sait déjà. `onboarding_stop` arrête tout.
+
+## D35 — Une autonomie qui se gagne
+
+*20/10/2026 · acceptée*
+
+Une action soumise à accord peut devenir une action qu'Orion fait seul :
+- seulement pour les actions listées dans `[guardian] autonomable` (par défaut `calendar_add`) ;
+- seulement dans une conversation sans contenu tiers ;
+- dans la limite d'un plafond quotidien tenu par le gardien.
+
+Après 5 accords de suite, Orion le propose au plus une fois par mois, à une heure calme. Le
+gardien rédige la question, vérifie le oui et enregistre l'autonomie lui-même. `autonomy_revoke`
+la retire d'un mot. Orion doit la rendre au premier regret du propriétaire.
+
+## D36 — Proactivité v1 : un arbitre et « ce que j'ai failli te dire »
+
+*20/10/2026 · acceptée*
+
+Après le portail (heures calmes, budget, expiration), un arbitre décide si le message vaut d'être
+envoyé maintenant :
+- l'urgence est l'importance du message, qui monte quand l'échéance approche et à mesure qu'il
+  attend ;
+- le dérangement coûte plus pendant un événement de l'agenda et quand le budget s'épuise, et
+  moins juste après la fin d'un événement.
+
+Un message qui peut attendre attend un meilleur moment : il n'est pas jeté, et le verdict est
+journalisé. Le dimanche soir, Orion dit ce qu'il a gardé pour lui dans la semaine.
+
+## D37 — Engagements v1
+
+*20/10/2026 · acceptée*
+
+La fiche de quarantaine relève la promesse que porte un mail (ce que le propriétaire doit, ou ce
+qu'on lui doit), jamais pour une publicité. Elle devient un engagement marqué contenu tiers.
+Répondre à ce mail clôt ce que le propriétaire lui devait, avec le mail envoyé comme preuve.
+`mail_send` et `calendar_add` clôturent les engagements qu'ils nomment (`closes`).
+
+## D38 — La provenance au travail
+
+*20/10/2026 · acceptée*
+
+`contain_source` et `orion contain` partent d'une source suspecte et rassemblent :
+- ses propres événements ;
+- les tours où elle a atteint le modèle ;
+- la suite de chaque fenêtre de conversation, jusqu'à ce qu'elle reparte à neuf ;
+- tout ce qui en dérive.
+
+L'outil montre d'abord la liste, puis invalide ce qui est encore actif : souvenirs,
+engagements, rappels, règles. Rien n'est effacé, à la différence de l'oubli. Ce qui est déjà
+parti est seulement listé. `provenance` remonte la lignée d'un souvenir ou d'un engagement.
+
+## D39 — La console
+
+*20/10/2026 · acceptée*
+
+Module `console` : une page HTML simple, servie par le cœur, lisible sur un téléphone. On y voit
+et corrige la mémoire, les engagements, le manuel et l'autonomie. On y suit l'activité (ce
+qu'Orion a fait, ce qu'il a tu, et pourquoi) et les sources suspectes.
+
+- **Entrée** : un lien à usage unique de 10 minutes, qu'Orion envoie (`console_link`), devient
+  un cookie signé HttpOnly, Secure et SameSite=Strict.
+- **Corrections** : chacune est un événement du propriétaire dans le journal, le même que
+  celui des outils.
+
+## D40 — Voix v1 : Orion au téléphone
+
+*20/10/2026 · acceptée · révise D23*
+
+Avec `[voice] live`, les appels avec le propriétaire passent par le flux média d'Inkbox. Inkbox
+écoute et parle. Chaque phrase du propriétaire passe par la boîte de réception (canal `voix`)
+sur son fil, avec la même mémoire et les mêmes outils, et la réponse est lue tout de suite. Une
+formule d'attente couvre les réponses lentes.
+
+Seul un flux signé avec le numéro du propriétaire entre. Le gardien ne diffuse un appel que vers
+l'adresse d'Orion, et seulement avec le propriétaire. Les appels aux autres gardent la voix
+hébergée et leur accord.
+
+## D41 — Les mains sur les appareils du propriétaire (D1)
+
+*20/10/2026 · acceptée*
+
+`orion hand` tourne sur un appareil du propriétaire et appelle le serveur : aucun port n'est
+ouvert sur l'appareil.
+- **Appairage** : un code à usage unique ; seules des empreintes sont journalisées.
+  `orion hands revoke` coupe un appareil.
+- **Actions** : typées, jamais un shell, et chaque main vérifie ce que son appareil permet :
+  - notification ;
+  - recherche et lecture de fichiers dans les dossiers partagés (chemins résolus, taille
+    plafonnée) ;
+  - ouverture d'une page, avec accord.
+- **Confiance** : le contenu d'un fichier reste sous la pleine confiance.
+
+## D42 — Orion conduit lui-même son navigateur (révise D33)
+
+*20/10/2026 · acceptée*
+
+Le navigateur n'est plus seulement confié à un agent à part : Orion l'ouvre et le conduit
+depuis sa propre boucle, page par page (`browser_open`, `browser_click`, `browser_type`,
+`browser_select`, `browser_scroll`, `browser_back`, `browser_read`, `browser_close`). Il décide
+de chaque action avec ce qu'il sait déjà, et la conversation garde le fil. Un navigateur par
+conversation, fermé après dix minutes sans usage.
+
+Le contexte d'Orion contient la vie du propriétaire, donc trois règles tiennent, quoi que dise
+une page :
+- **Lecture seule** au niveau du réseau : rien ne part, aucun formulaire envoyé. Envoyer reste
+  à `computer_task_send`, dont le propriétaire approuve la consigne.
+- **Adresses** : seulement celles que le propriétaire a écrites, qu'une recherche a trouvées
+  ou qu'une page ouverte propose en lien. Jamais une adresse inventée, qui pourrait porter ses
+  données dans la requête.
+- **Frappe** : seulement des mots du message auquel Orion répond. Une recherche envoyée par GET
+  est aussi une sortie : une page ne peut pas lui faire taper un numéro, même donné plus tôt.
+
+Chaque page vue est journalisée en confiance `WEB` avec la source `web:<adresse>` : la
+provenance la retrouve et peut la contenir (D38). `computer_task` reste pour les longues
+tâches en arrière-plan.
+
+## D43 — La boucle, comparée à celle de Claude Code
+
+*20/10/2026 · acceptée*
+
+Comparée à la boucle documentée de Claude Code (sa source n'est pas publiée ; seule la
+documentation officielle a servi), celle d'Orion avait déjà : outils en lecture lancés en
+parallèle, contrôle de chaque appel, messages du propriétaire lus en cours de tour, budgets,
+détection des appels répétés, reprises et modèles de secours. Trois écarts sont comblés :
+- **Une limite donne une réponse** : quand un tour atteint ses étapes, ses appels, son coût
+  ou se répète, un dernier appel au modèle, outils déclarés mais interdits (même préfixe en
+  cache), dit au propriétaire ce qui est fait et ce qui reste. Les appels coupés par un budget
+  reçoivent un résultat « non exécuté » : l'historique restait sinon mal formé.
+- **Le rebase résume ce qu'il laisse** : comme la compaction de Claude Code, les tours de
+  confiance qui sortent de la fenêtre sont résumés dans le nouveau message, journalisé tel
+  quel. Les tours non fiables ne sont pas résumés : ce serait porter leurs consignes au-delà.
+- **Des limites pour travailler** : 40 étapes et 80 appels par tour ; le coût et les
+  répétitions sont les vrais freins.
+
+Restent hors de ce lot : la réponse en continu (utile surtout pour la voix) et l'effacement
+des anciens résultats d'outils, qui casserait le contrat de cache tel qu'il est écrit.
+
+## D44 — Trois idées reprises d'OpenClaw
+
+*20/10/2026 · acceptée · complète D43*
+
+La comparaison avec OpenClaw (MIT, code lu dans le dépôt) en apporte trois :
+- **Alléger sans perdre le cache.** Après dix minutes sans message, le cache du fournisseur a
+  expiré de toute façon : les vieux résultats d'outils volumineux (plus de 2 000 caractères,
+  avant les deux derniers échanges) sont alors montrés réduits à leur début. C'est un
+  événement `thread.pruned` du journal, comme un rebase : la projection se reconstruit, et le
+  journal garde chaque message entier. Le contrat de cache tient, le préfixe ne change qu'après
+  une pause.
+- **Lire le propriétaire avant de continuer.** Quand il écrit pendant un tour, les appels
+  d'outils pas encore lancés sont sautés avec un résultat « non exécuté, lis son message ». Un
+  appel en cours n'est jamais interrompu, et chaque appel garde sa réponse.
+- **Un dernier regard avant d'oublier.** Les tours de confiance qu'un rebase sort de la fenêtre
+  passent une dernière fois par l'extracteur de mémoire, en plus du résumé (D43).
+
+Orion fait aussi des petits messages en cours de tour : ce que le modèle écrit à côté d'un
+appel d'outil part tout de suite, par la même sortie que la réponse.
+
+## D45 — Des évaluations tirées des vraies conversations
+
+*20/10/2026 · acceptée*
+
+`uv run python -m evals` rejoue des moments du journal avec le vrai modèle et les vrais
+outils : la configuration de production sans canaux, sans gardien et sans voix, dans un
+répertoire neuf, l'horloge déplacée au moment du cas. Tout ce qui demande un accord est refusé
+et noté. Les vérifications portent d'abord sur ce qu'Orion a fait (rappels posés, outils
+utilisés), ensuite sur ce qu'il a dit. Un juge d'une autre famille de modèles répond par oui
+ou non sur le ton.
+
+Les tests unitaires prouvent que le code fait ce qu'il dit ; les évaluations disent si Orion se
+comporte bien. Elles coûtent quelques centimes et ne sont pas déterministes : `--repeat` mesure
+la stabilité, `--model` compare les modèles sur les mêmes cas. Chaque vrai raté devient un cas.
+
+## D46 — Un modèle plus fort, à la demande d'Orion
+
+*20/10/2026 · acceptée*
+
+Le modèle du quotidien est rapide et peu cher. Quand c'est difficile, Orion choisit lui-même :
+- `consult_expert` pose une question au modèle fort (par défaut Claude Opus 5.5), avec le
+  contexte qu'Orion lui donne ; la réponse revient comme résultat d'outil, jamais plus fiable
+  que ce contexte, et le tour reste sur le modèle du quotidien ;
+- `think_harder` fait passer la suite du tour sur le modèle fort, avec son propre plafond de
+  coût. La conversation ne change pas : chaque requête prolonge encore la précédente.
+
+Les deux sont journalisés avec leur coût et plafonnés par jour (`[modules.expert]`).
+
+## D47 — Les missions
+
+*20/10/2026 · acceptée*
+
+Un but qui prend des jours (trouver un appartement, guetter un prix) devient une mission :
+Orion y travaille seul, à son rythme, chaque fois dans le fil de la mission, qui garde la
+mémoire de ce qu'il a fait. Ce qu'il trouve n'arrive au propriétaire que s'il y a du neuf, par
+le moteur d'initiative (heures calmes, budget, arbitre). `mission_seen` dit ce qui est neuf,
+donc rien n'est signalé deux fois ; ce que le propriétaire écarte est gardé avec son motif, et
+les passages suivants le lisent. Le dossier d'une mission n'est jamais plus fiable que les
+pages qu'elle a notées.
+
+## D48 — Le second cerveau : la bibliothèque
+
+*20/10/2026 · acceptée*
+
+À côté de la mémoire (des faits), la bibliothèque garde entiers les textes que le propriétaire
+confie (notes, fichiers de son ordinateur, pages) et toute la conversation, datée. On y
+cherche par les mots et par le sens (FTS5 et embeddings, fusionnés par rang, comme la
+mémoire), et on retrouve « ce que je disais de ça en août ». L'index est une projection du
+journal. Un document revient comme contenu du propriétaire, sous la pleine confiance ; une
+ancienne réponse garde la confiance qu'elle avait. `orion library import <dossier>` importe
+un dossier de notes.
+
+## D49 — Agir dans le monde : des délégations bornées, des sessions prêtées
+
+*20/10/2026 · acceptée · complète D35*
+
+- **Limites** : une autonomie peut porter des limites que le propriétaire fixe en l'accordant
+  (destinataires, sites), vérifiées en code par le gardien et par le cœur. Envoyer un mail ou
+  un formulaire seul ne s'accorde qu'avec elles : jamais un inconnu, jamais un site non nommé.
+  Le cœur ne peut pas élargir ce que le propriétaire a approuvé.
+- **Sites** : une tâche qui envoie peut être limitée à des sites ; ailleurs, le navigateur
+  bloque tout envoi.
+- **Sessions** : pour agir sur un compte du propriétaire, le gardien garde la session (les
+  cookies), comme les mots de passe. Il la prête pour une tâche approuvée (cette session, ce
+  texte exact, une seule fois), ou faite seule sur des sites couverts par l'autonomie. Le cœur
+  ne la garde qu'en mémoire, le temps de la tâche, et chaque prêt est noté.
+
+Pas de paiement : la consigne de l'agent l'arrête avant tout paiement, sauf si le texte
+approuvé dit explicitement de payer.
+
+## D50 — Les photos
+
+*20/10/2026 · acceptée*
+
+Module `photos`, actif par défaut. Le propriétaire envoie une photo par iMessage : une affiche,
+une ordonnance, un ticket, une capture d'écran.
+- **Regardée une fois** : un modèle qui voit (Gemini Flash, qui lit le HEIC de l'iPhone) la
+  décrit à son arrivée, avec tout le texte qu'elle porte. Le modèle de tous les jours ne reçoit
+  que cette description : il n'a pas besoin de voir, et une image rejouée à chaque requête
+  pèserait sur chaque tour. Le contrat du cache tient.
+- **Du contenu, pas des ordres** : le message qui porte une photo est journalisé sous
+  `OWNER_INSTANCE`, comme un fichier lu sur l'ordinateur du propriétaire. Les règles du contenu
+  venu d'ailleurs s'appliquent (D26) : il propose, le propriétaire approuve. Les mots de la
+  photo ne comptent jamais comme ceux du propriétaire (ils ne peuvent pas être tapés dans un
+  site, ni extraits en mémoire comme s'il les avait dits).
+- **Gardée** : le fichier reste dans le dossier de données (0600), et `photo_look` repose une
+  question précise sur un détail. Le journal ne garde que la description et une empreinte.
+  Oublier la conversation oublie la photo : le fichier est supprimé dès qu'aucun événement ne
+  le nomme plus.
+- **Lien qui expire** : Inkbox donne un lien valable une heure ; après un redémarrage, le
+  message est relu pour en obtenir un neuf.
+
+## D51 — Il continue de penser, il prend des nouvelles
+
+*20/10/2026 · acceptée*
+
+Module `thinking`, actif par défaut. Un assistant s'arrête quand la conversation s'arrête ;
+Orion, non.
+- **La nuit** (5 h par défaut), un modèle fort (Opus) relit la journée avec le propriétaire et
+  ce qu'il sait de lui. Pour chaque question restée ouverte (une décision, un problème, une
+  hésitation), il réfléchit, et ne garde une pensée que si elle apporte du neuf. Deux par nuit
+  au plus. Elles arrivent le matin comme une pensée qui lui est venue.
+- **Promettre d'y réfléchir** : `think_later`. Une question promise reçoit toujours une
+  réponse, même « je maintiens », et en plus des deux pensées de la nuit.
+- **Prendre des nouvelles** : après un moment qui compte (entretien, médecin, visite, examen),
+  Orion demande une fois comment ça s'est passé, quelques heures après. Il le prévoit pendant la
+  conversation (`follow_up`), ou la lecture de nuit le trouve. La réponse reste dans la
+  conversation, et la mémoire en garde l'issue.
+
+Tout passe par le moteur d'initiative : heures calmes, budget, vérificateur, et `SILENCE` si
+la question a été réglée entre-temps. La nuit ne relit que les tours de confiance : ce que
+disait une page, un mail ou une photo n'oriente jamais sa réflexion. Les dates des moments
+sont demandées en absolu, calculées depuis la date de chaque message, et refusées si elles sont
+passées ou à plus de 90 jours.
+
+## D52 — La chronique
+
+*20/10/2026 · acceptée*
+
+Module `chronicle`, actif par défaut. Chaque dimanche à 19 h, Orion écrit la page de la
+semaine du propriétaire, à la deuxième personne, entre 120 et 350 mots : ce qui s'est passé, ce
+qu'il a décidé ou laissé en suspens, les gens, ce qui l'occupait. Rien d'inventé, et pas de
+tableau de bord : un texte qu'on a envie de lire.
+- Elle lui est envoyée par le moteur d'initiative, et rangée dans la bibliothèque (« Ma semaine
+  du 19 octobre 2026 »), où `library_search` la retrouve. `chronicle` relit la page de
+  n'importe quelle semaine.
+- La page de la même semaine, l'an dernier, est donnée à l'auteur : il les relie quand le
+  rapprochement dit quelque chose.
+- Comme la nuit (D51), seuls les tours de confiance sont lus. Une semaine de moins de six
+  échanges n'a pas de page.
+
+## D53 — Ses intentions
+
+*20/10/2026 · acceptée*
+
+Module `intentions`, actif par défaut. Un engagement est une tâche ; une intention est ce que
+le propriétaire veut devenir (courir plus, dépenser moins, voir plus sa mère).
+- **En vue** : chaque intention est aussi un fait de profil en mémoire. Orion l'a sous les yeux
+  au début de chaque conversation et la retrouve quand un message la touche. Il peut donc dire
+  « tu m'avais dit vouloir… » au moment où ça compte, une fois, puis laisser décider.
+- **Notée** : ce qui arrive (`intention_note`, tenu ou écart), quand le propriétaire en parle.
+- **Le point** : chaque semaine (ou au rythme choisi), à 18 h 30, Orion fait le point avec ce
+  qui a été noté. Il le dit simplement si ça avance, franchement si ça décroche, et demande ce
+  qui coince, sans morale. Ça passe par le moteur d'initiative.
+
+Orion propose de suivre une intention plutôt que de le décider seul : la suivre est une forme
+d'attention qu'on accepte.
+
+## D54 — Le secrétaire
+
+*20/10/2026 · acceptée*
+
+Module `secretary`, désactivé par défaut. Le propriétaire nomme dans sa configuration les
+proches qui peuvent écrire à Orion, avec, pour chacun, qui il est et ce qu'Orion peut lui dire
+(`share = ["availability"]` : quand il est libre ou occupé). « Noan est libre jeudi soir ? »
+reçoit une réponse. Un message est pris. Ce qui est urgent lui arrive tout de suite, le reste
+dans un point.
+
+La sécurité vient de ce que le secrétaire n'a pas :
+- c'est un appel de modèle à part, sans outils, qui ne voit ni la mémoire ni la conversation du
+  propriétaire. Il voit seulement qui est le contact, leur conversation, et, si c'est permis,
+  les créneaux occupés (jamais leur titre ni leur lieu). Une manipulation n'a rien d'autre à
+  obtenir ;
+- il n'engage le propriétaire à rien : ni rendez-vous, ni promesse, il transmet ;
+- le gardien n'envoie qu'aux contacts configurés, dans leur propre conversation (vérifiée
+  auprès d'Inkbox), dans les 12 heures qui suivent leur dernier message, et quelques fois par
+  jour. Orion répond, il ne commence jamais seul ;
+- pour écrire le premier ou transmettre une réponse (`contact_message`), il faut l'accord du
+  propriétaire, et le gardien vérifie ce oui sur le texte exact ;
+- `orion inkbox setup` ouvre la ligne aux contacts sur iMessage seulement : ils ne peuvent pas
+  appeler la voix d'Orion, qui connaît la vie du propriétaire.
+
+Un contact doit d'abord écrire à Orion (la commande de connexion d'Inkbox) : Inkbox n'ouvre une
+conversation qu'à l'initiative du destinataire.
+
+## D55 — Tous les modèles se changent dans la configuration
+
+*20/10/2026 · acceptée*
+
+Aucun nom de modèle n'est écrit dans le code hors de `config.py`, et un test le vérifie. La
+section `[agent]` nomme les modèles partagés :
+- `model` : le modèle de tous les jours ;
+- `extractor_model` : le travail de fond ;
+- `verifier_model` : la relecture des messages qu'Orion envoie de lui-même ;
+- `strong_model` : l'expert, la réflexion de nuit, la chronique ;
+- `vision_model` : les photos ;
+- `summary_model` et `reflection_model` : ils reprennent `extractor_model` s'ils sont vides ;
+- `fallback_models` : les modèles de secours.
+
+Chaque module peut nommer le sien dans sa section, et c'est lui qui l'emporte. Les modèles de
+secours s'appliquent désormais à chacun de ces modèles, plus seulement aux deux premiers.
+
+## D56 — Les gens de sa vie
+
+*20/10/2026 · acceptée*
+
+Module `relations`, actif par défaut. La mémoire connaît les personnes (D27) ; ce module rend
+Orion attentif à elles.
+- **Avant une rencontre** : un événement de l'agenda dont le titre nomme quelqu'un que la
+  mémoire connaît, ou une rencontre que le propriétaire mentionne (`meeting_soon`). Orion lui
+  rappelle ce qui compte : ce qui se passe dans la vie de la personne, les engagements dans un
+  sens ou dans l'autre. La veille au soir pour un rendez-vous du matin, le matin pour un
+  rendez-vous plus tard. `SILENCE` s'il ne sait rien d'utile.
+- **Anniversaires** (`person_birthday`) : trois jours avant, pour penser à quelque chose, et le
+  jour même, avec une idée tirée de ce qu'il sait.
+- **Garder le lien** (`keep_in_touch`, `saw_someone`) : pour les gens qu'il veut voir souvent,
+  Orion dit quand ça fait trop longtemps, une fois par semaine au plus, avec une idée concrète
+  plutôt qu'un reproche.
+
+Le message est écrit par le moteur d'initiative à partir de la fiche de la personne : rien
+d'inventé, et la confiance du message est celle des faits qu'il cite.
+
+## D57 — Les rappels de lieu
+
+*20/10/2026 · acceptée*
+
+Module `places`, désactivé par défaut (il faut régler le téléphone). « Quand je passe à la
+boulangerie » devient `remind_at_place`. Une automatisation Raccourcis de l'iPhone (arrivée ou
+départ d'un lieu) envoie à Orion le seul nom du lieu choisi par le propriétaire, avec un jeton
+(`orion places token`) dont le journal ne garde que l'empreinte. Ni coordonnées ni trajet :
+Orion ne sait que ce que le propriétaire a décidé de lui dire, et un signal du téléphone est
+une information (`OWNER_INSTANCE`), pas un ordre.
+
+Le rappel part tout de suite, heures calmes ou non, comme un rappel à heure fixe : il a été
+demandé. Il part une fois, et les noms se rapprochent sans exiger l'exactitude
+(« boulangerie » = « Boulangerie Paul »).
+
+## D58 — Ce qu'il remarque, ses goûts
+
+*20/10/2026 · acceptée · complète D52 et D56*
+
+- **Ce qu'il remarque** : le premier dimanche du mois, le modèle de la chronique relit les pages
+  des cinq dernières semaines. Il en tire au plus trois choses qui reviennent : une habitude, un
+  sujet, une humeur, un progrès, une chose remise à plus tard. Une remarque doit s'appuyer sur au
+  moins deux semaines, sans psychologie de comptoir ni leçon, et rien quand rien ne revient. Elle
+  arrive le lendemain, pas le soir de la page.
+- **Les goûts** : ce que le propriétaire ou ses proches aiment et n'aiment pas (cuisine, lieux,
+  films, musique, cadeaux, marques), et ce qu'ils ont écarté et pourquoi, sont des faits
+  durables pour l'extracteur de mémoire. Pour un cadeau ou un resto, Orion part de là.
+
+## D59 — Un outil par domaine
+
+*20/10/2026 · acceptée*
+
+Orion avait 64 outils, et environ 80 avec tous les modules : beaucoup de petites variantes
+(`mission_start`, `mission_note`, `missions`…) entre lesquelles le modèle doit choisir. Les
+variantes d'un même domaine deviennent les actions d'un seul outil (`orion.tools.actions`) :
+`mission`, `library`, `intention`, `follow_up`, `relations`, `places`, `commitments`,
+`reminders`, `playbook`, `people`, `browser`. Il en reste 33 avec la configuration d'essai. Le
+modèle choisit d'abord le domaine, puis l'action, que la description liste avec ses paramètres.
+
+- Chaque action garde son modèle d'entrée, son traitement, son effet et sa règle de confiance.
+  Le gardien juge chaque appel selon l'action demandée (`Tool.effect_for`) : lister reste une
+  lecture, même dans une conversation qui contient un mail.
+- Restent à part les gestes fréquents (`remember`, `recall`, `remind_me`, `web_search`), et
+  toute action dont le gardien vérifie l'accord par son nom (`mail_send`, `calendar_add`,
+  `computer_task_send`, `contact_message`, l'autonomie) : ce nom est ce sur quoi le oui du
+  propriétaire est vérifié.
+- La liste reste fixe et triée : le contrat du cache tient.
+
+Le banc d'essai complet a tourné avant et après, sur Haiku et DeepSeek, deux fois par cas.
+
+## D60 — Orion envoie des fichiers
+
+*20/10/2026 · acceptée*
+
+Module `files`, actif par défaut. Le propriétaire peut demander un fichier plutôt que des mots.
+- **Image** : faite par le modèle d'images (`agent.image_model`).
+- **PDF** : Orion rédige le texte (titres, paragraphes, listes), et le même Chromium sans écran
+  que son navigateur l'imprime, sans réseau ni JavaScript.
+- **Capture** : `browser` (screenshot) prend la page affichée, la partie visible ou la page
+  entière.
+- **Envoi** : `file` (send) l'envoie dans la conversation du propriétaire avec une légende. La
+  boîte d'envoi journalise le chemin du fichier, jamais son contenu, et un envoi interrompu
+  reprend avec la même clé. Inkbox reçoit le fichier (10 Mo au plus), puis le message qui le
+  porte.
+
+Le gardien laisse passer l'envoi d'un fichier vers Inkbox, puisque cet envoi ne fait encore
+rien partir. Il vérifie ensuite le message qui le porte comme les autres, et refuse un fichier
+pour qui que ce soit d'autre que le propriétaire. Une capture d'une page reste du contenu du
+web (`Trust.WEB`). Oublier la conversation oublie le fichier.
+
+## D61 — N'importe quel fichier, tel quel (révise D60)
+
+*20/10/2026 · acceptée*
+
+Orion peut joindre n'importe quel fichier, de n'importe quel type, jusqu'à 10 Mo, et toujours
+au propriétaire seul. Trois nouvelles sources dans `file` :
+- **download** : un fichier du web, octet pour octet, à une adresse que le propriétaire a donnée
+  ou qu'une recherche a trouvée. C'est la règle du module web : une adresse inventée pourrait
+  faire sortir des données. Les adresses privées restent refusées, même après une redirection.
+  `web.downloaded` journalise l'adresse, le type et la taille, jamais le contenu.
+- **server** : un fichier du serveur d'Orion, par son chemin. Le chemin est résolu (liens
+  suivis), puis refusé s'il mène au dossier du gardien, à sa socket, à `/proc`, `/sys` ou
+  `/dev` (`/proc/self/environ` contient la clé du modèle), ou à un fichier `.env`. Dans un
+  contexte qui contient du contenu non fiable, le propriétaire approuve d'abord. En
+  production, le système de fichiers protège déjà le reste, puisque le cœur tourne sous son
+  propre utilisateur.
+- **device** : un fichier d'un dossier partagé sur une machine du propriétaire, grâce à la
+  nouvelle action `get_file` de `orion hand`. Elle est active par défaut pour une nouvelle
+  main ; une main déjà appairée doit l'ajouter à `actions` dans son `hand.json`.
+
+Chaque fichier est rangé dans son propre dossier, sous son vrai nom, pour qu'il arrive sous ce
+nom (`config.xml`, pas un identifiant). Un `.php` téléchargé depuis un site n'est pas sa source :
+le site renvoie la page qu'il produit. Évaluation `envoie_moi_ce_xml` : 2/2 sur Haiku et 2/2 sur
+DeepSeek. L'arrivée d'un type quelconque (pas une image ni un PDF) sur l'iPhone via Inkbox reste
+à vérifier pour de vrai.

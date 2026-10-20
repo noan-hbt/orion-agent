@@ -25,7 +25,11 @@ class AdaptationModule(Module):
         adapter = Adapter(
             plate.journal,
             plate.memory,
-            Reflector(plate.provider, plate.memory, self.config.agent.extractor_model),
+            Reflector(
+                plate.provider,
+                plate.memory,
+                self.config.agent.reflection_model or self.config.agent.extractor_model,
+            ),
             AdaptationSettings(
                 timezone=self.config.agent.timezone,
                 digests=tuple(self.config.initiative.digests),

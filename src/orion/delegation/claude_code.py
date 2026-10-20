@@ -12,6 +12,7 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -84,7 +85,9 @@ class ClaudeCodeAgent:
             command += ["--model", self._model]
         return command
 
-    async def run(self, task: str, workdir: Path) -> AgentOutcome:
+    async def run(
+        self, task: str, workdir: Path, options: dict[str, Any] | None = None
+    ) -> AgentOutcome:
         await asyncio.to_thread(workdir.mkdir, parents=True, exist_ok=True)
         try:
             process = await asyncio.create_subprocess_exec(

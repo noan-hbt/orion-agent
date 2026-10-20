@@ -8,8 +8,10 @@ User=orion-core
 Group=orion
 WorkingDirectory=/srv/orion
 EnvironmentFile=/etc/orion/core.env
-ExecStart=/srv/orion/.venv/bin/orion serve
-Restart=on-failure
+Environment=PLAYWRIGHT_BROWSERS_PATH=/srv/orion/browsers
+ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml serve
+Restart=always
+RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/srv/orion/data

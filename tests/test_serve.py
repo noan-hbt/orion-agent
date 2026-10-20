@@ -109,6 +109,7 @@ async def test_imessage_and_voice_modules_plug_into_the_daemon(tmp_path: Path) -
             "imessage.poll",
             "voice.brief",
             "voice.poll",
+            "autonomy.ritual",
             "initiative",
         ]
         assert voice.voice is not None and voice.link.target is voice.voice

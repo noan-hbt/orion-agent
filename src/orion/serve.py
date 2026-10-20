@@ -7,12 +7,15 @@ stops everything after trying to tell the owner, rather than running half-dead.
 
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 
 from orion.app import App
 from orion.channels.inbox import OwnerInbox
 from orion.cognition.verifier import Verifier
 from orion.core.supervisor import Supervisor
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
 from orion.modules.base import Daemon, ModuleError
 from orion.runtime import OWNER_THREAD, TurnResult
@@ -40,10 +43,21 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         )
     daemon = Daemon(app.plate, app.orion, inbox, supervisor)
     supervisor.add("inbox", inbox.run)
+    guardian = app.plate.guardian
+    if guardian is not None:
+        every = app.config.guardian.heartbeat_seconds
+        supervisor.add("guardian.heartbeat", lambda: heartbeat(guardian, every))
     for module in app.modules:
         await module.serve(daemon)
 
     initiative = app.config.initiative
+    autonomy = app.plate.autonomy
+    grant_tool = app.orion.registry.get("autonomy_grant")
+    if autonomy is not None and grant_tool is not None:
+        quiet = InitiativeSettings(
+            quiet_start=initiative.quiet_start, quiet_end=initiative.quiet_end
+        ).is_quiet
+        supervisor.add("autonomy.ritual", lambda: autonomy.run(app.approver, grant_tool, quiet))
     if initiative.enabled:
         engine = InitiativeEngine(
             app.orion,
@@ -64,6 +78,7 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
             caller=daemon.caller,
             alerts=daemon.alerts,
             digests=daemon.digests,
+            presence=daemon.presence,
         )
         supervisor.add("initiative", lambda: engine.run(initiative.tick_seconds))
     log.info(
@@ -72,6 +87,16 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         initiative=initiative.enabled,
     )
     return daemon
+
+
+async def heartbeat(guardian: GuardianClient, every: float) -> None:
+    """Tell the guardian the core is alive; it warns the owner when this stops."""
+    while True:
+        try:
+            await guardian.heartbeat()
+        except GuardianUnavailableError:
+            log.warning("guardian.heartbeat_failed", exc_info=True)
+        await asyncio.sleep(every)
 
 
 async def serve(app: App) -> None:

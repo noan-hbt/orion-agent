@@ -371,3 +371,67 @@ def test_the_module_loads_and_reports_in_doctor(tmp_path: Path) -> None:
     )
     [module] = [m for m in load(cfg) if isinstance(m, MailModule)]
     assert module.doctor() == ["perso (noan on imap.gmail.com) ok"]
+
+
+async def test_a_promise_in_a_mail_joins_the_ledger_and_closes_on_the_reply(
+    journal: SqliteJournal,
+) -> None:
+    from orion.mail.smtp import Outgoing, Postman
+    from orion.memory.model import CommitmentStatus
+    from orion.memory.service import MemoryService
+    from orion.memory.store import MemoryStore
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    card = {
+        **PAUL_CARD,
+        "commitment": {"by": "owner", "what": "Répondre à Paul pour le dîner", "due": "2026-10-22"},
+    }
+    server = Server(parse_message(10, PLAIN, NOW))
+    box = Mailbox(
+        journal,
+        settings(),
+        Quarantine(ScriptedProvider(json_reply(card)), "q"),
+        "Europe/Paris",
+        server.fetch,
+        clock=lambda: NOW,
+        memory=memory,
+    )
+    await box.start()
+    await box.sync_once()
+    [owed] = await store.commitments()
+    assert owed.debtor == "owner" and owed.due == "2026-10-22"
+    assert "d'après un mail de Paul" in owed.what and owed.trust is Trust.THIRD_PARTY
+
+    sent: list[Outgoing] = []
+
+    async def send(account: MailAccount, mail: Outgoing, grant: str | None) -> str:
+        sent.append(mail)
+        return "<reply@x>"
+
+    box.settings.accounts[0].smtp_host = "smtp.x"
+    postman = Postman(journal, box, send, memory)
+    [paul] = box.state.cards.values()
+    reply = Outgoing(to=["paul@example.com"], subject="Re: Dîner", body="Avec plaisir.")
+    await postman.send(reply, paul, "g")
+    assert sent[0].in_reply_to == paul.message_id  # threaded
+    assert await store.commitments() == []
+    [done] = await store.commitments(CommitmentStatus.DONE)
+    assert done.evidence == "mail envoyé <reply@x>"
+    await store.close()
+
+
+async def test_ads_and_newsletters_promise_nothing() -> None:
+    from orion.mail.quarantine import Card
+
+    provider = ScriptedProvider(
+        json_reply(
+            {
+                "category": "newsletter",
+                "commitment": {"by": "owner", "what": "Profiter de -50 %"},
+            }
+        )
+    )
+    card: Card = await Quarantine(provider, "q").card(parse_message(10, PLAIN, NOW))
+    assert card.promise is None

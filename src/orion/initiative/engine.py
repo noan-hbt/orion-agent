@@ -8,7 +8,10 @@ Every tick, deterministic rules turn Orion's state into candidates:
 - a heads-up shortly before a commitment that has a precise due time.
 
 Each candidate goes through the same gate: quiet hours, a daily attention budget, and a ledger
-of what was already said, so nothing is repeated and a restart never re-sends. The model only
+of what was already said, so nothing is repeated and a restart never re-sends. Then an arbiter
+(`initiative.arbiter`) weighs urgency against the cost of interrupting now: a message that can
+wait waits for a break (the end of a meeting). On Sunday evening, Orion tells the owner what it
+held back that week. The model only
 writes the message (or answers `SILENCE`); it does not decide whether to interrupt. Every
 decision, including staying silent, is journaled with its reason.
 """
@@ -32,6 +35,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.initiative.arbiter import Moment, PresenceSource, judge, merge
 from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
@@ -67,6 +71,10 @@ class Report:
     trust: Trust = Trust.SYSTEM
 
 
+ALMOST_KEY = "almost:"
+_NOT_WORTH_REPORTING = {"nothing to say", "quiet hours"}
+
+
 class Caller(Protocol):
     async def call_owner(self, reason: str, correlation_id: str | None = None) -> str: ...
 
@@ -89,6 +97,8 @@ class Alert:
     fallback: str
     trust: Trust = Trust.SYSTEM
     expires_at: datetime | None = None
+    importance: float = 0.5
+    """0 to 1: how much the owner would mind missing it (the arbiter weighs it)."""
 
 
 class AlertSource(Protocol):
@@ -160,6 +170,16 @@ class Candidate:
     timer: Timer | None = None
     mentions: tuple[str, ...] = ()
     expires_at: datetime | None = None
+    importance: float = 0.5
+
+
+@dataclass(frozen=True)
+class Unsaid:
+    """Something Orion decided not to say, for the weekly « ce que j'ai failli te dire »."""
+
+    day: date
+    text: str
+    reason: str
 
 
 @dataclass
@@ -170,6 +190,7 @@ class Ledger:
     handled: set[str] = field(default_factory=set[str])
     last_mention: dict[str, date] = field(default_factory=dict[str, date])
     spent: dict[date, int] = field(default_factory=dict[date, int])
+    unsaid: list[Unsaid] = field(default_factory=list[Unsaid])
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -179,6 +200,7 @@ class Ledger:
         self.handled.clear()
         self.last_mention.clear()
         self.spent.clear()
+        self.unsaid.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -188,6 +210,18 @@ class Ledger:
         payload: dict[str, Any] = event.payload
         if event.kind in (DELIVERED, SUPPRESSED):
             self.handled.add(str(payload["key"]))
+        if (
+            event.kind == SUPPRESSED
+            and payload.get("fallback")
+            and payload.get("reason") not in _NOT_WORTH_REPORTING
+        ):
+            self.unsaid.append(
+                Unsaid(
+                    date.fromisoformat(str(payload["day"])),
+                    str(payload["fallback"]),
+                    str(payload.get("reason", "")),
+                )
+            )
         if event.kind == DELIVERED:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
@@ -270,7 +304,11 @@ class InitiativeEngine:
         caller: Caller | None = None,
         alerts: Sequence[AlertSource] = (),
         digests: Sequence[DigestSource] = (),
+        presence: Sequence[PresenceSource] = (),
     ) -> None:
+        self._presence = list(presence)
+        self._waiting: dict[str, datetime] = {}
+        """Messages the arbiter held back, since when (asked again each tick)."""
         self._caller = caller
         self._alerts = list(alerts)
         self._digest_sources = list(digests)
@@ -330,6 +368,7 @@ class InitiativeEngine:
                     fallback=a.fallback,
                     trust=a.trust,
                     expires_at=a.expires_at,
+                    importance=a.importance,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -338,7 +377,32 @@ class InitiativeEngine:
         digest = await self._digest(commitments, now)
         if digest is not None:
             found.append(digest)
+        almost = self._almost(now)
+        if almost is not None:
+            found.append(almost)
         return [c for c in found if c.key not in self.ledger.handled]
+
+    def _almost(self, now: datetime) -> Candidate | None:
+        """Sunday evening: what Orion held back this week, so the owner can say what it
+        should not have kept to itself."""
+        if now.weekday() != 6 or now.time() < time(18, 0):
+            return None
+        week = now.date() - timedelta(days=6)
+        unsaid = [u for u in self.ledger.unsaid if u.day >= week][-8:]
+        if not unsaid:
+            return None
+        lines = "\n".join(f"- {u.text} ({u.reason})" for u in unsaid)
+        year, number, _ = now.isocalendar()
+        return Candidate(
+            key=f"{ALMOST_KEY}{year}-W{number:02d}",
+            notice="Ce que tu as failli lui dire cette semaine, et pourquoi tu t'es tu. "
+            "Résume-le en quelques lignes et demande-lui si quelque chose aurait dû passer :\n"
+            + lines,
+            why="c'est le point de la semaine sur ce que j'ai gardé pour moi",
+            fallback="Cette semaine, j'ai failli te dire :\n" + lines,
+            importance=0.4,
+            expires_at=datetime.combine(now.date(), time(22, 0), self._zone),
+        )
 
     def _reminder(self, timer: Timer, now: datetime) -> Candidate:
         moment = describe_moment(timer.due_at, self._settings.timezone)
@@ -382,6 +446,7 @@ class InitiativeEngine:
                     trust=c.trust,
                     mentions=(c.id,),
                     expires_at=due,
+                    importance=0.8,
                 )
             )
         return found
@@ -423,16 +488,36 @@ class InitiativeEngine:
                 ),
                 mentions=tuple(i for i, _ in lines),
                 expires_at=end,
+                importance=0.6,
             )
         return None
 
+    async def _moment(self, now: datetime) -> Moment:
+        return merge([await source.presence(now) for source in self._presence])
+
     async def _process(self, candidate: Candidate, now: datetime) -> bool:
+        why_now: str | None = None
         if not candidate.explicit:
             reason = self._gate(candidate, now)
             if reason is not None:
                 if reason != "quiet hours":
+                    self._waiting.pop(candidate.key, None)
                     await self._record(SUPPRESSED, candidate, now, reason=reason)
                 return False
+            judgement = judge(
+                candidate.importance,
+                now,
+                await self._moment(now),
+                self.ledger.spent.get(now.date(), 0),
+                self._settings.daily_budget,
+                candidate.expires_at,
+                self._waiting.get(candidate.key),
+            )
+            if not judgement.now:
+                self._waiting.setdefault(candidate.key, now)
+                return False
+            self._waiting.pop(candidate.key, None)
+            why_now = judgement.reason
         if not await self._notifier.available():
             if not self._unavailable_logged:
                 log.warning("initiative.no_channel", key=candidate.key)
@@ -448,7 +533,9 @@ class InitiativeEngine:
             return False
         correlation_id = new_id()
         await self._notifier.notify(text, correlation_id)
-        await self._record(DELIVERED, candidate, now, correlation_id=correlation_id, how=how)
+        await self._record(
+            DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
+        )
         if candidate.timer is not None:
             await self._timers.fired(candidate.timer.id, correlation_id)
         return True
@@ -526,6 +613,7 @@ class InitiativeEngine:
         reason: str | None = None,
         correlation_id: str | None = None,
         how: str | None = None,
+        arbiter: str | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "key": candidate.key,
@@ -538,6 +626,10 @@ class InitiativeEngine:
             payload["reason"] = reason
         if how is not None:
             payload["how"] = how
+        if arbiter is not None:
+            payload["arbiter"] = arbiter
+        if kind == SUPPRESSED and candidate.fallback:
+            payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)
         await self._journal.append(
             [

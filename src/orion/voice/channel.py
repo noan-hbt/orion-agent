@@ -39,6 +39,7 @@ from orion.initiative.timers import TimerProjection
 from orion.memory.store import MemoryStore
 from orion.runtime import OWNER_THREAD
 from orion.voice.brief import build_brief, fingerprint
+from orion.voice.live import LIVE_STARTED
 
 log = structlog.get_logger(__name__)
 
@@ -58,6 +59,8 @@ class VoiceSettings:
     origination: str = "shared_imessage_number"
     reply_via: str = "imessage"
     voice: str | None = None
+    live_url: str | None = None
+    """Calls with the owner go to Orion's live voice (`voice.live`)."""
     """Sent with every brief: Inkbox replaces the whole config on each update."""
 
 
@@ -80,6 +83,8 @@ class VoiceState:
     reasons: dict[str, str] = field(default_factory=dict[str, str])
     """call id → what the call was about"""
     ended: dict[str, EndedCall] = field(default_factory=dict[str, EndedCall])
+    live: set[str] = field(default_factory=set[str])
+    """Calls Orion led itself: their words are already in the thread."""
     brief: str | None = None
     _seq: int = 0
 
@@ -90,6 +95,7 @@ class VoiceState:
         self.requested.clear()
         self.reasons.clear()
         self.ended.clear()
+        self.live.clear()
         self.brief = None
         self._seq = 0
 
@@ -115,6 +121,8 @@ class VoiceState:
                 str(payload.get("status", "")),
                 str(payload.get("hangup_reason") or ""),
             )
+        elif event.kind == LIVE_STARTED:
+            self.live.add(str(payload["call_id"]))
         elif event.kind == BRIEF_UPDATED:
             self.brief = str(payload["fingerprint"])
 
@@ -211,7 +219,14 @@ class VoiceChannel:
 
     async def call_owner(self, reason: str, correlation_id: str | None = None) -> str:
         await self.brief_once()
-        return await self._place(self._settings.owner_number, reason, "owner", "", correlation_id)
+        return await self._place(
+            self._settings.owner_number,
+            reason,
+            "owner",
+            "",
+            correlation_id,
+            live=self._settings.live_url is not None,
+        )
 
     async def call_someone(
         self,
@@ -238,9 +253,15 @@ class VoiceChannel:
         title: str,
         correlation_id: str | None,
         grant: str | None = None,
+        live: bool = False,
     ) -> str:
         call = await self._client.place_call(
-            number, reason, self._settings.identity_id, self._settings.origination, grant=grant
+            number,
+            reason,
+            self._settings.identity_id,
+            self._settings.origination,
+            grant=grant,
+            live_url=self._settings.live_url if live else None,
         )
         await self._append(
             CALL_REQUESTED,
@@ -310,7 +331,7 @@ class VoiceChannel:
             ),
             Trust.OWNER if with_owner else Trust.THIRD_PARTY,
         )
-        if with_owner and call.duration_seconds:
+        if with_owner and call.duration_seconds and call.id not in self.state.live:
             self._inbox.submit(
                 Inbound(
                     CHANNEL,
@@ -320,6 +341,13 @@ class VoiceChannel:
                     allow_silence=True,
                 )
             )
+
+    async def opening(self, call_id: str) -> str | None:
+        """What Orion says first on a live call it placed: why it calls."""
+        await self._runner.catch_up()
+        purpose, _ = self.state.requested.get(call_id, ("", ""))
+        reason = self.state.reasons.get(call_id, "")
+        return f"Allô, c'est Orion. {reason}" if purpose == "owner" and reason else None
 
     async def reports(self) -> list[Report]:
         """Calls placed to other people at the owner's request, once finished, and calls

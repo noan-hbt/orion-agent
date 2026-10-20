@@ -8,15 +8,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
-from orion.context.threads import ThreadProjection
+from orion.context.threads import MESSAGE_KIND, ThreadProjection
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import Guardian
+from orion.providers.base import ModelRequest, ModelResponse
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
@@ -145,3 +147,136 @@ async def test_untrusted_content_leaves_the_window_after_a_pause(journal: Sqlite
     assert [m["role"] for m in thread.window()] == ["user", "assistant"]
     rebased = [e for e in await journal.read() if e.kind == "thread.rebased"]
     assert len(rebased) == 1
+
+
+class _Summarizing(ScriptedProvider):
+    """Answers summary requests itself; the conversation's requests follow the script."""
+
+    def __init__(self, *script: Any) -> None:
+        super().__init__(*script)
+        self.summaries: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.model == "summary-model":
+            self.summaries.append(request)
+            return reply("Tu cherchais un T2 à Lyon ; il attend ta réponse sur le n°3.")(request)
+        return await super().complete(request)
+
+
+async def test_a_rebase_carries_a_summary_of_what_it_drops(journal: SqliteJournal) -> None:
+    provider = _Summarizing(*[reply("r" * 900) for _ in range(12)])
+    orion = make_orion(journal, provider, window=4_000)
+    orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
+    await orion.start()
+    for i in range(12):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
+
+    assert provider.summaries, "a rebase happened, so what it dropped was summarized"
+    assert "Personne : " in str(provider.summaries[0].messages[1]["content"])
+    # The summary rides in the message that opened the new window, after the turns kept.
+    carried = [
+        str(m["content"])
+        for m in provider.requests[-1].messages
+        if "<plus-tot-dans-la-conversation>" in str(m["content"])
+    ]
+    assert carried and "T2 à Lyon" in carried[0]
+    assert_prefix_stable_between_rebases(provider)
+
+
+def assert_prefix_stable_between_rebases(provider: ScriptedProvider) -> None:
+    jumps = 0
+    for previous, current in zip(provider.requests, provider.requests[1:], strict=False):
+        if current.messages[: len(previous.messages)] != previous.messages:
+            jumps += 1
+    assert jumps < len(provider.requests) // 2
+
+
+async def test_untrusted_turns_are_not_summarized(journal: SqliteJournal) -> None:
+    from orion.core.events import Trust
+
+    provider = _Summarizing(*[reply("r" * 900) for _ in range(9)])
+    orion = make_orion(journal, provider, window=4_000)
+    orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
+    await orion.start()
+    await orion.handle_initiative("t1", "Page : " + "y" * 900, "web", Trust.WEB, now=at(0))
+    for i in range(1, 9):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
+    assert [e for e in await journal.read() if e.kind == "thread.rebased"]
+    assert not provider.summaries
+
+
+async def test_old_bulky_results_are_shortened_only_after_a_pause(journal: SqliteJournal) -> None:
+    """Like a rebase, pruning changes the prefix once; it waits until the cache is gone."""
+    page = "annonce " * 600
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": page})),
+        reply("trois annonces"),
+        reply("ok"),
+        reply("ok"),
+        reply("ok"),
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    for minute in (0, 1, 2):  # a lively conversation: nothing changes under the cache
+        await orion.handle_owner_message("t1", f"m{minute}", "terminal", now=at(minute))
+    assert_prefix_stable(provider)
+    assert page in str(provider.requests[-1].messages)
+
+    await orion.handle_owner_message("t1", "re", "terminal", now=at(20))  # after a pause
+    shown = [str(m["content"]) for m in provider.requests[-1].messages if m["role"] == "tool"]
+    assert len(shown) == 1 and "ancien résultat allégé" in shown[0] and len(shown[0]) < 800
+    # The journal keeps the page whole, and the projection rebuilds the same window.
+    assert any(page in str(e.payload) for e in await journal.read() if e.kind == MESSAGE_KIND)
+    rebuilt = ThreadProjection()
+    await ProjectionRunner(journal, [rebuilt]).catch_up()
+    assert rebuilt.get("t1").window() == orion.threads.get("t1").window()
+
+
+async def test_memory_gets_a_last_look_at_what_a_rebase_drops(journal: SqliteJournal) -> None:
+    """OpenClaw's pre-compaction flush: before turns leave the window, the extractor reads
+    them once more (whatever happened to the turn itself)."""
+    from datetime import date
+
+    from orion.memory.extractor import ExtractionReport, MemoryExtractor
+    from orion.memory.service import MemoryService, Origin
+    from orion.memory.store import Fact, MemoryStore
+
+    seen: list[tuple[str, str]] = []
+
+    class Extractor(MemoryExtractor):
+        async def consolidate(
+            self,
+            owner_text: str,
+            reply_text: str,
+            origin: Origin,
+            today: date,
+            recorded_this_turn: list[Fact],
+        ) -> ExtractionReport:
+            seen.append((owner_text, reply_text))
+            return ExtractionReport()
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    provider = ScriptedProvider(*[reply("r" * 900) for _ in range(12)])
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([*builtin_tools(), echo_tool()]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("CONSTITUTION", max_window_tokens=4_000),
+        agent=AgentConfig(),
+        memory=memory,
+        extractor=Extractor(provider, memory, "fake"),
+    )
+    await orion.start()
+    turns = [
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
+        for i in range(12)
+    ]
+    leaving = [t for t in turns if t.leaving is not None]
+    assert leaving, "a rebase happened"
+    await orion.consolidate(leaving[0])
+    flushed_owner, flushed_orion = seen[0]
+    assert "message 0" in flushed_owner and "r" * 50 in flushed_orion
+    await store.close()

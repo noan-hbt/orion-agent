@@ -36,7 +36,11 @@ class DelegatedAgent(Protocol):
     name: str
     allow_bash: bool
 
-    async def run(self, task: str, workdir: Path) -> AgentOutcome: ...
+    async def run(
+        self, task: str, workdir: Path, options: dict[str, Any] | None = None
+    ) -> AgentOutcome:
+        """`options`: per-task settings that are never journaled (a site session…)."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -56,8 +60,10 @@ class Job:
 class JobProjection:
     name = "jobs"
 
-    def __init__(self) -> None:
+    def __init__(self, agent: str | None = None) -> None:
         self.jobs: dict[str, Job] = {}
+        self._agent = agent
+        """Only this agent's jobs (several job services share the journal); None: all."""
         self._seq = 0
 
     async def checkpoint(self) -> int:
@@ -73,6 +79,8 @@ class JobProjection:
             return
         payload: dict[str, Any] = event.payload
         if event.kind == JOB_STARTED:
+            if self._agent is not None and payload.get("agent", self._agent) != self._agent:
+                return
             job_id = str(payload["job_id"])
             self.jobs[job_id] = Job(
                 job_id, str(payload["title"]), str(payload["task"]), str(payload["workdir"])
@@ -101,13 +109,22 @@ class JobProjection:
 
 
 class JobService:
-    def __init__(self, journal: EventStore, agent: DelegatedAgent, workspaces: Path) -> None:
+    def __init__(
+        self,
+        journal: EventStore,
+        agent: DelegatedAgent,
+        workspaces: Path,
+        result_trust: Trust = Trust.SYSTEM,
+    ) -> None:
         self._journal = journal
         self._agent = agent
         self._workspaces = workspaces
-        self.projection = JobProjection()
+        self._result_trust = result_trust
+        """What a result is worth: a browsing agent's report is web content."""
+        self.projection = JobProjection(agent.name)
         self._runner = ProjectionRunner(journal, [self.projection])
         self._tasks: set[asyncio.Task[None]] = set()
+        self._options: dict[str, dict[str, Any]] = {}
 
     @property
     def agent(self) -> DelegatedAgent:
@@ -124,9 +141,17 @@ class JobService:
             await self._finish(job, AgentOutcome(False, "", error="interrupted by a restart"), None)
 
     async def start(
-        self, title: str, task: str, provenance: Provenance, correlation_id: str | None
+        self,
+        title: str,
+        task: str,
+        provenance: Provenance,
+        correlation_id: str | None,
+        options: dict[str, Any] | None = None,
     ) -> str:
+        """`options` reach the agent in memory only (a restart fails the job anyway)."""
         job_id = f"j_{new_id()}"
+        if options:
+            self._options[job_id] = options
         workdir = self._workspaces / job_id
         await self._append(
             JOB_STARTED,
@@ -148,7 +173,7 @@ class JobService:
 
     async def reports(self) -> list[Report]:
         await self.sync()
-        return [_report(job) for job in self.projection.finished()]
+        return [_report(job, self._result_trust) for job in self.projection.finished()]
 
     async def wait(self) -> None:
         """For tests and shutdown: wait for running jobs."""
@@ -157,7 +182,9 @@ class JobService:
 
     async def _run(self, job: Job, correlation_id: str | None) -> None:
         try:
-            outcome = await self._agent.run(job.task, Path(job.workdir))
+            outcome = await self._agent.run(
+                job.task, Path(job.workdir), self._options.pop(job.id, None)
+            )
         except Exception as exc:
             log.exception("job.crashed", job_id=job.id)
             outcome = AgentOutcome(False, "", error=f"crashed: {exc!r}")
@@ -177,6 +204,7 @@ class JobService:
             },
             Provenance(source=f"job:{job.id}", actor=f"agent:{self._agent.name}"),
             correlation_id,
+            self._result_trust,
         )
 
     async def _append(
@@ -185,6 +213,7 @@ class JobService:
         payload: dict[str, object],
         provenance: Provenance,
         correlation_id: str | None,
+        trust: Trust = Trust.SYSTEM,
     ) -> None:
         await self._journal.append(
             [
@@ -192,7 +221,7 @@ class JobService:
                     kind=kind,
                     payload=payload,
                     provenance=provenance,
-                    trust=Trust.SYSTEM,
+                    trust=trust,
                     correlation_id=correlation_id or new_id(),
                 )
             ]
@@ -200,7 +229,7 @@ class JobService:
         await self.sync()
 
 
-def _report(job: Job) -> Report:
+def _report(job: Job, trust: Trust = Trust.SYSTEM) -> Report:
     status = "terminée" if job.ok else f"échouée ({job.error})"
     files = ", ".join(job.files[:10]) or "aucun"
     return Report(
@@ -211,6 +240,7 @@ def _report(job: Job) -> Report:
         why="la tâche que tu m'as confiée vient de se terminer",
         fallback=f"Tâche « {job.title} » {status}. "
         + (f"Fichiers dans {job.workdir} : {files}" if job.ok else ""),
+        trust=trust,
     )
 
 

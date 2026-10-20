@@ -18,10 +18,27 @@ def builtin_modules() -> list[type[Module]]:
     from orion.adaptation.module import AdaptationModule
     from orion.calendar.module import CalendarModule
     from orion.channels.module import IMessageModule
+    from orion.chronicle.module import ChronicleModule
+    from orion.computer.module import ComputerModule
+    from orion.console.module import ConsoleModule
     from orion.delegation.module import DelegationModule
+    from orion.expert.module import ExpertModule
+    from orion.federation.module import FederationModule
+    from orion.files.module import FilesModule
+    from orion.hands.module import HandsModule
+    from orion.intentions.module import IntentionsModule
+    from orion.library.module import LibraryModule
     from orion.mail.module import MailModule
     from orion.memory.night import NightModule
+    from orion.missions.module import MissionsModule
+    from orion.onboarding.module import OnboardingModule
+    from orion.photos.module import PhotosModule
+    from orion.places.module import PlacesModule
+    from orion.relations.module import RelationsModule
+    from orion.secretary.module import SecretaryModule
+    from orion.thinking.module import ThinkingModule
     from orion.voice.module import VoiceModule
+    from orion.web.module import WebModule
 
     return [
         IMessageModule,
@@ -31,6 +48,23 @@ def builtin_modules() -> list[type[Module]]:
         NightModule,
         CalendarModule,
         MailModule,
+        FederationModule,
+        WebModule,
+        FilesModule,
+        ComputerModule,
+        OnboardingModule,
+        ExpertModule,
+        MissionsModule,
+        LibraryModule,
+        PhotosModule,
+        ThinkingModule,
+        ChronicleModule,
+        IntentionsModule,
+        RelationsModule,
+        PlacesModule,
+        SecretaryModule,
+        ConsoleModule,
+        HandsModule,
     ]
 
 

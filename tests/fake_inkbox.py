@@ -36,6 +36,7 @@ class FakeInkbox:
     rules: list[tuple[str, dict[str, Any]]] = field(
         default_factory=list[tuple[str, dict[str, Any]]]
     )
+    uploads: list[bytes] = field(default_factory=list[bytes])
     fail_sends: list[int] = field(default_factory=list[int])
     """Status codes to answer the next sends with, in order."""
     _counter: int = 0
@@ -104,6 +105,11 @@ class FakeInkbox:
         path = request.url.path.removeprefix("/api/v1")
         self.calls.append((request.method, path))
         assert request.headers["X-API-Key"] == "test-key"
+        if path == "/media" and request.method == "POST":
+            self.uploads.append(request.content)
+            return httpx.Response(
+                201, json={"media_url": f"https://media.inkbox.test/{len(self.uploads)}"}
+            )
         body: dict[str, Any] = json.loads(request.content) if request.content else {}
         if path.startswith("/identities/") and request.method == "PATCH":
             self.rules.append((path, body))
@@ -117,16 +123,18 @@ class FakeInkbox:
             return httpx.Response(201, json={"id": "rule"})
         if path == "/phone/place-call":
             self._counter += 1
-            call = {
-                "id": f"call-{self._counter}",
+            call_id = f"call-{self._counter}"
+            call: dict[str, Any] = {
+                "id": call_id,
                 "remote_phone_number": body["to_number"],
                 "direction": "outbound",
                 "status": "ringing",
                 "created_at": "2026-10-19T18:00:00+00:00",
-                "reason": body["reason"],
+                "reason": body.get("reason"),
+                "mode": body.get("mode"),
             }
-            self.phone_calls[call["id"]] = call
-            self.transcripts[call["id"]] = []
+            self.phone_calls[call_id] = call
+            self.transcripts[call_id] = []
             return httpx.Response(200, json=call)
         if path == "/phone/calls":
             return httpx.Response(200, json=list(reversed(self.phone_calls.values())))
@@ -143,7 +151,7 @@ class FakeInkbox:
             return httpx.Response(200, json=self.identity)
         if path == "/imessage/triage-number":
             return httpx.Response(
-                200, json={"number": "+15550000", "connect_command": "connect @x"}
+                200, json={"number": "+15550000", "connect_command": "connect @your-handle"}
             )
         if path == "/imessage/messages" and request.method == "POST":
             return self._send(request, body)
@@ -185,5 +193,12 @@ class FakeInkbox:
         }
         self.messages[message["id"]] = message
         self.idempotency[key] = message
-        self.sent.append({"id": message["id"], "text": body["text"], "key": key})
+        self.sent.append(
+            {
+                "id": message["id"],
+                "text": body["text"],
+                "key": key,
+                "media": body.get("media_urls") or [],
+            }
+        )
         return httpx.Response(200, json={"message": message})

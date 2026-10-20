@@ -17,6 +17,7 @@ import structlog
 from pydantic import BaseModel, Field, ValidationError
 
 from orion.providers.base import (
+    Citation,
     Message,
     ModelRequest,
     ModelResponse,
@@ -28,6 +29,40 @@ from orion.providers.base import (
 log = structlog.get_logger(__name__)
 
 _RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+
+
+EXPLICIT_CACHE = ("anthropic/",)
+"""Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
+
+
+def cache_marked(messages: list[Message]) -> list[Message]:
+    """Anthropic caches only up to `cache_control` breakpoints: one after the system message
+    (constitution and tools) and one on the last message, so each step reads everything
+    before it from the cache. The markers exist only on the wire: the journaled messages, and
+    so the next request's prefix, stay as they were sent (prompt-cache contract)."""
+    last = max(
+        (
+            i
+            for i, m in enumerate(messages)
+            if isinstance(m.get("content"), str) and m.get("content")
+        ),
+        default=None,
+    )
+    marked: list[Message] = []
+    for i, message in enumerate(messages):
+        content = message.get("content")
+        if (i == 0 or i == last) and isinstance(content, str) and content:
+            message = cast(
+                Message,
+                {
+                    **message,
+                    "content": [
+                        {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                    ],
+                },
+            )
+        marked.append(message)
+    return marked
 
 
 class OpenRouterProvider:
@@ -43,7 +78,11 @@ class OpenRouterProvider:
         max_backoff: float = 20.0,
         app_name: str = "Orion",
         transport: httpx.AsyncBaseTransport | None = None,
+        sort: str | None = None,
     ) -> None:
+        self._sort = sort
+        """OpenRouter's provider routing (`throughput`, `latency`, `price`): with no preference
+        a slow host can serve a model at a fifth of the speed of the fastest one."""
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=timeout,
@@ -107,15 +146,18 @@ class OpenRouterProvider:
                 )
                 await asyncio.sleep(delay)
 
-    @staticmethod
-    def _body(request: ModelRequest) -> dict[str, Any]:
+    def _body(self, request: ModelRequest) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": request.model,
-            "messages": request.messages,
+            "messages": cache_marked(request.messages)
+            if request.model.startswith(EXPLICIT_CACHE)
+            else request.messages,
             "usage": {"include": True},
         }
         if request.tools:
             body["tools"] = [t.to_openai() for t in request.tools]
+            if request.no_tools:
+                body["tool_choice"] = "none"
         if request.session_id:
             body["session_id"] = request.session_id
         if request.max_tokens is not None:
@@ -126,6 +168,12 @@ class OpenRouterProvider:
             body["response_format"] = {"type": "json_object"}
         if request.reasoning_effort is not None:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
+        if self._sort is not None:
+            body["provider"] = {"sort": self._sort}
+        if request.image_output:
+            body["modalities"] = ["image", "text"]
+        if request.web_search is not None:
+            body["plugins"] = [{"id": "web", "max_results": request.web_search}]
         return body
 
     async def _post(self, body: dict[str, Any], path: str = "/chat/completions") -> dict[str, Any]:
@@ -203,6 +251,12 @@ class OpenRouterProvider:
             model=parsed.model,
             provider=parsed.provider,
             attempts=attempts,
+            citations=[
+                Citation(url=a.url_citation.url, title=a.url_citation.title or "")
+                for a in choice.message.annotations or []
+                if a.type == "url_citation" and a.url_citation is not None
+            ],
+            images=[i.image_url.url for i in choice.message.images or []],
         )
 
 
@@ -219,9 +273,29 @@ class _RawToolCall(BaseModel):
     function: _RawFunction
 
 
+class _RawUrlCitation(BaseModel):
+    url: str
+    title: str | None = None
+
+
+class _RawAnnotation(BaseModel):
+    type: str = ""
+    url_citation: _RawUrlCitation | None = None
+
+
+class _RawImageUrl(BaseModel):
+    url: str
+
+
+class _RawImage(BaseModel):
+    image_url: _RawImageUrl
+
+
 class _RawMessage(BaseModel):
     content: str | None = None
     tool_calls: list[_RawToolCall] | None = None
+    annotations: list[_RawAnnotation] | None = None
+    images: list[_RawImage] | None = None
 
 
 class _RawChoice(BaseModel):

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Run an `orion` command as the guardian's user, with its secrets (they never reach the core):
+#   sudo /srv/orion/app/deploy/orion-admin inkbox setup --webhook-url https://…/inkbox/webhook
+#   sudo /srv/orion/app/deploy/orion-admin federation invite Paul
+# `--core` runs it as the core's user instead (`orion memory`, `orion doctor`, `orion chat`).
+set -euo pipefail
+who=guardian
+if [ "${1:-}" = "--core" ]; then who=core; shift; fi
+cd /srv/orion
+exec sudo -u "orion-$who" sh -c 'set -a; . "/etc/orion/$0.env"; set +a; exec /srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml "$@"' "$who" "$@"

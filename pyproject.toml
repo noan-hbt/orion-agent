@@ -5,15 +5,18 @@ description = "Orion: an always-on, proactive personal agent."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=44",
     "httpx>=0.27,<1",
     "icalendar>=6",
     "numpy>=2",
+    "playwright>=1.56",
     "pydantic>=2.8,<3",
     "recurring-ical-events>=3",
     "starlette>=1.9,<2",
     "structlog>=24.1",
     "tzdata>=2024.1",
     "uvicorn>=0.54,<1",
+    "websockets>=13",
 ]
 
 [project.scripts]
@@ -25,6 +28,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    "time-machine>=3.5.1",
 ]
 
 [build-system]
@@ -54,7 +58,7 @@ ignore = ["TRY003"]
 "tests/**" = ["S", "TRY"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "evals"]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
 reportPrivateUsage = "none"

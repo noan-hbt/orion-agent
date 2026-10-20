@@ -1,0 +1,33 @@
+# Orion's public face: the Inkbox webhook and the control page (to the core), the federation
+# (to the guardian). Nothing else is reachable from outside.
+@DOMAIN@ {
+	encode gzip
+
+	handle /inkbox/webhook {
+		reverse_proxy 127.0.0.1:8787
+	}
+	handle /.well-known/agent-card.json {
+		reverse_proxy 127.0.0.1:8788
+	}
+	handle /a2a {
+		reverse_proxy 127.0.0.1:8788
+	}
+	# Live calls: Inkbox streams the owner's calls to Orion (signed, owner only).
+	handle /voice/live {
+		reverse_proxy 127.0.0.1:8791
+	}
+	# Orion's hands on your machines dial in here (paired secret required).
+	handle /places/event {
+		reverse_proxy 127.0.0.1:8793
+	}
+	handle /hands/* {
+		reverse_proxy 127.0.0.1:8792
+	}
+	# The control page: reachable only with a one-time link Orion sends you.
+	handle /console/* {
+		reverse_proxy 127.0.0.1:8790
+	}
+	handle {
+		respond 404
+	}
+}

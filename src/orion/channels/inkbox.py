@@ -55,6 +55,10 @@ class TriageNumber(_Model):
     number: str
     connect_command: str
 
+    def command_for(self, handle: str) -> str:
+        """Inkbox answers with a template (`connect @your-handle`): fill in Orion's handle."""
+        return self.connect_command.replace("@your-handle", f"@{handle}")
+
 
 class _Subscription(_Model):
     id: str
@@ -67,6 +71,12 @@ class MessageReaction(_Model):
     reaction: Reaction
     custom_emoji: str | None = None
     remote_number: str | None = None
+
+
+class Media(_Model):
+    url: str
+    content_type: str = ""
+    size: int | None = None
 
 
 class IMessage(_Model):
@@ -83,6 +93,8 @@ class IMessage(_Model):
     status: str | None = None
     was_downgraded: bool | None = None
     reactions: list[MessageReaction] | None = None
+    media: list[Media] | None = None
+    """Attachments; inbound URLs are presigned and expire after an hour."""
 
     @property
     def sender(self) -> str | None:
@@ -253,16 +265,34 @@ class InkboxClient:
         text: str,
         idempotency_key: str,
         identity_id: str | None = None,
+        media_url: str | None = None,
     ) -> IMessage:
         params = {"agent_identity_id": identity_id} if identity_id else None
+        body: dict[str, Any] = {"conversation_id": conversation_id, "text": text or None}
+        if media_url:
+            body["media_urls"] = [media_url]
         data = await self._request(
             "POST",
             "/imessage/messages",
-            json={"conversation_id": conversation_id, "text": text},
+            json=body,
             params=params,
             headers={"Idempotency-Key": idempotency_key, "Prefer": "idempotency-replay"},
         )
         return IMessage.model_validate(data.get("message", data))
+
+    async def upload(self, name: str, data: bytes, content_type: str) -> str:
+        """A file Inkbox keeps for a send (10 MiB at most); returns its URL for `send`."""
+        try:
+            response = await self._client.post("/media", files={"file": (name, data, content_type)})
+        except httpx.TransportError as exc:
+            raise InkboxError(f"POST /media: {exc!r}", retryable=True) from exc
+        if response.status_code >= 400:
+            raise InkboxError(
+                f"POST /media -> {response.status_code}: {response.text[:300]}",
+                status=response.status_code,
+                retryable=response.status_code in _RETRYABLE_STATUS,
+            )
+        return str(response.json()["media_url"])
 
     async def unread(self, identity_id: str | None = None, limit: int = 50) -> list[IMessage]:
         params: dict[str, Any] = {"is_read": False, "limit": limit}
@@ -298,6 +328,16 @@ class InkboxClient:
         await self._request(
             "POST", "/imessage/reactions", json={"message_id": message_id, "reaction": reaction}
         )
+
+    async def allow_imessage(self, handle: str, number: str) -> None:
+        """Let `number` write to Orion on iMessage only (a contact of the secretary, D54): they
+        can never call the line, whose voice knows the owner's life."""
+        rules = {"action": "allow", "match_type": "exact_number", "match_target": number}
+        try:
+            await self._request("POST", f"/imessage/identities/{handle}/contact-rules", json=rules)
+        except InkboxError as exc:
+            if exc.status != 409:  # already allowed
+                raise
 
     async def allow_only(self, handle: str, number: str) -> None:
         """Whitelist mode on iMessage and phone, with only `number` allowed: nobody else can
@@ -346,18 +386,22 @@ class InkboxClient:
         origination: str = "shared_imessage_number",
         voicemail_message: str | None = None,
         grant: str | None = None,
+        live_url: str | None = None,
     ) -> Call:
-        """Place a call driven by Inkbox Voice AI, with `reason` as its task brief."""
-        body: dict[str, Any] = {
-            "to_number": to,
-            "origination": origination,
-            "mode": "hosted_agent",
-            "reason": reason,
-            "hosted_agent_authority_mode": "contact_scoped",
-        }
+        """Place a call driven by Inkbox Voice AI, with `reason` as its task brief; or, with
+        `live_url`, streamed to Orion itself (the reason is then Orion's own business)."""
+        body: dict[str, Any] = {"to_number": to, "origination": origination}
+        if live_url:
+            body |= {"mode": "client_websocket", "client_websocket_url": live_url}
+        else:
+            body |= {
+                "mode": "hosted_agent",
+                "reason": reason,
+                "hosted_agent_authority_mode": "contact_scoped",
+            }
         if identity_id:
             body["agent_identity_id"] = identity_id
-        if voicemail_message:
+        if voicemail_message and not live_url:
             body["on_voicemail"] = "leave_message"
             body["voicemail_message"] = voicemail_message[:1000]
         return Call.model_validate(
@@ -385,6 +429,13 @@ class InkboxClient:
         if voice:
             body["voice"] = voice
         await self._request("PUT", "/phone/hosted-agent-config", json=body)
+
+    async def answer_calls_live(self, url: str, identity_id: str | None = None) -> None:
+        """Incoming calls are accepted and streamed to Orion (voice v1)."""
+        body: dict[str, Any] = {"incoming_call_action": "auto_accept", "client_websocket_url": url}
+        if identity_id:
+            body["agent_identity_id"] = identity_id
+        await self._request("PUT", "/phone/incoming-call-action", json=body)
 
     async def answer_calls_with_voice_ai(self, identity_id: str | None = None) -> None:
         body: dict[str, Any] = {"incoming_call_action": "hosted_agent"}

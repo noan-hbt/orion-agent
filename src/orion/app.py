@@ -17,12 +17,14 @@ from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.guardian.autonomy import Autonomy, autonomy_tools
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
 from orion.memory.extractor import MemoryExtractor
 from orion.memory.people import people_tools
+from orion.memory.provenance import Provenances, provenance_tools
 from orion.memory.semantic import EmbeddingCache, SemanticIndex
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
@@ -32,6 +34,7 @@ from orion.modules.registry import load
 from orion.providers.base import Embedder, ModelProvider
 from orion.resources import read_resource
 from orion.runtime import Orion
+from orion.tools.actions import grouped
 from orion.tools.base import Tool, ToolRegistry
 from orion.tools.builtin import builtin_tools
 from orion.voice.module import VoiceModule
@@ -84,12 +87,43 @@ def constitution(modules: list[Module]) -> str:
 
 
 def core_tools(plate: Plate) -> list[Tool]:
+    """The core's tools; small variants of one domain are the actions of one tool."""
+    memory = memory_tools(plate.memory)
+    reminders = reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None)
+    adaptation = adaptation_tools(plate.memory)
+    commitments = {"commitment_add": "add", "commitment_close": "close", "commitments_list": "list"}
     return [
         *builtin_tools(),
-        *memory_tools(plate.memory),
-        *reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None),
-        *adaptation_tools(plate.memory),
-        *people_tools(plate.memory, plate.config.memory.owner_names),
+        *[t for t in memory if t.name not in commitments],
+        grouped(
+            "commitments",
+            "The commitments ledger: what the owner owes, and what is owed to him (or to you).",
+            [t for t in memory if t.name in commitments],
+            commitments,
+        ),
+        *[t for t in reminders if t.name not in {"reminder_cancel", "reminders_list"}],
+        grouped(
+            "reminders",
+            "The reminders set with remind_me: see them, cancel one.",
+            [t for t in reminders if t.name in {"reminder_cancel", "reminders_list"}],
+            {"reminders_list": "list", "reminder_cancel": "cancel"},
+        ),
+        *[t for t in adaptation if t.name == "initiative_settings"],
+        grouped(
+            "playbook",
+            "The owner's playbook: how he wants you to behave (tone, length, habits), learnt "
+            "and corrected.",
+            [t for t in adaptation if t.name != "initiative_settings"],
+            {"adapt": "learn", "unlearn": "unlearn", "playbook": "show"},
+        ),
+        grouped(
+            "people",
+            "What memory knows of the people in the owner's life (to note a birthday, a meeting "
+            "or staying in touch: `relations`).",
+            people_tools(plate.memory, plate.config.memory.owner_names),
+            {"person": "show", "people": "list", "same_person": "same"},
+        ),
+        *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
     ]
 
 
@@ -125,6 +159,14 @@ async def build_app(
             stack.push_async_callback(cache.close)
             semantic = SemanticIndex(store, provider, cache, config.memory.embedding_model)
         memory = MemoryService(journal, store, semantic)
+        autonomy = Autonomy(
+            journal,
+            config.guardian.autonomable,
+            guardian,
+            config.guardian.offer_autonomy_after,
+            config.agent.timezone,
+        )
+        await autonomy.start()
         plate = Plate(
             config=config,
             provider=provider,
@@ -134,8 +176,9 @@ async def build_app(
             approver=LateApprover(),
             modules=enabled,
             guardian=guardian,
+            autonomy=autonomy,
         )
-        tools = core_tools(plate)
+        tools = [*core_tools(plate), *autonomy_tools(autonomy)]
         for module in enabled:
             stack.push_async_callback(module.close)
             tools += await module.assemble(plate)
@@ -144,11 +187,12 @@ async def build_app(
             journal=journal,
             provider=provider,
             registry=ToolRegistry(tools),
-            guardian=Guardian(plate.approver),
+            guardian=Guardian(plate.approver, autonomy.allows),
             compiler=ContextCompiler(constitution(enabled), config.agent.max_window_tokens),
             agent=config.agent,
             memory=memory,
             extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
+            summary_model=config.agent.summary_model or config.agent.extractor_model,
         )
         await orion.start()
         await plate.timers.sync()

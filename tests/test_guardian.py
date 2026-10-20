@@ -395,3 +395,29 @@ async def test_run_split_orion_does_not_start_without_its_guardian(tmp_path: Pat
     with pytest.raises(ModuleError, match="start `orion guardian` first"):
         async with build_app(config, ScriptedProvider(), []):
             pass
+
+
+def test_calendar_write_credentials_belong_to_the_guardian(tmp_path: Path) -> None:
+    config = guardian_config(
+        tmp_path,
+        modules={
+            "calendar": {
+                "enabled": True,
+                "accounts": [
+                    {
+                        "name": "perso",
+                        "url": {"env": "CAL"},
+                        "write": {
+                            "kind": "google",
+                            "client_id": "c",
+                            "client_secret": {"env": "GOOGLE_CLIENT_SECRET"},
+                            "refresh_token": {"env": "GOOGLE_REFRESH_TOKEN"},
+                        },
+                    }
+                ],
+            }
+        },
+    )
+    assert exposed(config, {"GOOGLE_REFRESH_TOKEN": "r", "OPENROUTER_API_KEY": "k"}) == [
+        "GOOGLE_REFRESH_TOKEN"
+    ]

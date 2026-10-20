@@ -17,18 +17,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import mimetypes
 import re
 import unicodedata
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
 
 from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
+from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
-from orion.channels.inbox import OwnerInbox
 from orion.channels.inkbox import (
     IMessage,
     InkboxClient,
@@ -59,6 +61,66 @@ REACTION_NO = {"dislike"}
 
 def normalize_number(number: str) -> str:
     return re.sub(r"[^\d+]", "", number)
+
+
+_TAPBACK_LABELS = {
+    "j\u2019aime": "like",
+    "je n\u2019aime pas": "dislike",
+    "j\u2019adore": "love",
+    "haha": "laugh",
+    "!!": "emphasize",
+    "?": "question",
+}
+_TAPBACK_VERBS = {
+    "a aimé": "like",
+    "n\u2019a pas aimé": "dislike",
+    "a adoré": "love",
+    "a ri de": "laugh",
+    "a mis en évidence": "emphasize",
+    "a posé une question sur": "question",
+    "liked": "like",
+    "disliked": "dislike",
+    "loved": "love",
+    "laughed at": "laugh",
+    "emphasized": "emphasize",
+    "questioned": "question",
+}
+_QUOTED = r"[«“\"]\s*(?P<quoted>.*?)\s*[»”\"]\.?"
+_TAPBACK_PATTERNS = (
+    re.compile(r"a ajouté un\s*«\s*(?P<label>[^»]+?)\s*»\s*à\s*" + _QUOTED, re.S | re.I),
+    re.compile(r"(?:a réagi avec|reacted)\s*(?P<emoji>\S+)\s*(?:à|to)\s*" + _QUOTED, re.S | re.I),
+    re.compile(r"(?P<verb>" + "|".join(_TAPBACK_VERBS) + r")\s*" + _QUOTED, re.S | re.I),
+)
+
+
+@dataclass(frozen=True)
+class TextTapback:
+    reaction: str
+    quoted: str
+    emoji: str | None = None
+
+
+def _plain(text: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", text).replace("'", "\u2019").split())
+
+
+def text_tapback(text: str) -> TextTapback | None:
+    """A tapback that arrived as text ("A ajouté un « J'aime » à « … »"), as iMessage sends
+    them to a line that is not an Apple device. None for an ordinary message."""
+    plain = _plain(text)
+    for pattern in _TAPBACK_PATTERNS:
+        found = pattern.fullmatch(plain)
+        if found is None:
+            continue
+        groups = found.groupdict()
+        quoted = groups["quoted"]
+        if groups.get("label") is not None:
+            reaction = _TAPBACK_LABELS.get(groups["label"].lower())
+            return TextTapback(reaction, quoted) if reaction else None
+        if groups.get("emoji") is not None:
+            return TextTapback("custom", quoted, groups["emoji"])
+        return TextTapback(_TAPBACK_VERBS[groups["verb"].lower()], quoted)
+    return None
 
 
 def answer_word(text: str) -> bool | None:
@@ -102,6 +164,9 @@ class Inbound:
     message_id: str
     conversation_id: str
     text: str
+    media: tuple[Attachment, ...] = ()
+    """Fresh links to its attachments (they expire: a requeued message fetches them again)."""
+    with_media: int = 0
 
 
 @dataclass
@@ -140,10 +205,14 @@ class ChannelState:
                 conversation = str(payload["conversation_id"])
                 self.owner_conversation = conversation
                 self.owner_inbound[message_id] = Inbound(
-                    message_id, conversation, str(payload.get("text") or "")
+                    message_id,
+                    conversation,
+                    str(payload.get("text") or ""),
+                    with_media=len(payload.get("media") or []),
                 )
         elif event.kind == FEEDBACK_REACTION:
             self.reactions.add(str(payload.get("reaction_id")))
+            self.handled.add(str(payload.get("reaction_id")))  # a tapback sent as text
         elif event.kind in ("message.received", APPROVAL_DECIDED):
             self.handled.update(str(ref) for ref in payload.get("refs", []))
 
@@ -175,6 +244,8 @@ class IMessageChannel:
         self._runner = ProjectionRunner(journal, [self.state])
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._polls = 0
+        self.others: Callable[[IMessage], None] | None = None
+        """Gets the messages of anyone but the owner (the secretary, D54), once journaled."""
         inbox.register(self)
 
     async def start(self) -> None:
@@ -183,12 +254,19 @@ class IMessageChannel:
         await self.outbox.resume()
         for message in self.state.unhandled():
             log.info("imessage.requeue", message_id=message.message_id)
+            if message.with_media:
+                fresh = await self._client.message(message.message_id, self._settings.identity_id)
+                message = replace(message, media=_attachments(fresh))
             self._inbox.submit(self._inbound(message))
 
     @staticmethod
     def _inbound(message: Inbound) -> InboxItem:
         return InboxItem(
-            CHANNEL, (message.message_id,), message.text, context=message.conversation_id
+            CHANNEL,
+            (message.message_id,),
+            message.text,
+            context=message.conversation_id,
+            media=message.media,
         )
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
@@ -200,6 +278,28 @@ class IMessageChannel:
             raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
         return sent.id
 
+    async def transmit_file(self, to: str, text: str, path: str, idempotency_key: str) -> str:
+        file = Path(path)
+        content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        try:
+            data = await asyncio.to_thread(file.read_bytes)
+            url = await self._client.upload(file.name, data, content_type)
+            sent = await self._client.send(
+                to, text, idempotency_key, self._settings.identity_id, media_url=url
+            )
+        except InkboxError as exc:
+            raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
+        except OSError as exc:
+            raise SendError(f"the file cannot be read: {exc}", retryable=False) from exc
+        return sent.id
+
+    async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
+        """A file for the owner, with a short caption, in their conversation."""
+        conversation = self.state.owner_conversation
+        if conversation is None:
+            raise SendError("the owner has not written to Orion on iMessage yet", retryable=False)
+        await self.outbox.send(CHANNEL, conversation, caption, correlation_id, media=str(path))
+
     async def available(self) -> bool:
         await self._runner.catch_up()
         return self.state.owner_conversation is not None
@@ -209,12 +309,12 @@ class IMessageChannel:
 
     @asynccontextmanager
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
-        """Read receipt, then a typing indicator kept alive until the answer is ready."""
+        """Read receipt, then a typing indicator kept alive until the answer is ready. Both run
+        beside the turn: the model starts at once instead of waiting for Inkbox."""
         conversation = item.context or self.state.owner_conversation
         if conversation is None:
             yield
             return
-        await self._best_effort(self._client.mark_read(conversation), "mark_read")
         typing = asyncio.create_task(self._keep_typing(conversation))
         try:
             yield
@@ -263,6 +363,10 @@ class IMessageChannel:
                         "is_owner": is_owner,
                         "service": message.service,
                         "created_at": message.created_at,
+                        "media": [
+                            {"content_type": a.content_type, "size": a.size}
+                            for a in _attachments(message)
+                        ],
                     },
                     provenance=Provenance(
                         source=f"imessage:{message.conversation_id}",
@@ -275,12 +379,43 @@ class IMessageChannel:
         )
         await self._runner.catch_up()
         if not is_owner:
-            log.info("imessage.third_party_ignored", conversation=message.conversation_id)
+            if self.others is not None:
+                self.others(message)
+            else:
+                log.info("imessage.third_party_ignored", conversation=message.conversation_id)
             return
-        inbound = Inbound(message.id, message.conversation_id, text)
-        if self._approvals and self._resolve_by_word(inbound):
+        media = _attachments(message)
+        inbound = Inbound(message.id, message.conversation_id, text, media, len(media))
+        tapback = None if media else text_tapback(text)
+        if tapback is not None:
+            await self._text_tapback(inbound, tapback)
+            return
+        if not media and self._approvals and self._resolve_by_word(inbound):
             return
         self._inbox.submit(self._inbound(inbound))
+
+    async def _text_tapback(self, inbound: Inbound, tapback: TextTapback) -> None:
+        """Treated like a real tapback on the message it quotes: an approval answer or a
+        signal for adaptation, never a turn of its own."""
+        quoted = _plain(tapback.quoted).rstrip(".…").strip()  # NFKC: "…" is "..."
+        target: str | None = None
+        for sent in await self._client.recent(
+            inbound.conversation_id, self._settings.identity_id, limit=30
+        ):
+            content = _plain(sent.content or "")
+            if sent.direction == "outbound" and quoted and content.startswith(quoted):
+                target = sent.id
+                break
+        log.info("imessage.text_tapback", reaction=tapback.reaction, matched=target is not None)
+        if target is not None and target in self._approvals:
+            self._resolve_by_reaction(target, tapback.reaction)
+        await self._feedback(
+            target or "unknown",
+            inbound.message_id,
+            tapback.reaction,
+            tapback.emoji,
+            inbound.conversation_id,
+        )
 
     async def receive_reaction(self, reaction: ReactionEvent) -> None:
         if reaction.direction != "inbound":
@@ -357,6 +492,7 @@ class IMessageChannel:
             await asyncio.sleep(interval)
 
     async def _keep_typing(self, conversation: str) -> None:
+        await self._best_effort(self._client.mark_read(conversation), "mark_read")
         while True:
             await self._best_effort(self._client.typing(conversation), "typing")
             await asyncio.sleep(self._settings.typing_refresh_seconds)
@@ -449,3 +585,7 @@ class IMessageChannel:
             ]
         )
         await self._runner.catch_up()
+
+
+def _attachments(message: IMessage) -> tuple[Attachment, ...]:
+    return tuple(Attachment(m.url, m.content_type, m.size) for m in message.media or [])
