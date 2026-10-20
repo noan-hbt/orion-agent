@@ -21,14 +21,14 @@ import re
 import unicodedata
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import structlog
 
 from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
+from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
-from orion.channels.inbox import OwnerInbox
 from orion.channels.inkbox import (
     IMessage,
     InkboxClient,
@@ -162,6 +162,9 @@ class Inbound:
     message_id: str
     conversation_id: str
     text: str
+    media: tuple[Attachment, ...] = ()
+    """Fresh links to its attachments (they expire: a requeued message fetches them again)."""
+    with_media: int = 0
 
 
 @dataclass
@@ -200,7 +203,10 @@ class ChannelState:
                 conversation = str(payload["conversation_id"])
                 self.owner_conversation = conversation
                 self.owner_inbound[message_id] = Inbound(
-                    message_id, conversation, str(payload.get("text") or "")
+                    message_id,
+                    conversation,
+                    str(payload.get("text") or ""),
+                    with_media=len(payload.get("media") or []),
                 )
         elif event.kind == FEEDBACK_REACTION:
             self.reactions.add(str(payload.get("reaction_id")))
@@ -244,12 +250,19 @@ class IMessageChannel:
         await self.outbox.resume()
         for message in self.state.unhandled():
             log.info("imessage.requeue", message_id=message.message_id)
+            if message.with_media:
+                fresh = await self._client.message(message.message_id, self._settings.identity_id)
+                message = replace(message, media=_attachments(fresh))
             self._inbox.submit(self._inbound(message))
 
     @staticmethod
     def _inbound(message: Inbound) -> InboxItem:
         return InboxItem(
-            CHANNEL, (message.message_id,), message.text, context=message.conversation_id
+            CHANNEL,
+            (message.message_id,),
+            message.text,
+            context=message.conversation_id,
+            media=message.media,
         )
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
@@ -324,6 +337,10 @@ class IMessageChannel:
                         "is_owner": is_owner,
                         "service": message.service,
                         "created_at": message.created_at,
+                        "media": [
+                            {"content_type": a.content_type, "size": a.size}
+                            for a in _attachments(message)
+                        ],
                     },
                     provenance=Provenance(
                         source=f"imessage:{message.conversation_id}",
@@ -338,12 +355,13 @@ class IMessageChannel:
         if not is_owner:
             log.info("imessage.third_party_ignored", conversation=message.conversation_id)
             return
-        inbound = Inbound(message.id, message.conversation_id, text)
-        tapback = text_tapback(text)
+        media = _attachments(message)
+        inbound = Inbound(message.id, message.conversation_id, text, media, len(media))
+        tapback = None if media else text_tapback(text)
         if tapback is not None:
             await self._text_tapback(inbound, tapback)
             return
-        if self._approvals and self._resolve_by_word(inbound):
+        if not media and self._approvals and self._resolve_by_word(inbound):
             return
         self._inbox.submit(self._inbound(inbound))
 
@@ -538,3 +556,7 @@ class IMessageChannel:
             ]
         )
         await self._runner.catch_up()
+
+
+def _attachments(message: IMessage) -> tuple[Attachment, ...]:
+    return tuple(Attachment(m.url, m.content_type, m.size) for m in message.media or [])

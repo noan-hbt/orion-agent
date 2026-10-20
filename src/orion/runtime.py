@@ -12,7 +12,7 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -93,6 +93,26 @@ class Interjection:
 
 
 Interjections = Callable[[], Awaitable[list[Interjection]]]
+
+
+@dataclass(frozen=True)
+class Photo:
+    """An image the owner sent, as the model reads it: described once by a model that sees."""
+
+    id: str
+    description: str
+
+
+PHOTO_TRUST = Trust.OWNER_INSTANCE
+"""The owner sent it, but what is in it was written by others (a flyer, a screenshot of a
+message): information, not orders, like a file read from their machine."""
+
+
+def photo_block(photo: Photo) -> str:
+    head = f'<photo id="{_attr(photo.id)}">' if photo.id else "<photo>"
+    return f"{head}\n{photo.description}\n</photo>"
+
+
 Progress = Callable[[str, str], Awaitable[None]]
 """(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
 mid-turn, instead of holding everything for the final answer."""
@@ -148,24 +168,32 @@ class Orion:
         interjections: Interjections | None = None,
         progress: Progress | None = None,
         waiting: Waiting | None = None,
+        photos: Sequence[Photo] = (),
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
         `refs` are the channel's own message ids, recorded so a restart knows they were handled.
         `interjections` is asked between steps for messages the owner sent meanwhile: they join
-        the turn, so Orion can change course instead of finishing a plan the owner revoked."""
+        the turn, so Orion can change course instead of finishing a plan the owner revoked.
+        `photos` came with the message: their content lowers the turn's trust (`PHOTO_TRUST`),
+        and their words never count as the owner's (`owner_text`)."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
             payload["refs"] = refs
+        body = text
+        if photos:
+            payload["photos"] = [p.id for p in photos if p.id]
+            body = "\n\n".join([*([text] if text else []), *(photo_block(p) for p in photos)])
         return await self._turn(
             thread_id,
             kind="message.received",
             payload=payload,
             provenance=owner,
-            trust=Trust.OWNER,
-            body=text,
+            trust=min(Trust.OWNER, PHOTO_TRUST) if photos else Trust.OWNER,
+            body=body,
             channel=channel,
             now=now,
+            owner_text=text,
             interjections=interjections,
             progress=progress,
             waiting=waiting,

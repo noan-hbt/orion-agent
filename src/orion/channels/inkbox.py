@@ -73,6 +73,12 @@ class MessageReaction(_Model):
     remote_number: str | None = None
 
 
+class Media(_Model):
+    url: str
+    content_type: str = ""
+    size: int | None = None
+
+
 class IMessage(_Model):
     id: str
     conversation_id: str
@@ -87,6 +93,8 @@ class IMessage(_Model):
     status: str | None = None
     was_downgraded: bool | None = None
     reactions: list[MessageReaction] | None = None
+    media: list[Media] | None = None
+    """Attachments; inbound URLs are presigned and expire after an hour."""
 
     @property
     def sender(self) -> str | None:

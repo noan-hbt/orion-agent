@@ -1029,3 +1029,25 @@ un dossier de notes.
 
 Pas de paiement : la consigne de l'agent l'arrête avant tout paiement, sauf si le texte
 approuvé dit explicitement de payer.
+
+## D50 — Les photos
+
+*20/10/2026 · acceptée*
+
+Module `photos`, actif par défaut. Le propriétaire envoie une photo par iMessage : une affiche,
+une ordonnance, un ticket, une capture d'écran.
+- **Regardée une fois** : un modèle qui voit (Gemini Flash, qui lit le HEIC de l'iPhone) la
+  décrit à son arrivée, avec tout le texte qu'elle porte. Le modèle de tous les jours ne reçoit
+  que cette description : il n'a pas besoin de voir, et une image rejouée à chaque requête
+  pèserait sur chaque tour. Le contrat du cache tient.
+- **Du contenu, pas des ordres** : le message qui porte une photo est journalisé sous
+  `OWNER_INSTANCE`, comme un fichier lu sur l'ordinateur du propriétaire. Les règles du contenu
+  venu d'ailleurs s'appliquent (D26) : il propose, le propriétaire approuve. Les mots de la
+  photo ne comptent jamais comme ceux du propriétaire (ils ne peuvent pas être tapés dans un
+  site, ni extraits en mémoire comme s'il les avait dits).
+- **Gardée** : le fichier reste dans le dossier de données (0600), et `photo_look` repose une
+  question précise sur un détail. Le journal ne garde que la description et une empreinte.
+  Oublier la conversation oublie la photo : le fichier est supprimé dès qu'aucun événement ne
+  le nomme plus.
+- **Lien qui expire** : Inkbox donne un lien valable une heure ; après un redémarrage, le
+  message est relu pour en obtenir un neuf.

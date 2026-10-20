@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -26,9 +26,23 @@ from typing import Protocol
 import structlog
 
 from orion.cognition.loop import StopReason
-from orion.runtime import OWNER_THREAD, Interjection, Orion, TurnResult, is_silence
+from orion.runtime import OWNER_THREAD, Interjection, Orion, Photo, TurnResult, is_silence
 
 log = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class Attachment:
+    """A file sent with a message, fetchable at `url` for a while."""
+
+    url: str
+    content_type: str = ""
+    size: int | None = None
+
+
+Eyes = Callable[[Sequence[Attachment], str, str], Awaitable[list[Photo]]]
+"""Turns attachments into what the model can read (the `photos` module), given the caption and
+the source of the message they came with."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,7 @@ class Inbound:
     """The message needs no answer unless Orion has something to add."""
     context: str = field(default="", compare=False)
     """Opaque per-channel data, e.g. the conversation to show typing in."""
+    media: tuple[Attachment, ...] = ()
 
 
 class Outlet(Protocol):
@@ -80,6 +95,7 @@ class OwnerInbox:
         self._held: deque[Inbound] = deque()
         """Taken off the queue but kept for a later turn, in arrival order."""
         self._background: set[asyncio.Task[None]] = set()
+        self.eyes: Eyes | None = None
 
     def register(self, outlet: Outlet) -> None:
         """Outlets are tried for proactive messages in registration order."""
@@ -137,9 +153,7 @@ class OwnerInbox:
                 self._held.append(self._queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
-        return bool(self._held) and (
-            self._held[0].channel == first.channel and not self._held[0].allow_silence
-        )
+        return bool(self._held) and _joins(self._held[0], first)
 
     def _arrived_meanwhile(self, first: Inbound) -> list[Inbound]:
         """Messages that can join the running turn: same channel, needing an answer, and not
@@ -151,11 +165,19 @@ class OwnerInbox:
                 break
         joined: list[Inbound] = []
         while self._held:
-            item = self._held[0]
-            if item.channel != first.channel or item.allow_silence:
+            if not _joins(self._held[0], first):
                 break
             joined.append(self._held.popleft())
         return joined
+
+    async def _look(self, batch: list[Inbound]) -> list[Photo]:
+        attachments = [a for item in batch for a in item.media]
+        if not attachments:
+            return []
+        if self.eyes is None:
+            return [Photo("", "(Une pièce jointe : tu ne peux pas voir les images.)")]
+        caption = "\n".join(item.text for item in batch if item.text)
+        return await self.eyes(attachments, caption, f"{batch[0].channel}:{OWNER_THREAD}")
 
     async def _handle(self, batch: list[Inbound], waited: float = 0.0) -> None:
         first = batch[0]
@@ -177,6 +199,7 @@ class OwnerInbox:
                 await reply.deliver(text, correlation_id)
 
         async with showing:
+            photos = await self._look(batch)
             turn = await self._orion.handle_owner_message(
                 OWNER_THREAD,
                 "\n".join(item.text for item in batch if item.text),
@@ -185,6 +208,7 @@ class OwnerInbox:
                 interjections=interjections,
                 progress=progress,
                 waiting=lambda: not first.allow_silence and self._waiting(first),
+                photos=photos,
             )
         thought = time.monotonic() - started
         text = turn.text.strip()
@@ -225,3 +249,9 @@ class OwnerInbox:
         task = asyncio.create_task(guarded())
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+
+def _joins(item: Inbound, first: Inbound) -> bool:
+    """Whether a message that came during a turn can join it. One with a photo waits for its
+    own turn: the photo has to be looked at first."""
+    return item.channel == first.channel and not item.allow_silence and not item.media

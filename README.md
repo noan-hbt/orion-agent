@@ -121,6 +121,9 @@ d'autres personnes.
 - **Agir sur tes comptes, dans tes limites** (D49) : des mails ou des formulaires seul, mais
   seulement aux destinataires et sur les sites que tu as nommés ; tes sessions connectées
   restent chez le gardien, prêtées pour une tâche approuvée.
+- **Des photos** (D50) : envoie-lui une affiche, une ordonnance, un ticket ou une capture
+  d'écran ; il la lit, texte compris, et fait ce qu'elle appelle (agenda, rappel,
+  bibliothèque, réponse). Ce qui est écrit sur une photo n'est jamais un ordre.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).
