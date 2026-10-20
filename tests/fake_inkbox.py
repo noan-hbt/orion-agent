@@ -36,6 +36,7 @@ class FakeInkbox:
     rules: list[tuple[str, dict[str, Any]]] = field(
         default_factory=list[tuple[str, dict[str, Any]]]
     )
+    uploads: list[bytes] = field(default_factory=list[bytes])
     fail_sends: list[int] = field(default_factory=list[int])
     """Status codes to answer the next sends with, in order."""
     _counter: int = 0
@@ -104,6 +105,11 @@ class FakeInkbox:
         path = request.url.path.removeprefix("/api/v1")
         self.calls.append((request.method, path))
         assert request.headers["X-API-Key"] == "test-key"
+        if path == "/media" and request.method == "POST":
+            self.uploads.append(request.content)
+            return httpx.Response(
+                201, json={"media_url": f"https://media.inkbox.test/{len(self.uploads)}"}
+            )
         body: dict[str, Any] = json.loads(request.content) if request.content else {}
         if path.startswith("/identities/") and request.method == "PATCH":
             self.rules.append((path, body))
@@ -187,5 +193,12 @@ class FakeInkbox:
         }
         self.messages[message["id"]] = message
         self.idempotency[key] = message
-        self.sent.append({"id": message["id"], "text": body["text"], "key": key})
+        self.sent.append(
+            {
+                "id": message["id"],
+                "text": body["text"],
+                "key": key,
+                "media": body.get("media_urls") or [],
+            }
+        )
         return httpx.Response(200, json={"message": message})

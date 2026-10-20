@@ -57,6 +57,7 @@ class ProvidersConfig(BaseModel):
 
 STRONG_MODEL = "anthropic/claude-opus-5.5"
 VISION_MODEL = "google/gemini-3.8-flash"
+IMAGE_MODEL = "google/gemini-3.1-flash-image"
 
 
 class AgentConfig(BaseModel):
@@ -100,6 +101,9 @@ class AgentConfig(BaseModel):
         default=VISION_MODEL,
         description="Looks at the photos the owner sends (reads HEIC, the iPhone's format)",
     )
+    image_model: str = Field(
+        default=IMAGE_MODEL, description="Makes the pictures the owner asks for"
+    )
     summary_model: str | None = Field(
         default=None, description="Summarizes what a rebase drops; default: extractor_model"
     )
@@ -117,6 +121,7 @@ class AgentConfig(BaseModel):
             self.verifier_model,
             self.strong_model,
             self.vision_model,
+            self.image_model,
             self.summary_model or self.extractor_model,
             self.reflection_model or self.extractor_model,
         }

@@ -237,4 +237,11 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Une idée de cadeau pour l'anniversaire de ma mère ?"),),
         checks=(says(r"orchid", "the idea ignores what his mother likes"),),
     ),
+    Case(
+        name="fais_moi_une_image",
+        origin="Un fichier, pas des mots : l'image doit être faite puis envoyée.",
+        at=paris(2026, 10, 20, 20, 0),
+        steps=(Say("Fais-moi une image d'un chat roux qui dort sur un toit de Paris"),),
+        checks=(uses("file:image"),),
+    ),
 )

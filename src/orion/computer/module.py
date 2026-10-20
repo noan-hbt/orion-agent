@@ -100,6 +100,19 @@ class ComputerModule(Module):
         await self.sending.recover()
         # Orion's own browser is always read-only: sending stays with an approved brief.
         self.desk = BrowserDesk(plate.journal, lambda: sessions(True))
+        from orion.files.module import FilesModule
+
+        files = plate.module(FilesModule)
+        store = files.store if files is not None else None
+        keep = None
+        if store is not None:
+            kept_by = store
+
+            async def keep_file(name: str, data: bytes, kind: str, ctx: ToolContext) -> str:
+                return (await kept_by.save(name, data, kind, "screenshot", ctx, Trust.WEB)).id
+
+            keep = keep_file
+        browsing = browser_tools(self.desk, keep)
         return [
             *computer_tools(self.reading, self.sending, plate.guardian),
             grouped(
@@ -107,7 +120,7 @@ class ComputerModule(Module):
                 "Your own browser, which you drive yourself, page by page: open a page and see "
                 "it (its text and numbered elements), then act on the page shown. For a site's "
                 "search, listings, schedules. Nothing is ever sent from it.",
-                browser_tools(self.desk),
+                browsing,
                 {
                     "browser_open": "open",
                     "browser_click": "click",
@@ -117,6 +130,7 @@ class ComputerModule(Module):
                     "browser_back": "back",
                     "browser_read": "read",
                     "browser_close": "close",
+                    **({"browser_screenshot": "screenshot"} if keep is not None else {}),
                 },
             ),
         ]

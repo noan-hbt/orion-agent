@@ -77,6 +77,9 @@ class ModelRequest(BaseModel):
         default=False,
         description="Tools stay declared (the cached prefix is unchanged) but none may be called",
     )
+    image_output: bool = Field(
+        default=False, description="Ask an image model for pictures (`ModelResponse.images`)"
+    )
     web_search: int | None = Field(
         default=None,
         ge=1,
@@ -105,6 +108,9 @@ class ModelResponse(BaseModel):
     provider: str | None = None
     attempts: int = 1
     citations: list[Citation] = Field(default_factory=list[Citation])
+    images: list[str] = Field(
+        default_factory=list[str], description="Pictures an image model made, as data: URLs"
+    )
 
 
 class ProviderError(RuntimeError):

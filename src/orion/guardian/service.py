@@ -88,6 +88,8 @@ _ALWAYS_READABLE = (
     re.compile(r"/phone/calls/[^/]+/transcripts"),
 )
 _TO_OWNER = ("/imessage/messages", "/imessage/typing", "/imessage/mark-read")
+MAX_MEDIA_BYTES = 10 * 1024 * 1024 + 4096
+"""Inkbox's limit for one file, plus the multipart envelope."""
 
 
 class GuardianError(RuntimeError):
@@ -340,6 +342,12 @@ class GuardianService:
         path = "/" + str(request.path_params["path"])
         params = list(request.query_params.multi_items())
         content = await request.body()
+        if request.method == "POST" and path == "/media":
+            # A file for Orion to send: uploading sends nothing; what goes out, and to whom, is
+            # the message that names it, checked below like any other.
+            if len(content) > MAX_MEDIA_BYTES:
+                return await self.deny("POST /media", "file too large")
+            return await self._forward(request, path, [], content)
         try:
             loaded: Any = json.loads(content) if content else {}
         except json.JSONDecodeError:
@@ -350,6 +358,13 @@ class GuardianService:
         )
         if reason is not None:
             return await self.deny(f"{request.method} {path}", reason)
+        return await self._forward(request, path, params, content)
+
+    async def _forward(
+        self, request: Request, path: str, params: list[tuple[str, str]], content: bytes
+    ) -> Response:
+        if self._inkbox is None:  # pragma: no cover - checked by the caller
+            return refused("Inkbox is not configured on the guardian", 503)
         headers = {
             name: request.headers[name]
             for name in ("content-type", "idempotency-key", "prefer")
@@ -387,7 +402,9 @@ class GuardianService:
         if method == "POST" and path in _TO_OWNER:
             conversation = str(body.get("conversation_id", ""))
             if not await self.is_owner_conversation(conversation):
-                return await self._to_contact(path, conversation)
+                return await self._to_contact(
+                    path, conversation, body_media=bool(body.get("media_urls"))
+                )
             if path == "/imessage/messages" and not self._may_send():
                 return "too many messages this minute"
             return None
@@ -421,7 +438,9 @@ class GuardianService:
             )
         return f"{method} {path} is not allowed from the core"
 
-    async def _to_contact(self, path: str, conversation: str, starting: bool = False) -> str | None:
+    async def _to_contact(
+        self, path: str, conversation: str, starting: bool = False, body_media: bool = False
+    ) -> str | None:
         """A contact's conversation (D54): Orion only answers, within hours of their last
         message (`starting` lifts that, for a message the owner approved), a few times a day."""
         contact = await self.contact_of(conversation)
@@ -429,6 +448,8 @@ class GuardianService:
             return "that conversation is not the owner's, nor a contact's"
         if path != "/imessage/messages":
             return None
+        if body_media:
+            return "Orion sends files to the owner only"
         if not starting and not contact[1]:
             return f"{contact[0].name} has not written to Orion in the last hours"
         key = (normalize_number(contact[0].number), self.clock().date())

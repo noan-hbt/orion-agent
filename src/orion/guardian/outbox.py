@@ -10,7 +10,7 @@ outcome is a definite refusal (4xx) is not retried.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 import structlog
 
@@ -40,6 +40,13 @@ class Transport(Protocol):
         ...
 
 
+@runtime_checkable
+class FileTransport(Transport, Protocol):
+    """A channel that can also send a file with the text."""
+
+    async def transmit_file(self, to: str, text: str, path: str, idempotency_key: str) -> str: ...
+
+
 @dataclass(frozen=True)
 class Pending:
     outbox_id: str
@@ -47,6 +54,8 @@ class Pending:
     to: str
     text: str
     correlation_id: str | None
+    media: str = ""
+    """A file to send with the text (its path under the data directory), if any."""
 
 
 class PendingProjection:
@@ -78,6 +87,7 @@ class PendingProjection:
                 str(payload["to"]),
                 str(payload["text"]),
                 event.correlation_id,
+                str(payload.get("media", "")),
             )
         elif event.kind in (DELIVERED, FAILED):
             self.pending.pop(str(payload["outbox_id"]), None)
@@ -98,16 +108,17 @@ class Outbox:
         text: str,
         correlation_id: str | None = None,
         causation_id: str | None = None,
+        media: str = "",
     ) -> str:
-        """Queue, send, record the outcome. Returns the provider's message id."""
+        """Queue, send, record the outcome. Returns the provider's message id. `media` is a
+        file sent with the text: only its path is journaled, never its content."""
         outbox_id = f"o_{new_id()}"
-        await self._append(
-            QUEUED,
-            {"outbox_id": outbox_id, "channel": channel, "to": to, "text": text},
-            correlation_id,
-            causation_id,
-        )
-        return await self._deliver(Pending(outbox_id, channel, to, text, correlation_id))
+        payload: dict[str, object] = {"outbox_id": outbox_id, "channel": channel, "to": to}
+        payload["text"] = text
+        if media:
+            payload["media"] = media
+        await self._append(QUEUED, payload, correlation_id, causation_id)
+        return await self._deliver(Pending(outbox_id, channel, to, text, correlation_id, media))
 
     async def resume(self) -> int:
         """Retry sends left unsettled by a crash, with their original idempotency keys."""
@@ -127,8 +138,16 @@ class Outbox:
         if transport is None:
             await self._settle(FAILED, item, error=f"no transport for {item.channel}")
             raise SendError(f"no transport for channel {item.channel!r}", retryable=False)
+        if item.media and not isinstance(transport, FileTransport):
+            await self._settle(FAILED, item, error=f"{item.channel} cannot send files")
+            raise SendError(f"{item.channel} cannot send files", retryable=False)
         try:
-            remote_id = await transport.transmit(item.to, item.text, item.outbox_id)
+            if item.media and isinstance(transport, FileTransport):
+                remote_id = await transport.transmit_file(
+                    item.to, item.text, item.media, item.outbox_id
+                )
+            else:
+                remote_id = await transport.transmit(item.to, item.text, item.outbox_id)
         except SendError as exc:
             if not exc.retryable:
                 await self._settle(FAILED, item, error=str(exc))

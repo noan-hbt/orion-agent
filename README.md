@@ -140,6 +140,8 @@ d'autres personnes.
   qui compte.
 - **Rappels de lieu** (D57, à activer) : « quand je passe à la boulangerie ». Ton iPhone ne
   lui dit que le nom du lieu où tu arrives, pour les lieux que tu as choisis.
+- **Des fichiers** (D60) : demande-lui une image, une capture de la page qu'il regarde ou un
+  PDF ; il te l'envoie dans la conversation.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

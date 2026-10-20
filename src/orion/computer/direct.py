@@ -28,7 +28,7 @@ import asyncio
 import re
 import unicodedata
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -199,6 +199,13 @@ class BrowserDesk:
         more = len(text) > start + SHOWN_CHARS
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
+    async def screenshot(self, full: bool, ctx: ToolContext) -> bytes:
+        async with self._lock:
+            live = self._live.get(ctx.thread_id)
+            if live is None:
+                raise Refused("No page is open: browser open first.")
+            return await live.session.screenshot(full)
+
     async def _act(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
         async with self._lock:
             live = await self._browser(ctx.thread_id)
@@ -304,7 +311,17 @@ class NoInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def browser_tools(desk: BrowserDesk) -> list[Tool]:
+class ScreenshotInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    full: bool = Field(default=False, description="The whole page, not only what is visible")
+
+
+Keep = Callable[[str, bytes, str, ToolContext], Awaitable[str]]
+"""(name, data, content type, ctx) → the id of the file kept (`orion.files`)."""
+
+
+def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
     def run(act: Callable[[Any, ToolContext], Any]) -> Any:
         async def handler(args: Any, ctx: ToolContext) -> ToolResult:
             try:
@@ -313,6 +330,17 @@ def browser_tools(desk: BrowserDesk) -> list[Tool]:
                 return ToolResult(str(exc), is_error=True)
 
         return handler
+
+    async def screenshot(args: Any, ctx: ToolContext) -> ToolResult:
+        if keep is None:  # pragma: no cover - the tool exists only with a store
+            return ToolResult("Screenshots are not available.", is_error=True)
+        try:
+            data = await desk.screenshot(args.full, ctx)
+        except (Refused, BrowserError) as exc:
+            return ToolResult(str(exc), is_error=True)
+        kind = "image/jpeg" if args.full else "image/png"
+        file_id = await keep("capture", data, kind, ctx)
+        return ToolResult(f"Capture prête ({file_id}). Envoie-la avec `file` (send).")
 
     async def close(_args: Any, ctx: ToolContext) -> ToolResult:
         closed = await desk.close(ctx.thread_id)
@@ -373,4 +401,16 @@ def browser_tools(desk: BrowserDesk) -> list[Tool]:
             run(lambda a, c: desk.read(a.part, a.find, c)),
         ),
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
+        *(
+            [
+                tool(
+                    "browser_screenshot",
+                    "A picture of the page shown, to send to the owner (`file` send).",
+                    ScreenshotInput,
+                    screenshot,
+                )
+            ]
+            if keep is not None
+            else []
+        ),
     ]

@@ -265,16 +265,34 @@ class InkboxClient:
         text: str,
         idempotency_key: str,
         identity_id: str | None = None,
+        media_url: str | None = None,
     ) -> IMessage:
         params = {"agent_identity_id": identity_id} if identity_id else None
+        body: dict[str, Any] = {"conversation_id": conversation_id, "text": text or None}
+        if media_url:
+            body["media_urls"] = [media_url]
         data = await self._request(
             "POST",
             "/imessage/messages",
-            json={"conversation_id": conversation_id, "text": text},
+            json=body,
             params=params,
             headers={"Idempotency-Key": idempotency_key, "Prefer": "idempotency-replay"},
         )
         return IMessage.model_validate(data.get("message", data))
+
+    async def upload(self, name: str, data: bytes, content_type: str) -> str:
+        """A file Inkbox keeps for a send (10 MiB at most); returns its URL for `send`."""
+        try:
+            response = await self._client.post("/media", files={"file": (name, data, content_type)})
+        except httpx.TransportError as exc:
+            raise InkboxError(f"POST /media: {exc!r}", retryable=True) from exc
+        if response.status_code >= 400:
+            raise InkboxError(
+                f"POST /media -> {response.status_code}: {response.text[:300]}",
+                status=response.status_code,
+                retryable=response.status_code in _RETRYABLE_STATUS,
+            )
+        return str(response.json()["media_url"])
 
     async def unread(self, identity_id: str | None = None, limit: int = 50) -> list[IMessage]:
         params: dict[str, Any] = {"is_read": False, "limit": limit}

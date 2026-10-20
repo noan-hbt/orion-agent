@@ -1221,3 +1221,23 @@ modèle choisit d'abord le domaine, puis l'action, que la description liste avec
 - La liste reste fixe et triée : le contrat du cache tient.
 
 Le banc d'essai complet a tourné avant et après, sur Haiku et DeepSeek, deux fois par cas.
+
+## D60 — Orion envoie des fichiers
+
+*20/10/2026 · acceptée*
+
+Module `files`, actif par défaut. Le propriétaire peut demander un fichier plutôt que des mots.
+- **Image** : faite par le modèle d'images (`agent.image_model`).
+- **PDF** : Orion rédige le texte (titres, paragraphes, listes), et le même Chromium sans écran
+  que son navigateur l'imprime, sans réseau ni JavaScript.
+- **Capture** : `browser` (screenshot) prend la page affichée, la partie visible ou la page
+  entière.
+- **Envoi** : `file` (send) l'envoie dans la conversation du propriétaire avec une légende. La
+  boîte d'envoi journalise le chemin du fichier, jamais son contenu, et un envoi interrompu
+  reprend avec la même clé. Inkbox reçoit le fichier (10 Mo au plus), puis le message qui le
+  porte.
+
+Le gardien laisse passer l'envoi d'un fichier vers Inkbox, puisque cet envoi ne fait encore
+rien partir. Il vérifie ensuite le message qui le porte comme les autres, et refuse un fichier
+pour qui que ce soit d'autre que le propriétaire. Une capture d'une page reste du contenu du
+web (`Trust.WEB`). Oublier la conversation oublie le fichier.

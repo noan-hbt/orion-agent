@@ -24,6 +24,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.delegation.module import DelegationModule
     from orion.expert.module import ExpertModule
     from orion.federation.module import FederationModule
+    from orion.files.module import FilesModule
     from orion.hands.module import HandsModule
     from orion.intentions.module import IntentionsModule
     from orion.library.module import LibraryModule
@@ -49,6 +50,7 @@ def builtin_modules() -> list[type[Module]]:
         MailModule,
         FederationModule,
         WebModule,
+        FilesModule,
         ComputerModule,
         OnboardingModule,
         ExpertModule,

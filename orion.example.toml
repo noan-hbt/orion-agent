@@ -21,6 +21,7 @@ fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model
 verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family
 strong_model = "anthropic/claude-opus-5.5"           # consulted when hard; night thinking; chronicle
 vision_model = "google/gemini-3.8-flash"             # looks at the photos you send
+image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask for
 # summary_model = "..."      # summarizes what leaves the window; default: extractor_model
 # reflection_model = "..."   # learns your playbook, tidies memory at night; default: extractor_model
 # Each module can also name its own, overriding these: [modules.expert] model, [modules.thinking]

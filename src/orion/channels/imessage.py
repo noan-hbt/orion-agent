@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import mimetypes
 import re
 import unicodedata
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 import structlog
@@ -275,6 +277,28 @@ class IMessageChannel:
         except InkboxError as exc:
             raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
         return sent.id
+
+    async def transmit_file(self, to: str, text: str, path: str, idempotency_key: str) -> str:
+        file = Path(path)
+        content_type = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        try:
+            data = await asyncio.to_thread(file.read_bytes)
+            url = await self._client.upload(file.name, data, content_type)
+            sent = await self._client.send(
+                to, text, idempotency_key, self._settings.identity_id, media_url=url
+            )
+        except InkboxError as exc:
+            raise SendError(str(exc), retryable=exc.retryable or exc.status is None) from exc
+        except OSError as exc:
+            raise SendError(f"the file cannot be read: {exc}", retryable=False) from exc
+        return sent.id
+
+    async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
+        """A file for the owner, with a short caption, in their conversation."""
+        conversation = self.state.owner_conversation
+        if conversation is None:
+            raise SendError("the owner has not written to Orion on iMessage yet", retryable=False)
+        await self.outbox.send(CHANNEL, conversation, caption, correlation_id, media=str(path))
 
     async def available(self) -> bool:
         await self._runner.catch_up()

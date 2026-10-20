@@ -175,6 +175,13 @@ class Session:
             raise BrowserError("the browser is not open")
         return self.page
 
+    async def screenshot(self, full: bool) -> bytes:
+        """The page as the owner would see it: the visible part as PNG, or the whole page as
+        JPEG (smaller, for a long page)."""
+        if full:
+            return await self._page().screenshot(full_page=True, type="jpeg", quality=80)
+        return await self._page().screenshot(type="png")
+
     async def snapshot(self, text_chars: int = TEXT_CHARS) -> Snapshot:
         page = self._page()
         for attempt in range(3):

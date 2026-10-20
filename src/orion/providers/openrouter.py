@@ -170,6 +170,8 @@ class OpenRouterProvider:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         if self._sort is not None:
             body["provider"] = {"sort": self._sort}
+        if request.image_output:
+            body["modalities"] = ["image", "text"]
         if request.web_search is not None:
             body["plugins"] = [{"id": "web", "max_results": request.web_search}]
         return body
@@ -254,6 +256,7 @@ class OpenRouterProvider:
                 for a in choice.message.annotations or []
                 if a.type == "url_citation" and a.url_citation is not None
             ],
+            images=[i.image_url.url for i in choice.message.images or []],
         )
 
 
@@ -280,10 +283,19 @@ class _RawAnnotation(BaseModel):
     url_citation: _RawUrlCitation | None = None
 
 
+class _RawImageUrl(BaseModel):
+    url: str
+
+
+class _RawImage(BaseModel):
+    image_url: _RawImageUrl
+
+
 class _RawMessage(BaseModel):
     content: str | None = None
     tool_calls: list[_RawToolCall] | None = None
     annotations: list[_RawAnnotation] | None = None
+    images: list[_RawImage] | None = None
 
 
 class _RawChoice(BaseModel):
