@@ -17,6 +17,9 @@
 		reverse_proxy 127.0.0.1:8791
 	}
 	# Orion's hands on your machines dial in here (paired secret required).
+	handle /places/event {
+		reverse_proxy 127.0.0.1:8793
+	}
 	handle /hands/* {
 		reverse_proxy 127.0.0.1:8792
 	}

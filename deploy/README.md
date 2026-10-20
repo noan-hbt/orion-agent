@@ -95,3 +95,21 @@ Une session expire comme dans ton navigateur : refais l'étape 1 quand le site t
 Pour qu'Orion envoie des mails ou des formulaires seul, ajoute `"mail_send"` ou
 `"computer_task_send"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites
 que tu lui donnes en accordant l'autonomie (à quels destinataires, sur quels sites).
+
+## Rappels de lieu (iPhone)
+
+« Rappelle-moi d'acheter du pain quand je passe à la boulangerie. » Active `[modules.places]`
+(`enabled = true`), relance `orion serve`, puis, sous l'utilisateur du cœur :
+
+```bash
+orion places token     # le jeton du téléphone (en refaire un rend l'ancien inutilisable)
+```
+
+Sur l'iPhone, app **Raccourcis** > **Automatisation** > **Arrivée** (ou **Départ**) > choisis le
+lieu > action **Obtenir le contenu de l'URL** :
+- URL : `https://<ton domaine>/places/event`, méthode **POST** ;
+- en-tête `Authorization` : `Bearer <jeton>` ;
+- corps JSON : `{"place": "boulangerie", "event": "arrive"}` (`"leave"` pour un départ).
+
+Coche « Exécuter immédiatement ». Orion ne reçoit que le nom que tu as donné au lieu, et
+seulement pour les lieux où tu as mis une automatisation : jamais de coordonnées.

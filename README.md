@@ -137,6 +137,8 @@ d'autres personnes.
 - **Les gens de ta vie** (D56) : avant de voir quelqu'un, ce qui compte sur lui ; les
   anniversaires à temps ; et un mot quand ça fait trop longtemps que tu n'as pas vu quelqu'un
   qui compte.
+- **Rappels de lieu** (D57, à activer) : « quand je passe à la boulangerie ». Ton iPhone ne
+  lui dit que le nom du lieu où tu arrives, pour les lieux que tu as choisis.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

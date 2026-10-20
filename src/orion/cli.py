@@ -271,6 +271,22 @@ async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _places_token(config: OrionConfig) -> int:
+    from orion.places.module import PATH, Places
+
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        places = Places(journal)
+        await places.sync()
+        token = await places.new_token()
+    print(f"Jeton du téléphone (l'ancien ne marche plus) : {token}")
+    print(
+        "Dans Raccourcis : Automatisation > Arrivée (ou Départ) > le lieu > « Obtenir le contenu "
+        f"de l'URL », POST vers https://<ton domaine>{PATH}, en-tête Authorization: Bearer "
+        '<jeton>, corps JSON {"place": "boulangerie", "event": "arrive"}.'
+    )
+    return 0
+
+
 async def _hand(args: argparse.Namespace) -> int:
     from orion.hands.hand import DEFAULT_ACTIONS, Hand, HandConfig, Refused, pair
 
@@ -656,6 +672,9 @@ def main(argv: list[str] | None = None) -> int:
     sessions_remove = sessions_sub.add_parser("remove", help="Forget a session")
     sessions_remove.add_argument("name")
     sessions_sub.add_parser("list", help="The sessions kept, and their sites")
+    places = sub.add_parser("places", help="Reminders by place, from the owner's iPhone")
+    places_sub = places.add_subparsers(dest="places_command", required=True)
+    places_sub.add_parser("token", help="A new token for the phone's Shortcuts automations")
     library = sub.add_parser("library", help="Orion's library of the owner's notes")
     library_sub = library.add_subparsers(dest="library_command", required=True)
     library_import = library_sub.add_parser("import", help="Add a folder of notes (.md, .txt)")
@@ -693,6 +712,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_login(args.name, args.url, args.out))
     if args.command == "sessions":
         return asyncio.run(_sessions(config, args))
+    if args.command == "places":
+        return asyncio.run(_places_token(config))
     if args.command == "library":
         return _library_import(config, args.folder)
     if args.command == "google":

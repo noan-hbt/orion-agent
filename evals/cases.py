@@ -221,4 +221,12 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Au fait l'anniversaire de ma mère c'est le 3 mars"),),
         checks=(uses("person_birthday"), avoids("remind_me")),
     ),
+    Case(
+        name="quand_je_passe_a_la_boulangerie",
+        origin="Un rappel de lieu, pas d'heure.",
+        at=paris(2026, 10, 20, 17, 0),
+        steps=(Say("Rappelle-moi d'acheter du pain quand je passe à la boulangerie"),),
+        checks=(uses("remind_at_place"), avoids("remind_me")),
+        modules=("places",),
+    ),
 )

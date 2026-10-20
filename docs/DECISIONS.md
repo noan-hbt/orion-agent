@@ -1171,3 +1171,18 @@ Orion attentif à elles.
 
 Le message est écrit par le moteur d'initiative à partir de la fiche de la personne : rien
 d'inventé, et la confiance du message est celle des faits qu'il cite.
+
+## D57 — Les rappels de lieu
+
+*20/10/2026 · acceptée*
+
+Module `places`, désactivé par défaut (il faut régler le téléphone). « Quand je passe à la
+boulangerie » devient `remind_at_place`. Une automatisation Raccourcis de l'iPhone (arrivée ou
+départ d'un lieu) envoie à Orion le seul nom du lieu choisi par le propriétaire, avec un jeton
+(`orion places token`) dont le journal ne garde que l'empreinte. Ni coordonnées ni trajet :
+Orion ne sait que ce que le propriétaire a décidé de lui dire, et un signal du téléphone est
+une information (`OWNER_INSTANCE`), pas un ordre.
+
+Le rappel part tout de suite, heures calmes ou non, comme un rappel à heure fixe : il a été
+demandé. Il part une fois, et les noms se rapprochent sans exiger l'exactitude
+(« boulangerie » = « Boulangerie Paul »).

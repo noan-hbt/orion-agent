@@ -101,6 +101,8 @@ class Case:
     """What Orion already knows, as the owner told it."""
     live_web: bool = False
     """Reads the real web (slower; skipped with --offline)."""
+    modules: tuple[str, ...] = ()
+    """Modules off by default that this case turns on."""
 
 
 # -- checks ----------------------------------------------------------------------------------
@@ -253,6 +255,9 @@ async def run_case(
     observation = Observation()
     with tempfile.TemporaryDirectory(prefix="orion-eval-") as tmp:
         config = eval_config(base, Path(tmp), model)
+        if case.modules:
+            on = {name: {**config.modules.get(name, {}), "enabled": True} for name in case.modules}
+            config = config.model_copy(update={"modules": {**config.modules, **on}})
         with time_machine.travel(case.at, tick=True) as clock:
             async with build_app(config, provider, modules=load(config)) as app:
                 refuse = Refuse()
