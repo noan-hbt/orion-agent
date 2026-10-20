@@ -27,6 +27,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.channels.inbox import Attachment
+from orion.config import VISION_MODEL
 from orion.core.events import Event, NewEvent, Provenance
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
@@ -71,9 +72,8 @@ Fetch = Callable[[Attachment], Awaitable[bytes]]
 
 class PhotoSettings(ModuleSettings):
     enabled: bool = True
-    model: str = Field(
-        default="google/gemini-3.8-flash",
-        description="A model that sees (and reads HEIC, the iPhone's format)",
+    model: str | None = Field(
+        default=None, description="A model that sees; default: agent.vision_model"
     )
     description_tokens: int = Field(default=1500, ge=200, le=8000)
 
@@ -117,6 +117,7 @@ class Photos:
         self._journal = journal
         self._provider = provider
         self._settings = settings
+        self.model = settings.model or VISION_MODEL
         self.folder = folder
         self._fetch = fetch or _download
         self._kept = _Kept()
@@ -176,7 +177,7 @@ class Photos:
                         "size": len(data),
                         "sha256": hashlib.sha256(data).hexdigest(),
                         "description": description,
-                        "model": self._settings.model,
+                        "model": self.model,
                     },
                     provenance=Provenance(source=source, actor="owner:main"),
                     trust=PHOTO_TRUST,
@@ -199,7 +200,7 @@ class Photos:
         image = f"data:{content_type};base64,{base64.b64encode(data).decode()}"
         response = await self._provider.complete(
             ModelRequest(
-                model=self._settings.model,
+                model=self.model,
                 messages=[
                     {"role": "system", "content": system},
                     {
@@ -278,8 +279,13 @@ class PhotosModule(Module):
         self.photos: Photos | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
+        settings: PhotoSettings = self.settings
+        model = settings.model or self.config.agent.vision_model
         self.photos = Photos(
-            plate.journal, plate.provider, self.settings, self.config.data_dir / "photos"
+            plate.journal,
+            plate.provider,
+            settings.model_copy(update={"model": model}),
+            self.config.data_dir / "photos",
         )
         await self.photos.sync()
         return photo_tools(self.photos)

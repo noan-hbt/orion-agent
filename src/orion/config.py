@@ -55,6 +55,10 @@ class ProvidersConfig(BaseModel):
     openrouter: OpenRouterConfig = OpenRouterConfig()
 
 
+STRONG_MODEL = "anthropic/claude-opus-5.5"
+VISION_MODEL = "google/gemini-3.8-flash"
+
+
 class AgentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -87,6 +91,35 @@ class AgentConfig(BaseModel):
         default="anthropic/claude-haiku-5.5",
         description="Checks proactive messages; must differ from `model`",
     )
+    strong_model: str = Field(
+        default=STRONG_MODEL,
+        description="The stronger model: consulted by Orion (expert), and used for the night's "
+        "thinking and the weekly chronicle unless their section names another",
+    )
+    vision_model: str = Field(
+        default=VISION_MODEL,
+        description="Looks at the photos the owner sends (reads HEIC, the iPhone's format)",
+    )
+    summary_model: str | None = Field(
+        default=None, description="Summarizes what a rebase drops; default: extractor_model"
+    )
+    reflection_model: str | None = Field(
+        default=None,
+        description="Learns the owner's playbook and tidies memory at night; "
+        "default: extractor_model",
+    )
+
+    def models(self) -> set[str]:
+        """Every model the agent section names."""
+        return {
+            self.model,
+            self.extractor_model,
+            self.verifier_model,
+            self.strong_model,
+            self.vision_model,
+            self.summary_model or self.extractor_model,
+            self.reflection_model or self.extractor_model,
+        }
 
     @field_validator("timezone")
     @classmethod

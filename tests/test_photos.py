@@ -10,6 +10,7 @@ import pytest
 
 from orion.channels.imessage import IMessageChannel
 from orion.channels.inbox import Attachment, OwnerInbox
+from orion.config import VISION_MODEL
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.photos.module import SEEN, Photos, PhotoSettings, photo_tools
@@ -71,7 +72,7 @@ async def test_a_photo_is_described_once_and_read_as_content(
     await until(lambda: len(fake.sent) == 1)
 
     look, turn = provider.requests
-    assert look.model == PhotoSettings().model
+    assert look.model == VISION_MODEL
     image = look.messages[1]["content"][1]["image_url"]["url"]
     assert image.startswith("data:image/jpeg;base64,")
     assert "on y va ?" in look.messages[0]["content"]  # the caption focuses the look

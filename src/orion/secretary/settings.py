@@ -39,4 +39,4 @@ class SecretarySettings(ModuleSettings):
     enabled: bool = False
     contacts: list[Contact] = Field(default_factory=list[Contact])
     max_replies_per_day: int = Field(default=20, ge=1, le=200, description="Per contact")
-    model: str = Field(default="", description="Who answers them; empty: the everyday model")
+    model: str | None = Field(default=None, description="Who answers them; default: agent.model")

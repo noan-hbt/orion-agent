@@ -35,10 +35,7 @@ def _provider(config: OrionConfig) -> Router | None:
         sort=config.providers.openrouter.sort,
     )
     agent = config.agent
-    chains = {
-        m: [f for f in agent.fallback_models if f != m]
-        for m in {agent.model, agent.extractor_model}
-    }
+    chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
     return Router({"openrouter": openrouter}, "openrouter", chains)
 
 

@@ -374,7 +374,7 @@ class NightModule(Module):
             plate.journal,
             plate.memory,
             plate.provider,
-            self.config.agent.extractor_model,
+            self.config.agent.reflection_model or self.config.agent.extractor_model,
             settings,
             self.config.agent.timezone,
             self.config.memory.owner_names,

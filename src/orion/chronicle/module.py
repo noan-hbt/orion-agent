@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.config import STRONG_MODEL
 from orion.context.recent import conversation_since
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
@@ -86,7 +87,9 @@ class ChronicleSettings(ModuleSettings):
     enabled: bool = True
     weekday: int = Field(default=6, ge=0, le=6, description="0 = Monday … 6 = Sunday")
     at: time = Field(default=time(19, 0), description="Local time the page is written")
-    model: str = Field(default="anthropic/claude-opus-5.5", description="Who writes the page")
+    model: str | None = Field(
+        default=None, description="Who writes the page; default: strong_model"
+    )
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ class Chronicle:
         self._memory = memory
         self.library = library
         self.settings = settings
+        self.model = settings.model or STRONG_MODEL
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = ChronicleState()
@@ -196,7 +200,7 @@ class Chronicle:
         try:
             response = await self._provider.complete(
                 ModelRequest(
-                    model=self.settings.model,
+                    model=self.model,
                     messages=[
                         {"role": "system", "content": PROMPT},
                         {"role": "user", "content": "\n\n".join(parts)},
@@ -222,7 +226,7 @@ class Chronicle:
                         "text": text,
                         "upto": upto,
                         "at": now.isoformat(),
-                        "model": self.settings.model,
+                        "model": self.model,
                     },
                     provenance=source,
                     trust=Trust.SYSTEM,
@@ -324,8 +328,14 @@ class ChronicleModule(Module):
         self.chronicle: Chronicle | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
+        settings: ChronicleSettings = self.settings
+        model = settings.model or self.config.agent.strong_model
         self.chronicle = Chronicle(
-            plate.journal, plate.provider, plate.memory, self.settings, self.config.agent.timezone
+            plate.journal,
+            plate.provider,
+            plate.memory,
+            settings.model_copy(update={"model": model}),
+            self.config.agent.timezone,
         )
         await self.chronicle.sync()
         return chronicle_tools(self.chronicle)
@@ -342,4 +352,5 @@ class ChronicleModule(Module):
 
     def doctor(self) -> list[str]:
         settings: ChronicleSettings = self.settings
-        return [f"every {_DAYS[settings.weekday]} at {settings.at:%H:%M}, with {settings.model}"]
+        model = settings.model or self.config.agent.strong_model
+        return [f"every {_DAYS[settings.weekday]} at {settings.at:%H:%M}, with {model}"]

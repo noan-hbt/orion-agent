@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from orion.config import STRONG_MODEL
 from orion.context.recent import conversation_since
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -93,8 +94,8 @@ Des listes vides si rien ne le mérite : c'est le cas le plus fréquent."""
 class ThinkingSettings(ModuleSettings):
     enabled: bool = True
     at: time = Field(default=time(5, 0), description="Local time the night reading runs")
-    model: str = Field(
-        default="anthropic/claude-opus-5.5", description="Who thinks at night (worth a strong one)"
+    model: str | None = Field(
+        default=None, description="Who thinks at night (worth a strong one); default: strong_model"
     )
     max_thoughts: int = Field(default=2, ge=0, le=10, description="New thoughts sent per night")
     answer_tokens: int = Field(default=8000, ge=1000, le=32000)
@@ -242,6 +243,7 @@ class Thinking:
         self._provider = provider
         self._memory = memory
         self.settings = settings
+        self.model = settings.model or STRONG_MODEL
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = ThinkingState()
@@ -397,7 +399,7 @@ class Thinking:
         try:
             response = await self._provider.complete(
                 ModelRequest(
-                    model=self.settings.model,
+                    model=self.model,
                     messages=[
                         {"role": "system", "content": PROMPT},
                         {"role": "user", "content": "\n\n".join(parts)},
@@ -644,8 +646,14 @@ class ThinkingModule(Module):
         self.thinking: Thinking | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
+        settings: ThinkingSettings = self.settings
+        model = settings.model or self.config.agent.strong_model
         self.thinking = Thinking(
-            plate.journal, plate.provider, plate.memory, self.settings, self.config.agent.timezone
+            plate.journal,
+            plate.provider,
+            plate.memory,
+            settings.model_copy(update={"model": model}),
+            self.config.agent.timezone,
         )
         await self.thinking.sync()
         return thinking_tools(self.thinking)
@@ -658,4 +666,5 @@ class ThinkingModule(Module):
 
     def doctor(self) -> list[str]:
         settings: ThinkingSettings = self.settings
-        return [f"every night at {settings.at:%H:%M}, with {settings.model}"]
+        model = settings.model or self.config.agent.strong_model
+        return [f"every night at {settings.at:%H:%M}, with {model}"]

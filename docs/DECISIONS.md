@@ -1134,3 +1134,20 @@ La sécurité vient de ce que le secrétaire n'a pas :
 
 Un contact doit d'abord écrire à Orion (la commande de connexion d'Inkbox) : Inkbox n'ouvre une
 conversation qu'à l'initiative du destinataire.
+
+## D55 — Tous les modèles se changent dans la configuration
+
+*20/10/2026 · acceptée*
+
+Aucun nom de modèle n'est écrit dans le code hors de `config.py`, et un test le vérifie. La
+section `[agent]` nomme les modèles partagés :
+- `model` : le modèle de tous les jours ;
+- `extractor_model` : le travail de fond ;
+- `verifier_model` : la relecture des messages qu'Orion envoie de lui-même ;
+- `strong_model` : l'expert, la réflexion de nuit, la chronique ;
+- `vision_model` : les photos ;
+- `summary_model` et `reflection_model` : ils reprennent `extractor_model` s'ils sont vides ;
+- `fallback_models` : les modèles de secours.
+
+Chaque module peut nommer le sien dans sa section, et c'est lui qui l'emporte. Les modèles de
+secours s'appliquent désormais à chacun de ces modèles, plus seulement aux deux premiers.

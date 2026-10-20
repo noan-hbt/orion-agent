@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from orion.config import AgentConfig
+from orion.config import STRONG_MODEL, AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
@@ -99,7 +99,7 @@ async def test_the_night_rereads_the_trusted_day_and_keeps_only_new_thoughts(
 
     (request,) = provider.requests
     seen = request.messages[1]["content"]
-    assert request.model == ThinkingSettings().model
+    assert request.model == STRONG_MODEL
     assert "[mardi 2026-10-20 21:00] Lui : J'hésite entre l'offre de Lyon" in seen
     assert "Bonne chance jeudi" in seen
     assert "choisir Nantes" not in seen  # what a photo said stays out of the night's thinking

@@ -22,6 +22,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.loop import SWITCH_COST, SWITCH_MODEL
+from orion.config import STRONG_MODEL
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -42,8 +43,8 @@ parles pas à la personne : Orion reformulera."""
 
 class ExpertSettings(ModuleSettings):
     enabled: bool = True
-    model: str = Field(
-        default="anthropic/claude-opus-5.5", description="The stronger model, consulted or used"
+    model: str | None = Field(
+        default=None, description="The stronger model, consulted or used; default: strong_model"
     )
     max_per_day: int = Field(default=30, ge=0, description="Consultations and switches per day")
     max_cost_usd_per_turn: float = Field(
@@ -103,6 +104,7 @@ class Expert:
         self._journal = journal
         self._provider = provider
         self.settings = settings
+        self.model = settings.model or STRONG_MODEL
         self._day = _Day()
         self._runner = ProjectionRunner(journal, [self._day])
 
@@ -118,7 +120,7 @@ class Expert:
         try:
             response = await self._provider.complete(
                 ModelRequest(
-                    model=self.settings.model,
+                    model=self.model,
                     messages=[
                         {"role": "system", "content": ADVISOR},
                         {"role": "user", "content": content},
@@ -161,12 +163,12 @@ class Expert:
         if await self._left_today(today) <= 0:
             return ToolResult("No switch left today: carry on with the everyday model.", True)
         await self._record(
-            SWITCHED, {"day": today.isoformat(), "model": self.settings.model, "why": why}, ctx
+            SWITCHED, {"day": today.isoformat(), "model": self.model, "why": why}, ctx
         )
         return ToolResult(
-            f"La suite de ce tour se fait sur {self.settings.model}.",
+            f"La suite de ce tour se fait sur {self.model}.",
             data={
-                SWITCH_MODEL: self.settings.model,
+                SWITCH_MODEL: self.model,
                 SWITCH_COST: self.settings.max_cost_usd_per_turn,
             },
         )
@@ -225,8 +227,13 @@ class ExpertModule(Module):
     settings_model = ExpertSettings
 
     async def assemble(self, plate: Plate) -> list[Tool]:
-        return expert_tools(Expert(plate.journal, plate.provider, self.settings))
+        settings: ExpertSettings = self.settings
+        model = settings.model or self.config.agent.strong_model
+        return expert_tools(
+            Expert(plate.journal, plate.provider, settings.model_copy(update={"model": model}))
+        )
 
     def doctor(self) -> list[str]:
         settings: ExpertSettings = self.settings
-        return [f"stronger model on call: {settings.model} (at most {settings.max_per_day}/day)"]
+        model = settings.model or self.config.agent.strong_model
+        return [f"stronger model on call: {model} (at most {settings.max_per_day}/day)"]
