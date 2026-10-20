@@ -12,3 +12,7 @@ orion.toml
 /guardian/
 /run/
 evals/reports/
+orion.toml.previous
+.orion.toml.*
+core.env
+guardian.env
