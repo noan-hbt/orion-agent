@@ -43,7 +43,7 @@ async def test_a_case_is_replayed_at_its_moment_and_judged_on_what_was_done() ->
     observation = await run_case(case, OrionConfig(), provider)
 
     # The model saw the moment of the case, not today.
-    assert "[mardi 2026-10-20 01:16 · imessage]" in str(provider.requests[0].messages[-1])
+    assert "[mardi 2026-10-20 01:16 · imessage · nuit" in str(provider.requests[0].messages[-1])
     assert [r.date() for r in observation.reminders] == [date(2026, 10, 21)]
     outcome = await evaluate(case, observation, never)
     assert not outcome.passed

@@ -254,4 +254,28 @@ CASES: tuple[Case, ...] = (
         checks=(uses("file:download", "file:send"), avoids("web_read")),
         live_web=True,
     ),
+    Case(
+        name="mon_linkedin",
+        origin="20/10 12h04 : « Tu peux accéder à mon linkedin ? » ; Orion a dit non, sans "
+        "proposer de lui prêter une session (orion login).",
+        at=paris(2026, 10, 20, 12, 4),
+        facts=OWNER,
+        steps=(Say("Tu peux accéder à mon linkedin ? Noan HERBETH"),),
+        checks=(says(r"orion login", "does not offer the lent session (orion login)"),),
+        modules=("computer",),
+    ),
+    Case(
+        name="il_etait_coupe",
+        origin="20/10 12h09 : un message resté sans réponse 7 minutes (Orion était arrêté), "
+        "puis une réponse comme si de rien n'était.",
+        at=paris(2026, 10, 20, 12, 16),
+        facts=OWNER,
+        steps=(
+            Say("Rappelle-moi dans 10 minutes d'appeler l'assurance", waited=timedelta(minutes=7)),
+        ),
+        checks=(
+            judged("La réponse dit-elle qu'Orion a répondu en retard, ou qu'il était coupé ?"),
+            reminder_within(timedelta(minutes=1), timedelta(minutes=11)),
+        ),
+    ),
 )
