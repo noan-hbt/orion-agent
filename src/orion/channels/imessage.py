@@ -248,6 +248,8 @@ class IMessageChannel:
         self._runner = ProjectionRunner(journal, [self.state])
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._polls = 0
+        self._gone: set[str] = set()
+        """Conversations Inkbox no longer knows (another line): not polled again."""
         self.others: Callable[[IMessage], None] | None = None
         """Gets the messages of anyone but the owner (the secretary, D54), once journaled."""
         inbox.register(self)
@@ -459,9 +461,19 @@ class IMessageChannel:
 
     async def _poll_reactions(self) -> None:
         conversation = self.state.owner_conversation
-        if conversation is None:
+        if conversation is None or conversation in self._gone:
             return
-        for message in await self._client.recent(conversation, self._settings.identity_id):
+        try:
+            recent = await self._client.recent(conversation, self._settings.identity_id)
+        except InkboxError as exc:
+            if exc.status != 404:
+                raise
+            # Another line's conversation (the identity changed), or one Inkbox dropped: the
+            # owner's next message binds the new one. Nothing to read until then.
+            log.warning("imessage.conversation_gone", conversation=conversation)
+            self._gone.add(conversation)
+            return
+        for message in recent:
             if message.direction != "outbound" or message.id in self._approvals:
                 continue
             for reaction in message.reactions or []:

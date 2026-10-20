@@ -38,6 +38,8 @@ class FakeInkbox:
         default_factory=list[tuple[str, dict[str, Any]]]
     )
     uploads: list[bytes] = field(default_factory=list[bytes])
+    gone: set[str] = field(default_factory=set[str])
+    """Conversations Inkbox no longer knows (another identity's)."""
     fail_sends: list[int] = field(default_factory=list[int])
     """Status codes to answer the next sends with, in order."""
     _counter: int = 0
@@ -163,6 +165,8 @@ class FakeInkbox:
             return self._send(request, body)
         if path == "/imessage/messages" and "conversation_id" in request.url.params:
             conversation = request.url.params["conversation_id"]
+            if conversation in self.gone:
+                return httpx.Response(404, json={"detail": "Conversation not found"})
             mine = [m for m in self.messages.values() if m["conversation_id"] == conversation]
             return httpx.Response(200, json=list(reversed(mine)))
         if path == "/imessage/messages":

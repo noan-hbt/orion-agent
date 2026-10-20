@@ -345,3 +345,14 @@ async def test_a_fresh_message_carries_no_wait(
     await channel.poll_once()
     await until(lambda: len(fake.sent) == 1)
     assert "<attente" not in provider.requests[0].messages[-1]["content"]
+
+
+async def test_a_conversation_inkbox_no_longer_knows_does_not_stop_the_poll(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
+) -> None:
+    await _bind_owner(channel, fake, provider)
+    fake.gone.add(CONVERSATION)  # Orion moved to another line
+    await channel._poll_reactions()  # pyright: ignore[reportPrivateUsage]
+    asked = len(fake.calls)
+    await channel._poll_reactions()  # pyright: ignore[reportPrivateUsage]
+    assert len(fake.calls) == asked  # not asked again
