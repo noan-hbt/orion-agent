@@ -4,11 +4,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
-build/
-dist/
-data/
+/build/
+/dist/
+/data/
 orion.toml
 .env
-guardian/
-run/
+/guardian/
+/run/
 evals/reports/
