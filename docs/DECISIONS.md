@@ -1483,3 +1483,25 @@ règle. ffmpeg est installé par `deploy/install.sh`.
 
 Vérifié en vrai : une phrase dite par Orion, puis transcrite, revient mot pour mot (« Noan,
 ton rendez-vous chez le dentiste est demain à 9h30 »).
+
+## D73 — Prendre rendez-vous, de bout en bout
+
+*20/10/2026 · acceptée*
+
+« Trouve-moi un dentiste cette semaine après 18 h. » Le navigateur, les sessions prêtées et
+l'approbation existaient ; il manquait l'enchaînement. Le module `booking` (actif avec
+`computer`) le tient :
+- Orion cherche les créneaux lui-même (Doctolib, TheFork, SNCF Connect se lisent sans compte)
+  et en propose au plus trois ;
+- quand le propriétaire choisit, `booking` (book) note le créneau exact, puis
+  `computer_task_send` réserve, dans le même tour : la tâche est liée à la réservation par
+  l'identifiant de corrélation du tour, dans un ordre ou dans l'autre ;
+- quand la tâche se termine, c'est le code qui conclut, pas le modèle. Réussie : le
+  rendez-vous va dans l'agenda et deux rappels sont programmés (la veille à 19 h, et 90 min
+  avant). Échouée : la réservation est marquée échouée et Orion le dit ;
+- le oui donné à la réservation vaut pour l'agenda. Quand le gardien tient l'agenda, il
+  n'écrit sans approbation que si `calendar_add` est autonome ; sinon Orion propose de
+  l'ajouter ;
+- annuler retire les rappels ; le site est prévenu par une autre tâche d'envoi.
+
+    booking.tracked  booking.confirmed  booking.failed  booking.cancelled

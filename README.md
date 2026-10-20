@@ -151,6 +151,8 @@ d'autres personnes.
   tu conduis, il te répond en vocal.
 - **Ses réglages par message** (D72) : « active le mail », « mets tes points à 9 h » ; tu
   approuves le changement exact, ou tu le laisses faire seul.
+- **Tes rendez-vous** (D73) : « trouve-moi un dentiste après 18 h » ; il propose trois
+  créneaux, réserve celui que tu choisis, et le met dans ton agenda avec ses rappels.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
