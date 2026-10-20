@@ -4,7 +4,7 @@ Où en est Orion sur `main`, pour qui le reprend. Les raisons de chaque choix so
 `DECISIONS.md` ; l'architecture, et ce qui s'est écarté du plan, dans
 `architecture/04-architecture.md` (§17).
 
-## Ce qui a été fait depuis la dernière passation (D62 à D77)
+## Ce qui a été fait depuis la dernière passation (D62 à D84)
 
 - **D62 Forfait ChatGPT** : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`. La voie
   officielle « Sign in with ChatGPT », API Responses, jetons rotatifs dans `data/chatgpt/`.
@@ -31,13 +31,25 @@ Où en est Orion sur `main`, pour qui le reprend. Les raisons de chaque choix so
 - **D77 La veille d'un départ** (`departure`) : voyage ou épreuve dans l'agenda (ou dit en
   passant), un message à 19 h la veille : billet, pièces d'identité, météo, heure de départ.
 
+Le socle (D78 à D84) :
+- **D78 Ce qui est prévu** : `Module.planned` dans chaque module, l'outil `planned`.
+- **D79 Plafond de dépense** : `providers/spending.py` enveloppe le fournisseur dans
+  `build_app` ; `foreground()` autour des tours du propriétaire ; `[budget]`.
+- **D80 Versions des événements** : colonne `version` (migration sur place), `core/upcast.py`.
+- **D81 Reconstruction prouvée** : `tests/conftest.py` rejoue chaque projection à la fin de
+  chaque test ; `core/backup.verify`, `orion check-backup`.
+- **D82 Simulation** : `orion simulate --days 7` (`initiative/simulate.py`).
+- **D83 Mémoire qui doute** : `memory/doubt.py`.
+- **D84 Budget du message système** : `MAX_SECTION_CHARS` dans `app.py`,
+  `tests/test_prompt_budget.py`.
+
 Les problèmes connus de la passation précédente (« demain » à 1 h du matin, longueurs et
 ironie de DeepSeek, `computer_task` au lieu de `browser`, règles de contact d'exemple dans
 Inkbox, envoi de fichiers par Inkbox) sont corrigés.
 
 ## État vérifié
 
-- `uv run pytest -q` : 411 tests passent. `uv run pyright` : 0 erreur. `ruff` : propre.
+- `uv run pytest -q` : 432 tests passent, chacun suivi du rejeu de ses projections. `uv run pyright` : 0 erreur. `ruff` : propre.
 - 32 cas d'évaluation dans `evals/cases.py`. `train_pour_lyon` et
   `interesse_toi_aux_villes_sans_voiture` : 2/2 sur DeepSeek.
 - En vrai : le forfait ChatGPT (outils, images, recherche web, JSON, PDF et Word lus), un vocal
@@ -59,6 +71,12 @@ Inkbox, envoi de fichiers par Inkbox) sont corrigés.
   mensuels (trois semaines de journal).
 - D76 de bout en bout : la trouvaille arrivée par iMessage, puis le verdict.
 - D77 avec un vrai billet dans la boîte mail.
+- D79 : le plafond par défaut (3 $ par jour pour le fond, 40 $ par mois) n'a pas été comparé
+  à la dépense réelle : regarder `spending` après quelques jours, et ajuster `[budget]`.
+- D82 sur le vrai journal du serveur : `orion simulate` n'a tourné que sur des journaux de
+  test.
+- D80 : aucun type d'événement n'a encore eu besoin d'une conversion ; le mécanisme n'a
+  servi que dans les tests.
 - Pas de cas d'évaluation pour D73, D74 et D75. Pas de série complète
   (`python -m evals --repeat 2`) depuis D60.
 

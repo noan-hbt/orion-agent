@@ -1610,3 +1610,119 @@ Rien dans la dernière heure : il est déjà en route. Un départ vu tard est pr
 est vu.
 
     departure.planned  departure.cancelled
+
+## D78 — Ce qu'Orion a prévu, en un seul endroit
+
+*20/10/2026 · acceptée*
+
+Une dizaine de modules programment chacun de leur côté : les rappels demandés, les nouvelles
+à prendre, les conseils dont il faut demander l'issue, les départs à préparer, les
+anniversaires, la page du dimanche, la curiosité, les missions, les papiers qui expirent.
+Personne, ni le propriétaire ni Orion, ne voyait l'ensemble.
+
+Chaque module dit désormais ce qu'il fera seul d'ici une date (`Module.planned`, une liste de
+`Planned` : l'heure, ce qu'il fera, en français, et comment l'annuler). L'outil `planned`
+rassemble le tout par jour, avec les rappels du cœur : « qu'est-ce que tu as prévu cette
+semaine ? » a une réponse, et chaque ligne dit avec quel outil l'annuler. C'est une lecture :
+rien n'est journalisé de plus, et la liste se refait à chaque appel depuis les projections.
+
+## D79 — Un plafond de dépense
+
+*20/10/2026 · acceptée*
+
+Seul un plafond par tour existait (`max_cost_usd_per_turn`). Le travail de fond grandit (la
+nuit, la curiosité, les missions, la chronique, le greffier du web) sans aucune limite par
+jour ni par mois.
+
+Chaque appel de modèle passe par `orion.providers.spending` :
+- ce qu'il a coûté est journalisé (`spend.recorded` : le modèle, qui l'a demandé, et si le
+  propriétaire attendait la réponse). Le décompte est une projection, refaite à l'identique
+  à chaque démarrage ;
+- un tour qui lui répond (`handle_owner_message`) est au **premier plan** (une variable de
+  contexte, héritée par ce que le tour lance) : jamais coupé ;
+- tout le reste est **de fond**, et s'arrête au plafond du jour (3 $ par défaut, pour le fond
+  seul) ou du mois (40 $, tout compris) : l'appel échoue fermé (`ProviderError`), ce que
+  chaque tâche de fond traite déjà comme « pas maintenant » ;
+- il est prévenu une fois par période, par l'initiative (heures calmes comprises) : à 80 %
+  du mois, puis quand le fond s'arrête. `spending` répond à « combien tu m'as coûté ? ».
+
+`[budget]` ne se change pas par message (D72) : c'est une limite, comme celles du gardien. Sur
+le forfait ChatGPT, un appel coûte zéro : le plafond ne mord pas.
+
+    spend.recorded
+
+## D80 — Les versions des événements
+
+*20/10/2026 · acceptée*
+
+Le journal ne se réécrit jamais, mais la forme des événements change. Dans deux ans, rejouer un
+journal écrit aujourd'hui casserait au premier champ renommé.
+
+Chaque événement est stocké avec la version de son type au moment où il est écrit (une colonne
+`version`, ajoutée sur place aux journaux existants, dont tous les événements sont en
+version 1). Quand la forme d'un type change, on ajoute à `orion.core.upcast.UPCASTERS` la
+fonction qui passe de la version N à N+1 ; chaque lecture applique celles que l'événement n'a
+pas encore traversées. Un type renommé va dans `RENAMED`. Une fonction de passage est pure,
+totale, et ne se supprime jamais. Un événement d'une version plus récente que ce qu'Orion
+connaît est refusé : c'est le signe qu'un Orion plus ancien tourne sur un journal plus récent.
+Une charge effacée (`redact`) n'est pas convertie.
+
+## D81 — La preuve qu'on peut tout reconstruire
+
+*20/10/2026 · acceptée*
+
+La règle « une projection se reconstruit depuis le journal seul » n'était testée que pour la
+mémoire. Désormais :
+- **à la fin de chaque test**, chaque projection construite sur le journal du test est
+  rattrapée, photographiée (`snapshot` : ses attributs, ou toutes ses lignes SQLite), remise à
+  zéro, rejouée et comparée. Toute la suite devient un test de rejeu de chaque module. La
+  première exécution a trouvé un fil de conversation créé par une simple lecture : corrigé.
+  Un test qui le ferait exprès porte `no_rebuild_check` ;
+- **une sauvegarde ne compte que si elle se restaure** : intégrité SQLite, puis chaque
+  événement relu comme Orion le relirait au démarrage (versions comprises), dans l'ordre et
+  sans trou. C'est fait à chaque sauvegarde de nuit ; `orion check-backup <copie>` le refait
+  sur une copie ancienne.
+
+## D82 — Une semaine d'initiative, jouée d'avance
+
+*20/10/2026 · acceptée*
+
+Une quinzaine de sources se disputent six messages par jour. `orion simulate --days 7` copie le
+journal dans un dossier temporaire, construit Orion sur la copie avec un modèle qui n'écrit
+rien (aucun appel ne part, rien n'est dépensé), branche les alertes, points et présence de
+chaque module (leurs services ne tournent pas), puis fait tourner le moteur d'initiative sur
+une horloge simulée, toutes les cinq minutes. Il affiche, jour par jour, ce qui serait parti,
+ce qui aurait été tu, et pourquoi. Le vrai journal n'est jamais écrit. Ce qui a besoin d'un
+modèle pour exister (pensées de la nuit, trouvailles, page du dimanche) n'est pas simulé.
+
+## D83 — Une mémoire qui doute
+
+*20/10/2026 · acceptée*
+
+« Cherche un appart à Dreux » restait vrai pour toujours. Le module `doubt` distingue, par des
+règles simples (la catégorie, et des mots de situation : cherche, habite, travaille, projet,
+en couple…), ce qui change souvent de ce qui ne change guère (une date de naissance, un goût),
+et donne aux premiers une durée de fraîcheur : 60 jours pour un projet, 120 pour sa
+situation, 180 pour celle d'un proche. Les goûts n'expirent pas.
+- passé ce délai, le fait est « à vérifier » : `doubt` (stale) les liste, et Orion dit « en
+  mars, tu cherchais… » plutôt que de l'affirmer ;
+- une fois par semaine au plus, à 18 h 30, Orion demande pour le plus ancien, en passant.
+  Une fois demandé (l'initiative journalise ce qu'elle a envoyé), un fait n'est pas
+  redemandé avant trois mois ;
+- sa réponse le confirme (`doubt` confirm, un événement à part : la mémoire reste
+  reconstructible) ou le corrige (`forget_fact`, puis `remember`).
+
+    doubt.confirmed
+
+## D84 — Un budget pour le message système
+
+*20/10/2026 · acceptée*
+
+Avec les modules par défaut, le début fixe de chaque requête faisait 23 400 caractères de
+consignes et 35 200 de schémas d'outils, environ 15 000 jetons. C'est en cache, mais chaque
+tour le porte, et plus c'est long, plus une consigne en noie une autre. Désormais :
+- une section de module fait au plus 2 500 caractères : au-delà, le module ne se charge pas
+  (`ModuleError`). Ce que fait un outil va dans sa description ;
+- `tests/test_prompt_budget.py` plafonne le message système avec tous les modules (38 000
+  caractères), les schémas d'outils par défaut (40 000) et un outil seul (2 600).
+Dépasser oblige à alléger, ou à relever un chiffre exprès, dans le même commit.

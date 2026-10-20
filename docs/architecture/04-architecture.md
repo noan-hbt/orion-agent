@@ -6,7 +6,7 @@
 > donne lieu à une nouvelle décision dans `DECISIONS.md`.
 >
 > Les sections 1 à 16 sont le plan d'origine. La section 17 dit ce qui est construit au
-> 20/10/2026 (jusqu'à D77), et où le code s'est écarté du plan.
+> 20/10/2026 (jusqu'à D84), et où le code s'est écarté du plan.
 
 ---
 
@@ -455,7 +455,7 @@ L'**évaluation** commence dès M1 et grossit à chaque jalon : chaque bug réel
 
 ---
 
-## 17. Ce qui est construit (au 20/10/2026, jusqu'à D77)
+## 17. Ce qui est construit (au 20/10/2026, jusqu'à D84)
 
 Le plan des sections 1 à 16 tient dans ses principes : journal append-only, projections
 reconstructibles, provenance et confiance, gardien séparé, initiative gouvernée, cache de prompt.
@@ -490,19 +490,31 @@ rendus pour l'initiative. Chaque module déclare ce qu'il permettrait s'il étai
 | Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77 |
 | Le connaître | `adaptation` (le manuel), `onboarding`, `advice` (ses conseils assumés), `style` (écrire en son nom), `focus` | D21, D34, D65, D68, D70 |
 | Les autres | `federation`, `secretary` | D29, D54 |
-| Administration | `configure` (réglages par message), `console`, `night` (rangement de la mémoire) | D27, D39, D72 |
+| Administration | `configure` (réglages par message), `console`, `night` (rangement de la mémoire), `doubt` (la mémoire qui doute) | D27, D39, D72, D83 |
 
-### 17.3 Arborescence réelle
+### 17.3 Le socle, renforcé (D78 à D84)
+
+| Besoin | Ce qui le tient | Décision |
+|---|---|---|
+| Voir et annuler tout ce qu'Orion fera seul | `Module.planned`, l'outil `planned` | D78 |
+| Ne pas dépenser sans limite | `providers.spending` : chaque appel journalisé, le fond coupé au plafond, jamais le premier plan | D79 |
+| Rejouer un journal ancien | une version par événement, `core.upcast` à la lecture | D80 |
+| Prouver que tout se reconstruit | chaque test rejoue chaque projection ; une sauvegarde est relue en entier | D81 |
+| Régler l'arbitre sur des chiffres | `orion simulate`, sur une copie, sans modèle | D82 |
+| Ne pas affirmer ce qui a changé | `memory.doubt` : fraîcheur des faits de situation | D83 |
+| Garder le début fixe des requêtes court | sections ≤ 2 500 caractères, budgets testés | D84 |
+
+### 17.4 Arborescence réelle
 
 ```
 src/orion/
-  core/          journal, HLC, événements, projections, superviseur, sauvegarde
+  core/          journal, HLC, événements et leurs versions, projections, superviseur, sauvegarde
   cognition/     boucle d'agent, vérificateur
   context/       compilateur, fenêtre récente, résumé, fils
   memory/        faits, personnes, recherche par le sens, extraction, nuit, provenance
-  initiative/    moteur, arbitre, minuteurs
+  initiative/    moteur, arbitre, minuteurs, ce qui est prévu, simulation
   guardian/      politiques, autonomie, limites, outbox, sessions prêtées, coffre, service
-  providers/     openrouter, chatgpt (+ connexion), routeur
+  providers/     openrouter, chatgpt (+ connexion), routeur, dépense
   channels/      boîte de réception unifiée, iMessage par Inkbox, webhook, terminal
   modules/       la plaque : base, registre (intégrés puis paquets `orion.modules`)
   tools/         contrat d'outil, outils intégrés
@@ -512,7 +524,7 @@ evals/           évaluations sur le vrai modèle (`python -m evals`)
 deploy/          installation sur un VPS : Caddy, systemd, sauvegardes
 ```
 
-### 17.4 Les jalons
+### 17.5 Les jalons
 
 | Jalon | État |
 |---|---|

@@ -177,6 +177,12 @@ d'autres personnes.
   ton temps, avec son avis. Dis-lui ce qui t'intéresse, ou ce qui ne t'intéresse pas.
 - **La veille d'un départ** (D77) : un train, un vol, un examen ; la veille au soir, un seul
   message avec le billet, tes papiers, la météo et l'heure à laquelle partir.
+- **Ce qu'il a prévu** (D78) : « qu'est-ce que tu as prévu cette semaine ? » ; tout ce qu'il
+  fera seul, jour par jour, et comment annuler chaque chose.
+- **Un plafond de dépense** (D79) : ce qu'il fait seul s'arrête au plafond du jour ou du mois
+  (`[budget]`), jamais ses réponses ; il te prévient. « Combien tu m'as coûté ? »
+- **Une mémoire qui doute** (D83) : ce qui change souvent (ton logement, ton travail, tes
+  projets) vieillit ; il te demande de temps en temps, en passant, si c'est toujours vrai.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 
@@ -228,6 +234,13 @@ uv run orion federation peers             # ton empreinte et tes Orion reliés
 ```
 
 Vérifiez vos empreintes de vive voix.
+
+### Vérifier
+
+```bash
+uv run orion simulate --days 7        # ce qu'Orion enverrait cette semaine, sans rien envoyer
+uv run orion check-backup backups/core/<copie>   # une sauvegarde se restaure-t-elle ?
+```
 
 ## Documentation
 

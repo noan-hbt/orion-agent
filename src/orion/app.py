@@ -41,7 +41,7 @@ from orion.tools.base import Tool, ToolRegistry
 from orion.tools.builtin import builtin_tools
 from orion.voice.module import VoiceModule
 
-__all__ = ["App", "LateApprover", "build_app", "constitution"]
+__all__ = ["MAX_SECTION_CHARS", "App", "LateApprover", "build_app", "constitution"]
 
 
 @dataclass
@@ -81,11 +81,24 @@ class App:
         return self.plate.module(kind)
 
 
+MAX_SECTION_CHARS = 2_500
+"""A module's section of the constitution, at most (D84): every turn pays for it, and a long
+section drowns the others. What a tool does belongs in its description, read when it matters."""
+
+
 def constitution(modules: list[Module], offers: Sequence[str] = ()) -> str:
     """The core constitution, each enabled module's section in loading order, then what Orion
     could do with more setup (D64). All fixed while Orion runs: the system message is cached."""
     parts = [read_resource("constitution.md").strip()]
-    parts += [text for text in (m.instructions_text() for m in modules) if text]
+    for module in modules:
+        text = module.instructions_text()
+        if len(text) > MAX_SECTION_CHARS:
+            raise ModuleError(
+                f"module {module.name!r}: its instructions are {len(text)} characters, more "
+                f"than {MAX_SECTION_CHARS}; move what its tools do into their descriptions"
+            )
+        if text:
+            parts.append(text)
     if offers:
         listed = "\n".join(f"- {offer}" for offer in offers)
         parts.append(f"{read_resource('offers.md').strip()}\n\n{listed}")
