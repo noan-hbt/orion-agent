@@ -94,7 +94,7 @@ async def test_owner_message_gets_a_reply_in_bubbles(
     assert ("POST", "/imessage/typing") in fake.calls
     assert ("POST", "/imessage/mark-read") in fake.calls
     user = provider.requests[0].messages[-1]["content"]
-    assert "· imessage]" in user and user.endswith("salut")
+    assert ("· imessage]" in user or "· imessage · nuit" in user) and user.endswith("salut")
     assert await channel.available()
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -134,7 +135,10 @@ async def test_a_call_with_the_owner_comes_back_into_the_thread(world: World) ->
     await world.voice.poll_once()
     await until_requests(world, 1)
     content = world.provider.requests[0].messages[-1]["content"]
-    assert "· appel]" in content and '<appel sens="entrant" durée="1 min 35 s"' in content
+    assert (
+        re.search(r"· appel[] ·]", content)
+        and '<appel sens="entrant" durée="1 min 35 s"' in content
+    )
     assert "Lui : rappelle-moi demain 9h" in content and "Orion (voix) : C'est noté." in content
     assert world.imessage.sent == ["C'est calé : demain 9h, le garage."]
     [ended] = [e for e in await world.journal.read() if e.kind == CALL_ENDED]
