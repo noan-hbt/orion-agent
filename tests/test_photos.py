@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from orion.channels.imessage import IMessageChannel
 from orion.channels.inbox import Attachment, OwnerInbox
 from orion.config import VISION_MODEL
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.photos.module import KEPT, SEEN, Photos, PhotoSettings, kind_of, photo_tools
+from orion.photos.module import (
+    KEPT,
+    SEEN,
+    VIEW_SIDE,
+    Photos,
+    PhotoSettings,
+    kind_of,
+    photo_tools,
+)
 from orion.providers.base import ProviderError
 from orion.runtime import PHOTO_TRUST, photo_block
 from orion.tools.base import ToolContext
@@ -32,7 +43,7 @@ def photos_for(
         got.append(attachment.url)
         return JPEG
 
-    return Photos(journal, provider, PhotoSettings(), folder, fetch)
+    return Photos(journal, provider, PhotoSettings(direct=False), folder, fetch)
 
 
 @pytest.fixture
@@ -168,7 +179,7 @@ def files_for(
     async def fetch(attachment: Attachment) -> bytes:
         return data
 
-    return Photos(journal, provider, PhotoSettings(), folder, fetch)
+    return Photos(journal, provider, PhotoSettings(direct=False), folder, fetch)
 
 
 async def test_a_heic_photo_is_turned_into_jpeg_first(
@@ -263,3 +274,49 @@ def test_a_file_name_comes_from_its_link_or_its_type() -> None:
     assert kind_of("application/pdf") == "document"
     assert kind_of("text/calendar") == "text" and kind_of("application/ld+json") == "text"
     assert kind_of("audio/mpeg") == "audio" and kind_of("image/heic") == "image"
+
+
+def a_form() -> bytes:
+    """A real photo, bigger than what the model gets."""
+    out = io.BytesIO()
+    Image.new("RGB", (3024, 4032), (240, 240, 230)).save(out, "JPEG")
+    return out.getvalue()
+
+
+async def test_the_everyday_model_looks_at_a_photo_itself(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """D87: no model in between. The journal keeps the text; the image is on the wire, the same
+    bytes on every request (prompt cache)."""
+    provider = ScriptedProvider(reply("C'est un constat."), reply("De rien."))
+    orion = make_orion(journal, provider)
+    await orion.start()
+
+    async def fetch(_attachment: Attachment) -> bytes:
+        return a_form()
+
+    photos = Photos(journal, provider, PhotoSettings(), tmp_path / "photos", fetch)
+    orion.inline = photos.inline
+    [photo] = await photos.look([Attachment("https://x.test/c.jpg", "image/jpeg")], "", "t")
+    assert provider.requests == []  # nobody looked at it for Orion
+    await orion.handle_owner_message("owner", "tiens", "imessage", photos=[photo])
+    await orion.handle_owner_message("owner", "merci", "imessage")
+
+    first, second = provider.requests
+    text, image = first.messages[-1]["content"]
+    assert 'vue="directe"' in text["text"] and image["type"] == "image_url"
+    with Image.open(io.BytesIO(base64.b64decode(image["image_url"]["url"].split(",")[1]))) as seen:
+        assert max(seen.size) == VIEW_SIDE
+    assert second.messages[: len(first.messages)] == first.messages
+    [said] = [
+        e.payload["message"]
+        for e in await journal.read()
+        if e.kind == "conversation.message" and e.payload["message"]["role"] == "user"
+    ][:1]
+    assert isinstance(said["content"], str)  # the journal never holds the image
+
+
+def test_a_forgotten_photo_leaves_its_text_alone(tmp_path: Path) -> None:
+    photos = Photos(None, ScriptedProvider(), PhotoSettings(), tmp_path, None)  # type: ignore[arg-type]
+    message = {"role": "user", "content": '<photo id="ph_01ABC" vue="directe">\n…\n</photo>'}
+    assert photos.inline(message) == message

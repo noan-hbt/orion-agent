@@ -1746,3 +1746,43 @@ la protection qu'on voulait.
 
 Il se change par message (`configure`), mais ce changement-là n'est jamais fait seul, même si
 le propriétaire a laissé Orion changer ses réglages sans demander (`ASKED_ALWAYS`).
+
+## D86 — La mémoire se lit après une conversation, pas après chaque message
+
+*20/10/2026 · acceptée*
+
+L'extracteur de souvenirs relisait chaque échange seul, juste après : un appel par message pour
+quelques faits par jour, et une vue trop courte (un détail corrigé trois messages plus loin
+était noté deux fois, l'accident du 30/09 l'a été). Désormais (`orion.memory.batch`) :
+- il attend une pause (`[memory] extract_idle_minutes`, 5 min sans message de lui) et lit
+  d'un coup tout ce qui s'est dit depuis son dernier passage : seule la version finale d'une
+  info corrigée est retenue ;
+- seulement s'il s'est dit assez (`extract_min_messages`, 3) ; un message isolé attend la
+  suite, mais jamais plus de `extract_max_wait_minutes` (60) de silence ;
+- l'endroit où il s'est arrêté est un événement : un redémarrage reprend les mêmes échanges.
+  Au premier démarrage, le passé compte comme lu.
+
+    memory.extracted
+
+Le terminal (`orion chat`) garde la lecture échange par échange.
+
+## D87 — Orion regarde les photos lui-même (révise D63)
+
+*20/10/2026 · acceptée*
+
+Une photo passait par un modèle qui voit (Gemini) : il la décrivait, Orion lisait la
+description, et redemandait un détail au besoin. Pour le constat du 20/10 : deux appels au
+modèle de vision, et une étape de plus. Le modèle de tous les jours (DeepSeek V4.1 Flash)
+prend les images : la photo est maintenant jointe au message, Orion la regarde directement.
+- `photos` garde l'original et en fait une fois une copie JPEG de 1 568 px au plus. Le journal
+  ne contient que le texte (`<photo id="…" vue="directe">`) ; l'image est ajoutée au moment
+  d'envoyer, toujours les mêmes octets : le cache tient ;
+- piège mesuré : parmi les hébergeurs de ce modèle, certains jettent l'image sans rien dire,
+  et le modèle invente tout (plaques, assureur, dates). Une requête avec image ne va donc
+  qu'aux hébergeurs vérifiés (`[providers.openrouter] image_hosts`), et une réponse qui a
+  coûté moins de 200 jetons par image est refusée : elle ne l'a pas vue ;
+- les documents (PDF…) et les vocaux restent lus par le modèle de vision et le modèle audio ;
+  `[modules.photos] direct = false` rétablit la description.
+
+Lire le constat : 0,23 centime chez DeepInfra, contre 1,1 centime pour les deux regards de
+Gemini.

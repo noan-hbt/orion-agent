@@ -37,6 +37,7 @@ def _provider(config: OrionConfig) -> Router | None:
             api_key.get_secret_value(),
             config.providers.openrouter.base_url,
             sort=config.providers.openrouter.sort,
+            image_hosts=config.providers.openrouter.image_hosts,
         )
     if config.providers.chatgpt.enabled:
         from orion.providers.chatgpt import ChatGPTProvider

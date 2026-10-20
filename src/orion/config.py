@@ -47,6 +47,11 @@ class OpenRouterConfig(BaseModel):
         description="Which host serves the model: the fastest by default (a slow one made "
         "each step 3 to 5 times longer)",
     )
+    image_hosts: dict[str, list[str]] = Field(
+        default_factory=lambda: {"deepseek/deepseek-v4.1-flash": ["deepinfra", "together"]},
+        description="Per model, the hosts a request with an image goes to: some hosts drop "
+        "images silently (D87)",
+    )
 
 
 class ChatGPTConfig(BaseModel):
@@ -184,6 +189,15 @@ class MemoryConfig(BaseModel):
     embedding_model: str | None = Field(
         default="openai/text-embedding-3-small",
         description="Embeddings for semantic search, through the main provider; None: words only",
+    )
+    extract_idle_minutes: int = Field(
+        default=5, ge=1, description="Memory is extracted after this long without a message (D86)"
+    )
+    extract_min_messages: int = Field(
+        default=3, ge=1, description="…once at least this many messages were exchanged"
+    )
+    extract_max_wait_minutes: int = Field(
+        default=60, ge=5, description="…or after this long, however few they were"
     )
 
 

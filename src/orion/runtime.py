@@ -154,6 +154,9 @@ class Orion:
         self._registry = registry
         self._guardian = guardian
         self._compiler = compiler
+        self.inline: Callable[[Message], Message] | None = None
+        """Turns a journaled message into what goes on the wire (photos the model looks at
+        itself, D87): same input, same bytes, so the prompt cache holds."""
         self._agent = agent
         self.threads = ThreadProjection()
         self._projections = ProjectionRunner(journal, [self.threads])
@@ -384,6 +387,8 @@ class Orion:
 
         thread = self.threads.get(thread_id)
         messages = self._compiler.compile(thread, [])
+        if self.inline is not None:
+            messages = [self.inline(m) for m in messages]
         settings = LoopSettings(
             model=self._agent.model,
             session_id=f"orion:{thread_id}",

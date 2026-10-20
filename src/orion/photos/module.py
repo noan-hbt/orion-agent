@@ -33,6 +33,7 @@ import base64
 import hashlib
 import io
 import mimetypes
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -49,7 +50,7 @@ from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
-from orion.providers.base import ModelProvider, ModelRequest, ProviderError
+from orion.providers.base import Message, ModelProvider, ModelRequest, ProviderError
 from orion.runtime import PHOTO_TRUST, Photo
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -102,6 +103,8 @@ TEXTS = {
 
 Kind = Literal["image", "document", "text", "audio", "other"]
 
+DIRECT_NOTE = "(L'image est jointe à ce message : regarde-la toi-même.)"
+
 LOOK = """Tu décris une image pour un assistant personnel qui ne la voit pas. Son propriétaire
 la lui a envoyée{caption}. Écris en français, sans préambule :
 1. ce que c'est, en une ligne (photo, capture d'écran de…, affiche, document, ticket…) ;
@@ -140,6 +143,11 @@ class PhotoSettings(ModuleSettings):
         default=None, description="A model that sees and reads files; default: agent.vision_model"
     )
     description_tokens: int = Field(default=1500, ge=200, le=8000)
+    direct: bool = Field(
+        default=True,
+        description="The everyday model looks at images itself (agent.model must see them): "
+        "no model in between (D87)",
+    )
     audio_model: str | None = Field(
         default=None, description="Transcribes voice messages; default: agent.audio_model"
     )
@@ -179,6 +187,26 @@ def _size(size: int) -> str:
     return f"{size} octets" if size < 1024 else f"{size // 1024} Ko"
 
 
+VIEW_SIDE = 1568
+"""Longest side of the copy the everyday model looks at: enough to read a form."""
+DIRECT = re.compile(r'<photo id="(ph_[0-9A-Z]+)" vue="directe">')
+
+
+def view_of(data: bytes) -> bytes:
+    """The copy the everyday model looks at: JPEG, at most `VIEW_SIDE` wide. Made once and
+    kept, so every request carries the same bytes (prompt-cache contract)."""
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()  # pyright: ignore[reportUnknownMemberType]
+    with Image.open(io.BytesIO(data)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((VIEW_SIDE, VIEW_SIDE))
+        out = io.BytesIO()
+        image.save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+
 def to_jpeg(data: bytes) -> bytes:
     import pillow_heif
     from PIL import Image
@@ -213,6 +241,12 @@ class _Kept:
         if event.kind == SEEN and not event.redacted:
             content_type = str(payload.get("content_type", "image/jpeg"))
             self.files[str(payload["photo_id"])] = (str(payload["file"]), content_type, event.id)
+            if payload.get("view"):
+                self.files[f"{payload['photo_id']}:view"] = (
+                    str(payload["view"]),
+                    "image/jpeg",
+                    event.id,
+                )
         elif event.kind == KEPT and not event.redacted:
             self.files[str(payload["attachment_id"])] = (
                 str(payload["file"]),
@@ -289,9 +323,15 @@ class Photos:
         if content_type in CONVERTED:
             data, content_type = to_jpeg(data), "image/jpeg"
         photo_id = f"ph_{new_id()}"
-        prompt = LOOK.format(caption=_caption(caption))
-        description = await self._ask(prompt, data, content_type, "", "Décris cette image.")
         name = photo_id + SUFFIXES[content_type]
+        view: str | None = None
+        if self._settings.direct:
+            view = f"{photo_id}.view.jpg"
+            self._write(view, view_of(data))
+            description = DIRECT_NOTE
+        else:
+            prompt = LOOK.format(caption=_caption(caption))
+            description = await self._ask(prompt, data, content_type, "", "Décris cette image.")
         self._write(name, data)
         await self._journal.append(
             [
@@ -304,15 +344,37 @@ class Photos:
                         "size": len(data),
                         "sha256": hashlib.sha256(data).hexdigest(),
                         "description": description,
-                        "model": self.model,
+                        "model": None if view else self.model,
+                        **({"view": view} if view else {}),
                     },
                     provenance=Provenance(source=source, actor="owner:main"),
                     trust=PHOTO_TRUST,
                 )
             ]
         )
-        log.info("photos.seen", photo=photo_id, type=content_type, size=len(data))
+        log.info(
+            "photos.seen", photo=photo_id, type=content_type, size=len(data), direct=bool(view)
+        )
+        if view:
+            return Photo(photo_id, description, attributes=(("vue", "directe"),))
         return Photo(photo_id, description)
+
+    def inline(self, message: Message) -> Message:
+        """The owner's message with the photos it names joined as images, for a model that
+        looks at them itself (D87). The journal keeps the text; the images exist on the wire.
+        A forgotten photo's copy is gone: the text stays alone."""
+        content = message.get("content")
+        if message.get("role") != "user" or not isinstance(content, str):
+            return message
+        parts: list[dict[str, Any]] = []
+        for photo_id in DIRECT.findall(content):
+            path = self.folder / f"{photo_id}.view.jpg"
+            if path.is_file():
+                url = "data:image/jpeg;base64," + base64.b64encode(path.read_bytes()).decode()
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+        if not parts:
+            return message
+        return {**message, "content": [{"type": "text", "text": content}, *parts]}
 
     async def _keep(
         self,
@@ -568,3 +630,5 @@ class PhotosModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.photos is not None:
             daemon.inbox.eyes = self.photos.look
+            if self.settings.direct:
+                daemon.orion.inline = self.photos.inline

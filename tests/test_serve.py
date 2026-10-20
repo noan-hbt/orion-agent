@@ -106,6 +106,7 @@ async def test_imessage_and_voice_modules_plug_into_the_daemon(tmp_path: Path) -
         daemon = await start(app, owner_inbox(app), supervisor)
         assert supervisor.services == [
             "inbox",
+            "memory.batch",
             "imessage.poll",
             "voice.brief",
             "voice.poll",

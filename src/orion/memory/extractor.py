@@ -1,14 +1,16 @@
 """Background memory consolidation (the reflective process, M2 version).
 
-After a turn, a cheap model reads the exchange next to what memory already holds and proposes
-operations: add a fact, update one (the old version is kept as history), invalidate one, add or
-close a commitment. Operations are validated before being applied; anything malformed is
-dropped and logged. Nothing here runs on the conversation's critical path.
+After a conversation (D86: a few exchanges, then a pause), a cheap model reads them next to what
+memory already holds and proposes operations: add a fact, update one (the old version is kept
+as history), invalidate one, add or close a commitment. Operations are validated before being
+applied; anything malformed is dropped and logged. Nothing here runs on the conversation's
+critical path.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import date
 from typing import Annotated, Literal, cast
 
@@ -26,8 +28,10 @@ log = structlog.get_logger(__name__)
 
 SYSTEM_PROMPT = """You maintain the long-term memory of Orion, a personal assistant.
 
-You receive one exchange between the owner and Orion, plus what memory already holds on related
-topics. Decide what, if anything, must change in memory. Reply with ONE JSON object:
+You receive the exchanges of a conversation between the owner and Orion, in order, plus what
+memory already holds on related topics. Decide what, if anything, must change in memory. A
+later exchange may correct an earlier one: record only the final version, once. Reply with ONE
+JSON object:
 
 {"operations": [ ... ]}
 
@@ -124,8 +128,21 @@ class MemoryExtractor:
         today: date,
         recorded_this_turn: list[Fact],
     ) -> ExtractionReport:
-        related = await self._memory.search(f"{owner_text} {reply_text}", limit=12)
-        known = {f.id: f for f in [*related, *recorded_this_turn]}
+        return await self.consolidate_many(
+            [(owner_text, reply_text)], origin, today, recorded_this_turn
+        )
+
+    async def consolidate_many(
+        self,
+        exchanges: Sequence[tuple[str, str]],
+        origin: Origin,
+        today: date,
+        recorded: list[Fact],
+    ) -> ExtractionReport:
+        """`exchanges` (owner, Orion) in order; `recorded`: what Orion itself remembered."""
+        said = " ".join(f"{owner} {reply}" for owner, reply in exchanges)
+        related = await self._memory.search(said[-4000:], limit=12 + 3 * len(exchanges))
+        known = {f.id: f for f in [*related, *recorded]}
         commitments = await self._memory.store.commitments()
         user = "\n".join(
             [
@@ -136,8 +153,11 @@ class MemoryExtractor:
                 *(format_commitment(c) for c in commitments),
                 "" if known or commitments else "(nothing related)",
                 "",
-                f"Owner: {owner_text}",
-                f"Orion: {reply_text}",
+                *(
+                    line
+                    for owner, reply in exchanges
+                    for line in (f"Owner: {owner}", f"Orion: {reply}")
+                ),
             ]
         )
         try:

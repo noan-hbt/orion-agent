@@ -158,6 +158,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         daemon = await start(app, inbox, supervisor)
         assert supervisor.services == [
             "inbox",
+            "memory.batch",
             "adaptation",
             "consolidation",
             "missions.work",

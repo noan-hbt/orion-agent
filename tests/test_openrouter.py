@@ -227,3 +227,38 @@ async def test_a_voice_that_introduces_the_text_is_refused() -> None:
     provider = provider_with(speech("Bien sûr, voici le texte en intégralité. " + text))
     with pytest.raises(ProviderError, match="said something else"):
         await provider.speak("openai/gpt-audio-mini", text, "alloy")
+
+
+def with_image() -> ModelRequest:
+    image = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
+    return ModelRequest(
+        model="deepseek/deepseek-v4.1-flash",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "tiens"}, image]}],
+        session_id="orion:t1",
+    )
+
+
+async def test_an_image_goes_to_hosts_that_look_at_it_and_a_dropped_one_is_refused() -> None:
+    """D87: a host of a model said to see dropped the image; the model made up a whole form."""
+    seen: list[dict[str, Any]] = []
+    tokens = [2570, 97, 2570]
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(req.content))
+        body = json.loads(json.dumps(OK_BODY))
+        body["usage"]["prompt_tokens"] = tokens.pop(0)
+        return httpx.Response(200, json=body)
+
+    provider = provider_with(
+        handler, sort="throughput", image_hosts={"deepseek/deepseek-v4.1-flash": ["deepinfra"]}
+    )
+    await provider.complete(with_image())
+    assert seen[0]["provider"] == {
+        "sort": "throughput",
+        "order": ["deepinfra"],
+        "allow_fallbacks": False,
+    }
+    with pytest.raises(ProviderError, match="ignored the image"):
+        await provider.complete(with_image())
+    await provider.complete(request())  # no image: the usual routing
+    assert seen[-1]["provider"] == {"sort": "throughput"}

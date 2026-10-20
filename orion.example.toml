@@ -44,6 +44,9 @@ monthly_usd = 40.0
 api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"
 sort = "throughput"              # the fastest host for the model ("latency", "price"; remove: none)
+# A request with an image goes only to hosts that really look at it: some drop it without a
+# word, and the model makes the picture up (D87).
+image_hosts = { "deepseek/deepseek-v4.1-flash" = ["deepinfra", "together"] }
 
 # Your ChatGPT Plus or Pro plan (D62), through OpenAI's "Sign in with ChatGPT": run
 # `uv run orion chatgpt login` once, then name models `chatgpt:<model>` anywhere above, e.g.
@@ -208,6 +211,9 @@ drafts_folder = "[Gmail]/Drafts"      # where reply drafts go (iCloud: "Drafts")
 [memory]
 owner_names = ["Noan"]                # your names: kept out of "the people in your life"
 embedding_model = "openai/text-embedding-3-small"   # semantic search; remove to search by words
+extract_idle_minutes = 5          # what to remember is read after a pause this long…
+extract_min_messages = 3          # …once this many messages were exchanged…
+extract_max_wait_minutes = 60     # …or after this long anyway (D86)
 
 # Nightly consolidation: duplicates out, outdated facts replaced, names merged, contradictions
 # asked in the morning digest. On by default; never drops a fact for a less trusted one.

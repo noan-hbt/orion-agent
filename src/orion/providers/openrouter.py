@@ -66,6 +66,21 @@ EXPLICIT_CACHE = ("anthropic/",)
 """Models whose prompt cache needs breakpoints; others cache any repeated prefix by themselves."""
 
 
+IMAGE_TOKENS_AT_LEAST = 200
+"""An image a model really looked at costs hundreds of prompt tokens (about 1 100 for a photo
+1 568 px wide); fewer means the host dropped it."""
+
+
+def images_in(messages: list[Message]) -> int:
+    count = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = cast(list[dict[str, Any]], content)
+            count += sum(1 for part in parts if part.get("type") == "image_url")
+    return count
+
+
 def cache_marked(messages: list[Message]) -> list[Message]:
     """Anthropic caches only up to `cache_control` breakpoints: one after the system message
     (constitution and tools) and one on the last message, so each step reads everything
@@ -110,8 +125,12 @@ class OpenRouterProvider:
         app_name: str = "Orion",
         transport: httpx.AsyncBaseTransport | None = None,
         sort: str | None = None,
+        image_hosts: dict[str, list[str]] | None = None,
     ) -> None:
         self._sort = sort
+        self._image_hosts = image_hosts or {}
+        """Hosts that really look at images, per model: some hosts of a model said to see drop
+        the image without a word, and the model makes up what it would have shown (D87)."""
         """OpenRouter's provider routing (`throughput`, `latency`, `price`): with no preference
         a slow host can serve a model at a fifth of the speed of the fastest one."""
         self._client = httpx.AsyncClient(
@@ -131,10 +150,20 @@ class OpenRouterProvider:
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         body = self._body(request)
-        return await self._retrying(
-            lambda attempt: self._post(body),
-            lambda data, attempt: self._parse(data, attempts=attempt),
-        )
+        images = images_in(request.messages)
+
+        def parse(data: dict[str, Any], attempt: int) -> ModelResponse:
+            response = self._parse(data, attempts=attempt)
+            if response.usage.prompt_tokens < IMAGE_TOKENS_AT_LEAST * images:
+                # Fail closed: an answer about an image nobody looked at is made up.
+                raise ProviderError(
+                    f"{response.provider or 'the host'} ignored the image(s): "
+                    f"{response.usage.prompt_tokens} prompt tokens for {images}",
+                    retryable=False,
+                )
+            return response
+
+        return await self._retrying(lambda attempt: self._post(body), parse)
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         def parse(data: dict[str, Any], _attempt: int) -> list[list[float]]:
@@ -256,6 +285,13 @@ class OpenRouterProvider:
             body["reasoning"] = {"effort": request.reasoning_effort, "exclude": True}
         if self._sort is not None:
             body["provider"] = {"sort": self._sort}
+        hosts = self._image_hosts.get(request.model)
+        if hosts and images_in(request.messages):
+            body["provider"] = {
+                **body.get("provider", {}),
+                "order": hosts,
+                "allow_fallbacks": False,
+            }
         if request.image_output:
             body["modalities"] = ["image", "text"]
         if request.web_search is not None:
