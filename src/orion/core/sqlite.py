@@ -63,3 +63,15 @@ class SqliteWorker:
         if self._schema:
             conn.executescript(self._schema)
         self._conn = conn
+
+
+def dump(db: sqlite3.Connection, tables: tuple[str, ...]) -> dict[str, list[tuple[object, ...]]]:
+    """Every row of these tables, in a stable order: a store's state, to compare after a
+    rebuild (D81)."""
+    return {
+        table: sorted(
+            (tuple(row) for row in db.execute(f"SELECT * FROM {table}")),
+            key=repr,
+        )
+        for table in tables
+    }

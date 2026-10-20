@@ -568,6 +568,22 @@ def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -
     return 0
 
 
+def _check_backup(path: Path) -> int:
+    from orion.core.backup import BackupError, verify
+
+    files = sorted(path.glob("*.sqlite3")) if path.is_dir() else [path]
+    if not files:
+        print(f"Aucun journal dans {path}")
+        return 1
+    try:
+        for file in files:
+            print(f"{file} : {verify(file)} événements, tous relisibles")
+    except BackupError as exc:
+        print(f"Copie inutilisable : {exc}")
+        return 1
+    return 0
+
+
 async def _doctor(config: OrionConfig) -> int:
     print(f"orion {__version__}")
     print(f"instance:  {config.instance}")
@@ -782,6 +798,10 @@ def main(argv: list[str] | None = None) -> int:
     backup.add_argument(
         "--guardian", action="store_true", help="Copy the guardian's ledger instead"
     )
+    check_backup = sub.add_parser(
+        "check-backup", help="Check that a copy of the journal can be restored"
+    )
+    check_backup.add_argument("path", type=Path, help="The copy (a .sqlite3 file or its folder)")
     args = parser.parse_args(argv)
 
     if args.command == "version":
@@ -790,6 +810,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "hand":
         return asyncio.run(_hand(args))
+
+    if args.command == "check-backup":
+        return _check_backup(args.path)
 
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)

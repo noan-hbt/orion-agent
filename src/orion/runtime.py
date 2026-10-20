@@ -51,6 +51,7 @@ from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, Usage
+from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
 
 log = structlog.get_logger(__name__)
@@ -200,20 +201,21 @@ class Orion:
             assert sent_at is not None
             payload["sent_at"] = sent_at.isoformat()
             body = f"{waited}\n{body}"
-        return await self._turn(
-            thread_id,
-            kind="message.received",
-            payload=payload,
-            provenance=owner,
-            trust=min(Trust.OWNER, PHOTO_TRUST) if photos else Trust.OWNER,
-            body=body,
-            channel=channel,
-            now=now,
-            owner_text=text,
-            interjections=interjections,
-            progress=progress,
-            waiting=waiting,
-        )
+        with foreground():  # he is waiting: never cut by the spending ceiling (D79)
+            return await self._turn(
+                thread_id,
+                kind="message.received",
+                payload=payload,
+                provenance=owner,
+                trust=min(Trust.OWNER, PHOTO_TRUST) if photos else Trust.OWNER,
+                body=body,
+                channel=channel,
+                now=now,
+                owner_text=text,
+                interjections=interjections,
+                progress=progress,
+                waiting=waiting,
+            )
 
     async def handle_initiative(
         self,

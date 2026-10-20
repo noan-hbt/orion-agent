@@ -32,6 +32,7 @@ from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.registry import discover, load
 from orion.providers.base import Embedder, ModelProvider
+from orion.providers.spending import Spending, spending_tools, with_spending
 from orion.resources import read_resource
 from orion.runtime import Orion
 from orion.tools.actions import grouped
@@ -133,6 +134,7 @@ def core_tools(plate: Plate) -> list[Tool]:
             {"person": "show", "people": "list", "same_person": "same"},
         ),
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
+        *(spending_tools(plate.provider) if isinstance(plate.provider, Spending) else []),
     ]
 
 
@@ -161,6 +163,8 @@ async def build_app(
         journal = await stack.enter_async_context(
             SqliteJournal(config.journal_path, HybridClock(config.instance))
         )
+        provider = with_spending(provider, journal, config.budget, config.agent.timezone)
+        await provider.sync()
         semantic: SemanticIndex | None = None
         if config.memory.embedding_model and isinstance(provider, Embedder):
             cache = EmbeddingCache(config.embeddings_path)

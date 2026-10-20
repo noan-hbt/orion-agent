@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from orion.cli import main
-from orion.core.backup import BackupError, backup
+from orion.core.backup import BackupError, backup, verify
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
@@ -95,3 +96,23 @@ async def test_the_watch_can_be_turned_off(tmp_path: Path) -> None:
         g.service.monotonic = lambda: 10**9
         await g.service.check_core()
         assert g.fake.sent == []
+
+
+async def test_a_copy_is_checked_by_reading_every_event(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "journal.sqlite3"
+    await journal_with(source, 3)
+    result = backup(source, tmp_path / "copies", keep=2)
+    assert main(["check-backup", str(result.path)]) == 0
+    assert "3 événements, tous relisibles" in capsys.readouterr().out
+
+    broken = tmp_path / "broken.sqlite3"
+    shutil.copy(source, broken)
+    db = sqlite3.connect(broken)
+    db.execute("UPDATE events SET payload = 'pas du json' WHERE seq = 2")
+    db.commit()
+    db.close()
+    with pytest.raises(BackupError, match="event 2 cannot be read"):
+        verify(broken)
+    assert main(["check-backup", str(broken)]) == 1

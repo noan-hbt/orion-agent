@@ -335,6 +335,22 @@ class FederationConfig(BaseModel):
     weekends: bool = False
 
 
+class BudgetConfig(BaseModel):
+    """`[budget]` in orion.toml: what Orion may spend on models on its own."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    daily_usd: float | None = Field(
+        default=3.0, gt=0, description="Background spending per day; none: no daily ceiling"
+    )
+    monthly_usd: float | None = Field(
+        default=40.0, gt=0, description="All spending per month; background stops at it"
+    )
+    warn_at: float = Field(
+        default=0.8, gt=0, lt=1, description="Share of the month's ceiling to warn at"
+    )
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -355,6 +371,7 @@ class OrionConfig(BaseModel):
     voice: VoiceConfig = VoiceConfig()
     guardian: GuardianConfig = GuardianConfig()
     federation: FederationConfig = FederationConfig()
+    budget: BudgetConfig = BudgetConfig()
     modules: dict[str, dict[str, Any]] = Field(
         default_factory=dict[str, dict[str, Any]],
         description="Third-party modules' [modules.<name>] sections, validated by each module",

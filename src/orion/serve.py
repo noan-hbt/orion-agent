@@ -18,6 +18,7 @@ from orion.core.supervisor import Supervisor
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
 from orion.modules.base import Daemon, ModuleError
+from orion.providers.spending import Spending
 from orion.runtime import OWNER_THREAD, TurnResult
 
 log = structlog.get_logger(__name__)
@@ -49,6 +50,8 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         supervisor.add("guardian.heartbeat", lambda: heartbeat(guardian, every))
     for module in app.modules:
         await module.serve(daemon)
+    if isinstance(app.provider, Spending):
+        daemon.alerts.append(app.provider)
 
     initiative = app.config.initiative
     autonomy = app.plate.autonomy

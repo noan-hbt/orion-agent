@@ -10,9 +10,14 @@ projection itself, so applying an event and advancing the checkpoint happen atom
 
 from __future__ import annotations
 
-from typing import Protocol
+import dataclasses
+import weakref
+from datetime import date, datetime, time, timedelta
+from enum import Enum
+from typing import Any, ClassVar, Protocol
 
 import structlog
+from pydantic import BaseModel
 
 from orion.core.events import Event
 from orion.core.journal import EventStore
@@ -36,8 +41,45 @@ class Projection(Protocol):
         ...
 
 
+def snapshot(value: Any, _seen: frozenset[int] = frozenset()) -> Any:
+    """A projection's state as plain, comparable data: what a rebuild must give back.
+
+    A projection kept outside Python objects (in SQLite) gives its own with an async
+    `snapshot()`; this one reads the attributes of the others."""
+    if isinstance(value, str | int | float | bool | None | Enum):
+        return value
+    if isinstance(value, timedelta):
+        return value.total_seconds()
+    if isinstance(value, datetime | date | time):
+        return value.isoformat()
+    if id(value) in _seen:
+        return "<cycle>"
+    seen = _seen | {id(value)}
+    if isinstance(value, dict):
+        items: dict[Any, Any] = value  # pyright: ignore[reportUnknownVariableType]
+        pairs = ((repr(snapshot(k, seen)), snapshot(v, seen)) for k, v in items.items())
+        return sorted(pairs, key=repr)
+    if isinstance(value, set | frozenset):
+        members: frozenset[Any] = frozenset(value)  # pyright: ignore[reportUnknownArgumentType]
+        return sorted((snapshot(v, seen) for v in members), key=repr)
+    if isinstance(value, list | tuple):
+        sequence: list[Any] = list(value)  # pyright: ignore[reportUnknownArgumentType]
+        return [snapshot(v, seen) for v in sequence]
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: snapshot(getattr(value, f.name), seen) for f in dataclasses.fields(value)}
+    if isinstance(value, BaseModel):
+        return snapshot(value.model_dump(), seen)
+    if hasattr(value, "__dict__"):
+        return {k: snapshot(v, seen) for k, v in sorted(vars(value).items())}
+    return repr(value)
+
+
 class ProjectionRunner:
     """Keeps a set of projections caught up with the journal."""
+
+    live: ClassVar[weakref.WeakSet[ProjectionRunner]] = weakref.WeakSet()
+    """Every runner alive in this process: the test suite rebuilds each one's projections at
+    the end of every test, to prove they depend on the journal alone (D81)."""
 
     def __init__(
         self, journal: EventStore, projections: list[Projection], batch: int = 500
@@ -48,6 +90,27 @@ class ProjectionRunner:
         self._journal = journal
         self._projections = projections
         self._batch = batch
+        ProjectionRunner.live.add(self)
+
+    @property
+    def journal(self) -> EventStore:
+        return self._journal
+
+    @property
+    def projections(self) -> list[Projection]:
+        return list(self._projections)
+
+    async def verify(self) -> list[str]:
+        """Rebuild each projection from the journal and compare it with what it was. Returns
+        the names of those that came back different (their state does not depend on the
+        journal alone). Resets live state: run it on a copy, or in tests."""
+        different: list[str] = []
+        for projection in self._projections:
+            before = await state_of(projection)
+            await self.rebuild(projection.name)
+            if await state_of(projection) != before:
+                different.append(projection.name)
+        return different
 
     async def catch_up(self) -> int:
         """Apply every pending event to every projection. Returns the number of applications."""
@@ -90,3 +153,10 @@ class ProjectionRunner:
             if projection.name == name:
                 return projection
         raise KeyError(f"unknown projection: {name}")
+
+
+async def state_of(projection: Projection) -> Any:
+    custom = getattr(projection, "snapshot", None)
+    if custom is not None:
+        return snapshot(await custom())
+    return snapshot(projection)

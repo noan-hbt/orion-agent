@@ -29,6 +29,14 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # [modules.web] model, [modules.mail] quarantine_model, [modules.computer] model,
 # [modules.delegation] model. [memory] embedding_model is the embeddings model.
 
+# What Orion may spend on models (D79). What it does on its own (the night, curiosity,
+# missions, initiative) stops at the day's or the month's ceiling; answering you never does.
+# It tells you at 80 % of the month, and when it pauses. `spending` answers « combien tu m'as
+# coûté ? ». Not changeable by message.
+[budget]
+daily_usd = 3.0
+monthly_usd = 40.0
+
 [providers.openrouter]
 api_key = { env = "OPENROUTER_API_KEY" }
 base_url = "https://openrouter.ai/api/v1"

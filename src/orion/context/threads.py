@@ -90,16 +90,16 @@ class ThreadProjection:
     async def apply(self, event: Event) -> None:
         if not event.redacted:
             if event.kind == MESSAGE_KIND:
-                thread = self.get(event.payload["thread_id"])
+                thread = self._thread(event.payload["thread_id"])
                 thread.messages.append(event.payload["message"])
                 thread.trusts.append(event.trust)
                 if "at" in event.payload:
                     thread.last_at = datetime.fromisoformat(str(event.payload["at"]))
             elif event.kind == REBASED_KIND:
-                thread = self.get(event.payload["thread_id"])
+                thread = self._thread(event.payload["thread_id"])
                 thread.base = max(thread.base, int(event.payload["base"]))
             elif event.kind == PRUNED_KIND:
-                thread = self.get(event.payload["thread_id"])
+                thread = self._thread(event.payload["thread_id"])
                 thread.pruned.update(int(i) for i in event.payload["indexes"])
         self._checkpoint = event.seq
 
@@ -108,6 +108,11 @@ class ThreadProjection:
         self._checkpoint = 0
 
     def get(self, thread_id: str) -> Thread:
+        """The thread, or an empty one: reading never adds a thread (a rebuild from the
+        journal would not have it, D81)."""
+        return self._threads.get(thread_id) or Thread(thread_id)
+
+    def _thread(self, thread_id: str) -> Thread:
         thread = self._threads.get(thread_id)
         if thread is None:
             thread = self._threads[thread_id] = Thread(thread_id)
