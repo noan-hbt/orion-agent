@@ -129,6 +129,8 @@ d'autres personnes.
   ton rendez-vous, ta visite.
 - **La chronique** (D52) : chaque dimanche soir, la page de ta semaine, écrite pour toi et
   gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir.
+- **Tes intentions** (D53) : ce que tu veux devenir (courir plus, dépenser moins). Il les
+  garde en tête, te le dit quand tu t'en éloignes, et fait le point chaque semaine.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

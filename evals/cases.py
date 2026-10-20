@@ -189,4 +189,20 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(uses("library_add"),),
     ),
+    Case(
+        name="entretien_jeudi",
+        origin="Un moment qui compte : Orion devrait prévoir de demander comment ça s'est passé.",
+        at=paris(2026, 10, 20, 18, 0),
+        facts=OWNER,
+        steps=(Say("J'ai mon entretien chez Decathlon jeudi à 10h, je stresse un peu"),),
+        checks=(uses("follow_up"),),
+    ),
+    Case(
+        name="me_remettre_a_courir",
+        origin="Une intention, pas une tâche : la suivre (ou proposer de la suivre).",
+        at=paris(2026, 10, 20, 19, 0),
+        facts=OWNER,
+        steps=(Say("Je voudrais vraiment me remettre à courir, genre trois fois par semaine"),),
+        checks=(either(uses("intention_set"), asks()), avoids("remind_me")),
+    ),
 )

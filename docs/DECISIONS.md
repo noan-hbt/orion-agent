@@ -1090,3 +1090,20 @@ tableau de bord : un texte qu'on a envie de lire.
   rapprochement dit quelque chose.
 - Comme la nuit (D51), seuls les tours de confiance sont lus. Une semaine de moins de six
   échanges n'a pas de page.
+
+## D53 — Ses intentions
+
+*20/10/2026 · acceptée*
+
+Module `intentions`, actif par défaut. Un engagement est une tâche ; une intention est ce que
+le propriétaire veut devenir (courir plus, dépenser moins, voir plus sa mère).
+- **En vue** : chaque intention est aussi un fait de profil en mémoire. Orion l'a sous les yeux
+  au début de chaque conversation et la retrouve quand un message la touche. Il peut donc dire
+  « tu m'avais dit vouloir… » au moment où ça compte, une fois, puis laisser décider.
+- **Notée** : ce qui arrive (`intention_note`, tenu ou écart), quand le propriétaire en parle.
+- **Le point** : chaque semaine (ou au rythme choisi), à 18 h 30, Orion fait le point avec ce
+  qui a été noté. Il le dit simplement si ça avance, franchement si ça décroche, et demande ce
+  qui coince, sans morale. Ça passe par le moteur d'initiative.
+
+Orion propose de suivre une intention plutôt que de le décider seul : la suivre est une forme
+d'attention qu'on accepte.
