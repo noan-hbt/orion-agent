@@ -76,3 +76,28 @@ async def test_an_intention_is_kept_in_view_noted_and_taken_stock_of(
     await call(tools, "intention_drop", intention=intention.id, why="objectif atteint")
     assert await intentions.alerts(check + timedelta(days=7)) == []
     assert await memory.store.facts() == []  # no longer part of who he is
+
+
+async def test_orion_disagrees_once_and_the_check_in_remembers(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """« Je sors jusqu'à 4 h » the night before the exam he said mattered: said once (D66)."""
+    now = [MONDAY]
+    intentions = Intentions(journal, memory, IntentionSettings(), "Europe/Paris", lambda: now[0])
+    tools = {t.name: t for t in intention_tools(intentions)}
+    await call(tools, "intention_set", what="réussir son partiel de vendredi", why="son master")
+    (intention,) = intentions.state.active.values()
+
+    now[0] = MONDAY + timedelta(days=3, hours=10)  # Thursday evening
+    said = await call(
+        tools, "intention_challenge", intention=intention.id, plan="sortir jusqu'à 4 h jeudi"
+    )
+    assert "une fois" in said and "son master" in said
+    again = await call(
+        tools, "intention_challenge", intention=intention.id, plan="un dernier verre"
+    )
+    assert "déjà" in again  # never twice the same day
+    assert len(intentions.state.active[intention.id].challenges) == 1
+
+    (check_in,) = await intentions.alerts(MONDAY + timedelta(days=7, hours=10))
+    assert "sortir jusqu'à 4 h jeudi" in check_in.notice  # the week's stock knows

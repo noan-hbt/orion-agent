@@ -123,3 +123,42 @@ def test_a_notes_folder_skips_hidden_and_other_files(tmp_path: Path) -> None:
     (tmp_path / ".obsidian" / "c.md").write_text("x")
     (tmp_path / "d.png").write_bytes(b"x")
     assert [p.name for p in notes_in(tmp_path)] == ["a.md", "b.txt"]
+
+
+async def test_a_link_kept_for_later_comes_back_when_the_topic_does(
+    journal: SqliteJournal, library: Library
+) -> None:
+    """A bare link is kept with its gist and topics; weeks later, a conversation about rent
+    finds it in memory, with no to-read list in between (D67)."""
+    from orion.core.events import Trust as T
+    from orion.memory.service import MemoryService
+    from orion.memory.store import MemoryStore
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    tools = {t.name: t for t in library_tools(library, "Europe/Paris", 6, memory)}
+    tool = tools["library_keep"]
+    result = await tool.handler(
+        tool.parse(
+            json.dumps(
+                {
+                    "title": "L'encadrement des loyers prolongé à Lyon",
+                    "url": "https://example.org/loyers",
+                    "gist": "Le plafond des loyers reste en vigueur jusqu'en 2028 ; un "
+                    "propriétaire qui le dépasse peut être contesté.",
+                    "topics": ["loyer", "appartement", "encadrement"],
+                }
+            )
+        ),
+        ToolContext("owner", "c", context_trust=T.WEB),
+    )
+    assert "une ligne" in result.content
+    (doc,) = await library.store.docs()
+    assert doc[1] == "L'encadrement des loyers prolongé à Lyon"
+
+    found = await memory.search("je trouve que ce loyer est trop cher pour l'appartement")
+    (fact,) = [f for f in found if "Lecture qu'il a gardée" in f.statement]
+    assert "plafond des loyers" in fact.statement and doc[0] in fact.statement
+    assert fact.trust <= T.WEB  # web content stays web content in memory
+    await store.close()

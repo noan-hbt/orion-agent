@@ -6,7 +6,10 @@ searchable by words and by meaning:
 
 - `library_add`: keep a text (pasted, read from the owner's machine, a page);
 - `library_search`: passages that answer a question, with their document and date;
-- `conversations_search`: what was said with the owner, about something, between two dates.
+- `conversations_search`: what was said with the owner, about something, between two dates;
+- `library` (keep): a link sent « for later » (D67), read, kept, and noted in memory with its
+  gist and topics, so it comes back by itself the day the conversation touches it (memory
+  recall), instead of piling up in a to-read list nobody opens.
 
 A document is content, not orders: its passages come back below full trust, like a file read
 from the owner's machine. `orion library import <folder>` adds a folder of notes at once.
@@ -29,6 +32,8 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.library.store import ADDED, REMOVED, LibraryStore, Passage
+from orion.memory.model import Category
+from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.providers.base import ProviderError
 from orion.tools.actions import grouped
@@ -149,6 +154,24 @@ class AddInput(BaseModel):
     text: str = Field(min_length=10, max_length=MAX_DOC_CHARS)
 
 
+class KeepInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=2, max_length=200)
+    url: str = Field(default="", max_length=2000, description="Where it was, if a page")
+    gist: str = Field(
+        min_length=10,
+        max_length=800,
+        description="What it says that could serve him later, in two or three sentences",
+    )
+    topics: list[str] = Field(
+        min_length=1,
+        max_length=8,
+        description="What it is about, in the words a later conversation would use",
+    )
+    text: str = Field(default="", max_length=MAX_DOC_CHARS, description="What you read of it")
+
+
 class SearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -173,8 +196,42 @@ class RemoveInput(BaseModel):
     doc: str = Field(description="The document id (d_…)")
 
 
-def library_tools(library: Library, timezone: str, results: int) -> list[Tool]:
+def library_tools(
+    library: Library, timezone: str, results: int, memory: MemoryService | None = None
+) -> list[Tool]:
     zone = ZoneInfo(timezone)
+
+    async def keep(args: Any, ctx: ToolContext) -> ToolResult:
+        provenance = Provenance(
+            source=f"thread:{ctx.thread_id}",
+            actor="orion:core",
+            derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
+        )
+        body = "\n\n".join(p for p in (args.url, args.gist, args.text) if p)
+        doc_id = await library.add(
+            args.title, body, provenance, ctx.context_trust, ctx.correlation_id
+        )
+        if memory is not None:
+            day = datetime.now(zone)
+            where = f" {args.url}" if args.url else ""
+            await memory.remember(
+                f"Lecture qu'il a gardée pour plus tard le {day:%d/%m/%Y} ({doc_id}) : "
+                f"« {args.title} »{where}. En bref : {args.gist} "
+                f"Sujets : {', '.join(args.topics)}.",
+                Origin(
+                    actor="orion:core",
+                    source=provenance.source,
+                    trust=min(ctx.context_trust, DOCUMENT_TRUST),
+                    derived_from=provenance.derived_from,
+                    correlation_id=ctx.correlation_id,
+                ),
+                about=["owner"],
+                category=Category.OTHER,
+            )
+        return ToolResult(
+            f"Gardé ({doc_id}). Ne lui en fais pas de résumé maintenant : une ligne suffit. "
+            "Tu lui en reparleras le jour où la conversation y touchera."
+        )
 
     async def add(args: Any, ctx: ToolContext) -> ToolResult:
         doc_id = await library.add(
@@ -235,6 +292,16 @@ def library_tools(library: Library, timezone: str, results: int) -> list[Tool]:
         "accepts_untrusted_context": True,
     }
     return [
+        Tool(
+            name="library_keep",
+            description="Keep a link or text he sent « for later » (often a bare link, no "
+            "words): after reading it, its gist and topics, so it comes back when it serves.",
+            input_model=KeepInput,
+            handler=keep,
+            effect=Effect.INTERNAL,
+            reversibility=Reversibility.REVERSIBLE,
+            accepts_untrusted_context=True,
+        ),
         Tool(
             name="library_add",
             description="Keep a text whole in the owner's library (a note they dictate, a file "
@@ -298,7 +365,9 @@ class LibraryModule(Module):
             plate.journal, self._store, semantic.vectors if semantic is not None else None
         )
         await self.library.sync()
-        tools = library_tools(self.library, self.config.agent.timezone, settings.results)
+        tools = library_tools(
+            self.library, self.config.agent.timezone, settings.results, plate.memory
+        )
         talk = [t for t in tools if t.name == "conversations_search"]
         shelf = [t for t in tools if t.name != "conversations_search"]
         return [
@@ -310,6 +379,7 @@ class LibraryModule(Module):
                 shelf,
                 {
                     "library_add": "add",
+                    "library_keep": "keep",
                     "library_search": "search",
                     "library": "list",
                     "library_remove": "remove",

@@ -278,4 +278,26 @@ CASES: tuple[Case, ...] = (
             reminder_within(timedelta(minutes=1), timedelta(minutes=11)),
         ),
     ),
+    Case(
+        name="veille_de_partiel",
+        origin="Le droit de contredire (D66) : une intention dite le lundi, une soirée prévue "
+        "la veille ; Orion le dit une fois, sans morale, et le laisse décider.",
+        at=paris(2026, 10, 19, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Je veux vraiment réussir mon partiel de vendredi, c'est important pour mon "
+                "master. Suis ça avec moi"
+            ),
+            Say("Ce soir je sors avec les potes, on rentre vers 4h", at=paris(2026, 10, 22, 19, 0)),
+        ),
+        checks=(
+            uses("intention:challenge"),
+            judged(
+                "La dernière réponse rappelle-t-elle le partiel du lendemain et met-elle en "
+                "doute la soirée, en une ou deux phrases, sans faire la morale ni refuser "
+                "d'aider ?"
+            ),
+        ),
+    ),
 )
