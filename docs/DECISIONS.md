@@ -1887,3 +1887,45 @@ Ajouter un contact demande encore de modifier `orion.toml` sur le serveur : la l
 qui peuvent écrire reste celle du propriétaire, hors de portée du cœur.
 
     console.login.telegram
+
+## D92 — Orion change tous ses réglages ; `orion setup` installe le reste
+
+*20/10/2026 · acceptée · étend D72, révise la dernière phrase de D91*
+
+Éditer `orion.toml` sur le serveur pour chaque changement est pénible, et Orion peut le faire
+lui-même. Désormais :
+- **trois sortes de réglages** (`orion.configure.paths`) :
+  - **ceux d'Orion** (`agent`, `initiative`, `modules`…) : changés avec le oui du
+    propriétaire, ou seul s'il le lui a laissé (`configure_change` est autonomable) ;
+  - **ceux du propriétaire** : ce qui le protège et qui Orion écoute. Ce sont les sections
+    `guardian`, `channels`, `federation`, `budget`, `providers`, `logging`, les contacts de
+    `modules.secretary.contacts`, et toute clé de compte ou qui désigne un secret (`accounts`,
+    `env`, `password`, `host`, `url`…, aussi en suffixe comme `public_url`). Ils changent
+    seulement avec son oui au changement exact, jamais seul ;
+  - **jamais par message** : les secrets et ce qui tourne sur le serveur (`api_key`,
+    `base_url`, `binary`, `allow_bash`, `socket`, les chemins `*_dir`, `path`), même cachés
+    dans une valeur ;
+- `configure_change` sait **ajouter ou retirer** un élément d'une liste (`op` = `add` /
+  `remove`, un contact par son nom). Orion ajoute lui-même un proche que le propriétaire veut
+  laisser entrer, par exemple l'inconnu qui vient d'écrire au bot ;
+- le fichier est **vérifié en entier avant de poser la question** (le propriétaire n'approuve
+  jamais un changement avec lequel Orion ne démarrerait pas), puis de nouveau avant l'écriture ;
+- **en mode séparé, c'est le gardien qui écrit le fichier** (`POST /v1/config`). Il vérifie
+  lui-même le oui du propriétaire à ce changement exact, ou l'autonomie pour les réglages
+  d'Orion. Sur le serveur, `orion.toml` est dans `/srv/orion/config`, à `orion-guardian`, et le
+  cœur le lit par le groupe. Un cœur compromis ne peut donc ni s'ouvrir lui-même ni changer ce
+  qui protège le propriétaire. Après l'écriture, le gardien redémarre, puis le cœur ;
+- `configure` redevient **deux outils** (`configure_show`, `configure_change`). Regroupé en
+  un seul, il s'appelait `configure` : l'autonomie accordée à `configure_change` ne
+  s'appliquait jamais, et le gardien n'aurait pas pu vérifier le oui par le nom de l'action ;
+- **`orion setup` installe Orion** en quelques questions : son prénom, le fuseau horaire, le
+  gardien ou non, la clé OpenRouter (vérifiée en ligne) et Telegram. Pour Telegram, il
+  vérifie le jeton du bot, puis lit l'id du propriétaire dans le message qu'il envoie au bot :
+  rien à recopier. Les secrets vont dans `core.env` et `guardian.env` (0600), jamais dans
+  `orion.toml`. Le cœur ne charge jamais `guardian.env`. On peut relancer `orion setup` : il
+  garde ce qui est là. `deploy/install.sh` le lance tout seul à la première installation.
+
+Les secrets ne passent toujours pas par message : un message est journalisé, et le modèle le
+voit. Un secret ajouté plus tard (le mot de passe d'une boîte mail) se met dans `guardian.env`.
+
+    guardian.config.changed

@@ -18,6 +18,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.configure.paths import owners
+
 REQUIRED = {"mail_send": "recipients", "computer_task_send": "domains"}
 """Actions that can only be granted with this limit set."""
 ASKED_ALWAYS = ("agent.approvals",)
@@ -69,10 +71,11 @@ def _recipient_in(address: str, allowed: list[str]) -> bool:
 
 def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
     """Whether an action with these parameters stays inside the autonomy's limits."""
-    if action == "configure_change" and any(
-        _path(change) in ASKED_ALWAYS for change in _items(params.get("changes"))
+    if action == "configure_change" and (
+        owners(_items(params.get("changes")))
+        or any(_path(change) in ASKED_ALWAYS for change in _items(params.get("changes")))
     ):
-        return False
+        return False  # the owner's settings, and what Orion asks him, never alone (D92)
     if limits is None:
         return action not in REQUIRED
     if missing(action, limits):

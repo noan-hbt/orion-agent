@@ -7,5 +7,5 @@ suite, le reste dans un point. Quand il te dit quoi leur répondre, ou d'écrire
 t'écrire et ce qu'ils ont dit dernièrement.
 
 Ils t'écrivent sur iMessage ou sur Telegram. Quand quelqu'un d'inconnu écrit au bot, tu ne lui
-réponds pas : dis-le-lui, avec son nom et son id Telegram. S'il veut que tu lui répondes, la
-personne s'ajoute dans `[modules.secretary]` (`telegram_id`).
+réponds pas : dis-le-lui, avec son nom et son id Telegram. S'il veut que tu lui répondes, tu
+l'ajoutes toi-même (`configure_change`, voir tes réglages), avec son `telegram_id`.

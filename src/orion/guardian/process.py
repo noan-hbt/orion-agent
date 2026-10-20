@@ -19,6 +19,7 @@ from starlette.types import ASGIApp
 
 from orion.channels.inkbox import InkboxClient
 from orion.config import OrionConfig
+from orion.configure.module import reexec
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.federation.crypto import Identity
@@ -28,6 +29,9 @@ from orion.guardian.service import GuardianError, GuardianService
 from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
+
+GUARDIAN_RESTART_AFTER = 2.0
+"""Once it wrote orion.toml: its answer reaches the core, which restarts later."""
 
 
 def inkbox_client(config: OrionConfig) -> InkboxClient | None:
@@ -122,6 +126,7 @@ async def run(config: OrionConfig) -> None:
     clock = HybridClock(f"{config.instance}-guardian")
     async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
         service = GuardianService(config, Ledger(journal), inkbox_client(config))
+        service.restart = lambda: reexec(GUARDIAN_RESTART_AFTER)
         edge = federation_edge(service) if config.federation.enabled else None
         gate = telegram_gate(service) if config.channels.telegram.enabled else None
         try:

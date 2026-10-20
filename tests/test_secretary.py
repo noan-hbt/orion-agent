@@ -268,5 +268,5 @@ async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
 
     later = datetime.fromtimestamp(1_760_000_000, ZoneInfo("UTC")) + timedelta(minutes=1)
     stranger = [a for a in await secretary.alerts(later) if "stranger" in a.key]
-    assert len(stranger) == 1 and f"telegram_id = {STRANGER}" in stranger[0].notice
+    assert len(stranger) == 1 and f"`telegram_id` = {STRANGER}" in stranger[0].notice
     assert "Noan" in stranger[0].notice  # FakeTelegram names everyone Noan

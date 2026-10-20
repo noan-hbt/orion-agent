@@ -457,8 +457,10 @@ class Secretary:
                 key=f"secretary:stranger:{s.user_id}",
                 notice=f"Quelqu'un qu'il n'a pas autorisé a écrit au bot Telegram : {s.name} "
                 f"(id {s.user_id}) : « {s.text[:300]} ». Tu ne lui as pas répondu. Dis-le-lui en "
-                "une phrase ; s'il veut que tu lui répondes, il ajoute cette personne à "
-                f"`[modules.secretary]` avec `telegram_id = {s.user_id}`.",
+                "une phrase. S'il veut que tu lui répondes, tu l'ajoutes toi-même "
+                "(`configure_change`, `modules.secretary.contacts`, op add, "
+                f"`telegram_id` = {s.user_id}) après lui avoir demandé qui c'est et ce que tu "
+                "peux lui dire.",
                 why=f"{s.name} a écrit au bot",
                 fallback=f"{s.name} (id {s.user_id}) a écrit au bot : « {s.text[:200]} »",
                 trust=Trust.THIRD_PARTY,

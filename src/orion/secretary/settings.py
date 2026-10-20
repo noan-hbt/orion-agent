@@ -1,8 +1,8 @@
 """Who may write to Orion besides the owner, and what Orion may tell them.
 
 Read by the core (the secretary module) and by the guardian process, which only lets Orion
-write to these people: the list lives in the owner's configuration, never in what the core
-can change.
+write to these people: the list is the owner's. Orion changes it by message only with his yes
+to the exact change, which the guardian checks itself when Orion runs split (D92).
 """
 
 from __future__ import annotations

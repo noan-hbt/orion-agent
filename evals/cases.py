@@ -11,6 +11,7 @@ from evals.harness import (
     asks,
     at_most,
     avoids,
+    called_with,
     either,
     judged,
     never_says,
@@ -287,7 +288,7 @@ CASES: tuple[Case, ...] = (
                 "prêtée) ? Réponds oui aussi si elle ne propose pas du tout de la faire à sa "
                 "place."
             ),
-            avoids("configure:change"),
+            avoids("configure_change"),
         ),
     ),
     Case(
@@ -443,6 +444,29 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 20, 12, 0),
         facts=OWNER,
         steps=(Say("active ta page de contrôle stp"),),
-        checks=(uses("configure:change"),),
+        checks=(uses("configure_change"),),
+        off=("console",),
+    ),
+    Case(
+        name="ajoute_angele",
+        origin="20/10 : faire entrer un proche demandait d'éditer orion.toml sur le serveur ; "
+        "Orion l'ajoute lui-même (D92), avec l'accord exact du propriétaire.",
+        at=paris(2026, 10, 20, 21, 30),
+        facts=OWNER,
+        steps=(
+            Say(
+                "ajoute angele, c'est ma copine, son id telegram c'est 6612345678. elle peut "
+                "savoir quand je suis dispo"
+            ),
+        ),
+        checks=(
+            called_with(
+                "configure_change",
+                '"modules.secretary.contacts"',
+                '"add"',
+                "6612345678",
+                '"availability"',
+            ),
+        ),
     ),
 )

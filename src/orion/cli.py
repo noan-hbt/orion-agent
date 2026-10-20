@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orion import __version__
-from orion.config import OrionConfig, load_config
+from orion.config import DEFAULT_CONFIG_PATH, OrionConfig, load_config
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.memory.store import MemoryStore
 from orion.observability.logging import configure_logging
+from orion.setup import load_env_files
 
 if TYPE_CHECKING:
     from orion.channels.inkbox import InkboxClient
@@ -710,11 +711,44 @@ async def _guardian_status(config: OrionConfig) -> str:
     return state + (f"; secrets visible here: {', '.join(visible)}" if visible else "")
 
 
+def _setup(config: Path | None, secrets: Path | None, server: bool) -> int:
+    import getpass
+
+    from orion.configure.paths import ConfigureError
+    from orion.setup import Setup, SetupError
+
+    target = (config or DEFAULT_CONFIG_PATH).resolve()
+    wizard = Setup(
+        target,
+        secrets.resolve() if secrets else target.parent,
+        ask=input,
+        secret=lambda prompt: getpass.getpass(prompt + "(rien ne s'affiche) "),
+        say=print,
+        server=server,
+    )
+    try:
+        return wizard.run()
+    except (SetupError, ConfigureError) as exc:
+        print(f"Installation arrêtée : {exc}")
+        return 1
+    except (KeyboardInterrupt, EOFError):
+        print("\nInstallation arrêtée : rien n'est écrit.")
+        return 130
+    finally:
+        wizard.http.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="orion")
     parser.add_argument("--config", type=Path, default=None, help="Path to orion.toml")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("version", help="Print the version")
+    setup_cmd = sub.add_parser("setup", help="Install Orion: the keys, and who you are (D92)")
+    setup_cmd.add_argument(
+        "--secrets", type=Path, default=None, help="Where core.env and guardian.env go "
+        "(default: beside orion.toml)",
+    )  # fmt: skip
+    setup_cmd.add_argument("--server", action="store_true", help="Run by deploy/install.sh")
     sub.add_parser("doctor", help="Check configuration and storage")
     sub.add_parser("chat", help="Talk to Orion in the terminal")
     sub.add_parser("serve", help="Run Orion: iMessage channel and initiative engine")
@@ -830,6 +864,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check-backup":
         return _check_backup(args.path)
 
+    if args.command == "setup":
+        return _setup(args.config, args.secrets, args.server)
+
+    load_env_files((args.config or DEFAULT_CONFIG_PATH).resolve().parent, args.command)
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)
     if args.command == "doctor":

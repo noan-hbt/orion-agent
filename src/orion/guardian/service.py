@@ -30,7 +30,7 @@ import json
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
@@ -57,6 +57,7 @@ from orion.guardian.ledger import (
     AUTONOMOUS,
     AUTONOMY_GRANTED,
     AUTONOMY_REVOKED,
+    CONFIG_CHANGED,
     CORE_BACK,
     CORE_SILENT,
     DENIED,
@@ -192,6 +193,33 @@ def _contact_message(params: dict[str, Any]) -> str:
     return f"Avant que je l'envoie à {params.get('contact')} : « {params.get('text')} »"
 
 
+def _configure_change(params: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for change in _items(params.get("changes")):
+        if not isinstance(change, dict):
+            continue
+        item = cast(dict[str, Any], change)
+        value = json.dumps(item.get("value"), ensure_ascii=False)
+        op = item.get("op", "set")
+        did = {"add": "ajouter", "remove": "retirer"}.get(str(op), "mettre")
+        lines.append(f"- {item.get('path')} : {did} {value}")
+    return "Avant que je change mes réglages :\n" + "\n".join(lines) + f"\n({params.get('why')})"
+
+
+def _described(value: object) -> list[dict[str, Any]] | None:
+    """The approved changes as the core sends them, or None if they cannot be read."""
+    from orion.configure.module import Change
+
+    try:
+        return [Change.model_validate(c).described() for c in _items(value)]
+    except ValidationError:
+        return None
+
+
+def _items(value: object) -> list[Any]:
+    return list(cast(list[Any], value)) if isinstance(value, list) else []
+
+
 def _call_someone(params: dict[str, Any]) -> str:
     return (
         f"Avant que je le fasse : appeler {params.get('name')} au {params.get('number')}.\n"
@@ -254,7 +282,10 @@ class GuardianService:
             "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
             "computer_task_send": _computer_task_send,
+            "configure_change": _configure_change,
         }
+        self.restart: Callable[[], Coroutine[Any, Any, None]] | None = None
+        """Restarts this process once it wrote orion.toml (set by `orion guardian`)."""
         self.telegram: TelegramGate | None = None
         """Telegram through the guardian (D89), installed by `orion.guardian.telegram`."""
         self.routes: list[BaseRoute] = []
@@ -304,6 +335,7 @@ class GuardianService:
                 Route("/v1/mail/{account}/tidy", self._mail_tidy, methods=["POST"]),
                 Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
+                Route("/v1/config", self._configure, methods=["POST"]),
                 *self.routes,
             ]
         )
@@ -656,6 +688,53 @@ class GuardianService:
         )
         log.info("guardian.autonomy_granted", action=action, limits=limits.describe())
         return JSONResponse({"action": action})
+
+    # -- orion.toml (D92) -------------------------------------------------------------------
+
+    async def _configure(self, request: Request) -> Response:
+        """The guardian writes orion.toml: Orion's own settings with the owner's yes or alone
+        within an autonomy he granted; his settings (what protects him, who may write to
+        Orion) only with his yes to this exact change. Never a secret, never a path."""
+        from orion.configure.module import Change, digest, rewrite, write
+        from orion.configure.paths import ConfigureError
+
+        body = await _body(request)
+        source = self.config.source
+        if source is None:
+            return refused("Orion runs without an orion.toml", 409)
+        try:
+            changes = [Change.model_validate(c) for c in _items(body.get("changes"))]
+        except ValidationError:
+            return refused("malformed changes", 400)
+        if not changes:
+            return refused("no change", 400)
+        params = {"changes": [c.described() for c in changes], "why": body.get("why")}
+        grant = request.headers.get(GRANT_HEADER)
+        if grant or not await self.autonomous("configure_change", params):
+            reason = await self.use_grant(
+                grant,
+                "configure_change",
+                lambda p: _described(p.get("changes")) == params["changes"],
+                consume=True,
+            )
+            if reason is not None:
+                return await self.deny("configure", reason)
+        try:
+            before, after = await asyncio.to_thread(rewrite, source, changes)
+            if after != before:
+                write(source, before, after)
+        except ConfigureError as exc:
+            return refused(str(exc), 422)
+        if after == before:
+            return JSONResponse({"changed": False})
+        await self.ledger.record(
+            CONFIG_CHANGED,
+            {**params, "before": digest(before), "after": digest(after), "grant": grant},
+        )
+        log.info("guardian.config_changed", paths=[c.path for c in changes])
+        if self.restart is not None:
+            asyncio.get_running_loop().create_task(self.restart())
+        return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
 
     # -- logged-in sessions ---------------------------------------------------------------------
 

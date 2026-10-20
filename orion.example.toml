@@ -35,7 +35,7 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # What Orion may spend on models (D79). What it does on its own (the night, curiosity,
 # missions, initiative) stops at the day's or the month's ceiling; answering you never does.
 # It tells you at 80 % of the month, and when it pauses. `spending` answers « combien tu m'as
-# coûté ? ». Not changeable by message.
+# coûté ? ». Changed by message only with your yes, never alone (D92).
 [budget]
 daily_usd = 3.0
 monthly_usd = 40.0

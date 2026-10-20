@@ -22,38 +22,41 @@ Pour un nom de domaine à toi, crée d'abord un enregistrement A vers l'IP du VP
 Web Cloud > Domaines > Zone DNS). Sans domaine, le script utilise `sslip.io`, qui suffit
 pour obtenir un certificat.
 
-Le script :
+Le script installe tout (Caddy, uv, Python, le navigateur d'Orion, les utilisateurs, les
+services, le pare-feu), puis pose quelques questions (`orion setup`) :
 
-- installe Caddy, uv et Python ;
-- crée les utilisateurs et place le code dans `/srv/orion/app` ;
-- crée `/etc/orion/orion.toml` et deux fichiers de secrets :
-  - `/etc/orion/guardian.env` (0600, `orion-guardian`) ;
-  - `/etc/orion/core.env` (0600, `orion-core`) ;
-- installe les services systemd et le pare-feu.
+1. ton prénom et ton fuseau horaire ;
+2. la clé OpenRouter (vérifiée tout de suite) ;
+3. Telegram : crée un bot avec @BotFather (`/newbot`) et colle son jeton (vérifié), puis
+   écris au bot depuis ton téléphone : Orion lit ton id dans ce message, tu n'as rien à
+   recopier. Le bot te répond pour confirmer.
 
-Tu peux le relancer pour mettre à jour : il ne touche jamais à la configuration ni aux
-secrets.
+Les secrets vont dans `/etc/orion/core.env` (la clé du modèle, `orion-core`) et
+`/etc/orion/guardian.env` (le reste, `orion-guardian`), en 0600, jamais dans `orion.toml`.
+Puis Orion démarre.
 
-Ensuite :
+**Ensuite, plus besoin de toucher aux fichiers** : dis-lui « active le mail », « ajoute
+Angèle, elle peut savoir quand je suis libre », « mets tes points à 9 h ». Il change ses
+réglages lui-même (`/srv/orion/config/orion.toml`), avec ton accord. Ce qui te protège (le
+gardien, les canaux, qui peut lui écrire, le budget) n'est changé qu'avec ton oui au
+changement exact, vérifié par le gardien, qui est le seul à pouvoir écrire ce fichier (D92).
+Les secrets ne passent jamais par message : pour en ajouter un (le mot de passe d'une boîte
+mail…), mets-le dans `/etc/orion/guardian.env` et redémarre.
 
-1. Remplis `/etc/orion/orion.toml` (ton numéro, le handle Inkbox d'Orion, tes prénoms) et les
-   deux fichiers de secrets.
-2. Crée l'identité Inkbox et abonne le webhook :
+Relancer le script met le code à jour ; il ne touche jamais à la configuration ni aux
+secrets, et ne repose les questions que si la clé OpenRouter manque.
 
-   ```bash
-   sudo /srv/orion/app/deploy/orion-admin inkbox setup \
-       --webhook-url https://orion.mondomaine.fr/inkbox/webhook
-   ```
+iMessage (par Inkbox, payant) au lieu de Telegram : mets `[channels.imessage]` `enabled =
+true`, ton numéro et le handle d'Orion, `INKBOX_API_KEY` dans `guardian.env`, puis :
 
-   Mets la clé de signature qu'il affiche dans `INKBOX_SIGNING_KEY`
-   (`/etc/orion/guardian.env`). Puis envoie depuis ton téléphone la commande de connexion
-   qu'il affiche.
-3. Démarre :
+```bash
+sudo /srv/orion/app/deploy/orion-admin inkbox setup \
+    --webhook-url https://orion.mondomaine.fr/inkbox/webhook
+```
 
-   ```bash
-   sudo systemctl restart orion-guardian orion-core
-   sudo /srv/orion/app/deploy/orion-admin --core doctor
-   ```
+Mets la clé de signature qu'il affiche dans `INKBOX_SIGNING_KEY` (`guardian.env`), envoie
+depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
+`sudo systemctl restart orion-guardian orion-core`.
 
 `orion-admin` lance une commande `orion` sous l'utilisateur du gardien, avec ses secrets
 (`federation invite`, `inkbox calls`…). Avec `--core`, il la lance sous celui du cœur

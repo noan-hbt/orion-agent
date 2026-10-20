@@ -460,6 +460,11 @@ def load_config(path: Path | None = None) -> OrionConfig:
         return OrionConfig()
     with target.open("rb") as f:
         data = tomllib.load(f)
+    return parse_config(data, target)
+
+
+def parse_config(data: dict[str, Any], target: Path) -> OrionConfig:
+    """The config in `data`, as if read from `target` (relative paths are beside it)."""
     config = OrionConfig.model_validate(data)
     return config.model_copy(
         update={

@@ -174,6 +174,19 @@ class GuardianClient:
         )
         return str(data["message_id"])
 
+    async def configure(
+        self, changes: list[dict[str, Any]], why: str, grant: str | None
+    ) -> dict[str, Any]:
+        """orion.toml changed by the guardian, which checks the owner's yes itself (D92).
+        Returns whether it changed and the file's digests before and after."""
+        return dict(
+            await self.post(
+                "/v1/config",
+                {"changes": changes, "why": why},
+                headers={GRANT_HEADER: grant} if grant else None,
+            )
+        )
+
     async def lend_session(
         self, name: str, params: dict[str, Any], grant: str | None
     ) -> dict[str, Any]:
