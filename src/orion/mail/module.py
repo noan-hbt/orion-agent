@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from orion.mail.quarantine import Quarantine
 from orion.mail.service import Fetch, Mailbox, MailSettings
+from orion.mail.smtp import Postman, Send
 from orion.mail.tools import mail_tools
 from orion.modules.base import Daemon, Module, Plate
 
@@ -19,9 +20,12 @@ class MailModule(Module):
     instructions = "mail.md"
     settings_model = MailSettings
 
-    def __init__(self, config: OrionConfig, fetch: Fetch | None = None) -> None:
+    def __init__(
+        self, config: OrionConfig, fetch: Fetch | None = None, send: Send | None = None
+    ) -> None:
         super().__init__(config)
         self._fetch = fetch
+        self._send = send
         self.mailbox: Mailbox | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
@@ -35,7 +39,12 @@ class MailModule(Module):
             self._fetch or (plate.guardian.mail if plate.guardian else None),
         )
         await self.mailbox.start()
-        return mail_tools(self.mailbox)
+        postman = Postman(
+            plate.journal,
+            self.mailbox,
+            self._send or (plate.guardian.mail_send if plate.guardian else None),
+        )
+        return mail_tools(self.mailbox, postman)
 
     async def serve(self, daemon: Daemon) -> None:
         mailbox = self.mailbox

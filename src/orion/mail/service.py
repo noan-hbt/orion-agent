@@ -46,6 +46,11 @@ class MailAccount(BaseModel):
     username: str
     password: SecretRef = Field(description="An app password, never the account password")
     folder: str = "INBOX"
+    smtp_host: str | None = Field(
+        default=None, description="To send (e.g. smtp.gmail.com); read-only without"
+    )
+    smtp_port: int = Field(default=465, description="465 (TLS) or 587 (STARTTLS)")
+    sender: str | None = Field(default=None, description="The From address; default: username")
 
 
 class MailSettings(ModuleSettings):
@@ -60,6 +65,9 @@ class MailSettings(ModuleSettings):
     lookback_days: int = Field(default=2, ge=1, le=30)
     max_per_sync: int = Field(default=25, ge=1, le=200)
     alert_important: bool = True
+    send_account: str | None = Field(
+        default=None, description="Account new mail is sent from; default: the first that can"
+    )
 
 
 @dataclass(frozen=True)
@@ -71,6 +79,7 @@ class MailCard:
     subject: str
     received_at: datetime
     card: Card
+    message_id: str = ""
 
     @property
     def sender(self) -> str:
@@ -129,6 +138,7 @@ class MailState:
                 subject=str(payload["subject"]),
                 received_at=datetime.fromisoformat(str(payload["received_at"])),
                 card=Card.from_payload(payload["card"]),
+                message_id=str(payload.get("message_id", "")),
             )
             self.cards[card.id] = card
         elif event.kind == SYNCED:

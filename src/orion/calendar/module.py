@@ -34,7 +34,12 @@ class CalendarModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         fetch = self._fetch or (plate.guardian.calendar if plate.guardian else None)
         self.calendar = Calendar(
-            plate.journal, self.settings, self.config.agent.timezone, fetch, self._clock
+            plate.journal,
+            self.settings,
+            self.config.agent.timezone,
+            fetch,
+            self._clock,
+            plate.guardian.calendar_add if plate.guardian else None,
         )
         await self.calendar.start()
         return calendar_tools(self.calendar)

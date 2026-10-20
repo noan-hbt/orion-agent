@@ -7,6 +7,7 @@ any other. A feed that cannot be read changes nothing: an unreachable calendar i
 for an empty one.
 
     calendar.event.seen / calendar.event.gone / calendar.synced
+    calendar.event.added   (Orion wrote it; shown until the feed carries it)
 """
 
 from __future__ import annotations
@@ -23,6 +24,13 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.ics import Occurrence, Standing, occurrences
+from orion.calendar.write import (
+    CalendarWriteError,
+    NewCalendarEvent,
+    WriteEvent,
+    Writer,
+    write_event,
+)
 from orion.config import SecretRef
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -36,6 +44,10 @@ log = structlog.get_logger(__name__)
 SEEN = "calendar.event.seen"
 GONE = "calendar.event.gone"
 SYNCED = "calendar.synced"
+ADDED = "calendar.event.added"
+FEED_LAG = timedelta(days=1)
+"""How long an event Orion added is kept while the feed does not show it yet (Google's iCal
+address lags by hours)."""
 _WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
@@ -44,6 +56,9 @@ class CalendarAccount(BaseModel):
 
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]*$", description="e.g. 'perso', 'boulot'")
     url: SecretRef = Field(description="The calendar's secret iCal address (it is a password)")
+    write: Writer | None = Field(
+        default=None, description="How to add events (CalDAV or Google); read-only without"
+    )
 
 
 Fetch = Callable[[CalendarAccount], Awaitable[str]]
@@ -60,6 +75,15 @@ class CalendarSettings(ModuleSettings):
     refresh_minutes: float = Field(default=10.0, ge=1.0)
     horizon_days: int = Field(default=14, ge=1, le=90)
     heads_up_minutes: int = Field(default=15, ge=0, description="0: no alert before events")
+    write_account: str | None = Field(
+        default=None, description="Where Orion adds events; default: the first writable account"
+    )
+
+    def writable(self) -> CalendarAccount | None:
+        accounts = [a for a in self.accounts if a.write is not None]
+        if self.write_account is not None:
+            return next((a for a in accounts if a.name == self.write_account), None)
+        return accounts[0] if accounts else None
 
 
 @dataclass
@@ -70,6 +94,8 @@ class CalendarState:
     )
     """(account, occurrence key) → occurrence"""
     synced: dict[str, datetime] = field(default_factory=dict[str, datetime])
+    added: dict[tuple[str, str], datetime] = field(default_factory=dict[tuple[str, str], datetime])
+    """Events Orion wrote, and when: kept until the feed carries them."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -78,6 +104,7 @@ class CalendarState:
     async def reset(self) -> None:
         self.events.clear()
         self.synced.clear()
+        self.added.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -88,8 +115,15 @@ class CalendarState:
         if event.kind == SEEN:
             occurrence = Occurrence.from_payload(payload["occurrence"])
             self.events[(str(payload["account"]), occurrence.key)] = occurrence
+        elif event.kind == ADDED:
+            occurrence = Occurrence.from_payload(payload["occurrence"])
+            where = (str(payload["account"]), occurrence.key)
+            self.events[where] = occurrence
+            self.added[where] = datetime.fromisoformat(str(payload["at"]))
         elif event.kind == GONE:
-            self.events.pop((str(payload["account"]), str(payload["key"])), None)
+            where = (str(payload["account"]), str(payload["key"]))
+            self.events.pop(where, None)
+            self.added.pop(where, None)
         elif event.kind == SYNCED:
             self.synced[str(payload["account"])] = datetime.fromisoformat(str(payload["at"]))
 
@@ -130,9 +164,11 @@ class Calendar:
         timezone: str,
         fetch: Fetch | None = None,
         clock: Callable[[], datetime] | None = None,
+        write: WriteEvent | None = None,
     ) -> None:
         self._journal = journal
         self.settings = settings
+        self._write = write or self._http_write
         self._zone = ZoneInfo(timezone)
         self._timezone = timezone
         self._http: httpx.AsyncClient | None = None
@@ -153,6 +189,58 @@ class Calendar:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
         return await fetch_feed(self._http, account)
+
+    async def _http_write(self, account: str, event: NewCalendarEvent, _grant: str | None) -> str:
+        found = next((a for a in self.settings.accounts if a.name == account), None)
+        if found is None or found.write is None:
+            raise CalendarWriteError(f"calendar {account!r} cannot be written to")
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
+        return await write_event(self._http, found.write, event)
+
+    # -- writing ------------------------------------------------------------------------------
+
+    async def add(
+        self,
+        event: NewCalendarEvent,
+        grant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> tuple[str, Occurrence]:
+        """Write `event` to the writable account; it shows at once, before the feed has it."""
+        account = self.settings.writable()
+        if account is None:
+            raise CalendarWriteError("no calendar can be written to: add `write` to an account")
+        uid = await self._write(account.name, event, grant)
+        start, end = event.start.astimezone(self._zone), event.end.astimezone(self._zone)
+        occurrence = Occurrence(
+            key=f"{uid}@{start.isoformat()}",
+            start=start,
+            end=end,
+            all_day=False,
+            standing=Standing.OWN,
+            title=event.title,
+            location=event.location,
+            description=event.notes,
+        )
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=ADDED,
+                    payload={
+                        "account": account.name,
+                        "uid": uid,
+                        "at": self._clock().isoformat(),
+                        "occurrence": occurrence.payload(),
+                        **({"meeting": event.meeting} if event.meeting else {}),
+                    },
+                    provenance=Provenance(source=f"calendar:{account.name}", actor="orion:core"),
+                    trust=Trust.SYSTEM,
+                    correlation_id=correlation_id,
+                )
+            ]
+        )
+        await self._runner.catch_up()
+        return account.name, occurrence
 
     # -- sync ---------------------------------------------------------------------------------
 
@@ -216,16 +304,24 @@ class Calendar:
                     )
                 )
         for (acc, key), known in self.state.events.items():
-            if acc == account and key not in fresh and known.end > start and known.start < end:
-                events.append(
-                    NewEvent(
-                        kind=GONE,
-                        payload={"account": account, "key": key},
-                        provenance=provenance,
-                        trust=Trust.SYSTEM,
-                        correlation_id=correlation,
-                    )
+            if acc != account or key in fresh or not (known.end > start and known.start < end):
+                continue
+            added = self.state.added.get((acc, key))
+            if (
+                added is not None
+                and now - added < FEED_LAG
+                and not any(o.start == known.start and o.title == known.title for o in found)
+            ):
+                continue  # the feed does not carry it yet
+            events.append(
+                NewEvent(
+                    kind=GONE,
+                    payload={"account": account, "key": key},
+                    provenance=provenance,
+                    trust=Trust.SYSTEM,
+                    correlation_id=correlation,
                 )
+            )
         events.append(
             NewEvent(
                 kind=SYNCED,

@@ -112,6 +112,10 @@ class Guardian:
             return Decision(Verdict.ALLOW, "side-effect free")
         if tool.effect is Effect.INTERNAL:
             return Decision(Verdict.ALLOW, "internal effect only")
+        if proposal.context_trust < TRUSTED_FLOOR:
+            # A tool built to act on outside content (answering a mail): the owner sees the
+            # exact action, and why this one is asked with care.
+            proposal = replace(proposal, ask_reason=UNTRUSTED_REASON)
         approval = await self._approver.approve(proposal)
         if approval:
             return Decision(Verdict.ALLOW, "approved by owner", approval.grant)

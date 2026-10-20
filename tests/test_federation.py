@@ -15,6 +15,7 @@ import pytest
 
 from orion.app import App, build_app
 from orion.calendar.module import CalendarModule
+from orion.calendar.write import NewCalendarEvent
 from orion.calendar.service import CalendarAccount
 from orion.config import OrionConfig
 from orion.core.events import Trust
@@ -160,6 +161,7 @@ class Side:
     edge: FederationEdge
     desk: MeetingDesk
     owner: Owner = field(init=False)
+    written: list[NewCalendarEvent] = field(default_factory=list[NewCalendarEvent])
 
     def __post_init__(self) -> None:
         self.owner = Owner(self)
@@ -186,11 +188,27 @@ async def orion_of(
         modules={
             "calendar": {
                 "enabled": True,
-                "accounts": [{"name": "perso", "url": {"env": f"CAL_{name.upper()}"}}],
+                "accounts": [
+                    {
+                        "name": "perso",
+                        "url": {"env": f"CAL_{name.upper()}"},
+                        "write": {
+                            "kind": "caldav",
+                            "url": "https://dav.test/",
+                            "username": name,
+                            "password": {"env": "DAV"},
+                        },
+                    }
+                ],
             }
         },
     )
     edges: list[FederationEdge] = []
+    written: list[NewCalendarEvent] = []
+
+    async def write(_account: CalendarAccount, event: NewCalendarEvent) -> str:
+        written.append(event)
+        return f"uid-{len(written)}"
 
     def prepare(service: GuardianService) -> None:
         edge = FederationEdge(
@@ -206,7 +224,7 @@ async def orion_of(
     fake = FakeInkbox()
     fake.inbound("salut")  # the owner's conversation exists
     guardian = await stack.enter_async_context(
-        running_guardian(config, fake, prepare=prepare, clock=lambda: NOW)
+        running_guardian(config, fake, prepare=prepare, clock=lambda: NOW, write_calendar=write)
     )
 
     async def feed(account: CalendarAccount) -> str:
@@ -223,7 +241,9 @@ async def orion_of(
     )
     assert federation.desk is not None
     stack.push_async_callback(edges[0].aclose)
-    yield Side(name, guardian, app, edges[0], federation.desk)
+    side = Side(name, guardian, app, edges[0], federation.desk)
+    side.written = written
+    yield side
 
 
 @asynccontextmanager
@@ -319,6 +339,11 @@ async def test_a_meeting_is_arranged_with_both_owners_agreement(tmp_path: Path) 
             assert commitment.trust is Trust.TRUSTED_PEER
             reports = await side.desk.reports()
             assert any("C'est calé" in r.notice for r in reports)
+            # In both calendars, written by each guardian on the signed confirmation alone.
+            [event] = side.written
+            assert event.start == at(20, 14) and event.meeting == meeting.id
+            assert f"Déjeuner avec {other}" == event.title
+        assert len(noan.owner.asked) == 1 and len(paul.owner.asked) == 1
         # Once agreed, that hour is busy for the next proposal.
         assert (at(20, 14), at(20, 15)) in await noan.desk.busy(at(20, 0), at(21, 0))
 

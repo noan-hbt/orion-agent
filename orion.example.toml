@@ -121,6 +121,21 @@ heads_up_minutes = 15                 # message before each event; 0 = never
 [[modules.calendar.accounts]]
 name = "perso"
 url = { env = "CALENDAR_PERSO_ICS" }
+# To let Orion add events (each one approved; meetings agreed with another Orion go in alone).
+# Google: create an OAuth client "Desktop app" (console.cloud.google.com > APIs > Credentials,
+# enable the Calendar API), then `orion google auth <client id>` prints the refresh token.
+# [modules.calendar.accounts.write]
+# kind = "google"
+# calendar_id = "primary"
+# client_id = "1234-abc.apps.googleusercontent.com"
+# client_secret = { env = "GOOGLE_CLIENT_SECRET" }
+# refresh_token = { env = "GOOGLE_REFRESH_TOKEN" }
+# iCloud, Fastmail, Nextcloud: CalDAV with an app password.
+# [modules.calendar.accounts.write]
+# kind = "caldav"
+# url = "https://caldav.fastmail.com/dav/calendars/user/you@fastmail.com/Default/"
+# username = "you@fastmail.com"
+# password = { env = "CALDAV_PASSWORD" }
 
 # [[modules.calendar.accounts]]
 # name = "boulot"
@@ -145,6 +160,8 @@ name = "perso"
 host = "imap.gmail.com"
 username = "you@gmail.com"
 password = { env = "MAIL_PERSO_PASSWORD" }
+smtp_host = "smtp.gmail.com"          # to send (each mail approved word for word); remove: read-only
+smtp_port = 465
 
 # Memory search and people.
 [memory]

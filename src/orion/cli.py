@@ -249,6 +249,34 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _google_auth(client_id: str, secret_env: str) -> int:
+    import os
+    import secrets
+
+    import httpx
+
+    from orion.calendar.write import CalendarWriteError, google_consent_url, google_refresh_token
+
+    secret = os.environ.get(secret_env)
+    if not secret:
+        print(f"Mets le secret du client OAuth dans {secret_env}.")
+        return 2
+    state = secrets.token_urlsafe(16)
+    print("1. Ouvre cette adresse dans ton navigateur et accepte :\n")
+    print(google_consent_url(client_id, state))
+    print("\n2. Google te renvoie vers une page 127.0.0.1 qui ne s'affiche pas : c'est normal.")
+    redirected = await asyncio.to_thread(input, "   Colle ici l'adresse complète de cette page : ")
+    async with httpx.AsyncClient(timeout=20.0) as http:
+        try:
+            token = await google_refresh_token(http, client_id, secret, redirected, state)
+        except CalendarWriteError as exc:
+            print(f"Échec : {exc}")
+            return 1
+    print("\nMets ceci dans les secrets du gardien (jamais dans orion.toml) :")
+    print(f"GOOGLE_REFRESH_TOKEN={token}")
+    return 0
+
+
 def _backup(config: OrionConfig, destination: Path, keep: int, guardian: bool) -> int:
     from orion.core.backup import BackupError, backup
 
@@ -398,6 +426,13 @@ def main(argv: list[str] | None = None) -> int:
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
     forget.add_argument("--reason", default="owner request")
+    google = sub.add_parser("google", help="Let Orion add events to a Google Calendar")
+    google_sub = google.add_subparsers(dest="google_command", required=True)
+    google_auth = google_sub.add_parser("auth", help="Get the refresh token (once)")
+    google_auth.add_argument("client_id", help="OAuth client id (type: Desktop app)")
+    google_auth.add_argument(
+        "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
+    )
     backup = sub.add_parser("backup", help="Copy the journal (everything else is rebuilt)")
     backup.add_argument("destination", type=Path, help="Folder that holds the copies")
     backup.add_argument("--keep", type=int, default=14, help="Copies kept, newest first")
@@ -418,6 +453,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "google":
+        return asyncio.run(_google_auth(args.client_id, args.secret_env))
     if args.command == "backup":
         return _backup(config, args.destination, args.keep, args.guardian)
     if args.command == "inkbox":

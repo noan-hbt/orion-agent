@@ -31,6 +31,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.service import Calendar
+from orion.calendar.write import CalendarWriteError, NewCalendarEvent
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -48,6 +49,7 @@ from orion.federation.wire import (
     Envelope,
     Propose,
     WireError,
+    clean_title,
     parse_body,
 )
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
@@ -564,6 +566,7 @@ class MeetingDesk:
             Trust.TRUSTED_PEER,
             message,
         )
+        await self._to_calendar(meeting, slot, end)
         await self._memory.add_commitment(
             f"{meeting.title} avec {meeting.label}, {describe_moment(slot, self.hours.timezone)}"
             f" ({meeting.duration_minutes} min), calé avec son Orion",
@@ -578,6 +581,23 @@ class MeetingDesk:
             creditor=meeting.label,
             due=slot.isoformat(),
         )
+
+    async def _to_calendar(self, meeting: Meeting, slot: datetime, end: datetime) -> None:
+        """Agreed by both owners already: the guardian writes it once it sees the signed
+        confirmation (no second approval)."""
+        if self._calendar.settings.writable() is None:
+            return
+        event = NewCalendarEvent(
+            title=clean_title(f"{meeting.title} avec {meeting.label}"),
+            start=slot,
+            end=end,
+            notes="Calé avec son Orion.",
+            meeting=meeting.id,
+        )
+        try:
+            await self._calendar.add(event, correlation_id=meeting.id)
+        except (CalendarWriteError, GuardianUnavailableError):
+            log.warning("federation.calendar_write_failed", meeting=meeting.id, exc_info=True)
 
     async def _failed(self, message: PeerMessage, payload: dict[str, object], error: str) -> None:
         log.warning("federation.answer_failed", envelope=message.envelope.id, error=error)
