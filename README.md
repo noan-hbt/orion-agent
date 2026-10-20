@@ -108,6 +108,10 @@ d'autres personnes.
   outils pendant l'appel.
 - **Mains sur tes appareils** (D41) : `orion hand` sur ton Mac ou ton PC. Il peut t'envoyer des
   notifications et trouver ou lire des fichiers dans les dossiers que tu partages.
+- **Il conduit son navigateur** (D42) : il ouvre une page, la lit, clique, utilise la recherche
+  d'un site, et décide de chaque étape lui-même. Rien ne part de ce navigateur.
+- **Une boucle qui finit proprement** (D43) : à court d'étapes ou de budget, il te dit où il en
+  est. Quand une longue conversation sort de sa fenêtre, il en garde un résumé.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

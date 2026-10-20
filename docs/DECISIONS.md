@@ -894,3 +894,48 @@ ouvert sur l'appareil.
     plafonnée) ;
   - ouverture d'une page, avec accord.
 - **Confiance** : le contenu d'un fichier reste sous la pleine confiance.
+
+## D42 — Orion conduit lui-même son navigateur (révise D33)
+
+*20/10/2026 · acceptée*
+
+Le navigateur n'est plus seulement confié à un agent à part : Orion l'ouvre et le conduit
+depuis sa propre boucle, page par page (`browser_open`, `browser_click`, `browser_type`,
+`browser_select`, `browser_scroll`, `browser_back`, `browser_read`, `browser_close`). Il décide
+de chaque action avec ce qu'il sait déjà, et la conversation garde le fil. Un navigateur par
+conversation, fermé après dix minutes sans usage.
+
+Le contexte d'Orion contient la vie du propriétaire, donc trois règles tiennent, quoi que dise
+une page :
+- **Lecture seule** au niveau du réseau : rien ne part, aucun formulaire envoyé. Envoyer reste
+  à `computer_task_send`, dont le propriétaire approuve la consigne.
+- **Adresses** : seulement celles que le propriétaire a écrites, qu'une recherche a trouvées
+  ou qu'une page ouverte propose en lien. Jamais une adresse inventée, qui pourrait porter ses
+  données dans la requête.
+- **Frappe** : seulement des mots du message auquel Orion répond. Une recherche envoyée par GET
+  est aussi une sortie : une page ne peut pas lui faire taper un numéro, même donné plus tôt.
+
+Chaque page vue est journalisée en confiance `WEB` avec la source `web:<adresse>` : la
+provenance la retrouve et peut la contenir (D38). `computer_task` reste pour les longues
+tâches en arrière-plan.
+
+## D43 — La boucle, comparée à celle de Claude Code
+
+*20/10/2026 · acceptée*
+
+Comparée à la boucle documentée de Claude Code (sa source n'est pas publiée ; seule la
+documentation officielle a servi), celle d'Orion avait déjà : outils en lecture lancés en
+parallèle, contrôle de chaque appel, messages du propriétaire lus en cours de tour, budgets,
+détection des appels répétés, reprises et modèles de secours. Trois écarts sont comblés :
+- **Une limite donne une réponse** : quand un tour atteint ses étapes, ses appels, son coût
+  ou se répète, un dernier appel au modèle, outils déclarés mais interdits (même préfixe en
+  cache), dit au propriétaire ce qui est fait et ce qui reste. Les appels coupés par un budget
+  reçoivent un résultat « non exécuté » : l'historique restait sinon mal formé.
+- **Le rebase résume ce qu'il laisse** : comme la compaction de Claude Code, les tours de
+  confiance qui sortent de la fenêtre sont résumés dans le nouveau message, journalisé tel
+  quel. Les tours non fiables ne sont pas résumés : ce serait porter leurs consignes au-delà.
+- **Des limites pour travailler** : 40 étapes et 80 appels par tour ; le coût et les
+  répétitions sont les vrais freins.
+
+Restent hors de ce lot : la réponse en continu (utile surtout pour la voix) et l'effacement
+des anciens résultats d'outils, qui casserait le contrat de cache tel qu'il est écrit.

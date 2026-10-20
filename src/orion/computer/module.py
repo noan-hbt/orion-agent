@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.computer.agent import BrowserAgent, SessionFactory
 from orion.computer.browser import Session
+from orion.computer.direct import BrowserDesk, browser_tools
 from orion.core.events import Provenance, Trust
 from orion.delegation.jobs import JobService
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
@@ -54,6 +55,7 @@ class ComputerModule(Module):
         self._sessions = sessions
         self.reading: JobService | None = None
         self.sending: JobService | None = None
+        self.desk: BrowserDesk | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: ComputerSettings = self.settings
@@ -79,12 +81,18 @@ class ComputerModule(Module):
         )
         await self.reading.recover()
         await self.sending.recover()
-        return computer_tools(self.reading, self.sending)
+        # Orion's own browser is always read-only: sending stays with an approved brief.
+        self.desk = BrowserDesk(plate.journal, lambda: sessions(True))
+        return [*computer_tools(self.reading, self.sending), *browser_tools(self.desk)]
 
     async def serve(self, daemon: Daemon) -> None:
         for jobs in (self.reading, self.sending):
             if jobs is not None:
                 daemon.reports.append(jobs)
+
+    async def close(self) -> None:
+        if self.desk is not None:
+            await self.desk.aclose()
 
     def doctor(self) -> list[str]:
         settings: ComputerSettings = self.settings

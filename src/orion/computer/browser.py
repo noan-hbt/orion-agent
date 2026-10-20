@@ -38,7 +38,7 @@ TEXT_CHARS = 10_000
 MAX_ELEMENTS = 150
 HostCheck = Callable[[str, int], Awaitable[None]]
 
-_SNAPSHOT = """() => {
+_SNAPSHOT = """(textChars) => {
   document.querySelectorAll('[data-orion-id]').forEach(e => e.removeAttribute('data-orion-id'));
   const sel = 'a[href], button, input:not([type=hidden]), select, textarea, ' +
               '[role=button], [role=link], [role=checkbox], [role=tab], [onclick]';
@@ -58,8 +58,8 @@ _SNAPSHOT = """() => {
     if (n >= MAX_ELEMENTS) break;
   }
   return {title: document.title, url: location.href,
-          text: (document.body ? document.body.innerText : '').slice(0, TEXT_CHARS), elements: out};
-}""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS)).replace("TEXT_CHARS", str(TEXT_CHARS))
+          text: (document.body ? document.body.innerText : '').slice(0, textChars), elements: out};
+}""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS))
 
 
 @dataclass
@@ -156,13 +156,21 @@ class Session:
             raise BrowserError("the browser is not open")
         return self.page
 
-    async def snapshot(self) -> Snapshot:
+    async def snapshot(self, text_chars: int = TEXT_CHARS) -> Snapshot:
         page = self._page()
-        try:
-            await page.wait_for_load_state("domcontentloaded")
-            data = cast(dict[str, Any], await page.evaluate(_SNAPSHOT))
-        except Error as exc:
-            raise BrowserError(f"the page cannot be read: {exc.message}") from exc
+        for attempt in range(3):
+            try:
+                await page.wait_for_load_state("domcontentloaded")
+                data = cast(dict[str, Any], await page.evaluate(_SNAPSHOT, text_chars))
+                break
+            except Error as exc:
+                # A page still navigating (a redirect, a blocked submit) replaces the document
+                # under the script: read the new one.
+                if "context was destroyed" not in exc.message or attempt == 2:
+                    raise BrowserError(f"the page cannot be read: {exc.message}") from exc
+                await page.wait_for_timeout(300)
+        else:  # pragma: no cover - the loop either breaks or raises
+            raise BrowserError("the page cannot be read")
         return Snapshot(
             str(data["url"]),
             str(data["title"]),
