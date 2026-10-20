@@ -74,3 +74,24 @@ Ensuite :
 - **Mise à jour** : `sudo /srv/orion/app/deploy/install.sh orion.mondomaine.fr`.
 - **Restaurer** : arrête les deux services, copie `journal.sqlite3` d'une sauvegarde dans
   `/srv/orion/data/`, supprime `memory.sqlite3` (reconstruit au démarrage), redémarre.
+
+## Agir sur tes comptes (sessions connectées)
+
+Pour qu'Orion agisse sur un site où tu as un compte (prendre un rendez-vous sur Doctolib,
+suivre une commande), le gardien garde ta session, comme il garde tes mots de passe :
+
+1. Sur ton ordinateur (il faut un écran) : `orion login doctolib https://www.doctolib.fr/sessions/new`.
+   Une fenêtre s'ouvre ; connecte-toi, puis appuie sur Entrée dans le terminal. La session est
+   écrite dans `doctolib.session.json`.
+2. Copie le fichier sur le serveur, puis : `sudo deploy/orion-admin sessions add doctolib
+   doctolib.session.json`, et efface le fichier copié.
+3. Orion ne l'utilise que pour une tâche que tu approuves (`computer_task_send` avec cette
+   session et ce texte exact), ou seule si tu lui as laissé ce genre de tâche sur ces sites.
+   Chaque prêt est noté dans le registre du gardien.
+
+`orion-admin sessions list` montre les sessions gardées, `sessions remove <nom>` en retire une.
+Une session expire comme dans ton navigateur : refais l'étape 1 quand le site te déconnecte.
+
+Pour qu'Orion envoie des mails ou des formulaires seul, ajoute `"mail_send"` ou
+`"computer_task_send"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites
+que tu lui donnes en accordant l'autonomie (à quels destinataires, sur quels sites).

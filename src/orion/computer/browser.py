@@ -30,6 +30,7 @@ from playwright.async_api import (
 )
 from playwright.async_api import Request as PwRequest
 
+from orion.guardian.limits import host_in
 from orion.web.fetch import FetchError, check_public
 
 log = structlog.get_logger(__name__)
@@ -95,6 +96,10 @@ class Session:
         self._routes = routes or {}
         """Test sites served in-process: host → handler."""
         self._executable = executable
+        self.send_hosts: tuple[str, ...] = ()
+        """When sending is allowed: only to these sites (and their subdomains); empty: any."""
+        self.storage_state: dict[str, Any] | None = None
+        """A logged-in session (cookies), lent by the guardian for this one task."""
         self.blocked: list[str] = []
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -108,7 +113,10 @@ class Session:
             headless=True, executable_path=self._executable
         )
         self._context = await self._browser.new_context(
-            accept_downloads=False, locale="fr-FR", timezone_id="Europe/Paris"
+            accept_downloads=False,
+            locale="fr-FR",
+            timezone_id="Europe/Paris",
+            storage_state=cast(Any, self.storage_state),
         )
         await self._context.route("**/*", self._guard)
         self.page = await self._context.new_page()
@@ -128,7 +136,18 @@ class Session:
         if parts.scheme in ("data", "blob", "about"):
             await route.continue_()
             return
-        if self.read_only and request.method not in ("GET", "HEAD"):
+        sending = request.method not in ("GET", "HEAD")
+        if (
+            sending
+            and not self.read_only
+            and self.send_hosts
+            and not host_in(parts.hostname or "", list(self.send_hosts))
+        ):
+            self.blocked.append(f"{request.method} {request.url}")
+            log.info("computer.blocked_off_site", method=request.method, url=request.url)
+            await route.abort("blockedbyclient")
+            return
+        if self.read_only and sending:
             self.blocked.append(f"{request.method} {request.url}")
             log.info("computer.blocked_send", method=request.method, url=request.url)
             await route.abort("blockedbyclient")

@@ -157,7 +157,7 @@ def test_reading_runs_alone_sending_is_approved(tmp_path: Path) -> None:
     assert module.doctor()
     from orion.computer.module import computer_tools
 
-    tools = {t.name: t for t in computer_tools(*(_jobs(tmp_path) for _ in range(2)))}
+    tools = {t.name: t for t in computer_tools(_jobs(tmp_path), _jobs(tmp_path))}
     assert tools["computer_task"].effect is Effect.INTERNAL
     assert tools["computer_task_send"].effect is Effect.EXTERNAL
 
@@ -167,7 +167,9 @@ def _jobs(tmp_path: Path) -> JobService:
         name = "x"
         allow_bash = False
 
-        async def run(self, task: str, workdir: Path) -> object:  # pragma: no cover
+        async def run(  # pragma: no cover
+            self, task: str, workdir: Path, options: object = None
+        ) -> object:
             raise AssertionError
 
     return JobService(None, Nothing(), tmp_path)  # type: ignore[arg-type]

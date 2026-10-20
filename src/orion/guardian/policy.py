@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel
 
@@ -82,8 +82,9 @@ UNTRUSTED_REASON = (
 )
 
 
-Autonomous = Callable[[str], Awaitable[bool]]
-"""Whether the owner let Orion do this action alone (`orion.guardian.autonomy`)."""
+Autonomous = Callable[[str, dict[str, Any]], Awaitable[bool]]
+"""Whether the owner let Orion do this action alone, with these parameters, within the limits
+they set (`orion.guardian.autonomy`)."""
 
 
 class Guardian:
@@ -123,7 +124,7 @@ class Guardian:
         if (
             proposal.context_trust >= TRUSTED_FLOOR
             and self._autonomous is not None
-            and await self._autonomous(tool.name)
+            and await self._autonomous(tool.name, proposal.arguments.model_dump())
         ):
             return Decision(Verdict.ALLOW, "the owner lets Orion do this alone")
         if proposal.context_trust < TRUSTED_FLOOR:

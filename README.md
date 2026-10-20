@@ -112,6 +112,15 @@ d'autres personnes.
   d'un site, et décide de chaque étape lui-même. Rien ne part de ce navigateur.
 - **Une boucle qui finit proprement** (D43) : à court d'étapes ou de budget, il te dit où il en
   est. Quand une longue conversation sort de sa fenêtre, il en garde un résumé.
+- **Un modèle plus fort quand c'est dur** (D46) : il consulte Opus pour une question
+  difficile, ou passe dessus pour la fin du tour.
+- **Des missions** (D47) : « trouve-moi un appart » devient un but qu'il poursuit seul pendant
+  des jours ; il ne t'écrit que s'il y a du neuf, et retient ce que tu écartes.
+- **Une bibliothèque** (D48) : tes notes et documents gardés entiers, et toute votre
+  conversation, datée et retrouvable.
+- **Agir sur tes comptes, dans tes limites** (D49) : des mails ou des formulaires seul, mais
+  seulement aux destinataires et sur les sites que tu as nommés ; tes sessions connectées
+  restent chez le gardien, prêtées pour une tâche approuvée.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

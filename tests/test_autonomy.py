@@ -85,7 +85,12 @@ async def test_it_is_offered_after_a_run_of_yeses_once_a_month(journal: SqliteJo
     owner = Owner(says=False)
     assert await autonomy.ritual(owner, grant_tool, never_quiet) is None
     [asked] = owner.asked
-    assert asked.arguments.model_dump() == {"action": "calendar_add", "approved_times": 3}
+    assert asked.arguments.model_dump() == {
+        "action": "calendar_add",
+        "approved_times": 3,
+        "recipients": [],
+        "domains": [],
+    }
     now[0] += timedelta(days=3)
     assert await autonomy.ritual(owner, grant_tool, never_quiet) is None
     assert len(owner.asked) == 1  # a ritual, not a nag

@@ -974,3 +974,58 @@ ou non sur le ton.
 Les tests unitaires prouvent que le code fait ce qu'il dit ; les évaluations disent si Orion se
 comporte bien. Elles coûtent quelques centimes et ne sont pas déterministes : `--repeat` mesure
 la stabilité, `--model` compare les modèles sur les mêmes cas. Chaque vrai raté devient un cas.
+
+## D46 — Un modèle plus fort, à la demande d'Orion
+
+*20/10/2026 · acceptée*
+
+Le modèle du quotidien est rapide et peu cher. Quand c'est difficile, Orion choisit lui-même :
+- `consult_expert` pose une question au modèle fort (par défaut Claude Opus 5.5), avec le
+  contexte qu'Orion lui donne ; la réponse revient comme résultat d'outil, jamais plus fiable
+  que ce contexte, et le tour reste sur le modèle du quotidien ;
+- `think_harder` fait passer la suite du tour sur le modèle fort, avec son propre plafond de
+  coût. La conversation ne change pas : chaque requête prolonge encore la précédente.
+
+Les deux sont journalisés avec leur coût et plafonnés par jour (`[modules.expert]`).
+
+## D47 — Les missions
+
+*20/10/2026 · acceptée*
+
+Un but qui prend des jours (trouver un appartement, guetter un prix) devient une mission :
+Orion y travaille seul, à son rythme, chaque fois dans le fil de la mission, qui garde la
+mémoire de ce qu'il a fait. Ce qu'il trouve n'arrive au propriétaire que s'il y a du neuf, par
+le moteur d'initiative (heures calmes, budget, arbitre). `mission_seen` dit ce qui est neuf,
+donc rien n'est signalé deux fois ; ce que le propriétaire écarte est gardé avec son motif, et
+les passages suivants le lisent. Le dossier d'une mission n'est jamais plus fiable que les
+pages qu'elle a notées.
+
+## D48 — Le second cerveau : la bibliothèque
+
+*20/10/2026 · acceptée*
+
+À côté de la mémoire (des faits), la bibliothèque garde entiers les textes que le propriétaire
+confie (notes, fichiers de son ordinateur, pages) et toute la conversation, datée. On y
+cherche par les mots et par le sens (FTS5 et embeddings, fusionnés par rang, comme la
+mémoire), et on retrouve « ce que je disais de ça en août ». L'index est une projection du
+journal. Un document revient comme contenu du propriétaire, sous la pleine confiance ; une
+ancienne réponse garde la confiance qu'elle avait. `orion library import <dossier>` importe
+un dossier de notes.
+
+## D49 — Agir dans le monde : des délégations bornées, des sessions prêtées
+
+*20/10/2026 · acceptée · complète D35*
+
+- **Limites** : une autonomie peut porter des limites que le propriétaire fixe en l'accordant
+  (destinataires, sites), vérifiées en code par le gardien et par le cœur. Envoyer un mail ou
+  un formulaire seul ne s'accorde qu'avec elles : jamais un inconnu, jamais un site non nommé.
+  Le cœur ne peut pas élargir ce que le propriétaire a approuvé.
+- **Sites** : une tâche qui envoie peut être limitée à des sites ; ailleurs, le navigateur
+  bloque tout envoi.
+- **Sessions** : pour agir sur un compte du propriétaire, le gardien garde la session (les
+  cookies), comme les mots de passe. Il la prête pour une tâche approuvée (cette session, ce
+  texte exact, une seule fois), ou faite seule sur des sites couverts par l'autonomie. Le cœur
+  ne la garde qu'en mémoire, le temps de la tâche, et chaque prêt est noté.
+
+Pas de paiement : la consigne de l'agent l'arrête avant tout paiement, sauf si le texte
+approuvé dit explicitement de payer.

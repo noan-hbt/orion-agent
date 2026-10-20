@@ -36,7 +36,11 @@ class DelegatedAgent(Protocol):
     name: str
     allow_bash: bool
 
-    async def run(self, task: str, workdir: Path) -> AgentOutcome: ...
+    async def run(
+        self, task: str, workdir: Path, options: dict[str, Any] | None = None
+    ) -> AgentOutcome:
+        """`options`: per-task settings that are never journaled (a site session…)."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,7 @@ class JobService:
         self.projection = JobProjection(agent.name)
         self._runner = ProjectionRunner(journal, [self.projection])
         self._tasks: set[asyncio.Task[None]] = set()
+        self._options: dict[str, dict[str, Any]] = {}
 
     @property
     def agent(self) -> DelegatedAgent:
@@ -136,9 +141,17 @@ class JobService:
             await self._finish(job, AgentOutcome(False, "", error="interrupted by a restart"), None)
 
     async def start(
-        self, title: str, task: str, provenance: Provenance, correlation_id: str | None
+        self,
+        title: str,
+        task: str,
+        provenance: Provenance,
+        correlation_id: str | None,
+        options: dict[str, Any] | None = None,
     ) -> str:
+        """`options` reach the agent in memory only (a restart fails the job anyway)."""
         job_id = f"j_{new_id()}"
+        if options:
+            self._options[job_id] = options
         workdir = self._workspaces / job_id
         await self._append(
             JOB_STARTED,
@@ -169,7 +182,9 @@ class JobService:
 
     async def _run(self, job: Job, correlation_id: str | None) -> None:
         try:
-            outcome = await self._agent.run(job.task, Path(job.workdir))
+            outcome = await self._agent.run(
+                job.task, Path(job.workdir), self._options.pop(job.id, None)
+            )
         except Exception as exc:
             log.exception("job.crashed", job_id=job.id)
             outcome = AgentOutcome(False, "", error=f"crashed: {exc!r}")

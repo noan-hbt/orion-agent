@@ -13,6 +13,7 @@ from orion.computer.browser import Session
 from orion.computer.direct import BrowserDesk, browser_tools
 from orion.core.events import Provenance, Trust
 from orion.delegation.jobs import JobService
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -38,6 +39,21 @@ class TaskInput(BaseModel):
         description="Complete instructions: the worker sees nothing else (no memory, no "
         "conversation). Say what to find or do, where to start if known, the criteria, and "
         "what to report. Put in only the personal details the task needs.",
+    )
+
+
+class SendInput(TaskInput):
+    sites: list[str] = Field(
+        default_factory=list[str],
+        max_length=10,
+        description="The sites where it may send (e.g. doctolib.fr): sending anywhere else is "
+        "blocked. Needed to do it alone, within an autonomy the owner granted.",
+    )
+    session: str = Field(
+        default="",
+        max_length=60,
+        description="A logged-in session the owner keeps with the guardian (`orion sessions`), "
+        "to act on their account; lent for this task only",
     )
 
 
@@ -83,7 +99,10 @@ class ComputerModule(Module):
         await self.sending.recover()
         # Orion's own browser is always read-only: sending stays with an approved brief.
         self.desk = BrowserDesk(plate.journal, lambda: sessions(True))
-        return [*computer_tools(self.reading, self.sending), *browser_tools(self.desk)]
+        return [
+            *computer_tools(self.reading, self.sending, plate.guardian),
+            *browser_tools(self.desk),
+        ]
 
     async def serve(self, daemon: Daemon) -> None:
         for jobs in (self.reading, self.sending):
@@ -99,9 +118,32 @@ class ComputerModule(Module):
         return [f"browser worker on {settings.model or self.config.agent.model}"]
 
 
-def computer_tools(reading: JobService, sending: JobService) -> list[Tool]:
+def computer_tools(
+    reading: JobService, sending: JobService, guardian: GuardianClient | None = None
+) -> list[Tool]:
+    async def options(args: Any, ctx: ToolContext) -> dict[str, Any] | str:
+        """What the sending worker gets beside its brief; a string says why it cannot run."""
+        found: dict[str, Any] = {}
+        if getattr(args, "sites", None):
+            found["sites"] = list(args.sites)
+        if getattr(args, "session", ""):
+            if guardian is None:
+                return "Logged-in sessions are kept by the guardian, which is not running."
+            try:
+                found["state"] = await guardian.lend_session(
+                    args.session,
+                    {"brief": args.brief, "session": args.session, "sites": list(args.sites)},
+                    ctx.grant,
+                )
+            except GuardianUnavailableError as exc:
+                return f"The guardian did not lend the session: {exc}"
+        return found
+
     def starter(jobs: JobService, mode: str) -> Any:
         async def start(args: Any, ctx: ToolContext) -> ToolResult:
+            extra = await options(args, ctx)
+            if isinstance(extra, str):
+                return ToolResult(extra, is_error=True)
             job_id = await jobs.start(
                 args.title,
                 args.brief,
@@ -111,6 +153,7 @@ def computer_tools(reading: JobService, sending: JobService) -> list[Tool]:
                     derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
                 ),
                 ctx.correlation_id,
+                extra or None,
             )
             return ToolResult(
                 f"Tâche lancée sur l'ordinateur ({job_id}, {mode}). Le compte rendu arrivera par "
@@ -146,8 +189,10 @@ def computer_tools(reading: JobService, sending: JobService) -> list[Tool]:
         Tool(
             name="computer_task_send",
             description="Like computer_task, but the worker may send what the brief says (fill "
-            "and submit a form, book). The owner approves the exact brief first.",
-            input_model=TaskInput,
+            "and submit a form, book), only on `sites` if given, and on the owner's account "
+            "with `session`. The owner approves the exact brief first, unless they let you do "
+            "it alone on those sites.",
+            input_model=SendInput,
             handler=starter(sending, "peut envoyer"),
             effect=Effect.EXTERNAL,
             reversibility=Reversibility.IRREVERSIBLE,

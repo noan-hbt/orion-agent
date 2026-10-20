@@ -131,14 +131,21 @@ class BrowserAgent:
         self._max_steps = max_steps
         self._start = start_url
 
-    async def run(self, task: str, workdir: Path) -> AgentOutcome:
+    async def run(
+        self, task: str, workdir: Path, options: dict[str, Any] | None = None
+    ) -> AgentOutcome:
+        """`options`: `sites` (sending only there) and `state` (a lent logged-in session)."""
         cost = 0.0
         system = PROMPT.format(mode=READ_ONLY if self.read_only else SUBMIT)
         messages: list[Message] = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"<brief>\n{task}\n</brief>"},
         ]
-        async with self._sessions(self.read_only) as browser:
+        session = self._sessions(self.read_only)
+        if options:
+            session.send_hosts = tuple(str(h) for h in options.get("sites", ()))
+            session.storage_state = options.get("state")
+        async with session as browser:
             await browser.goto(self._start)
             messages.append({"role": "user", "content": (await browser.snapshot()).render()})
             for _ in range(self._max_steps):

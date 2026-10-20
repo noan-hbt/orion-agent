@@ -93,7 +93,9 @@ approval_ttl_seconds = 1800      # an approval is used once, within this delay
 max_sends_per_minute = 30
 core_silence_alert_seconds = 300 # the guardian texts you when the core has been silent this long; 0 = never
 heartbeat_seconds = 60           # the core tells the guardian it is alive
-autonomable = ["calendar_add"]   # actions you may let Orion do alone, once earned
+autonomable = ["calendar_add"]   # actions you may let Orion do alone, once earned; add
+                                 # "mail_send" and "computer_task_send" to allow them within
+                                 # limits you state (recipients, sites)
 offer_autonomy_after = 5         # approvals in a row before Orion offers (at most monthly)
 max_autonomous_per_day = 10      # the guardian stops autonomous actions beyond this
 
