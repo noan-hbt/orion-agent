@@ -1929,3 +1929,29 @@ Les secrets ne passent toujours pas par message : un message est journalisé, et
 voit. Un secret ajouté plus tard (le mot de passe d'une boîte mail) se met dans `guardian.env`.
 
     guardian.config.changed
+
+## D93 — Orion écrit aux proches, y compris de lui-même ; le récap du soir
+
+*20/10/2026 · acceptée · étend D54 et D91*
+
+Pouvoir écrire aux autres est essentiel ; jusqu'ici, il fallait un oui à chaque message. Désormais :
+- **sur demande** (« dis à Angèle que j'arrive à 19 h ») : `contact_message` part tout de suite,
+  avec le oui sur le texte exact. Sur Telegram, un proche est joignable par son `telegram_id`
+  même si Orion n'a pas encore d'échange enregistré avec lui (il doit seulement avoir ouvert le bot) ;
+- **seul, par personne** : « tu peux écrire à Angèle sans me demander » accorde l'autonomie
+  `contact_message` (autonomable par défaut) avec, obligatoirement, la liste des proches
+  (`recipients`, leurs noms). Le gardien la vérifie lui-même, dans le plafond du jour du
+  contact. Après chaque message envoyé seul, Orion dit au propriétaire en une ligne ce qu'il a
+  écrit ;
+- **de sa propre initiative** : quand un proche devrait savoir quelque chose que le
+  propriétaire voudrait qu'on lui dise, Orion l'écrit s'il en a le droit pour cette personne.
+  Sinon, il propose le message exact sans l'envoyer. Il ne dit jamais aux proches ce que le
+  propriétaire ne leur dirait pas (santé, argent, ce qu'il fait) ;
+- **le récap du soir** (`[modules.recap]`, allumé par défaut) : le dernier point de la
+  journée commence par ce qu'Orion a fait pour lui. Ce sont les messages aux proches, les mails,
+  l'agenda, les rappels, les réglages et les démarches, lus dans le journal (`tool.executed`,
+  appels réussis). Le reste du point y était déjà : les échanges avec les proches, les mails et
+  le lendemain.
+
+Pas encore : un message programmé à une heure (« dis-lui à 18 h… »), ni Orion qui répond à sa
+place à un proche sur autre chose que ses disponibilités.

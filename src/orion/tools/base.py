@@ -43,6 +43,8 @@ class ToolContext:
     grant: str | None = None
     """The owner's approval of this very call, as recorded by the guardian process: an action
     the guardian checks (calling a stranger, writing to another Orion) presents it."""
+    alone: bool = False
+    """Done without asking, within an autonomy the owner granted: he is told afterwards."""
 
 
 @dataclass

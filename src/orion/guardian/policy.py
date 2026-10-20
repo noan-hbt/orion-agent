@@ -85,6 +85,9 @@ SOURCES_FOR_OWNER = {
 }
 """What lowered a context to this trust, in the question the owner reads."""
 
+ALONE = "the owner lets Orion do this alone"
+"""The reason given when an autonomy the owner granted covers the call."""
+
 NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant"})
 """Never done from a context holding outside content, even with his yes: letting Orion act
 alone is decided in a clean conversation."""
@@ -200,7 +203,7 @@ class Guardian:
             and self._autonomous is not None
             and await self._autonomous(tool.name, proposal.arguments.model_dump())
         ):
-            return Decision(Verdict.ALLOW, "the owner lets Orion do this alone")
+            return Decision(Verdict.ALLOW, ALONE)
         if proposal.context_trust < TRUSTED_FLOOR:
             # A tool built to act on outside content (answering a mail): the owner sees the
             # exact action, and why this one is asked with care.

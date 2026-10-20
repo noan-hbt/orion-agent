@@ -552,17 +552,21 @@ class GuardianService:
         return contact, recent
 
     async def _contact_send(self, request: Request) -> Response:
-        """A message the owner approved for a contact (`contact_message`): it may start a
-        conversation, so it needs their yes to this very text."""
+        """A message for a contact (`contact_message`): it may start a conversation, so it
+        needs the owner's yes to this very text, or an autonomy he granted for this person."""
         body = await _body(request)
         name, text = str(body.get("contact", "")), str(body.get("text", ""))
         conversation = str(body.get("conversation_id", ""))
-        reason = await self.use_grant(
-            request.headers.get(GRANT_HEADER),
-            "contact_message",
-            lambda p: p.get("contact") == name and p.get("text") == text,
-            consume=True,
-        )
+        grant = request.headers.get(GRANT_HEADER)
+        if not grant and await self.autonomous("contact_message", {"contact": name}):
+            reason = None
+        else:
+            reason = await self.use_grant(
+                grant,
+                "contact_message",
+                lambda p: p.get("contact") == name and p.get("text") == text,
+                consume=True,
+            )
         if conversation.startswith("telegram:"):
             if reason is not None:
                 return await self.deny(f"message to {name}", reason)

@@ -16,6 +16,7 @@ from orion.channels.inbox import Incoming
 from orion.channels.inkbox import IMessage
 from orion.core.journal import SqliteJournal
 from orion.guardian.client import GuardianUnavailableError
+from orion.guardian.ledger import AUTONOMY_GRANTED, AUTONOMY_REVOKED
 from orion.secretary.module import REPLIED, Secretary, from_imessage, secretary_tools
 from orion.secretary.settings import Contact, SecretarySettings
 from orion.tools.base import ToolContext
@@ -225,6 +226,41 @@ async def test_writing_first_needs_the_owners_yes_to_that_text(tmp_path: Path) -
             await g.client.contact_send("Maman", MUM_CHAT, "Autre chose", grant)
         await g.client.contact_send("Maman", MUM_CHAT, "Je passe dimanche !", grant)
         assert g.fake.texts()[-1] == "Je passe dimanche !"
+        # « Tu peux écrire à Maman sans me demander »: granted for her by name, nobody else.
+        await g.service.ledger.record(
+            AUTONOMY_GRANTED,
+            {"action": "contact_message", "limits": {"recipients": ["maman"], "domains": []}},
+        )
+        await g.client.contact_send("Maman", MUM_CHAT, "J'arrive à 19 h", None)
+        assert g.fake.texts()[-1] == "J'arrive à 19 h"
+        await g.service.ledger.record(AUTONOMY_REVOKED, {"action": "contact_message"})
+        with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
+            await g.client.contact_send("Maman", MUM_CHAT, "Encore", None)
+
+
+async def test_written_alone_the_owner_is_told_and_telegram_needs_no_history(
+    journal: SqliteJournal,
+) -> None:
+    angele = Contact(name="Angèle", telegram_id=5151)
+    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    secretary.contacts = {a: angele for a in angele.addresses()}
+    assert secretary.conversation_with(angele) == "telegram:5151"
+    out: list[tuple[str, str, str]] = []
+
+    async def send(channel: str, conversation: str, text: str, _cid: str) -> str:
+        out.append((channel, conversation, text))
+        return "out-2"
+
+    secretary.send = send
+    tool = {t.name: t for t in secretary_tools(secretary, None)}["contact_message"]
+    args = tool.parse(json.dumps({"contact": "Angèle", "text": "Il arrive à 19 h"}))
+    done = await tool.handler(args, ToolContext("owner", "c", alone=True))
+    assert out == [("telegram", "telegram:5151", "Il arrive à 19 h")]
+    assert "sans lui demander" in done.content and "Dis-lui" in done.content
+    nobody = await tool.handler(
+        tool.parse(json.dumps({"contact": "Zoé", "text": "x"})), ToolContext("owner", "c")
+    )
+    assert nobody.is_error and "offer to add them" in nobody.content
 
 
 async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(

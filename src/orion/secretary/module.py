@@ -270,14 +270,15 @@ class Secretary:
         self._queue.put_nowait(message)
 
     def conversation_with(self, contact: Contact) -> str | None:
-        """Where they last wrote from, if they ever did."""
+        """Where they last wrote from; on Telegram, their chat even if Orion has not heard
+        from them yet (the bot reaches them once they have opened it)."""
         known = [
             (self.state.history.get(a, [])[-1][0] if self.state.history.get(a) else None, a)
             for a in contact.addresses()
             if a in self.state.conversations
         ]
         if not known:
-            return None
+            return f"telegram:{contact.telegram_id}" if contact.telegram_id else None
         latest = max(known, key=lambda k: k[0].timestamp() if k[0] else 0.0)
         return self.state.conversations[latest[1]]
 
@@ -502,8 +503,14 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
         await secretary.sync()
         contact = secretary.contact(args.contact)
         if contact is None:
-            names = ", ".join(c.name for c in secretary.contacts.values())
-            return ToolResult(f"No contact {args.contact!r} (contacts: {names}).", is_error=True)
+            names = ", ".join(sorted({c.name for c in secretary.contacts.values()}))
+            return ToolResult(
+                f"{args.contact!r} is not one of his contacts (contacts: {names or 'none'}). "
+                "You only write to people he let in: offer to add them (`configure_change`, "
+                "`modules.secretary.contacts`); on Telegram they must first open the bot and "
+                "write to it, which tells you their id.",
+                is_error=True,
+            )
         conversation = secretary.conversation_with(contact)
         if conversation is None:
             return ToolResult(
@@ -525,6 +532,11 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
             Provenance(source=f"thread:{ctx.thread_id}", actor="orion:core"),
             ctx.correlation_id,
         )
+        if ctx.alone:
+            return ToolResult(
+                f"Envoyé à {contact.name}, sans lui demander (il te l'a permis pour "
+                f"{contact.name}). Dis-lui en une ligne ce que tu as envoyé."
+            )
         return ToolResult(f"Envoyé à {contact.name}.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
@@ -548,8 +560,10 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
         Tool(
             name="contact_message",
             description="Send a message to one of the owner's contacts (the people allowed to "
-            "write to Orion), e.g. to pass on the owner's answer. The owner approves the exact "
-            "text first.",
+            "write to Orion): what he asks you to tell them (« dis à Angèle que j'arrive à "
+            "19 h »), his answer to them, or something they should know that he would want "
+            "said. Write it as from Orion, his assistant, in his tone. He approves the exact "
+            "text first, unless he let you write to this person alone.",
             input_model=MessageInput,
             handler=message,
             effect=Effect.EXTERNAL,

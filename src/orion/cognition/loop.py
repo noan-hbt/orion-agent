@@ -22,7 +22,7 @@ from enum import StrEnum
 import structlog
 
 from orion.core.events import Trust
-from orion.guardian.policy import ActionProposal, Guardian
+from orion.guardian.policy import ALONE, ActionProposal, Guardian
 from orion.providers.base import (
     Message,
     ModelProvider,
@@ -386,6 +386,7 @@ async def _execute_one(
         context_trust=context_trust,
         timezone=settings.timezone,
         grant=decision.grant,
+        alone=decision.reason == ALONE,
     )
     try:
         result = await tool.handler(arguments, ctx)

@@ -344,7 +344,7 @@ class GuardianConfig(BaseModel):
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
     autonomable: list[str] = Field(
-        default_factory=lambda: ["calendar_add", "configure_change"],
+        default_factory=lambda: ["calendar_add", "configure_change", "contact_message"],
         description="Actions the owner may let Orion do alone, once earned (never calls or "
         "mail to strangers unless listed here)",
     )
