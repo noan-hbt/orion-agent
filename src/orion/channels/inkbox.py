@@ -283,12 +283,14 @@ class InkboxClient:
     async def upload(self, name: str, data: bytes, content_type: str) -> str:
         """A file Inkbox keeps for a send (10 MiB at most); returns its URL for `send`."""
         try:
-            response = await self._client.post("/media", files={"file": (name, data, content_type)})
+            response = await self._client.post(
+                "/imessage/media", files={"file": (name, data, content_type)}
+            )
         except httpx.TransportError as exc:
-            raise InkboxError(f"POST /media: {exc!r}", retryable=True) from exc
+            raise InkboxError(f"POST /imessage/media: {exc!r}", retryable=True) from exc
         if response.status_code >= 400:
             raise InkboxError(
-                f"POST /media -> {response.status_code}: {response.text[:300]}",
+                f"POST /imessage/media -> {response.status_code}: {response.text[:300]}",
                 status=response.status_code,
                 retryable=response.status_code in _RETRYABLE_STATUS,
             )

@@ -105,7 +105,7 @@ class FakeInkbox:
         path = request.url.path.removeprefix("/api/v1")
         self.calls.append((request.method, path))
         assert request.headers["X-API-Key"] == "test-key"
-        if path == "/media" and request.method == "POST":
+        if path == "/imessage/media" and request.method == "POST":
             self.uploads.append(request.content)
             return httpx.Response(
                 201, json={"media_url": f"https://media.inkbox.test/{len(self.uploads)}"}
