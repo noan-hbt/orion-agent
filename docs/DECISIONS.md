@@ -1529,3 +1529,31 @@ Ce que le propriétaire envoie en photo ou en PDF est déjà gardé (D63). Le mo
   d'imposition, justificatifs de domicile, RIB).
 
     paper.filed  paper.removed
+
+## D75 — Sa boîte mail, rangée
+
+*20/10/2026 · acceptée*
+
+La lecture reste strictement en lecture seule (D-mail : EXAMINE, BODY.PEEK). Trois écritures
+s'ajoutent, chacune explicite (`orion.mail.tidy`) :
+- **archiver** : les mails passent du dossier lu au `archive_folder` du compte (UID MOVE, ou
+  copie puis suppression du dossier d'origine). Rien n'est jamais supprimé pour de bon ;
+- **se désabonner** : l'adresse List-Unsubscribe est relue sur le serveur, par uid, pas prise
+  dans ce que le modèle écrit. Un lien en un clic (RFC 8058) reçoit son POST, un `mailto:`
+  un court mail depuis le compte du propriétaire ; une page à visiter revient en lien ;
+- **brouillon** : une réponse dans sa voix est déposée dans `drafts_folder`. Elle ne part
+  jamais : il la relit et l'envoie lui-même. Pas d'approbation.
+
+Archiver et se désabonner se valident par lot : `mail_tidy` porte toutes les fiches et les
+expéditeurs, et le propriétaire dit oui une fois. `mail_tidy` est autonomable. Quand Orion
+tourne séparé, c'est le gardien qui le fait, avec les mots de passe ; il vérifie que le lot
+ne dépasse pas ce qui a été approuvé.
+
+`mail_send` joint des fichiers du magasin (`attachments`, au plus cinq, 15 Mio) : un papier
+(D74), un dossier, une lettre. Le gardien affiche les fichiers dans l'approbation et vérifie
+que ceux joints sont ceux approuvés. Il ne voit pas leur contenu : c'est le noyau qui garde
+les fichiers.
+
+`mail` (bulk) regroupe newsletters et listes par expéditeur, pour proposer un lot.
+
+    mail.tidied  mail.drafted

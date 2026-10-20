@@ -131,6 +131,23 @@ class GuardianClient:
         )
         return str(data["message_id"])
 
+    async def mail_tidy(
+        self, account: MailAccount, action: str, uids: list[int], grant: str | None
+    ) -> Any:
+        """Archived or unsubscribed by the guardian, if the owner approved this batch."""
+        from orion.mail.tidy import Tidied
+
+        data = await self.post(
+            f"/v1/mail/{account.name}/tidy",
+            {"action": action, "uids": uids},
+            headers={GRANT_HEADER: grant} if grant else None,
+        )
+        return Tidied.from_payload(data)
+
+    async def mail_draft(self, account: MailAccount, mail: Any) -> None:
+        """A draft in the owner's drafts folder: it never leaves, so no approval."""
+        await self.post(f"/v1/mail/{account.name}/draft", mail.model_dump(mode="json"))
+
     async def contact_send(
         self, contact: str, conversation_id: str, text: str, grant: str | None
     ) -> str:

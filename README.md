@@ -156,6 +156,8 @@ d'autres personnes.
 - **Tes papiers** (D74) : envoie-lui ta carte d'identité, tes fiches de paie, ton
   attestation d'assurance ; il les range, te prévient avant qu'ils expirent, les envoie sur
   ton accord et prépare ton dossier de location en un PDF.
+- **Ta boîte mail, rangée** (D75) : désabonnement des newsletters et archivage par lots
+  (un seul oui par lot), brouillons de réponse dans ta voix, pièces jointes.
 - **Ton forfait ChatGPT** (D62) : `orion chatgpt login`, puis des modèles `chatgpt:<modèle>`
   dans `orion.toml`. Les appels comptent sur ton abonnement, pas sur des crédits.
 

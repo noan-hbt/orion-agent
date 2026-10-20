@@ -190,6 +190,8 @@ username = "you@gmail.com"
 password = { env = "MAIL_PERSO_PASSWORD" }
 smtp_host = "smtp.gmail.com"          # to send (each mail approved word for word); remove: read-only
 smtp_port = 465
+archive_folder = "[Gmail]/All Mail"   # where archived mail goes (iCloud: "Archive")
+drafts_folder = "[Gmail]/Drafts"      # where reply drafts go (iCloud: "Drafts")
 
 # Memory search and people.
 [memory]

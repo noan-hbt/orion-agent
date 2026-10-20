@@ -53,6 +53,12 @@ class MailAccount(BaseModel):
     )
     smtp_port: int = Field(default=465, description="465 (TLS) or 587 (STARTTLS)")
     sender: str | None = Field(default=None, description="The From address; default: username")
+    archive_folder: str | None = Field(
+        default=None, description="Where archived mail goes, e.g. '[Gmail]/All Mail', 'Archive'"
+    )
+    drafts_folder: str | None = Field(
+        default=None, description="Where drafts go, e.g. '[Gmail]/Drafts', 'Drafts'"
+    )
 
 
 class MailSettings(ModuleSettings):
@@ -82,6 +88,8 @@ class MailCard:
     received_at: datetime
     card: Card
     message_id: str = ""
+    uid: int = 0
+    bulk: bool = False
 
     @property
     def sender(self) -> str:
@@ -144,6 +152,8 @@ class MailState:
                 received_at=datetime.fromisoformat(str(payload["received_at"])),
                 card=Card.from_payload(payload["card"]),
                 message_id=str(payload.get("message_id", "")),
+                uid=int(payload.get("uid", 0)),
+                bulk=bool(payload.get("bulk", False)),
             )
             self.cards[card.id] = card
         elif event.kind == COMMITMENT_CREATED and (event.correlation_id or "").startswith("m_"):
@@ -310,6 +320,8 @@ class Mailbox:
                 "card_id": f"m_{new_id()}",
                 "account": account,
                 "message_id": mail.message_id,
+                "uid": mail.uid,
+                "bulk": mail.bulk,
                 "from_addr": mail.from_addr,
                 "from_name": mail.from_name,
                 "subject": mail.subject[:120],
@@ -322,6 +334,10 @@ class Mailbox:
             trust=Trust.THIRD_PARTY,
             correlation_id=correlation,
         )
+
+    async def record(self, event: NewEvent) -> None:
+        """A write to the mailbox (tidied, drafted), journaled."""
+        await self._journal.append([event])
 
     # -- reading ------------------------------------------------------------------------------
 
