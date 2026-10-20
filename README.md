@@ -128,7 +128,8 @@ d'autres personnes.
   revient le matin que s'il a trouvé du neuf. Il te demande comment s'est passé ton entretien,
   ton rendez-vous, ta visite.
 - **La chronique** (D52) : chaque dimanche soir, la page de ta semaine, écrite pour toi et
-  gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir.
+  gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir. Une fois par mois, ce qu'il
+  a vu revenir au fil des semaines (D58).
 - **Tes intentions** (D53) : ce que tu veux devenir (courir plus, dépenser moins). Il les
   garde en tête, te le dit quand tu t'en éloignes, et fait le point chaque semaine.
 - **Le secrétaire** (D54, à activer) : les proches que tu choisis peuvent écrire à Orion. Il

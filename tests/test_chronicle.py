@@ -125,3 +125,30 @@ def _written(week: date, text: str) -> NewEvent:
         provenance=Provenance(source="orion:chronicle", actor="orion:chronicle"),
         trust=Trust.SYSTEM,
     )
+
+
+async def test_once_a_month_what_came_back_is_said(journal: SqliteJournal) -> None:
+    for weeks in (1, 2, 3):
+        week = date(2026, 10, 26) - timedelta(weeks=weeks)
+        await journal.append([_written(week, f"Semaine {weeks} : tu as encore reporté le sport.")])
+    first_sunday = datetime(2026, 11, 1, 19, 30, tzinfo=PARIS)
+    noticed = "Trois semaines de suite, le sport a sauté le lundi."
+    provider = ScriptedProvider(reply(noticed))
+    chronicle = chronicle_for(journal, provider, first_sunday)
+    assert await chronicle.tick() is None  # a quiet week: no page, but the month is looked at
+    (request,) = provider.requests
+    assert "tu as encore reporté le sport" in request.messages[1]["content"]
+    assert await chronicle.alerts(first_sunday) == []  # not on the evening of a page
+    (alert,) = await chronicle.alerts(first_sunday + timedelta(days=1, minutes=5))
+    assert noticed in alert.notice and alert.key == "chronicle-noticed:2026-11"
+    assert await chronicle.tick() is None and len(provider.requests) == 1  # once a month
+
+
+async def test_nothing_noticed_is_nothing_said(journal: SqliteJournal) -> None:
+    for weeks in (1, 2, 3):
+        await journal.append([_written(date(2026, 10, 26) - timedelta(weeks=weeks), "Calme.")])
+    chronicle = chronicle_for(journal, ScriptedProvider(reply("RIEN")), SUNDAY_EVENING)
+    assert await chronicle.notice(datetime(2026, 11, 1, 19, 30, tzinfo=PARIS)) == ""
+    assert "2026-11" in chronicle.state.noticed
+    later = await chronicle.alerts(datetime(2026, 11, 2, 19, 45, tzinfo=PARIS))
+    assert not any(a.key.startswith("chronicle-noticed") for a in later)

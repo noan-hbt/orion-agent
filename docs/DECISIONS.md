@@ -1186,3 +1186,16 @@ une information (`OWNER_INSTANCE`), pas un ordre.
 Le rappel part tout de suite, heures calmes ou non, comme un rappel à heure fixe : il a été
 demandé. Il part une fois, et les noms se rapprochent sans exiger l'exactitude
 (« boulangerie » = « Boulangerie Paul »).
+
+## D58 — Ce qu'il remarque, ses goûts
+
+*20/10/2026 · acceptée · complète D52 et D56*
+
+- **Ce qu'il remarque** : le premier dimanche du mois, le modèle de la chronique relit les pages
+  des cinq dernières semaines. Il en tire au plus trois choses qui reviennent : une habitude, un
+  sujet, une humeur, un progrès, une chose remise à plus tard. Une remarque doit s'appuyer sur au
+  moins deux semaines, sans psychologie de comptoir ni leçon, et rien quand rien ne revient. Elle
+  arrive le lendemain, pas le soir de la page.
+- **Les goûts** : ce que le propriétaire ou ses proches aiment et n'aiment pas (cuisine, lieux,
+  films, musique, cadeaux, marques), et ce qu'ils ont écarté et pourquoi, sont des faits
+  durables pour l'extracteur de mémoire. Pour un cadeau ou un resto, Orion part de là.

@@ -51,6 +51,9 @@ Rules:
 - A commitment is a concrete promise with someone owing something: "je dois envoyer le devis à
   Paul vendredi", "Léa me rend mon livre", "rappelle-moi de…" (debtor: orion). Resolve relative
   dates against today's date.
+- Tastes are durable facts: what the owner, or someone in their life, likes or dislikes (food,
+  places, films, music, gifts, brands, styles), and what they turned down and why. Category
+  "preference" for the owner, "person" for someone else (name them in `about`).
 - Write statements in the owner's language, self-contained, naming people explicitly.
 - Most exchanges need no change: then reply {"operations": []}.
 """

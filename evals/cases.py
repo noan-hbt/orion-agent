@@ -229,4 +229,12 @@ CASES: tuple[Case, ...] = (
         checks=(uses("remind_at_place"), avoids("remind_me")),
         modules=("places",),
     ),
+    Case(
+        name="un_cadeau_pour_maman",
+        origin="Ses goûts sont en mémoire : l'idée doit en partir.",
+        at=paris(2026, 10, 20, 18, 0),
+        facts=(*OWNER, "La mère de Noan adore les orchidées et déteste le chocolat."),
+        steps=(Say("Une idée de cadeau pour l'anniversaire de ma mère ?"),),
+        checks=(says(r"orchid", "the idea ignores what his mother likes"),),
+    ),
 )
