@@ -1726,3 +1726,23 @@ tour le porte, et plus c'est long, plus une consigne en noie une autre. Désorma
 - `tests/test_prompt_budget.py` plafonne le message système avec tous les modules (38 000
   caractères), les schémas d'outils par défaut (40 000) et un outil seul (2 600).
 Dépasser oblige à alléger, ou à relever un chiffre exprès, dans le même commit.
+
+## D85 — Ce qu'Orion demande : un réglage, équilibré par défaut (révise D26)
+
+*20/10/2026 · acceptée*
+
+Premier essai réel : 14 demandes d'accord en vingt minutes, toutes pour la même raison. Dès qu'une
+page web entrait dans la conversation (une recherche de stock), chaque écriture d'Orion chez lui
+(un fait, un rappel, une règle, un vocal, un trajet à préparer) passait par « Avant que je le
+fasse… », pendant deux heures. Le propriétaire apprend alors à dire oui sans lire, ce qui ruine
+la protection qu'on voulait.
+
+`agent.approvals` choisit :
+- `equilibre` (par défaut) : dans une conversation qui contient du contenu venu d'ailleurs,
+  Orion écrit chez lui sans demander. Ce qu'il écrit garde la confiance de la conversation (un
+  fait retenu après une page web est marqué comme tel), tout reste journalisé et réversible.
+  Agir sur le monde depuis là reste refusé sans même demander, comme avant ;
+- `prudent` : le comportement de D26, une question avant chaque écriture.
+
+Il se change par message (`configure`), mais ce changement-là n'est jamais fait seul, même si
+le propriétaire a laissé Orion changer ses réglages sans demander (`ASKED_ALWAYS`).

@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -82,6 +82,9 @@ UNTRUSTED_REASON = (
 )
 
 
+Approvals = Literal["prudent", "equilibre"]
+"""What the owner is asked in a context holding outside content (`agent.approvals`, D85)."""
+
 Autonomous = Callable[[str, dict[str, Any]], Awaitable[bool]]
 """Whether the owner let Orion do this action alone, with these parameters, within the limits
 they set (`orion.guardian.autonomy`)."""
@@ -89,10 +92,14 @@ they set (`orion.guardian.autonomy`)."""
 
 class Guardian:
     def __init__(
-        self, approver: Approver | None = None, autonomous: Autonomous | None = None
+        self,
+        approver: Approver | None = None,
+        autonomous: Autonomous | None = None,
+        approvals: Approvals = "prudent",
     ) -> None:
         self._approver = approver or DenyAllApprover()
         self._autonomous = autonomous
+        self._approvals: Approvals = approvals
 
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
@@ -103,12 +110,18 @@ class Guardian:
             # Content from elsewhere may have steered the model. Acting on the world from such a
             # context is refused outright: that is what an injected instruction would ask for,
             # and the owner must not get used to approving it. An internal write (memory,
-            # reminders, playbook) is put to the owner instead (D26).
+            # reminders, playbook) is put to the owner instead (D26), unless he chose not to be
+            # asked for those (D85): what it writes keeps the context's trust anyway.
             if effect is Effect.EXTERNAL:
                 return Decision(
                     Verdict.DENY,
                     f"{tool.name} cannot run in a context containing untrusted content "
                     f"(trust {proposal.context_trust.name})",
+                )
+            if self._approvals == "equilibre":
+                return Decision(
+                    Verdict.ALLOW,
+                    f"{effect.value} effect in an untrusted context ({self._approvals} mode)",
                 )
             approval = await self._approver.approve(replace(proposal, ask_reason=UNTRUSTED_REASON))
             if approval:

@@ -221,11 +221,9 @@ def test_a_voice_says_the_text_not_about_it() -> None:
     assert not said_as_written(text, "Bien sûr, voici le texte en intégralité : " + text)
 
 
-async def test_a_voice_that_introduces_the_text_is_asked_again_then_refused() -> None:
+async def test_a_voice_that_introduces_the_text_is_refused() -> None:
     text = "Voilà, deuxième essai. Là tu devrais m'entendre."
-    preamble = "Bien sûr, voici le texte en intégralité. " + text
-    provider = provider_with(speech(preamble, text))
-    assert await provider.speak("openai/gpt-audio-mini", text, "alloy") == b"\x00\x01"
-    provider = provider_with(speech(preamble, preamble))
+    assert await provider_with(speech(text)).speak("m", text, "alloy") == b"\x00\x01"
+    provider = provider_with(speech("Bien sûr, voici le texte en intégralité. " + text))
     with pytest.raises(ProviderError, match="said something else"):
         await provider.speak("openai/gpt-audio-mini", text, "alloy")

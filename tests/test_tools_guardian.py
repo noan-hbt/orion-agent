@@ -5,7 +5,9 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from orion.config import AgentConfig
 from orion.core.events import Trust
+from orion.guardian.limits import within
 from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.tools.base import Effect, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
@@ -123,3 +125,24 @@ async def test_internal_writes_in_untrusted_context_are_put_to_the_owner() -> No
     assert (
         await Guardian(no).decide(ActionProposal(write, _Args(to="x"), Trust.OWNER, "t"))
     ).allowed
+
+
+async def test_in_balanced_mode_orion_writes_its_own_state_without_asking() -> None:
+    """D85: a web page in the conversation no longer makes every reminder a question; acting on
+    the world from there stays refused, without asking either."""
+    write = Tool(
+        name="note", description="note", input_model=_Args, handler=_noop, effect=Effect.INTERNAL
+    )
+    no = _Approver(answer=False)
+    balanced = Guardian(no, approvals="equilibre")
+    assert (await balanced.decide(ActionProposal(write, _Args(to="x"), Trust.WEB, "t"))).allowed
+    assert not (await balanced.decide(proposal(SEND, Trust.WEB))).allowed
+    assert no.asked == []
+    assert AgentConfig().approvals == "equilibre"
+
+
+def test_orion_never_changes_what_it_asks_alone() -> None:
+    mode = {"changes": [{"path": "agent.approvals", "value": "equilibre"}], "why": "moins"}
+    assert not within("configure_change", None, mode)
+    times = {"changes": [{"path": "initiative.quiet_start", "value": "23:00:00"}], "why": "x"}
+    assert within("configure_change", None, times)

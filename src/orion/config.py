@@ -93,6 +93,13 @@ class AgentConfig(BaseModel):
         description="After this long without messages (the model cache has expired anyway), "
         "old bulky tool results are shown shortened; 0 never does",
     )
+    approvals: Literal["prudent", "equilibre"] = Field(
+        default="equilibre",
+        description="When outside content (a web page, a mail) is in the conversation: "
+        "'prudent' asks before each of Orion's own writes (memory, reminders, a voice message "
+        "to him); 'equilibre' asks only before acting on the world, which stays refused there "
+        "(D85)",
+    )
     untrusted_idle_minutes: int = Field(
         default=120,
         ge=0,

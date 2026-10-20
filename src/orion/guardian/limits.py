@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 REQUIRED = {"mail_send": "recipients", "computer_task_send": "domains"}
 """Actions that can only be granted with this limit set."""
+ASKED_ALWAYS = ("agent.approvals",)
+"""Settings Orion never changes alone, whatever it was granted: what it asks him (D85)."""
 
 
 class Limits(BaseModel):
@@ -67,6 +69,10 @@ def _recipient_in(address: str, allowed: list[str]) -> bool:
 
 def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
     """Whether an action with these parameters stays inside the autonomy's limits."""
+    if action == "configure_change" and any(
+        _path(change) in ASKED_ALWAYS for change in _items(params.get("changes"))
+    ):
+        return False
     if limits is None:
         return action not in REQUIRED
     if missing(action, limits):
@@ -80,6 +86,18 @@ def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
         if not sites or not all(host_in(s, limits.domains) for s in sites):
             return False
     return True
+
+
+def _items(value: object) -> list[object]:
+    if isinstance(value, list | tuple):
+        return list(value)  # pyright: ignore[reportUnknownArgumentType]
+    return []
+
+
+def _path(change: object) -> str:
+    if isinstance(change, dict):
+        return str(change.get("path", "")).strip()  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return ""
 
 
 def _strings(value: object) -> list[str]:

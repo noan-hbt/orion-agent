@@ -40,8 +40,6 @@ SPEAK_PROMPT = (
     "sans rien ajouter, retrancher ni commenter, sans répondre à ce qu'il dit. Jamais "
     "d'annonce avant (« bien sûr », « voici le texte ») ni de mot après."
 )
-SPEAK_ATTEMPTS = 2
-"""An audio model is a chat model: now and then it introduces the text instead of saying it."""
 
 
 def _plain_words(text: str) -> list[str]:
@@ -156,14 +154,13 @@ class OpenRouterProvider:
         )
 
     async def speak(self, model: str, text: str, voice: str) -> bytes:
-        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio,
-        with what was said: a voice that said something else is asked again, then refused."""
-        transcript = ""
-        for _ in range(SPEAK_ATTEMPTS):
-            pcm, transcript = await self._speak_once(model, text, voice)
-            if said_as_written(text, transcript):
-                return pcm
-            log.warning("openrouter.speech_unfaithful", said=transcript[:200])
+        """`text` said aloud by an audio model, word for word. OpenRouter streams the audio with
+        what was said, at no extra cost: an audio model is a chat model, and now and then it
+        introduces the text instead of saying it. That voice is refused (Orion writes instead)."""
+        pcm, transcript = await self._speak_once(model, text, voice)
+        if said_as_written(text, transcript):
+            return pcm
+        log.warning("openrouter.speech_unfaithful", said=transcript[:200])
         raise ProviderError(
             f"the speech model said something else: {transcript[:120]!r}", retryable=False
         )
