@@ -124,8 +124,24 @@ def extract(url: str, html: str) -> Page:
 Check = Callable[[str, int], Awaitable[None]]
 
 
-async def fetch(client: httpx.AsyncClient, url: str, check: Check | None = None) -> Page:
-    """GET a public page, following redirects by hand (each target is checked)."""
+@dataclass(frozen=True)
+class Download:
+    url: str
+    content_type: str
+    data: bytes
+
+
+async def _get(
+    client: httpx.AsyncClient,
+    url: str,
+    check: Check | None,
+    limit: int,
+    accept: Callable[[str], bool],
+    whole: bool,
+) -> tuple[str, str, bytes, str | None]:
+    """GET a public address, following redirects by hand (each target is checked). Returns the
+    final address, the content type, the body (at most `limit` bytes) and its encoding. With
+    `whole`, a body over `limit` is refused rather than cut."""
     check = check or check_public
     current = url
     for _ in range(MAX_REDIRECTS + 1):
@@ -143,17 +159,40 @@ async def fetch(client: httpx.AsyncClient, url: str, check: Check | None = None)
                 if response.status_code >= 400:
                     raise FetchError(f"{current} answered {response.status_code}")
                 kind = response.headers.get("content-type", "")
-                if not any(t in kind for t in ("html", "text", "xml", "json")):
+                if not accept(kind):
                     raise FetchError(f"{current} is not text ({kind or 'unknown type'})")
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body += chunk
-                    if len(body) > MAX_BYTES:
+                    if len(body) > limit:
+                        if whole:
+                            raise FetchError(f"{current} is larger than {limit // 1_000_000} MB")
                         break
-                text = bytes(body).decode(response.encoding or "utf-8", errors="replace")
+                return current, kind, bytes(body[:limit]), response.encoding
         except httpx.HTTPError as exc:
             raise FetchError(f"{current} unreachable: {exc!r}") from exc
-        if "html" in kind:
-            return extract(current, text)
-        return Page(current, "", text)
     raise FetchError(f"too many redirects from {url}")
+
+
+async def fetch(client: httpx.AsyncClient, url: str, check: Check | None = None) -> Page:
+    """A public page, as text."""
+    final, kind, body, encoding = await _get(
+        client,
+        url,
+        check,
+        MAX_BYTES,
+        lambda kind: any(t in kind for t in ("html", "text", "xml", "json")),
+        whole=False,
+    )
+    text = body.decode(encoding or "utf-8", errors="replace")
+    if "html" in kind:
+        return extract(final, text)
+    return Page(final, "", text)
+
+
+async def download(
+    client: httpx.AsyncClient, url: str, limit: int, check: Check | None = None
+) -> Download:
+    """A public file, byte for byte, whatever its type; refused over `limit`."""
+    final, kind, body, _ = await _get(client, url, check, limit, lambda _kind: True, whole=True)
+    return Download(final, kind.split(";")[0].strip().lower(), body)

@@ -1241,3 +1241,29 @@ Le gardien laisse passer l'envoi d'un fichier vers Inkbox, puisque cet envoi ne 
 rien partir. Il vérifie ensuite le message qui le porte comme les autres, et refuse un fichier
 pour qui que ce soit d'autre que le propriétaire. Une capture d'une page reste du contenu du
 web (`Trust.WEB`). Oublier la conversation oublie le fichier.
+
+## D61 — N'importe quel fichier, tel quel (révise D60)
+
+*20/10/2026 · acceptée*
+
+Orion peut joindre n'importe quel fichier, de n'importe quel type, jusqu'à 10 Mo, et toujours
+au propriétaire seul. Trois nouvelles sources dans `file` :
+- **download** : un fichier du web, octet pour octet, à une adresse que le propriétaire a donnée
+  ou qu'une recherche a trouvée. C'est la règle du module web : une adresse inventée pourrait
+  faire sortir des données. Les adresses privées restent refusées, même après une redirection.
+  `web.downloaded` journalise l'adresse, le type et la taille, jamais le contenu.
+- **server** : un fichier du serveur d'Orion, par son chemin. Le chemin est résolu (liens
+  suivis), puis refusé s'il mène au dossier du gardien, à sa socket, à `/proc`, `/sys` ou
+  `/dev` (`/proc/self/environ` contient la clé du modèle), ou à un fichier `.env`. Dans un
+  contexte qui contient du contenu non fiable, le propriétaire approuve d'abord. En
+  production, le système de fichiers protège déjà le reste, puisque le cœur tourne sous son
+  propre utilisateur.
+- **device** : un fichier d'un dossier partagé sur une machine du propriétaire, grâce à la
+  nouvelle action `get_file` de `orion hand`. Elle est active par défaut pour une nouvelle
+  main ; une main déjà appairée doit l'ajouter à `actions` dans son `hand.json`.
+
+Chaque fichier est rangé dans son propre dossier, sous son vrai nom, pour qu'il arrive sous ce
+nom (`config.xml`, pas un identifiant). Un `.php` téléchargé depuis un site n'est pas sa source :
+le site renvoie la page qu'il produit. Évaluation `envoie_moi_ce_xml` : 2/2 sur Haiku et 2/2 sur
+DeepSeek. L'arrivée d'un type quelconque (pas une image ni un PDF) sur l'iPhone via Inkbox reste
+à vérifier pour de vrai.

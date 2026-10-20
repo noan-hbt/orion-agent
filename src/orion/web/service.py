@@ -2,6 +2,7 @@
 
     web.searched  (query, the clerk's answer, the pages found)
     web.read      (address, question, the clerk's answer, links worth following)
+    web.downloaded (address, type, size: a file kept as it is, its content never journaled)
 
 Both carry `Trust.WEB`. The addresses Orion may open are a projection: those the owner wrote
 in a message, those a search returned, and the links the clerk picked on a page it read. So
@@ -23,10 +24,11 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import ModuleSettings
 from orion.web.clerk import Findings, Reading, WebClerk
-from orion.web.fetch import Check, FetchError, fetch, normalize
+from orion.web.fetch import Check, Download, FetchError, download, fetch, normalize
 
 SEARCHED = "web.searched"
 READ = "web.read"
+DOWNLOADED = "web.downloaded"
 OWNER_MESSAGE = "message.received"
 _URL = re.compile(r"https?://[^\s<>\"'«»]+", re.IGNORECASE)
 
@@ -138,6 +140,28 @@ class WebDesk:
             correlation_id,
         )
         return reading
+
+    async def download(self, url: str, limit: int, correlation_id: str | None = None) -> Download:
+        """A file at an address the owner gave or a search found, byte for byte."""
+        address = normalize(url)
+        if not await self.may_open(address):
+            raise NotAllowedError(
+                f"{url} was neither given by the owner nor found by a search or on a page "
+                "already read: search first"
+            )
+        got = await download(self._http, address, limit, self._check)
+        await self._record(
+            DOWNLOADED,
+            {
+                "url": address,
+                "final_url": got.url,
+                "content_type": got.content_type,
+                "size": len(got.data),
+            },
+            f"web:{address}",
+            correlation_id,
+        )
+        return got
 
     async def _record(
         self, kind: str, payload: dict[str, Any], source: str, correlation_id: str | None

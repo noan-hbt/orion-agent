@@ -1,13 +1,21 @@
 """Files: `[modules.files]` in orion.toml (on by default).
 
 The owner can ask for a file, not only for words: « fais-moi une image de… », « envoie-moi une
-capture de la page », « mets ça dans un PDF ». Orion makes it, keeps it under the data directory,
-and sends it in the owner's conversation, with a short caption.
+capture de la page », « mets ça dans un PDF », « télécharge le XML de leur config », « envoie-moi
+le index.php de mon dossier site ». Orion makes or fetches it, keeps it under the data directory,
+and sends it in the owner's conversation, with a short caption. Any type, 10 MiB at most.
 
 - `image`: a picture made by the image model (`agent.image_model`);
 - `pdf`: a document from text Orion writes (titles, paragraphs, lists), printed to PDF by the
   same headless Chromium the browser uses;
 - a screenshot of the page shown in Orion's browser is `browser` (screenshot);
+- `download`: a file on the web, byte for byte, at an address the owner gave or a search found
+  (the web module's rule: a made-up address could carry data out);
+- `server`: a file on Orion's own server. Not the guardian's folder, not `/proc`, `/sys`,
+  `/dev`, not an `.env` file: those hold secrets, and a page could ask for them. In a context
+  holding untrusted content the owner approves it first;
+- `device`: a file from a folder the owner shared on one of his machines (`orion hand`,
+  `get_file`);
 - `send`: one of these files to the owner. Files go to the owner only: the guardian refuses a
   file for anyone else.
 
@@ -23,6 +31,7 @@ import asyncio
 import base64
 import hashlib
 import html
+import mimetypes
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -43,6 +52,8 @@ from orion.tools.base import Effect, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+    from orion.hands.desk import HandsDesk
+    from orion.web.service import WebDesk
 
 log = structlog.get_logger(__name__)
 
@@ -55,6 +66,9 @@ SUFFIXES = {
     "image/webp": ".webp",
     "application/pdf": ".pdf",
 }
+
+SYSTEM_DIRS = (Path("/proc"), Path("/sys"), Path("/dev"))
+"""Never sent: `/proc/self/environ` alone holds the model key."""
 
 Deliver = Callable[[Path, str, str | None], Awaitable[None]]
 """(file, caption, correlation id): sends a file to the owner."""
@@ -119,11 +133,13 @@ class FileStore:
         await self._runner.catch_up()
         if not self.folder.exists():
             return
-        names = {m.path.name for m in self._kept.files.values()}
-        for path in self.folder.iterdir():
-            if path.is_file() and path.name not in names:
+        kept = {m.path for m in self._kept.files.values()}
+        for path in sorted(self.folder.rglob("*"), reverse=True):
+            if path.is_file() and path not in kept:
                 path.unlink()
-                log.info("files.forgotten", file=path.name)
+                log.info("files.forgotten", file=path.relative_to(self.folder).as_posix())
+            elif path.is_dir() and not any(path.iterdir()):
+                path.rmdir()
 
     def get(self, file_id: str) -> Made | None:
         return self._kept.files.get(file_id)
@@ -143,9 +159,11 @@ class FileStore:
         if len(data) > MAX_BYTES:
             raise ValueError(f"file too large to send ({len(data)} bytes, 10 MiB at most)")
         file_id = f"fi_{new_id()}"
-        stored = file_id + SUFFIXES.get(content_type, "")
-        self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # One folder per file, so it travels under its own name (« config.xml », not an id).
+        named = _safe_name(name, content_type)
+        stored = f"{file_id}/{named}"
         path = self.folder / stored
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         await asyncio.to_thread(path.write_bytes, data)
         path.chmod(0o600)
         await self._journal.append(
@@ -154,7 +172,7 @@ class FileStore:
                     kind=MADE,
                     payload={
                         "file_id": file_id,
-                        "name": _safe_name(name, content_type),
+                        "name": named,
                         "stored": stored,
                         "content_type": content_type,
                         "size": len(data),
@@ -178,8 +196,49 @@ class FileStore:
 
 
 def _safe_name(name: str, content_type: str) -> str:
-    stem = re.sub(r"[^\w\- ]+", "", name).strip()[:60] or "fichier"
-    return stem + SUFFIXES.get(content_type, "")
+    """A plain file name. A file got as it is keeps its own extension (`index.php`); a file Orion
+    made gets its type's (« Rapport v1.2 » is `Rapport v12.pdf`)."""
+    given = Path(name.replace("\\", "/")).name
+    stem, dot, suffix = given.rpartition(".")
+    made = SUFFIXES.get(content_type)
+    own = dot and stem and re.fullmatch(r"[A-Za-z0-9]{1,10}", suffix)
+    if own and (made is None or f".{suffix.lower()}" in (made, ".jpeg")):
+        return f"{_plain(stem)}.{suffix.lower()}"
+    return _plain(given) + (made or mimetypes.guess_extension(content_type) or "")
+
+
+def _plain(stem: str) -> str:
+    return re.sub(r"[^\w\- ]+", "", stem).strip()[:60] or "fichier"
+
+
+def _content_type(name: str) -> str:
+    return mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+
+class Unsendable(ValueError):
+    """A server file Orion may not or cannot send."""
+
+
+def read_server_file(given: str, closed: tuple[Path, ...]) -> tuple[Path, bytes]:
+    """A file on Orion's server, resolved (links followed) before it is checked."""
+    path = Path(given).expanduser()
+    if not path.is_absolute():
+        raise Unsendable("Give an absolute path.")
+    path = path.resolve()
+    shut = (*SYSTEM_DIRS, *(c.resolve() for c in closed))
+    if any(path == d or d in path.parents for d in shut):
+        raise Unsendable(f"{path} is in a folder Orion never sends from (secrets).")
+    if path.name == ".env" or path.name.endswith(".env"):
+        raise Unsendable(f"{path} holds secrets.")
+    try:
+        if not path.is_file():
+            raise Unsendable(f"{path} is not a file.")
+        size = path.stat().st_size
+        if size > MAX_BYTES:
+            raise Unsendable(f"{path} is too large to send ({size // 1_048_576} MiB, 10 at most).")
+        return path, path.read_bytes()
+    except OSError as exc:
+        raise Unsendable(f"{path} cannot be read: {exc.strerror or exc}") from exc
 
 
 def page_html(title: str, text: str) -> str:
@@ -273,6 +332,26 @@ class SendInput(BaseModel):
     caption: str = Field(default="", max_length=300, description="A few words to go with it")
 
 
+class DownloadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(pattern=r"^https?://", description="The file's address")
+    name: str = Field(default="", max_length=80, description="A file name, if the address has none")
+
+
+class ServerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=1000, description="Absolute path on your server")
+
+
+class DeviceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device: str
+    path: str = Field(description="A path `hand_find_files` returned")
+
+
 Render = Callable[[str], Awaitable[bytes]]
 
 
@@ -282,6 +361,10 @@ def file_tool(
     image_model: str,
     deliver: Callable[[], Deliver | None],
     render: Render = render_pdf,
+    *,
+    web: Callable[[], WebDesk | None] = lambda: None,
+    hands: Callable[[], HandsDesk | None] = lambda: None,
+    closed: tuple[Path, ...] = (),
 ) -> Tool:
     async def image(args: Any, ctx: ToolContext) -> ToolResult:
         try:
@@ -312,6 +395,59 @@ def file_tool(
             f"PDF prêt ({made.id}, {len(data) // 1024} Ko). Envoie-le avec `file` (send)."
         )
 
+    def ready(made: Made) -> ToolResult:
+        return ToolResult(
+            f"Fichier prêt ({made.id}, {made.name}, {max(made.size // 1024, 1)} Ko). "
+            "Envoie-le avec `file` (send)."
+        )
+
+    async def downloading(args: Any, ctx: ToolContext) -> ToolResult:
+        from urllib.parse import unquote, urlsplit
+
+        from orion.web.service import FetchError, NotAllowedError
+
+        desk = web()
+        if desk is None:
+            return ToolResult("The web module is off: nothing can be downloaded.", is_error=True)
+        try:
+            got = await desk.download(args.url, MAX_BYTES, ctx.correlation_id)
+        except (FetchError, NotAllowedError) as exc:
+            return ToolResult(str(exc), is_error=True)
+        name = args.name or unquote(urlsplit(got.url).path.rsplit("/", 1)[-1]) or "fichier"
+        kind = got.content_type or _content_type(name)
+        made = await store.save(name, got.data, kind, "download", ctx, Trust.WEB)
+        return ready(made)
+
+    async def from_server(args: Any, ctx: ToolContext) -> ToolResult:
+        try:
+            path, data = await asyncio.to_thread(read_server_file, args.path, closed)
+        except Unsendable as exc:
+            return ToolResult(str(exc), is_error=True)
+        made = await store.save(
+            path.name, data, _content_type(path.name), "server", ctx, Trust.OWNER_INSTANCE
+        )
+        return ready(made)
+
+    async def from_device(args: Any, ctx: ToolContext) -> ToolResult:
+        from orion.hands.desk import HandError
+
+        desk = hands()
+        if desk is None:
+            return ToolResult("No hand is set up (`orion hand`).", is_error=True)
+        try:
+            got = await desk.call(args.device, "get_file", {"path": args.path})
+            data = base64.b64decode(str(got["data"]), validate=True)
+        except HandError as exc:
+            return ToolResult(str(exc), is_error=True)
+        except (KeyError, ValueError) as exc:
+            log.warning("files.bad_hand_reply", device=args.device, error=repr(exc))
+            return ToolResult(f"{args.device} sent back something unreadable.", is_error=True)
+        name = str(got.get("name") or Path(args.path).name)
+        made = await store.save(
+            name, data, _content_type(name), "device", ctx, Trust.OWNER_INSTANCE
+        )
+        return ready(made)
+
     async def send(args: Any, ctx: ToolContext) -> ToolResult:
         await store.sync()
         made = store.get(args.file)
@@ -336,10 +472,29 @@ def file_tool(
     return action_tool(
         "file",
         "Files for the owner, when he asks for one rather than words: make a picture or a PDF, "
-        "then send it in his conversation (a screenshot of a page is `browser` (screenshot)).",
+        "or get any file (from the web, your server, or one of his machines), then send it in "
+        "his conversation (a screenshot of a page is `browser` (screenshot)).",
         [
             Action("image", "Make a picture from a description.", ImageInput, image),
             Action("pdf", "Make a PDF document from text you write.", PdfInput, pdf),
+            Action(
+                "download",
+                "Get a file from the web as it is (any type), at an address he gave or a "
+                "search found.",
+                DownloadInput,
+                downloading,
+                accepts_untrusted_context=True,
+            ),
+            Action(
+                "server", "Get a file from your own server, by its path.", ServerInput, from_server
+            ),
+            Action(
+                "device",
+                "Get a file from a folder he shared on one of his machines (`hands`).",
+                DeviceInput,
+                from_device,
+                accepts_untrusted_context=True,
+            ),
             Action(
                 "send",
                 "Send a file to the owner, with a short caption.",
@@ -365,9 +520,21 @@ class FilesModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         self.store = FileStore(plate.journal, self.config.data_dir / "files")
         await self.store.sync()
+        from orion.hands.module import HandsModule
+        from orion.web.module import WebModule
+
+        web = plate.module(WebModule)
+        hands = plate.module(HandsModule)
+        guardian = self.config.guardian
         return [
             file_tool(
-                self.store, plate.provider, self.config.agent.image_model, lambda: self.deliver
+                self.store,
+                plate.provider,
+                self.config.agent.image_model,
+                lambda: self.deliver,
+                web=lambda: web.desk if web is not None else None,
+                hands=lambda: hands.desk if hands is not None else None,
+                closed=(guardian.data_dir, guardian.socket.parent),
             )
         ]
 

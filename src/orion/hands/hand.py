@@ -6,7 +6,9 @@ only what its own configuration allows, whatever the server asks:
 - `notify`: a desktop notification;
 - `open_url`: open an http(s) address in the default browser;
 - `find_files`: file names matching a query, inside the allowed folders only;
-- `read_file`: the text of one file inside the allowed folders (size capped).
+- `read_file`: the text of one file inside the allowed folders (size capped);
+- `get_file`: one file inside the allowed folders, byte for byte, for Orion to send to the
+  owner (10 MiB at most).
 
 Paths are resolved (symlinks included) and must stay inside an allowed folder. The
 configuration (`~/.config/orion/hand.json`, mode 0600) holds the server, the device's secret,
@@ -16,6 +18,7 @@ the folders and the actions; edit it to give more or less.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import platform
@@ -34,11 +37,13 @@ log = structlog.get_logger(__name__)
 
 CONFIG = Path.home() / ".config" / "orion" / "hand.json"
 MAX_READ = 200_000
+MAX_FILE = 10 * 1024 * 1024
+"""What one iMessage carries."""
 MAX_FOUND = 50
 MAX_VISITED = 20_000
 """Entries looked at per search: a shared home folder must not keep the call waiting."""
 SKIPPED = frozenset({"node_modules", "__pycache__", "Library"})
-DEFAULT_ACTIONS = ("notify", "find_files", "read_file")
+DEFAULT_ACTIONS = ("notify", "find_files", "read_file", "get_file")
 
 
 @dataclass
@@ -90,6 +95,8 @@ class Hand:
             return await asyncio.to_thread(self.find_files, str(args.get("query", "")))
         if action == "read_file":
             return await asyncio.to_thread(self.read_file, str(args.get("path", "")))
+        if action == "get_file":
+            return await asyncio.to_thread(self.get_file, str(args.get("path", "")))
         raise Refused(f"unknown action {action}")
 
     def notify(self, text: str) -> dict[str, Any]:
@@ -139,6 +146,20 @@ class Hand:
         if b"\x00" in data[:4096]:
             raise Refused(f"{path} is not text")
         return {"content": data.decode("utf-8", errors="replace"), "path": str(target)}
+
+    def get_file(self, path: str) -> dict[str, Any]:
+        target = self._inside(path)
+        if not target.is_file():
+            raise Refused(f"{path} is not a file")
+        size = target.stat().st_size
+        if size > MAX_FILE:
+            raise Refused(f"{path} is too large to send ({size // 1_048_576} MiB, 10 at most)")
+        data = target.read_bytes()
+        return {
+            "content": f"{target.name}, {len(data)} bytes",
+            "name": target.name,
+            "data": base64.b64encode(data).decode(),
+        }
 
     # -- the connection -----------------------------------------------------------------------
 

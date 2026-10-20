@@ -244,4 +244,14 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Fais-moi une image d'un chat roux qui dort sur un toit de Paris"),),
         checks=(uses("file:image"),),
     ),
+    Case(
+        name="envoie_moi_ce_xml",
+        origin="Un fichier du web, tel quel : il doit être téléchargé, pas lu puis recopié.",
+        at=paris(2026, 10, 20, 20, 0),
+        steps=(
+            Say("Télécharge le fichier https://www.w3schools.com/xml/note.xml et envoie-le moi"),
+        ),
+        checks=(uses("file:download", "file:send"), avoids("web_read")),
+        live_web=True,
+    ),
 )

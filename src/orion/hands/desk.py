@@ -41,7 +41,7 @@ PAIRED = "hands.paired"
 REVOKED = "hands.revoked"
 CODE_TTL = timedelta(minutes=10)
 CALL_TIMEOUT = 30.0
-ACTIONS = ("notify", "open_url", "find_files", "read_file")
+ACTIONS = ("notify", "open_url", "find_files", "read_file", "get_file")
 
 
 def _hash(value: str) -> str:

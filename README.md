@@ -142,6 +142,8 @@ d'autres personnes.
   lui dit que le nom du lieu où tu arrives, pour les lieux que tu as choisis.
 - **Des fichiers** (D60) : demande-lui une image, une capture de la page qu'il regarde ou un
   PDF ; il te l'envoie dans la conversation.
+- **N'importe quel fichier** (D61) : un fichier du web, de son serveur ou d'un dossier partagé
+  sur ton ordinateur, tel quel, jusqu'à 10 Mo.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

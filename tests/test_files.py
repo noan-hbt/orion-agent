@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from orion.channels.imessage import IMessageChannel
@@ -16,16 +18,22 @@ from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.files.module import MADE, FileStore, file_tool, page_html, render_pdf
 from orion.guardian.client import GuardianUnavailableError
+from orion.hands.hand import Hand, HandConfig
 from orion.tools.base import Tool, ToolContext, ToolResult
+from orion.web.clerk import WebClerk
+from orion.web.service import DOWNLOADED, WebDesk
 from tests.fake_guardian import guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, FakeInkbox
 from tests.fakes import Script, ScriptedProvider
 from tests.test_browser_direct import owner_says
 from tests.test_computer import Site, session
+from tests.test_hands import server, until
 from tests.test_imessage import SETTINGS, make_orion
 from tests.test_secretary import MUM, MUM_CHAT
 from tests.test_secretary import SETTINGS as SECRETARY
+from tests.test_web import allow_all, site
 
+_ = server  # the fixture, for the hand below
 PNG = base64.b64encode(b"\x89PNG fake").decode()
 CTX = ToolContext("owner", "c", context_trust=Trust.OWNER)
 
@@ -156,3 +164,143 @@ async def test_the_guardian_lets_files_go_to_the_owner_only(tmp_path: Path) -> N
             await inkbox.send(MUM_CHAT, "Tiens", "k2", None, media_url=url)
         with pytest.raises((GuardianUnavailableError, Exception), match="too large"):
             await inkbox.upload("big.bin", b"0" * (11 * 1024 * 1024), "application/octet-stream")
+
+
+def tool_for(store: FileStore, sent: list[tuple[Path, str]], **sources: Any) -> Tool:
+    async def deliver(path: Path, caption: str, _cid: str | None) -> None:
+        sent.append((path, caption))
+
+    return file_tool(store, ScriptedProvider(), "img", lambda: deliver, **sources)
+
+
+def made_id(result: ToolResult) -> str:
+    assert not result.is_error, result.content
+    return result.content.split("(")[1].split(",")[0]
+
+
+async def test_any_file_on_the_web_is_kept_and_sent_as_it_is(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    xml = b'<?xml version="1.0"?><config><port>8080</port></config>'
+    client = site(
+        {
+            "https://x.example/dl/config.xml": httpx.Response(
+                200, content=xml, headers={"content-type": "application/xml"}
+            ),
+            "https://x.example/big.zip": httpx.Response(200, content=b"0" * (11 * 1024 * 1024)),
+        }
+    )
+    desk = WebDesk(journal, WebClerk(ScriptedProvider(), "m"), client, allow_all)
+    await desk.start()
+    store = FileStore(journal, tmp_path / "files")
+    sent: list[tuple[Path, str]] = []
+    tool = tool_for(store, sent, web=lambda: desk)
+    try:
+        made_up = await run(tool, action="download", url="https://x.example/dl/config.xml")
+        assert made_up.is_error and "search first" in made_up.content
+        await owner_says(
+            journal, "Télécharge https://x.example/dl/config.xml et https://x.example/big.zip", "c"
+        )
+        file_id = made_id(await run(tool, action="download", url="https://x.example/dl/config.xml"))
+        await run(tool, action="send", file=file_id, caption="La config")
+        too_big = await run(tool, action="download", url="https://x.example/big.zip")
+        assert too_big.is_error and "larger" in too_big.content
+    finally:
+        await desk.aclose()
+    [(path, caption)] = sent
+    assert path.name == "config.xml" and path.read_bytes() == xml and caption == "La config"
+    events = await journal.read()
+    [got] = [e for e in events if e.kind == DOWNLOADED]
+    assert got.trust is Trust.WEB and "8080" not in str(got.payload)
+    assert [e.trust for e in events if e.kind == MADE] == [Trust.WEB]
+    assert tool.accepts_untrusted_for(tool.parse('{"action": "download", "url": "https://a.b"}'))
+
+
+async def test_a_file_on_the_server_but_never_a_secret(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    site_dir = tmp_path / "www"
+    site_dir.mkdir()
+    (site_dir / "index.php").write_text("<?php echo 'bonjour'; ?>")
+    (site_dir / ".env").write_text("KEY=secret")
+    (site_dir / "prod.env").write_text("KEY=secret")
+    guardian = tmp_path / "guardian"
+    guardian.mkdir()
+    (guardian / "guardian.sqlite3").write_bytes(b"ledger")
+    (site_dir / "innocent.txt").symlink_to(guardian / "guardian.sqlite3")
+    store = FileStore(journal, tmp_path / "files")
+    sent: list[tuple[Path, str]] = []
+    tool = tool_for(store, sent, closed=(guardian,))
+
+    file_id = made_id(await run(tool, action="server", path=str(site_dir / "index.php")))
+    await run(tool, action="send", file=file_id)
+    assert sent[0][0].name == "index.php" and b"bonjour" in sent[0][0].read_bytes()
+    refused = {
+        str(site_dir / ".env"): "secrets",
+        str(site_dir / "prod.env"): "secrets",
+        str(guardian / "guardian.sqlite3"): "never sends from",
+        str(site_dir / "innocent.txt"): "never sends from",  # a link is followed, then checked
+        "/proc/self/environ": "never sends from",
+        "index.php": "absolute",
+        str(site_dir / "nope.txt"): "not a file",
+        str(site_dir): "not a file",
+    }
+    for path, why in refused.items():
+        result = await run(tool, action="server", path=path)
+        assert result.is_error and why in result.content, (path, result.content)
+    # Steered by a page, it asks the owner first.
+    assert not tool.accepts_untrusted_for(tool.parse('{"action": "server", "path": "/a"}'))
+
+
+async def test_a_file_from_a_folder_the_owner_shared(
+    server: tuple[Any, str], tmp_path: Path, journal: SqliteJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    desk, url = server
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    shared = tmp_path / "site"
+    shared.mkdir()
+    (shared / "index.php").write_bytes(b"<?php phpinfo(); ?>\x00binary ok")
+    (tmp_path / "secret.txt").write_text("non")
+    code = await desk.new_code("mac")
+    from orion.hands.hand import pair
+
+    config = await pair(url, code, [str(shared)], ["get_file"])
+    running = asyncio.create_task(Hand(config).session())
+    await until(lambda: "mac" in desk.connected)
+    store = FileStore(journal, tmp_path / "files")
+    sent: list[tuple[Path, str]] = []
+    tool = tool_for(store, sent, hands=lambda: desk)
+    try:
+        path = str(shared / "index.php")
+        file_id = made_id(await run(tool, action="device", device="mac", path=path))
+        await run(tool, action="send", file=file_id)
+        outside = await run(
+            tool, action="device", device="mac", path=str(shared / ".." / "secret.txt")
+        )
+        assert outside.is_error and "outside the allowed folders" in outside.content
+        offline = await run(tool, action="device", device="pc", path=path)
+        assert offline.is_error and "offline" in offline.content
+    finally:
+        running.cancel()
+    assert sent[0][0].name == "index.php"
+    assert sent[0][0].read_bytes() == b"<?php phpinfo(); ?>\x00binary ok"
+
+
+def test_a_hand_refuses_a_file_too_large(tmp_path: Path) -> None:
+    from orion.hands.hand import Refused
+
+    (tmp_path / "big.bin").write_bytes(b"0" * (10 * 1024 * 1024 + 1))
+    hand = Hand(HandConfig("http://x", "mac", "s", [str(tmp_path)]))
+    with pytest.raises(Refused, match="too large"):
+        hand.get_file(str(tmp_path / "big.bin"))
+
+
+def test_a_file_keeps_its_own_name() -> None:
+    from orion.files.module import _safe_name  # pyright: ignore[reportPrivateUsage]
+
+    assert _safe_name("index.php", "application/octet-stream") == "index.php"
+    assert _safe_name("../../etc/config.XML", "application/xml") == "config.xml"
+    assert _safe_name("Rapport v1.2", "application/pdf") == "Rapport v12.pdf"
+    assert _safe_name("photo.jpeg", "image/jpeg") == "photo.jpeg"
+    assert _safe_name("image", "image/png") == "image.png"
+    assert _safe_name("", "application/pdf") == "fichier.pdf"
