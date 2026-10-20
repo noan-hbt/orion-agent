@@ -97,9 +97,7 @@ class AutonomyState:
             self.last_offer = datetime.fromisoformat(str(payload["at"]))
         elif event.kind == GRANTED:
             self.granted.add(str(payload["action"]))
-            self.limits[str(payload["action"])] = Limits.model_validate(
-                payload.get("limits") or {}
-            )
+            self.limits[str(payload["action"])] = Limits.model_validate(payload.get("limits") or {})
         elif event.kind == REVOKED:
             action = str(payload["action"])
             self.granted.discard(action)
@@ -201,8 +199,9 @@ class Autonomy:
     async def revoke(self, action: str, reason: str, correlation_id: str | None) -> None:
         if self._guardian is not None:
             await self._guardian.post("/v1/autonomy/revoke", {"action": action})
-        await self._record(REVOKED, {"action": action, "reason": reason}, Trust.OWNER,
-                           correlation_id)
+        await self._record(
+            REVOKED, {"action": action, "reason": reason}, Trust.OWNER, correlation_id
+        )
 
     async def ritual(
         self, approver: Approver, grant_tool: Tool, quiet: Callable[[time], bool]
@@ -233,8 +232,13 @@ class Autonomy:
             return None
         return action
 
-    async def run(self, approver: Approver, grant_tool: Tool, quiet: Callable[[time], bool],
-                  every: float = 3600.0) -> None:
+    async def run(
+        self,
+        approver: Approver,
+        grant_tool: Tool,
+        quiet: Callable[[time], bool],
+        every: float = 3600.0,
+    ) -> None:
         import asyncio
 
         while True:
@@ -299,8 +303,8 @@ def autonomy_tools(autonomy: Autonomy) -> list[Tool]:
                     else ""
                 )
                 if a in autonomy.state.granted
-                else
-               f"je demande (oui {autonomy.state.streak.get(a, 0)} fois de suite)")
+                else f"je demande (oui {autonomy.state.streak.get(a, 0)} fois de suite)"
+            )
             for a in autonomy.autonomable
         ]
         return ToolResult("\n".join(lines) or "Rien ne peut se faire sans lui demander.")

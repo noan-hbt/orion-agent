@@ -124,9 +124,11 @@ def _limits(params: dict[str, Any]) -> Limits:
 
 
 def _computer_task_send(params: dict[str, Any]) -> str:
-    sites = f"\nSites où elle peut envoyer : {', '.join(params['sites'])}" if params.get(
-        "sites"
-    ) else ""
+    sites = (
+        f"\nSites où elle peut envoyer : {', '.join(params['sites'])}"
+        if params.get("sites")
+        else ""
+    )
     session = (
         f"\nAvec ta session connectée « {params['session']} »." if params.get("session") else ""
     )
@@ -326,9 +328,7 @@ class GuardianService:
             log.warning("guardian.owner_unreachable", what=what)
             return
         try:
-            await self._inkbox.send(
-                conversations[0], text, f"{what}-{new_id()}", self._identity_id
-            )
+            await self._inkbox.send(conversations[0], text, f"{what}-{new_id()}", self._identity_id)
         except InkboxError:
             log.exception("guardian.tell_owner_failed", what=what)
 

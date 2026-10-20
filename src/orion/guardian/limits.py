@@ -61,8 +61,7 @@ def host_in(host: str, domains: list[str]) -> bool:
 def _recipient_in(address: str, allowed: list[str]) -> bool:
     address = address.strip().lower()
     return any(
-        address == a.lower() or (a.startswith("@") and address.endswith(a.lower()))
-        for a in allowed
+        address == a.lower() or (a.startswith("@") and address.endswith(a.lower())) for a in allowed
     )
 
 

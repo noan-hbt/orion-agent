@@ -87,12 +87,16 @@ def federation_edge(service: GuardianService) -> FederationEdge:
     try:
         identity = Identity(settings.key.resolve().get_secret_value())
     except LookupError as exc:
-        raise GuardianError(f"federation: {exc} (create one with `orion federation keygen`)") from exc
+        raise GuardianError(
+            f"federation: {exc} (create one with `orion federation keygen`)"
+        ) from exc
     except ValueError as exc:
         raise GuardianError(f"federation: {exc}") from exc
     edge = FederationEdge(service, identity, admin_token(service.config.guardian.data_dir))
     edge.install()
-    log.info("guardian.federation", instance=service.config.instance, fingerprint=identity.fingerprint)
+    log.info(
+        "guardian.federation", instance=service.config.instance, fingerprint=identity.fingerprint
+    )
     return edge
 
 

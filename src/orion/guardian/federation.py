@@ -52,9 +52,9 @@ from orion.federation.wire import (
     Propose,
     WireError,
     a2a_error,
-    clean_title,
     a2a_result,
     agent_card,
+    clean_title,
     decode_invite,
     encode_invite,
     from_a2a,
@@ -201,7 +201,8 @@ class FederationEdge:
         who = peer.label if peer else params.get("peer")
         return (
             f"Avant que je le fasse : proposer à l'Orion de {who} « {params.get('title')} » "
-            f"({params.get('duration_minutes')} min), entre {self._human(params.get('window_start'))}"
+            f"({params.get('duration_minutes')} min), entre "
+            f"{self._human(params.get('window_start'))}"
             f" et {self._human(params.get('window_end'))}. Je lui donne tes créneaux libres dans "
             "cette fenêtre, rien d'autre de ton agenda."
         )
@@ -210,7 +211,9 @@ class FederationEdge:
         peer = self.find(str(params.get("peer", "")))
         proposal = self._received_proposal(peer, str(params.get("meeting_id", "")))
         what = (
-            f"« {proposal.title} » ({proposal.duration_minutes} min)" if proposal else "un rendez-vous"
+            f"« {proposal.title} » ({proposal.duration_minutes} min)"
+            if proposal
+            else "un rendez-vous"
         )
         who = peer.label if peer else params.get("peer")
         return (
@@ -277,7 +280,9 @@ class FederationEdge:
         if reason is not None:
             return await self.service.deny(what, reason)
         try:
-            envelope = await self.deliver(peer, asked.type, asked.context, body.model_dump(mode="json"))
+            envelope = await self.deliver(
+                peer, asked.type, asked.context, body.model_dump(mode="json")
+            )
         except (httpx.HTTPError, WireError) as exc:
             log.warning("federation.send_failed", peer=peer.instance, error=str(exc))
             return refused(f"{peer.label}'s Orion did not take the message: {exc}", 502)
@@ -300,9 +305,11 @@ class FederationEdge:
             return await self.service.use_grant(
                 grant,
                 "meeting_accept",
-                lambda p: self.find(str(p.get("peer", ""))) == peer
-                and p.get("meeting_id") == context
-                and self._moment(p.get("slot")) == body.slot,
+                lambda p: (
+                    self.find(str(p.get("peer", ""))) == peer
+                    and p.get("meeting_id") == context
+                    and self._moment(p.get("slot")) == body.slot
+                ),
                 consume=True,
             )
         if kind == DECLINE:
@@ -322,7 +329,10 @@ class FederationEdge:
         return f"{kind} cannot be sent"
 
     def _matches_proposal(self, params: dict[str, Any], peer: Peer, body: Propose) -> bool:
-        start, end = self._moment(params.get("window_start")), self._moment(params.get("window_end"))
+        start, end = (
+            self._moment(params.get("window_start")),
+            self._moment(params.get("window_end")),
+        )
         return (
             self.find(str(params.get("peer", ""))) == peer
             and clean_title(str(params.get("title", ""))) == body.title
@@ -382,7 +392,9 @@ class FederationEdge:
         except ValueError as exc:
             raise WireError(f"answered {response.status_code}, not JSON-RPC") from exc
         if response.status_code != 200 or not isinstance(answer, dict) or "result" not in answer:
-            error: Any = cast(dict[str, Any], answer).get("error") if isinstance(answer, dict) else None
+            error: Any = (
+                cast(dict[str, Any], answer).get("error") if isinstance(answer, dict) else None
+            )
             detail = cast(dict[str, Any], error).get("message") if isinstance(error, dict) else None
             raise WireError(f"refused ({response.status_code}): {detail or 'no reason given'}")
         await self.service.ledger.record(SENT, {"envelope": envelope.model_dump(mode="json")})
