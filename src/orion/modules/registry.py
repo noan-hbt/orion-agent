@@ -35,6 +35,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.intentions.module import IntentionsModule
     from orion.library.module import LibraryModule
     from orion.mail.module import MailModule
+    from orion.memory.doubt import DoubtModule
     from orion.memory.night import NightModule
     from orion.missions.module import MissionsModule
     from orion.onboarding.module import OnboardingModule
@@ -55,6 +56,7 @@ def builtin_modules() -> list[type[Module]]:
         DelegationModule,
         AdaptationModule,
         NightModule,
+        DoubtModule,
         CalendarModule,
         MailModule,
         FederationModule,

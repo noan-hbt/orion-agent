@@ -44,7 +44,8 @@ async def test_a_week_is_played_on_a_copy_and_nothing_is_sent(tmp_path: Path) ->
     assert "Lundi 26/10 : 1 envoyé(s)" in shown
     async with SqliteJournal(config.journal_path, HybridClock("t")) as journal:
         assert await journal.last_seq() == before  # the real journal is untouched
-    assert not any(p.name.startswith("orion-simulate-") for p in tmp_path.iterdir())
+    left = await asyncio.to_thread(lambda: [p.name for p in tmp_path.iterdir()])
+    assert not any(name.startswith("orion-simulate-") for name in left)
 
 
 def test_the_command(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
