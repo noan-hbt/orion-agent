@@ -12,6 +12,10 @@
 	handle /a2a {
 		reverse_proxy 127.0.0.1:8788
 	}
+	# Live calls: Inkbox streams the owner's calls to Orion (signed, owner only).
+	handle /voice/live {
+		reverse_proxy 127.0.0.1:8791
+	}
 	# The control page: reachable only with a one-time link Orion sends you.
 	handle /console/* {
 		reverse_proxy 127.0.0.1:8790

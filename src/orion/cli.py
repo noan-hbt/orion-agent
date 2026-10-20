@@ -177,7 +177,10 @@ async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
         if cfg.owner_number:
             await client.allow_only(cfg.identity, cfg.owner_number)
             print(f"Ligne réservée à {cfg.owner_number} : personne d'autre ne peut joindre Orion.")
-        if config.voice.enabled:
+        if config.voice.enabled and config.voice.live:
+            await client.answer_calls_live(config.voice.live_url, identity.id)
+            print("Appels entrants : Orion décroche lui-même, en direct.")
+        elif config.voice.enabled:
             await client.answer_calls_with_voice_ai(identity.id)
             print("Appels entrants : la voix d'Orion décroche.")
         triage = await client.triage_number()

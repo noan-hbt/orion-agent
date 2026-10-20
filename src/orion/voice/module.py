@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import uvicorn
+
+from orion.channels.inkbox import verify_signature
 from orion.channels.module import IMessageModule
 from orion.modules.base import Daemon, Module, ModuleError, Plate
 from orion.voice.channel import VoiceChannel, VoiceSettings
+from orion.voice.live import LiveVoice, Verify
 from orion.voice.tools import PhoneLink, voice_tools
 
 if TYPE_CHECKING:
@@ -23,6 +27,7 @@ class VoiceModule(Module):
         super().__init__(config)
         self.link = PhoneLink()
         self.voice: VoiceChannel | None = None
+        self.live: LiveVoice | None = None
 
     @property
     def enabled(self) -> bool:
@@ -48,6 +53,7 @@ class VoiceModule(Module):
                 origination=voice_cfg.origination,
                 reply_via=line.imessage.name,
                 voice=voice_cfg.voice,
+                live_url=voice_cfg.live_url if voice_cfg.live else None,
             ),
             daemon.plate.memory.store,
             daemon.plate.timers.projection,
@@ -64,6 +70,45 @@ class VoiceModule(Module):
             daemon.add_service(
                 "voice.poll", lambda: voice.poll_forever(voice_cfg.calls_poll_seconds)
             )
+        if voice_cfg.live:
+            self._serve_live(daemon, voice)
+
+    def _serve_live(self, daemon: Daemon, voice: VoiceChannel) -> None:
+        voice_cfg = self.config.voice
+        if not voice_cfg.live_url.startswith("wss://"):
+            raise ModuleError('[voice] live needs live_url = "wss://…/voice/live"')
+        guardian = daemon.plate.guardian
+        key = self.config.channels.imessage.signing_key
+
+        async def locally(request_id: str, timestamp: str, signature: str, body: bytes) -> bool:
+            return verify_signature(
+                key.resolve().get_secret_value(), request_id, timestamp, signature, body
+            )
+
+        verify: Verify = guardian.verify_webhook if guardian is not None else locally
+
+        live = LiveVoice(
+            daemon.plate.journal,
+            daemon.inbox,
+            self.config.channels.imessage.owner_number,
+            verify,
+            voice.opening,
+        )
+        self.live = live
+        daemon.inbox.register(live)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                live.app(),
+                host=voice_cfg.live_host,
+                port=voice_cfg.live_port,
+                lifespan="off",
+                log_config=None,
+                access_log=False,
+            )
+        )
+        daemon.add_service("voice.live", server.serve)
 
     def doctor(self) -> list[str]:
-        return [f"calls through Inkbox ({self.config.voice.origination})"]
+        v = self.config.voice
+        live = f", live at {v.live_url or '(live_url missing)'}" if v.live else ""
+        return [f"calls through Inkbox ({v.origination}){live}"]

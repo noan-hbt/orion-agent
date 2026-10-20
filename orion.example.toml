@@ -75,6 +75,10 @@ enabled = false
 origination = "shared_imessage_number"
 brief_seconds = 300              # how often the brief is rebuilt (pushed only when it changed)
 calls_poll_seconds = 30          # poll mode: how often finished calls are read back
+live = false                     # Orion itself leads calls with you (memory and tools during the call)
+live_url = "wss://orion.example.com/voice/live"   # behind your HTTPS proxy, to live_host:live_port
+live_host = "127.0.0.1"
+live_port = 8791
 
 # Run split (D28): `orion guardian` holds every secret but the LLM key and checks each effect on
 # the world; `orion serve` reaches Inkbox, calendars and mail through it, over a Unix socket.

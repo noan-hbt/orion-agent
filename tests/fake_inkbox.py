@@ -117,16 +117,18 @@ class FakeInkbox:
             return httpx.Response(201, json={"id": "rule"})
         if path == "/phone/place-call":
             self._counter += 1
-            call = {
-                "id": f"call-{self._counter}",
+            call_id = f"call-{self._counter}"
+            call: dict[str, Any] = {
+                "id": call_id,
                 "remote_phone_number": body["to_number"],
                 "direction": "outbound",
                 "status": "ringing",
                 "created_at": "2026-10-19T18:00:00+00:00",
-                "reason": body["reason"],
+                "reason": body.get("reason"),
+                "mode": body.get("mode"),
             }
-            self.phone_calls[call["id"]] = call
-            self.transcripts[call["id"]] = []
+            self.phone_calls[call_id] = call
+            self.transcripts[call_id] = []
             return httpx.Response(200, json=call)
         if path == "/phone/calls":
             return httpx.Response(200, json=list(reversed(self.phone_calls.values())))

@@ -180,6 +180,16 @@ class VoiceConfig(BaseModel):
     ] = "shared_imessage_number"
     brief_seconds: float = Field(default=300.0, ge=30.0)
     calls_poll_seconds: float = Field(default=30.0, ge=5.0)
+    live: bool = Field(
+        default=False,
+        description="Calls with the owner are led by Orion itself over Inkbox's media stream "
+        "(live memory and tools); calls to others stay with the hosted voice",
+    )
+    live_url: str = Field(
+        default="", description="Public wss:// address of the stream, e.g. wss://host/voice/live"
+    )
+    live_host: str = "127.0.0.1"
+    live_port: int = 8791
 
 
 class DelegationConfig(BaseModel):

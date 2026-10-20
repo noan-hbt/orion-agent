@@ -287,3 +287,36 @@ def test_render_and_brief_helpers() -> None:
         ],
     )
     assert "Lui : yo" in brief and "secret" not in brief and "Orion : Salut." in brief
+
+
+async def test_a_live_call_is_not_read_back_and_orion_opens_it(world: World) -> None:
+    from dataclasses import replace
+
+    from orion.core.events import NewEvent, Provenance
+    from orion.voice.live import LIVE_STARTED
+
+    world.voice._settings = replace(  # pyright: ignore[reportPrivateUsage]
+        world.voice._settings,  # pyright: ignore[reportPrivateUsage]
+        live_url="wss://orion.test/voice/live",
+    )
+    call_id = await world.voice.call_owner("Ton rendez-vous chez le dentiste est à 15 h.")
+    placed = world.fake.phone_calls[call_id]
+    assert placed["mode"] == "client_websocket" and placed["reason"] is None
+    assert await world.voice.opening(call_id) == (
+        "Allô, c'est Orion. Ton rendez-vous chez le dentiste est à 15 h."
+    )
+    await world.journal.append(
+        [
+            NewEvent(
+                kind=LIVE_STARTED,
+                payload={"call_id": call_id},
+                provenance=Provenance(source=f"call:{call_id}", actor="orion:voice"),
+                trust=Trust.SYSTEM,
+            )
+        ]
+    )
+    world.fake.phone_calls[call_id] |= {"status": "completed", "duration_seconds": 60}
+    await world.voice.poll_once()
+    await asyncio.sleep(0.1)
+    assert world.provider.requests == []  # its words are already in the thread
+    assert CALL_ENDED in [e.kind for e in await world.journal.read()]  # still on record

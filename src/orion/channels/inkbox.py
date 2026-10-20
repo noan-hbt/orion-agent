@@ -350,18 +350,22 @@ class InkboxClient:
         origination: str = "shared_imessage_number",
         voicemail_message: str | None = None,
         grant: str | None = None,
+        live_url: str | None = None,
     ) -> Call:
-        """Place a call driven by Inkbox Voice AI, with `reason` as its task brief."""
-        body: dict[str, Any] = {
-            "to_number": to,
-            "origination": origination,
-            "mode": "hosted_agent",
-            "reason": reason,
-            "hosted_agent_authority_mode": "contact_scoped",
-        }
+        """Place a call driven by Inkbox Voice AI, with `reason` as its task brief; or, with
+        `live_url`, streamed to Orion itself (the reason is then Orion's own business)."""
+        body: dict[str, Any] = {"to_number": to, "origination": origination}
+        if live_url:
+            body |= {"mode": "client_websocket", "client_websocket_url": live_url}
+        else:
+            body |= {
+                "mode": "hosted_agent",
+                "reason": reason,
+                "hosted_agent_authority_mode": "contact_scoped",
+            }
         if identity_id:
             body["agent_identity_id"] = identity_id
-        if voicemail_message:
+        if voicemail_message and not live_url:
             body["on_voicemail"] = "leave_message"
             body["voicemail_message"] = voicemail_message[:1000]
         return Call.model_validate(
@@ -389,6 +393,13 @@ class InkboxClient:
         if voice:
             body["voice"] = voice
         await self._request("PUT", "/phone/hosted-agent-config", json=body)
+
+    async def answer_calls_live(self, url: str, identity_id: str | None = None) -> None:
+        """Incoming calls are accepted and streamed to Orion (voice v1)."""
+        body: dict[str, Any] = {"incoming_call_action": "auto_accept", "client_websocket_url": url}
+        if identity_id:
+            body["agent_identity_id"] = identity_id
+        await self._request("PUT", "/phone/incoming-call-action", json=body)
 
     async def answer_calls_with_voice_ai(self, identity_id: str | None = None) -> None:
         body: dict[str, Any] = {"incoming_call_action": "hosted_agent"}

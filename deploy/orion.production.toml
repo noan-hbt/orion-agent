@@ -29,6 +29,11 @@ webhook_host = "127.0.0.1"
 webhook_port = 8787
 webhook_path = "/inkbox/webhook"
 
+[voice]
+enabled = false                  # phone calls on the same line
+live = true                      # Orion leads calls with you itself
+live_url = "wss://@DOMAIN@/voice/live"
+
 [guardian]
 enabled = true
 socket = "run/guardian.sock"
