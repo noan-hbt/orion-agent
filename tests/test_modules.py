@@ -142,6 +142,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
             "adaptation",
             "consolidation",
             "weather.watch",
+            "autonomy.ritual",
             "initiative",
         ]
         assert daemon.reports == [app.module(Weather)]

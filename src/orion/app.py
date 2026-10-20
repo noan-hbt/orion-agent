@@ -17,6 +17,7 @@ from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.guardian.autonomy import Autonomy, autonomy_tools
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
 from orion.initiative.timers import TimerProjection, Timers
@@ -125,6 +126,14 @@ async def build_app(
             stack.push_async_callback(cache.close)
             semantic = SemanticIndex(store, provider, cache, config.memory.embedding_model)
         memory = MemoryService(journal, store, semantic)
+        autonomy = Autonomy(
+            journal,
+            config.guardian.autonomable,
+            guardian,
+            config.guardian.offer_autonomy_after,
+            config.agent.timezone,
+        )
+        await autonomy.start()
         plate = Plate(
             config=config,
             provider=provider,
@@ -134,8 +143,9 @@ async def build_app(
             approver=LateApprover(),
             modules=enabled,
             guardian=guardian,
+            autonomy=autonomy,
         )
-        tools = core_tools(plate)
+        tools = [*core_tools(plate), *autonomy_tools(autonomy)]
         for module in enabled:
             stack.push_async_callback(module.close)
             tools += await module.assemble(plate)
@@ -144,7 +154,7 @@ async def build_app(
             journal=journal,
             provider=provider,
             registry=ToolRegistry(tools),
-            guardian=Guardian(plate.approver),
+            guardian=Guardian(plate.approver, autonomy.allows),
             compiler=ContextCompiler(constitution(enabled), config.agent.max_window_tokens),
             agent=config.agent,
             memory=memory,

@@ -223,6 +223,15 @@ class GuardianConfig(BaseModel):
         "(the core can't say it is down); 0: never",
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
+    autonomable: list[str] = Field(
+        default_factory=lambda: ["calendar_add"],
+        description="Actions the owner may let Orion do alone, once earned (never calls or "
+        "mail to strangers unless listed here)",
+    )
+    offer_autonomy_after: int = Field(
+        default=5, ge=2, description="Approvals in a row before Orion offers to stop asking"
+    )
+    max_autonomous_per_day: int = Field(default=10, ge=1)
 
 
 class FederationConfig(BaseModel):

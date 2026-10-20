@@ -10,6 +10,7 @@ answers.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Protocol
@@ -81,9 +82,16 @@ UNTRUSTED_REASON = (
 )
 
 
+Autonomous = Callable[[str], Awaitable[bool]]
+"""Whether the owner let Orion do this action alone (`orion.guardian.autonomy`)."""
+
+
 class Guardian:
-    def __init__(self, approver: Approver | None = None) -> None:
+    def __init__(
+        self, approver: Approver | None = None, autonomous: Autonomous | None = None
+    ) -> None:
         self._approver = approver or DenyAllApprover()
+        self._autonomous = autonomous
 
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
@@ -112,6 +120,12 @@ class Guardian:
             return Decision(Verdict.ALLOW, "side-effect free")
         if tool.effect is Effect.INTERNAL:
             return Decision(Verdict.ALLOW, "internal effect only")
+        if (
+            proposal.context_trust >= TRUSTED_FLOOR
+            and self._autonomous is not None
+            and await self._autonomous(tool.name)
+        ):
+            return Decision(Verdict.ALLOW, "the owner lets Orion do this alone")
         if proposal.context_trust < TRUSTED_FLOOR:
             # A tool built to act on outside content (answering a mail): the owner sees the
             # exact action, and why this one is asked with care.

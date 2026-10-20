@@ -108,6 +108,10 @@ class Orion:
         self._projections = ProjectionRunner(journal, [self.threads])
         self._locks: dict[str, asyncio.Lock] = {}
 
+    @property
+    def registry(self) -> ToolRegistry:
+        return self._registry
+
     async def start(self) -> None:
         await self._projections.catch_up()
         if self._memory is not None:

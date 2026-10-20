@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from orion.config import OrionConfig
     from orion.core.journal import SqliteJournal
     from orion.core.supervisor import Supervisor
+    from orion.guardian.autonomy import Autonomy
     from orion.guardian.client import GuardianClient
     from orion.guardian.policy import ActionProposal, Approval, Approver
     from orion.initiative.engine import AlertSource, Caller, DigestSource, ReportSource
@@ -131,6 +132,7 @@ class Plate:
     guardian: GuardianClient | None = None
     """The guardian process, when Orion runs split (D28): it holds the secrets, so modules
     reach Inkbox, calendars and mailboxes through it."""
+    autonomy: Autonomy | None = None
 
     def module(self, kind: type[M]) -> M | None:
         """An enabled module, by class (for modules that build on another)."""

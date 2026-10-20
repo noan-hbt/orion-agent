@@ -51,6 +51,13 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         await module.serve(daemon)
 
     initiative = app.config.initiative
+    autonomy = app.plate.autonomy
+    grant_tool = app.orion.registry.get("autonomy_grant")
+    if autonomy is not None and grant_tool is not None:
+        quiet = InitiativeSettings(
+            quiet_start=initiative.quiet_start, quiet_end=initiative.quiet_end
+        ).is_quiet
+        supervisor.add("autonomy.ritual", lambda: autonomy.run(app.approver, grant_tool, quiet))
     if initiative.enabled:
         engine = InitiativeEngine(
             app.orion,
