@@ -44,3 +44,6 @@ listen_port = 8788
 
 [modules.web]
 enabled = true
+
+[modules.computer]
+enabled = true                   # Orion's own browser, for tasks that go through sites

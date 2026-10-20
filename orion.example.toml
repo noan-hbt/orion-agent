@@ -188,3 +188,12 @@ similarity = 0.5                      # how alike two facts must be to be compar
 enabled = false
 # model = "deepseek/deepseek-v4.1-flash"   # the clerk; defaults to agent.extractor_model
 max_results = 6
+
+# Orion's own computer: a headless browser driven by a worker that sees only the brief (no
+# memory, no conversation). Read-only tasks cannot send anything (the browser aborts every
+# request but GET); a task that must submit a form is approved by you first. Private addresses
+# are out of reach. `playwright install --with-deps chromium` once on the server.
+[modules.computer]
+enabled = false
+# model = "anthropic/claude-haiku-5.5"   # the worker; defaults to agent.model
+max_steps = 30

@@ -15,8 +15,8 @@ import pytest
 
 from orion.app import App, build_app
 from orion.calendar.module import CalendarModule
-from orion.calendar.write import NewCalendarEvent
 from orion.calendar.service import CalendarAccount
+from orion.calendar.write import NewCalendarEvent
 from orion.config import OrionConfig
 from orion.core.events import Trust
 from orion.federation.crypto import Identity, canonical, fingerprint, generate_secret, verify

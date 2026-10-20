@@ -52,7 +52,7 @@ def normalize(url: str) -> str:
     return parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower()).geturl()
 
 
-async def _public(host: str, port: int) -> None:
+async def check_public(host: str, port: int) -> None:
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
@@ -126,7 +126,7 @@ Check = Callable[[str, int], Awaitable[None]]
 
 async def fetch(client: httpx.AsyncClient, url: str, check: Check | None = None) -> Page:
     """GET a public page, following redirects by hand (each target is checked)."""
-    check = check or _public
+    check = check or check_public
     current = url
     for _ in range(MAX_REDIRECTS + 1):
         parts = urlsplit(current)

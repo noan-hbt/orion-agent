@@ -45,7 +45,9 @@ fi
 cd "$ROOT/app"
 export UV_PYTHON_INSTALL_DIR="$ROOT/python"
 uv sync --frozen --no-dev -q
-chmod -R a+rX "$ROOT/app" "$ROOT/python"
+# Orion's own browser ([modules.computer]): Chromium and the libraries it needs.
+PLAYWRIGHT_BROWSERS_PATH="$ROOT/browsers" .venv/bin/playwright install --with-deps chromium >/dev/null
+chmod -R a+rX "$ROOT/app" "$ROOT/python" "$ROOT/browsers"
 
 echo "==> folders"
 install -d -o orion-core -g orion -m 0750 "$ROOT/data" "$ROOT/backups/core"
