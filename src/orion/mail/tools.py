@@ -12,9 +12,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.core.events import Trust
+from orion.core.events import NewEvent, Provenance, Trust
 from orion.guardian.client import GuardianUnavailableError
-from orion.core.events import NewEvent, Provenance
 from orion.mail.service import Mailbox, MailCard
 from orion.mail.smtp import ADDRESS, MailFile, Outgoing, Postman, SendError
 from orion.mail.tidy import Draft, Tidied, Tidy

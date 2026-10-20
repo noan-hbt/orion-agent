@@ -121,7 +121,7 @@ async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) ->
     args = {"action": "unsubscribe", "cards": [news.id], "senders": ["Shop"]}
     done = await tools["mail_tidy"].handler(tools["mail_tidy"].parse(json.dumps(args)), CTX)
     assert done.content.startswith("1 désabonnement") and asked == [("unsubscribe", [12], "g1")]
-    assert "Je peux me désabonner de ces 1 mail(s) ? Expéditeurs : Shop" == _mail_tidy(args)
+    assert _mail_tidy(args) == "Je peux me désabonner de ces 1 mail(s) ? Expéditeurs : Shop"
 
     [paul] = [c for c in box.state.cards.values() if not c.bulk]
     draft = {"to": ["paul@example.com"], "subject": "Re: Dîner", "body": "Carrément !",
