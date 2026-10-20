@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from orion.core.journal import SqliteJournal
 from orion.files.module import FilesModule, FileStore
 from orion.photos.module import KEPT, Photos, PhotoSettings
 from orion.tools.base import ToolContext
-from orion.vocal.audio import SPEECH_RATE
+from orion.vocal.audio import SPEECH_RATE, to_mp3
 from orion.vocal.module import VocalSettings, vocal_tools
 from tests.fakes import ScriptedProvider, reply
 from tests.test_imessage import make_orion
@@ -105,3 +106,18 @@ async def test_orion_answers_aloud_with_an_m4a(journal: SqliteJournal, tmp_path:
     ((path, caption),) = sent
     assert path.suffix == ".m4a" and caption == ""
     assert path.read_bytes()[4:8] == b"ftyp"  # a real MP4 container, not raw sound
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+async def test_an_iphone_memo_in_caf_is_heard(tmp_path: Path) -> None:
+    """An iPhone memo is Opus in CAF: ffmpeg needs its packet table, so it cannot come piped."""
+    memo = tmp_path / "memo.caf"
+    made = await asyncio.to_thread(
+        subprocess.run,
+        ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=d=1", "-c:a", "libopus",
+         "-y", str(memo)],
+        capture_output=True,
+    )  # fmt: skip
+    if made.returncode != 0:
+        pytest.skip("this ffmpeg cannot write Opus in CAF")
+    assert len(await to_mp3(memo.read_bytes())) > 1000

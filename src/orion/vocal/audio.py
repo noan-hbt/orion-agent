@@ -40,12 +40,16 @@ async def _ffmpeg(arguments: list[str], data: bytes, expect_output: bool = True)
 
 
 async def to_mp3(data: bytes) -> bytes:
-    """Any audio file, as a 16 kHz mono MP3: small, and taken by audio models."""
-    return await _ffmpeg(
-        ["-i", "pipe:0", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
-         "-f", "mp3", "pipe:1"],
-        data,
-    )  # fmt: skip
+    """Any audio file, as a 16 kHz mono MP3: small, and taken by audio models. Read from a file,
+    not a pipe: an iPhone memo is Opus in CAF, whose packet table ffmpeg must seek to."""
+    with tempfile.TemporaryDirectory(prefix="orion-ears-") as folder:
+        source = Path(folder) / "memo"
+        await asyncio.to_thread(source.write_bytes, data)
+        return await _ffmpeg(
+            ["-i", str(source), "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k",
+             "-f", "mp3", "pipe:1"],
+            b"",
+        )  # fmt: skip
 
 
 async def pcm_to_m4a(pcm: bytes, rate: int = SPEECH_RATE) -> bytes:
