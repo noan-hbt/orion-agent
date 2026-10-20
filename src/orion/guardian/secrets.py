@@ -17,6 +17,7 @@ def guarded(config: OrionConfig) -> list[SecretRef]:
     refs = [
         config.channels.imessage.api_key,
         config.channels.imessage.signing_key,
+        config.channels.telegram.bot_token,
         config.federation.key,
     ]
     if "calendar" in config.modules:

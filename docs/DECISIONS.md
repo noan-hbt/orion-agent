@@ -1808,3 +1808,33 @@ d'autre chemin. Désormais :
   activé, le module refuse de se charger.
 
     telegram.inbound
+
+## D89 — Telegram par le gardien
+
+*20/10/2026 · acceptée · révise D88*
+
+Avec Telegram, le gardien séparé (D28) ne pouvait pas tourner : le jeton du bot restait dans le
+cœur. Sans gardien, pas de session prêtée (D49), donc rien sur les comptes du propriétaire, et
+pas de fédération. Désormais, avec `[guardian] enabled = true` :
+- `TELEGRAM_BOT_TOKEN` ne vit que dans l'environnement du gardien ; le cœur refuse de démarrer
+  s'il le voit. Le cœur garde le même client Telegram, pointé sur le gardien
+  (`GuardianClient.telegram`) ;
+- le gardien laisse passer les lectures (`getMe`, `getUpdates`, `getFile`, le téléchargement
+  d'un fichier reçu). Un message, un fichier, « en train d'écrire » ou le retrait des boutons
+  ne vont qu'au chat du propriétaire (`owner_id`), au plus `max_sends_per_minute` par minute.
+  Tout le reste est refusé : webhook, transfert, autre chat, réglages du bot. Les fichiers
+  arrivent au gardien en JSON, qui lit où ils vont avant de les envoyer lui-même ;
+- **les demandes d'accord.** Le gardien écrit la question lui-même, avec les boutons Oui / Non.
+  L'API des bots ne garde pas d'historique que le gardien pourrait relire, comme il le fait
+  chez Inkbox. Mais chaque mise à jour que lit le cœur passe par lui : il note dans son registre
+  les réponses du propriétaire à ses propres questions (`guardian.telegram.answer`). Comptent
+  un bouton, un 👍 ou un 👎, ou un « oui » / « non » écrit après la question. Le cœur ne peut
+  pas en fabriquer une, puisqu'il ne parle jamais à Telegram lui-même. Un mot ne répond qu'à
+  la dernière question posée avant lui ;
+- quand le cœur se tait, le gardien prévient le propriétaire par Telegram s'il n'y a pas
+  d'iMessage.
+
+Limite connue : si le cœur ne relit pas une mise à jour (un `offset` sauté), le gardien ne voit
+pas la réponse, et l'action est refusée. Le système échoue alors dans le sens sûr.
+
+    guardian.telegram.answer

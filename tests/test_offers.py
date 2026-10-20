@@ -40,10 +40,3 @@ def test_offers_close_the_constitution_and_are_stable() -> None:
     section = first[first.index("# Ce que tu pourrais faire de plus") :]
     assert "Une\nseule fois par sujet" in section and "- " in section
     assert "# Ce que tu pourrais faire de plus" not in constitution([], [])
-
-
-def test_telegram_says_what_it_rules_out() -> None:
-    assert not any("Telegram" in o for o in offers(_config()))
-    listed = offers(_config(channels={"telegram": {"enabled": True, "owner_id": 1}}))
-    (telegram,) = [o for o in listed if "Telegram" in o]
-    assert "gardien" in telegram and "session" in telegram

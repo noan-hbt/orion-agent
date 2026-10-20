@@ -75,7 +75,8 @@ approval_timeout_seconds = 900   # no answer means no
 # Telegram through a bot of your own (D88): free, no daily cap, beside iMessage or instead of it.
 # Create the bot with @BotFather, set TELEGRAM_BOT_TOKEN on the server, write to the bot once:
 # Orion logs your user id (telegram.stranger), which goes in owner_id. Orion answers where you
-# wrote from. Not yet through the guardian process: it refuses to load with [guardian] enabled.
+# wrote from. With [guardian] enabled, TELEGRAM_BOT_TOKEN goes in the guardian's environment
+# only: it holds the token and asks for approvals itself (D89).
 [channels.telegram]
 enabled = false
 bot_token = { env = "TELEGRAM_BOT_TOKEN" }

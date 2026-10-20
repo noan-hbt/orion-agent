@@ -25,6 +25,7 @@ from orion.federation.crypto import Identity
 from orion.guardian.federation import FederationEdge, admin_token
 from orion.guardian.ledger import Ledger
 from orion.guardian.service import GuardianError, GuardianService
+from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
 
@@ -38,6 +39,21 @@ def inkbox_client(config: OrionConfig) -> InkboxClient | None:
     except LookupError as exc:
         raise GuardianError(f"Inkbox: {exc}") from exc
     return InkboxClient(key.get_secret_value(), cfg.base_url)
+
+
+def telegram_gate(service: GuardianService) -> TelegramGate:
+    """The bot's token lives here, never in the core (D89)."""
+    from orion.channels.telegram import TelegramClient
+
+    try:
+        token = service.config.channels.telegram.bot_token.resolve()
+    except LookupError as exc:
+        raise GuardianError(f"Telegram: {exc}") from exc
+    gate = TelegramGate(service, TelegramClient(token.get_secret_value()))
+    gate.install()
+    if not service.config.channels.telegram.owner_id:
+        log.warning("guardian.telegram_owner_unknown", hint="nothing goes out until owner_id")
+    return gate
 
 
 def _server(app: ASGIApp, host: str = "127.0.0.1", port: int = 0) -> uvicorn.Server:
@@ -107,6 +123,7 @@ async def run(config: OrionConfig) -> None:
     async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
         service = GuardianService(config, Ledger(journal), inkbox_client(config))
         edge = federation_edge(service) if config.federation.enabled else None
+        gate = telegram_gate(service) if config.channels.telegram.enabled else None
         try:
             await service.start()
             async with asyncio.TaskGroup() as group:
@@ -118,4 +135,6 @@ async def run(config: OrionConfig) -> None:
         finally:
             if edge is not None:
                 await edge.aclose()
+            if gate is not None:
+                await gate.aclose()
             await service.aclose()

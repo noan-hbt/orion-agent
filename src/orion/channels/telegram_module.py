@@ -4,8 +4,9 @@ Create a bot with @BotFather, put its token in the environment (`TELEGRAM_BOT_TO
 to it once: Orion logs your user id (`telegram.stranger`), which goes in `owner_id`. Beside
 iMessage or instead of it: Orion answers where you wrote from.
 
-Not yet through the guardian process (D28): with `[guardian] enabled`, the token would sit in
-the core, so the module refuses to load.
+With `[guardian] enabled` (D28), the core reaches Telegram through the guardian process, which
+holds the token and asks for approvals itself (D89): run `orion serve` without
+`TELEGRAM_BOT_TOKEN`.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from orion.channels.imessage import ApprovalDesk
 from orion.channels.telegram import TelegramChannel, TelegramClient, TelegramSettings
 from orion.modules.base import Daemon, Module, ModuleError, Plate
 
@@ -31,27 +33,20 @@ class TelegramModule(Module):
     def __init__(self, config: OrionConfig, client: TelegramClient | None = None) -> None:
         super().__init__(config)
         self._client = client
+        self._desk: ApprovalDesk | None = None
         self.telegram: TelegramChannel | None = None
 
     @property
     def enabled(self) -> bool:
         return self.config.channels.telegram.enabled
 
-    def offers(self) -> list[str]:
-        if not self.enabled:
-            return []
-        return [
-            "Tant qu'il te parle par Telegram, le gardien séparé ne peut pas tourner : tout ce "
-            "qui en dépend (une session prêtée pour agir sur ses comptes, les autres Orion) "
-            "reste impossible, même une fois le module activé. Dis-le plutôt que de le promettre."
-        ]
-
     async def assemble(self, plate: Plate) -> list[Tool]:
         if self.config.guardian.enabled:
-            raise ModuleError(
-                "channels.telegram does not go through the guardian process yet: "
-                "turn one of them off"
-            )
+            if plate.guardian is None:
+                raise ModuleError("channels.telegram: the guardian process is not reachable")
+            # The guardian holds the token, and writes and checks the approvals itself (D89).
+            self._client = self._client or plate.guardian.telegram()
+            self._desk = plate.guardian
         if self._client is None:
             try:
                 token = self.config.channels.telegram.bot_token.resolve()
@@ -69,6 +64,7 @@ class TelegramModule(Module):
             daemon.plate.journal,
             daemon.inbox,
             TelegramSettings(cfg.owner_id, cfg.poll_seconds, cfg.approval_timeout_seconds),
+            desk=self._desk,
         )
         await channel.start()
         daemon.plate.approver.target = daemon.inbox  # it asks where he last wrote from
@@ -89,9 +85,11 @@ class TelegramModule(Module):
 
     def doctor(self) -> list[str]:
         cfg = self.config.channels.telegram
+        owner = cfg.owner_id or "unknown: write to the bot"
+        if self.config.guardian.enabled:
+            return [f"bot token held by the guardian, owner id {owner}"]
         try:
             cfg.bot_token.resolve()
         except LookupError as exc:
             return [str(exc)]
-        owner = cfg.owner_id or "unknown: write to the bot"
         return [f"bot token present, owner id {owner}"]

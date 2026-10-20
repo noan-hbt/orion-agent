@@ -334,6 +334,7 @@ def test_the_core_refuses_to_start_when_it_sees_a_guarded_secret(
     )
     monkeypatch.setenv("INKBOX_API_KEY", "leaked")
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     assert main(["--config", str(toml), "serve"]) == 2
     assert "INKBOX_API_KEY est visible par le noyau" in capsys.readouterr().out
     assert main(["--config", str(toml), "chat"]) == 2

@@ -20,12 +20,9 @@ from orion.channels.telegram import (
     TelegramSettings,
     _parts,  # pyright: ignore[reportPrivateUsage]
 )
-from orion.channels.telegram_module import TelegramModule
-from orion.config import OrionConfig
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import ActionProposal
-from orion.modules.base import ModuleError
 from orion.runtime import Orion, Photo
 from orion.tools.base import Tool, ToolContext, ToolResult
 from tests.fake_telegram import OWNER, STRANGER, TOKEN, FakeTelegram
@@ -184,15 +181,3 @@ def test_a_long_answer_is_cut_at_paragraphs() -> None:
     long = "a" * 3000 + "\n\n" + "b" * 3000
     assert [len(p) for p in _parts(long)] == [3000, 3000]
     assert _parts("court") == ["court"]
-
-
-async def test_the_module_refuses_to_bypass_the_guardian(tmp_path: Path) -> None:
-    config = OrionConfig.model_validate(
-        {
-            "data_dir": str(tmp_path),
-            "channels": {"telegram": {"enabled": True, "owner_id": OWNER}},
-            "guardian": {"enabled": True},
-        }
-    )
-    with pytest.raises(ModuleError, match="guardian"):
-        await TelegramModule(config).assemble(None)  # type: ignore[arg-type]

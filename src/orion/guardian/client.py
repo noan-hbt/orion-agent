@@ -8,15 +8,17 @@ the request.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from orion.calendar.service import CalendarAccount
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient
+from orion.channels.telegram import TelegramClient
 from orion.guardian.wire import ApprovalRequest, MailRequest, batch_from_json
 from orion.mail.imap import Batch
 from orion.mail.service import MailAccount
@@ -62,6 +64,10 @@ class GuardianClient:
             transport=self._transports(),
             max_attempts=max_attempts,
         )
+
+    def telegram(self) -> TelegramClient:
+        """A Telegram client without the bot's token: the guardian adds it (D89)."""
+        return GuardedTelegramClient(f"{BASE_URL}/v1/telegram", self._transports())
 
     async def request_approval(
         self, action: str, params: dict[str, Any], reason: str, conversation_id: str
@@ -208,6 +214,27 @@ class GuardianClient:
         except httpx.TransportError as exc:
             raise GuardianUnavailableError(f"guardian unreachable: {exc!r}") from exc
         return _json(response)
+
+
+class GuardedTelegramClient(TelegramClient):
+    """The Bot API through the guardian: same calls, no token in the URL, and files sent as
+    JSON so the guardian reads where they go before sending them itself."""
+
+    def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport) -> None:
+        super().__init__("held-by-the-guardian", base_url, transport=transport)
+
+    def method_url(self, method: str) -> str:
+        return f"{self._base}/{method}"
+
+    def file_url(self, file_path: str) -> str:
+        return f"{self._base}/file/{file_path}"
+
+    async def send_file(
+        self, chat_id: int, method: str, field_name: str, name: str, data: bytes, caption: str
+    ) -> int:
+        file = {"name": name, "data": base64.b64encode(data).decode("ascii")}
+        sent = await self.call(method, chat_id=chat_id, caption=caption or None, file=file)
+        return int(cast(dict[str, Any], sent)["message_id"])
 
 
 def _json(response: httpx.Response) -> Any:

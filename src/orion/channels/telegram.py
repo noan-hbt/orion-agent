@@ -11,7 +11,8 @@ Free and without a daily cap. It does what the iMessage channel does, through th
   characters); a file goes as a photo, a voice message (OGG Opus) or a document;
 - while Orion thinks, Telegram shows « en train d'écrire… »;
 - an action is put to the owner with two buttons (Oui / Non), or a one-word answer; no answer
-  before the timeout means no;
+  before the timeout means no. Run split, the guardian writes the question and checks the
+  answer itself (D89);
 - his reactions on Orion's messages (👍, ❤️, 👎…) are signals for adaptation.
 
     telegram.inbound  (every update read: a message, a reaction, a button)
@@ -33,7 +34,12 @@ import httpx
 import structlog
 
 from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
-from orion.channels.imessage import APPROVAL_DECIDED, APPROVAL_REQUESTED, answer_word
+from orion.channels.imessage import (
+    APPROVAL_DECIDED,
+    APPROVAL_REQUESTED,
+    ApprovalDesk,
+    answer_word,
+)
 from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
 from orion.core.events import Event, NewEvent, Provenance, Trust
@@ -95,10 +101,16 @@ class TelegramClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def method_url(self, method: str) -> str:
+        return f"{self._base}/bot{self._token}/{method}"
+
+    def file_url(self, file_path: str) -> str:
+        return f"{self._base}/file/bot{self._token}/{file_path}"
+
     async def call(
         self, method: str, files: dict[str, tuple[str, bytes, str]] | None = None, **params: Any
     ) -> Any:
-        url = f"{self._base}/bot{self._token}/{method}"
+        url = self.method_url(method)
         try:
             if files:
                 data = {k: str(v) for k, v in params.items() if v is not None}
@@ -175,7 +187,10 @@ class TelegramClient:
 
     async def file_bytes(self, file_id: str) -> bytes:
         found = cast(dict[str, Any], await self.call("getFile", file_id=file_id))
-        url = f"{self._base}/file/bot{self._token}/{found['file_path']}"
+        return await self.download(str(found["file_path"]))
+
+    async def download(self, file_path: str) -> bytes:
+        url = self.file_url(file_path)
         try:
             response = await self._client.get(url)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -271,8 +286,10 @@ class TelegramChannel:
         journal: EventStore,
         inbox: OwnerInbox,
         settings: TelegramSettings,
+        desk: ApprovalDesk | None = None,
     ) -> None:
         self._client = client
+        self._desk = desk
         self._journal = journal
         self._inbox = inbox
         self._settings = settings
@@ -535,11 +552,19 @@ class TelegramChannel:
             + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
             + "Oui ou non ?"
         )
+        grant: str | None = None
         try:
-            message_id = await self._client.send_message(
-                chat, question[:MAX_TEXT], [("Oui", YES), ("Non", NO)]
-            )
-        except TelegramError:
+            if self._desk is not None:
+                # The guardian writes the question itself and will check the answer itself.
+                grant, asked = await self._desk.request_approval(
+                    proposal.tool.name, arguments, proposal.ask_reason, f"telegram:{chat}"
+                )
+                message_id = int(asked)
+            else:
+                message_id = await self._client.send_message(
+                    chat, question[:MAX_TEXT], [("Oui", YES), ("Non", NO)]
+                )
+        except (TelegramError, ConnectionError):
             log.warning("telegram.approval_unsent", tool=proposal.tool.name, exc_info=True)
             approved, how, refs = False, "unsent", []
         else:
@@ -557,9 +582,15 @@ class TelegramChannel:
                 self._approvals.pop(message_id, None)
         await self._approval_event(
             APPROVAL_DECIDED,
-            {"approval_id": approval_id, "approved": approved, "how": how, "refs": refs},
+            {
+                "approval_id": approval_id,
+                "approved": approved,
+                "how": how,
+                "refs": refs,
+                **({"grant": grant} if grant else {}),
+            },
         )
-        return Approval(approved)
+        return Approval(approved, grant if approved else None)
 
     def _resolve_by_word(self, text: str, ref: str) -> bool:
         answer = answer_word(text)

@@ -13,6 +13,8 @@ request is checked against rules that hold even if the core is compromised:
   its parameters, so the owner sees what will run. A gated request then presents the
   approval, and the guardian checks with Inkbox that the owner really said yes (a 👍 on that
   message, or a "oui" after it) before letting it through, once;
+- **Telegram** (D89): the same rules for the bot (`orion.guardian.telegram`), which holds the
+  bot's token; the owner's answers to its questions are read as the core's updates pass;
 - **calendars and mail**: fetched here, so the secret addresses and passwords never reach the
   core; what comes back is the content the core asked for, nothing else.
 
@@ -30,7 +32,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -45,6 +47,7 @@ from orion.calendar.service import CalendarAccount, CalendarSettings, fetch_feed
 from orion.calendar.write import CalendarWriteError, NewCalendarEvent, write_event
 from orion.channels.imessage import REACTION_NO, REACTION_YES, answer_word, normalize_number
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient, InkboxError, verify_signature
+from orion.channels.telegram import TelegramError
 from orion.config import OrionConfig
 from orion.core.ids import new_id
 from orion.federation.wire import CONFIRM
@@ -70,6 +73,9 @@ from orion.mail.service import Fetch as MailFetch
 from orion.mail.service import MailAccount, MailSettings, imap_fetch
 from orion.mail.smtp import Outgoing, SendError, smtp_send
 from orion.secretary.settings import REPLY_WINDOW_HOURS, Contact, SecretarySettings
+
+if TYPE_CHECKING:
+    from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
 
@@ -244,6 +250,8 @@ class GuardianService:
             "autonomy_grant": _autonomy_grant,
             "computer_task_send": _computer_task_send,
         }
+        self.telegram: TelegramGate | None = None
+        """Telegram through the guardian (D89), installed by `orion.guardian.telegram`."""
         self.routes: list[BaseRoute] = []
         """Extra routes for the core (federation adds its own)."""
         self.listeners: list[tuple[str, Starlette, str, int]] = []
@@ -302,7 +310,12 @@ class GuardianService:
 
     async def _health(self, _request: Request) -> Response:
         return JSONResponse(
-            {"ok": True, "instance": self.config.instance, "inkbox": self._inkbox is not None}
+            {
+                "ok": True,
+                "instance": self.config.instance,
+                "inkbox": self._inkbox is not None,
+                "telegram": self.telegram is not None,
+            }
         )
 
     # -- watching the core ----------------------------------------------------------------------
@@ -339,6 +352,12 @@ class GuardianService:
     async def _tell_owner(self, what: str, text: str) -> None:
         await self.ledger.catch_up()
         conversations = sorted(self.ledger.state.owner_conversations)
+        if (self._inkbox is None or not conversations) and self.telegram is not None:
+            try:
+                await self.telegram.tell(text)
+            except TelegramError:
+                log.exception("guardian.tell_owner_failed", what=what, channel="telegram")
+            return
         if self._inkbox is None or not conversations:
             log.warning("guardian.owner_unreachable", what=what)
             return
@@ -418,7 +437,7 @@ class GuardianService:
                 return await self._to_contact(
                     path, conversation, body_media=bool(body.get("media_urls"))
                 )
-            if path == "/imessage/messages" and not self._may_send():
+            if path == "/imessage/messages" and not self.may_send():
                 return "too many messages this minute"
             return None
         if method == "PUT" and path == "/phone/hosted-agent-config":
@@ -468,7 +487,7 @@ class GuardianService:
         key = (normalize_number(contact[0].number), self.clock().date())
         if self._contact_sends.get(key, 0) >= self._contact_cap:
             return f"too many messages to {contact[0].name} today"
-        if not self._may_send():
+        if not self.may_send():
             return "too many messages this minute"
         self._contact_sends[key] = self._contact_sends.get(key, 0) + 1
         return None
@@ -516,7 +535,8 @@ class GuardianService:
         sent = await self._inkbox.send(conversation, text, f"contact-{new_id()}", self._identity_id)
         return JSONResponse({"message_id": sent.id})
 
-    def _may_send(self) -> bool:
+    def may_send(self) -> bool:
+        """A message to the owner fits in `max_sends_per_minute` (and is counted)."""
         now = time.monotonic()
         while self._sends and now - self._sends[0] > 60:
             self._sends.popleft()
@@ -546,23 +566,36 @@ class GuardianService:
     # -- approvals ----------------------------------------------------------------------------
 
     async def _approval(self, request: Request) -> Response:
-        if self._inkbox is None:
-            return refused("approvals go through iMessage, which is not configured", 503)
         try:
             asked = ApprovalRequest.model_validate_json(await request.body())
         except ValidationError:
             return refused("malformed approval request", 400)
-        if not await self.is_owner_conversation(asked.conversation_id):
-            return await self.deny("approval", "that conversation is not the owner's")
         approval_id = f"g_{new_id()}"
         render = self.renderers.get(asked.action, _generic(asked.action))
-        text = (
+        question = (
             render(asked.params)
             + "\n"
             + (f"Je demande parce que {asked.reason}.\n" if asked.reason else "")
-            + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
         )
-        sent = await self._inkbox.send(asked.conversation_id, text, approval_id, self._identity_id)
+        if asked.conversation_id.startswith("telegram:"):
+            if self.telegram is None:
+                return refused("Telegram is not configured on the guardian", 503)
+            if asked.conversation_id != self.telegram.conversation:
+                return await self.deny("approval", "that chat is not the owner's")
+            try:
+                message_id = str(await self.telegram.ask(question + "Oui ou non ?"))
+            except TelegramError as exc:
+                return refused(f"Telegram unreachable: {exc}", 502)
+        else:
+            if self._inkbox is None:
+                return refused("approvals go through iMessage, which is not configured", 503)
+            if not await self.is_owner_conversation(asked.conversation_id):
+                return await self.deny("approval", "that conversation is not the owner's")
+            text = question + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
+            sent = await self._inkbox.send(
+                asked.conversation_id, text, approval_id, self._identity_id
+            )
+            message_id = sent.id
         expires = self.clock() + timedelta(seconds=self.config.guardian.approval_ttl_seconds)
         await self.ledger.record(
             APPROVAL_REQUESTED,
@@ -570,12 +603,12 @@ class GuardianService:
                 "approval_id": approval_id,
                 "action": asked.action,
                 "params": asked.params,
-                "message_id": sent.id,
+                "message_id": message_id,
                 "conversation_id": asked.conversation_id,
                 "expires_at": expires.isoformat(),
             },
         )
-        return JSONResponse({"approval_id": approval_id, "message_id": sent.id})
+        return JSONResponse({"approval_id": approval_id, "message_id": message_id})
 
     # -- autonomy -----------------------------------------------------------------------------
 
@@ -688,6 +721,8 @@ class GuardianService:
         return None
 
     async def _owner_said_yes(self, approval: PendingApproval) -> bool:
+        if approval.conversation_id.startswith("telegram:"):
+            return self.telegram is not None and await self.telegram.owner_said_yes(approval)
         if self._inkbox is None:
             return False
         message = await self._inkbox.message(approval.message_id, self._identity_id)
