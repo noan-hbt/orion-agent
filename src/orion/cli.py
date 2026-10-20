@@ -157,6 +157,8 @@ async def _inkbox_calls(config: OrionConfig) -> int:
 
 
 async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
+    from orion.secretary.settings import SecretarySettings
+
     cfg = config.channels.imessage
     if not cfg.identity:
         print('Choisis un identifiant pour Orion : `identity = "..."` dans [channels.imessage].')
@@ -177,6 +179,10 @@ async def _inkbox_setup(config: OrionConfig, webhook_url: str | None) -> int:
         if cfg.owner_number:
             await client.allow_only(cfg.identity, cfg.owner_number)
             print(f"Ligne réservée à {cfg.owner_number} : personne d'autre ne peut joindre Orion.")
+        secretary = SecretarySettings.model_validate(config.modules.get("secretary", {}))
+        for contact in secretary.contacts if secretary.enabled else []:
+            await client.allow_imessage(cfg.identity, contact.number)
+            print(f"{contact.name} ({contact.number}) peut écrire à Orion (iMessage seulement).")
         if config.voice.enabled and config.voice.live:
             await client.answer_calls_live(config.voice.live_url, identity.id)
             print("Appels entrants : Orion décroche lui-même, en direct.")

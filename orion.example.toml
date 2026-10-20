@@ -227,3 +227,13 @@ port = 8790
 enabled = false
 host = "127.0.0.1"               # behind your HTTPS proxy at /hands/
 port = 8792
+
+# Le secrétaire (D54) : les proches qui peuvent écrire à Orion. Relance `orion inkbox setup`
+# après chaque changement, puis demande-leur d'envoyer la commande de connexion qu'il affiche.
+# [modules.secretary]
+# enabled = true
+# [[modules.secretary.contacts]]
+# name = "Maman"
+# number = "+33600000001"
+# about = "ma mère, elle s'inquiète vite"
+# share = ["availability"]

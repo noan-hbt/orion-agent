@@ -19,7 +19,7 @@ import asyncio
 import contextlib
 import re
 import unicodedata
-from collections.abc import AsyncGenerator, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
@@ -242,6 +242,8 @@ class IMessageChannel:
         self._runner = ProjectionRunner(journal, [self.state])
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._polls = 0
+        self.others: Callable[[IMessage], None] | None = None
+        """Gets the messages of anyone but the owner (the secretary, D54), once journaled."""
         inbox.register(self)
 
     async def start(self) -> None:
@@ -353,7 +355,10 @@ class IMessageChannel:
         )
         await self._runner.catch_up()
         if not is_owner:
-            log.info("imessage.third_party_ignored", conversation=message.conversation_id)
+            if self.others is not None:
+                self.others(message)
+            else:
+                log.info("imessage.third_party_ignored", conversation=message.conversation_id)
             return
         media = _attachments(message)
         inbound = Inbound(message.id, message.conversation_id, text, media, len(media))

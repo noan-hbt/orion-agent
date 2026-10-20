@@ -1107,3 +1107,30 @@ le propriétaire veut devenir (courir plus, dépenser moins, voir plus sa mère)
 
 Orion propose de suivre une intention plutôt que de le décider seul : la suivre est une forme
 d'attention qu'on accepte.
+
+## D54 — Le secrétaire
+
+*20/10/2026 · acceptée*
+
+Module `secretary`, désactivé par défaut. Le propriétaire nomme dans sa configuration les
+proches qui peuvent écrire à Orion, avec, pour chacun, qui il est et ce qu'Orion peut lui dire
+(`share = ["availability"]` : quand il est libre ou occupé). « Noan est libre jeudi soir ? »
+reçoit une réponse. Un message est pris. Ce qui est urgent lui arrive tout de suite, le reste
+dans un point.
+
+La sécurité vient de ce que le secrétaire n'a pas :
+- c'est un appel de modèle à part, sans outils, qui ne voit ni la mémoire ni la conversation du
+  propriétaire. Il voit seulement qui est le contact, leur conversation, et, si c'est permis,
+  les créneaux occupés (jamais leur titre ni leur lieu). Une manipulation n'a rien d'autre à
+  obtenir ;
+- il n'engage le propriétaire à rien : ni rendez-vous, ni promesse, il transmet ;
+- le gardien n'envoie qu'aux contacts configurés, dans leur propre conversation (vérifiée
+  auprès d'Inkbox), dans les 12 heures qui suivent leur dernier message, et quelques fois par
+  jour. Orion répond, il ne commence jamais seul ;
+- pour écrire le premier ou transmettre une réponse (`contact_message`), il faut l'accord du
+  propriétaire, et le gardien vérifie ce oui sur le texte exact ;
+- `orion inkbox setup` ouvre la ligne aux contacts sur iMessage seulement : ils ne peuvent pas
+  appeler la voix d'Orion, qui connaît la vie du propriétaire.
+
+Un contact doit d'abord écrire à Orion (la commande de connexion d'Inkbox) : Inkbox n'ouvre une
+conversation qu'à l'initiative du destinataire.

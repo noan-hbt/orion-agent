@@ -131,6 +131,9 @@ d'autres personnes.
   gardée. Au bout d'un an, un journal que tu n'as jamais eu à tenir.
 - **Tes intentions** (D53) : ce que tu veux devenir (courir plus, dépenser moins). Il les
   garde en tête, te le dit quand tu t'en éloignes, et fait le point chaque semaine.
+- **Le secrétaire** (D54, à activer) : les proches que tu choisis peuvent écrire à Orion. Il
+  leur répond sans rien savoir de ta vie (au plus, tes créneaux occupés), te transmet ce qui
+  compte, et ne leur écrit en premier qu'avec ton accord.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

@@ -311,6 +311,16 @@ class InkboxClient:
             "POST", "/imessage/reactions", json={"message_id": message_id, "reaction": reaction}
         )
 
+    async def allow_imessage(self, handle: str, number: str) -> None:
+        """Let `number` write to Orion on iMessage only (a contact of the secretary, D54): they
+        can never call the line, whose voice knows the owner's life."""
+        rules = {"action": "allow", "match_type": "exact_number", "match_target": number}
+        try:
+            await self._request("POST", f"/imessage/identities/{handle}/contact-rules", json=rules)
+        except InkboxError as exc:
+            if exc.status != 409:  # already allowed
+                raise
+
     async def allow_only(self, handle: str, number: str) -> None:
         """Whitelist mode on iMessage and phone, with only `number` allowed: nobody else can
         reach Orion's line, so nobody else can talk to a voice that knows the owner's life."""

@@ -11,7 +11,7 @@ import pytest
 
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.intentions.module import IntentionSettings, Intentions, intention_tools
+from orion.intentions.module import Intentions, IntentionSettings, intention_tools
 from orion.memory.model import Category
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
