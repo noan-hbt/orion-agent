@@ -1838,3 +1838,23 @@ Limite connue : si le cœur ne relit pas une mise à jour (un `offset` sauté), 
 pas la réponse, et l'action est refusée. Le système échoue alors dans le sens sûr.
 
     guardian.telegram.answer
+
+## D90 — Après une recherche, Orion demande au lieu de refuser (révise D26 et D85)
+
+*20/10/2026 · acceptée*
+
+Constat du 20/10 : une recherche web sur l'échéance URSSAF a suffi pour bloquer pendant 2 h
+toute action sur le monde, y compris activer un module à sa propre demande. Le propriétaire ne
+peut pas s'en servir comme d'une conversation normale. En mode `equilibre` (par défaut), une
+action sur le monde depuis une conversation qui contient du contenu venu d'ailleurs lui est
+désormais **demandée** au lieu d'être refusée :
+- la question donne l'action exacte et dit pourquoi elle est posée, en nommant la source :
+  « la conversation contient une page web ou un résultat de recherche, qui pourrait m'avoir
+  influencé : vérifie que c'est bien ce que tu veux » ;
+- elle n'est jamais faite seule : l'autonomie acquise (D30) ne s'applique pas dans ce
+  contexte, et accorder de l'autonomie (`autonomy_grant`) y reste refusé, même avec un oui ;
+- `prudent` garde le refus de D26.
+
+Le risque que D26 voulait écarter (le propriétaire qui apprend à dire oui sans lire) est réduit
+par la question elle-même. Elle n'arrive que pour une vraie action, et pas pour chaque rappel
+(D85). Elle est écrite par le gardien à partir des paramètres réels (D28), pas par le modèle.

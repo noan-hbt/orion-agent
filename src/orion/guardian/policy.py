@@ -76,10 +76,27 @@ class DenyAllApprover:
         return Approval(False)
 
 
-UNTRUSTED_REASON = (
-    "la conversation contient du contenu venu d'ailleurs (mail, appel, invitation…) qui "
-    "pourrait m'avoir influencé"
-)
+SOURCES_FOR_OWNER = {
+    Trust.UNKNOWN: "du contenu d'origine inconnue",
+    Trust.WEB: "une page web ou un résultat de recherche",
+    Trust.THIRD_PARTY: "un mail, un appel ou le message de quelqu'un d'autre",
+    Trust.TRUSTED_PEER: "un message d'un autre Orion",
+    Trust.OWNER_INSTANCE: "un fichier ou un document lu pour toi",
+}
+"""What lowered a context to this trust, in the question the owner reads."""
+
+NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant"})
+"""Never done from a context holding outside content, even with his yes: letting Orion act
+alone is decided in a clean conversation."""
+
+
+def untrusted_reason(trust: Trust) -> str:
+    """Why the owner is asked: what is in the conversation, and what to check (D90)."""
+    source = SOURCES_FOR_OWNER.get(trust, "du contenu venu d'ailleurs")
+    return (
+        f"la conversation contient {source}, qui pourrait m'avoir influencé : vérifie que "
+        "c'est bien ce que tu veux"
+    )
 
 
 UNTRUSTED_SOURCES = {
@@ -137,19 +154,34 @@ class Guardian:
         if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
             proposal.arguments
         ):
-            # Content from elsewhere may have steered the model. Acting on the world from such a
-            # context is refused outright: that is what an injected instruction would ask for,
-            # and the owner must not get used to approving it. An internal write (memory,
-            # reminders, playbook) is put to the owner instead (D26), unless he chose not to be
-            # asked for those (D85): what it writes keeps the context's trust anyway.
+            # Content from elsewhere may have steered the model. An internal write (memory,
+            # reminders, playbook) is put to the owner (D26), unless he chose not to be asked
+            # for those (D85): what it writes keeps the context's trust anyway. Acting on the
+            # world is put to him with the exact action and why he is asked (D90), never done
+            # alone; `prudent` refuses it outright, as D26 did.
+            reason = untrusted_reason(proposal.context_trust)
             if effect is Effect.EXTERNAL:
-                return Decision(Verdict.DENY, self._untrusted_refusal(tool, proposal.context_trust))
+                if self._approvals == "prudent" or tool.name in NEVER_FROM_UNTRUSTED:
+                    return Decision(
+                        Verdict.DENY, self._untrusted_refusal(tool, proposal.context_trust)
+                    )
+                approval = await self._approver.approve(replace(proposal, ask_reason=reason))
+                if approval:
+                    return Decision(
+                        Verdict.ALLOW, "approved by owner despite untrusted context", approval.grant
+                    )
+                return Decision(
+                    Verdict.DENY,
+                    f"{tool.name} in a context containing untrusted content "
+                    f"(trust {proposal.context_trust.name}) was put to the owner, who did not "
+                    "say yes",
+                )
             if self._approvals == "equilibre":
                 return Decision(
                     Verdict.ALLOW,
                     f"{effect.value} effect in an untrusted context ({self._approvals} mode)",
                 )
-            approval = await self._approver.approve(replace(proposal, ask_reason=UNTRUSTED_REASON))
+            approval = await self._approver.approve(replace(proposal, ask_reason=reason))
             if approval:
                 return Decision(
                     Verdict.ALLOW, "approved by owner despite untrusted context", approval.grant
@@ -172,7 +204,7 @@ class Guardian:
         if proposal.context_trust < TRUSTED_FLOOR:
             # A tool built to act on outside content (answering a mail): the owner sees the
             # exact action, and why this one is asked with care.
-            proposal = replace(proposal, ask_reason=UNTRUSTED_REASON)
+            proposal = replace(proposal, ask_reason=untrusted_reason(proposal.context_trust))
         approval = await self._approver.approve(proposal)
         if approval:
             return Decision(Verdict.ALLOW, "approved by owner", approval.grant)

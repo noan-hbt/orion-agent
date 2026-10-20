@@ -340,7 +340,7 @@ async def test_after_reading_mail_remembering_needs_the_owner(
     await orion.start()
     await orion.handle_owner_message("owner", "des mails ?", "imessage", now=NOW)
     await orion.handle_owner_message("owner", "retiens que je dîne avec lui", "imessage", now=NOW)
-    assert len(approver.asked) == 1 and "venu d'ailleurs" in approver.asked[0]
+    assert len(approver.asked) == 1 and "pourrait m'avoir influencé" in approver.asked[0]
     facts = await store.facts()
     if answer:
         [fact] = facts

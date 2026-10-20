@@ -17,8 +17,8 @@ max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
 prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
 approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
-                             # acting on the world (refused there anyway); "prudent" also asks
-                             # before each memory, reminder or voice message (D85)
+                             # acting on the world, saying why (D90); "prudent" refuses that, and
+                             # asks before each memory, reminder or voice message (D85)
 extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
 fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
 verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family

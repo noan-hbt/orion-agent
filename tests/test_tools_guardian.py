@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from orion.config import AgentConfig
 from orion.core.events import Trust
 from orion.guardian.limits import within
-from orion.guardian.policy import ActionProposal, Approval, Guardian
+from orion.guardian.policy import ActionProposal, Approval, Guardian, untrusted_reason
 from orion.tools.base import Effect, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
 
@@ -95,6 +95,7 @@ async def test_guardian_requires_owner_approval_for_external_effects() -> None:
 
 
 async def test_guardian_blocks_external_effects_in_untrusted_context_without_asking() -> None:
+    """`prudent` (D26): refused outright, the owner is not even asked."""
     approver = _Approver(answer=True)
     decision = await Guardian(approver).decide(proposal(SEND, Trust.THIRD_PARTY))
     assert not decision.allowed
@@ -104,7 +105,7 @@ async def test_guardian_blocks_external_effects_in_untrusted_context_without_ask
 
 async def test_a_refusal_says_what_tainted_the_conversation_and_until_when() -> None:
     """Orion repeats the reason to the owner: the source and the delay are in it, not guessed."""
-    decision = await Guardian(fresh_after_minutes=120).decide(proposal(SEND, Trust.WEB))
+    decision = await Guardian(fresh_after_minutes=120).decide(proposal(SEND, Trust.WEB))  # prudent
     assert "a web page" in decision.reason and "120 minutes without any message" in decision.reason
     never = await Guardian().decide(proposal(SEND, Trust.THIRD_PARTY))
     assert "a mail" in never.reason and "stays impossible" in never.reason
@@ -124,7 +125,7 @@ async def test_internal_writes_in_untrusted_context_are_put_to_the_owner() -> No
     )
     assert not decision.allowed and "approval" in decision.reason
     assert no.asked == ['note({"to":"x"})']
-    assert no.reasons[0].startswith("la conversation contient du contenu venu d'ailleurs")
+    assert no.reasons[0].startswith("la conversation contient un mail")
     yes = _Approver(answer=True)
     assert (
         await Guardian(yes).decide(ActionProposal(write, _Args(to="x"), Trust.THIRD_PARTY, "t"))
@@ -136,17 +137,35 @@ async def test_internal_writes_in_untrusted_context_are_put_to_the_owner() -> No
 
 
 async def test_in_balanced_mode_orion_writes_its_own_state_without_asking() -> None:
-    """D85: a web page in the conversation no longer makes every reminder a question; acting on
-    the world from there stays refused, without asking either."""
+    """D85: a web page in the conversation no longer makes every reminder a question. D90:
+    acting on the world from there is put to the owner, saying why, instead of refused."""
     write = Tool(
         name="note", description="note", input_model=_Args, handler=_noop, effect=Effect.INTERNAL
     )
     no = _Approver(answer=False)
     balanced = Guardian(no, approvals="equilibre")
     assert (await balanced.decide(ActionProposal(write, _Args(to="x"), Trust.WEB, "t"))).allowed
-    assert not (await balanced.decide(proposal(SEND, Trust.WEB))).allowed
     assert no.asked == []
+    refused = await balanced.decide(proposal(SEND, Trust.WEB))
+    assert not refused.allowed and "did not say yes" in refused.reason
+    assert no.asked == ['send({"to":"x"})']
+    assert no.reasons == [untrusted_reason(Trust.WEB)]
+    assert "une page web" in no.reasons[0] and "vérifie" in no.reasons[0]
+    yes = _Approver(answer=True)
+    assert (await Guardian(yes, approvals="equilibre").decide(proposal(SEND, Trust.WEB))).allowed
     assert AgentConfig().approvals == "equilibre"
+
+
+async def test_autonomy_is_never_granted_from_a_tainted_conversation() -> None:
+    grant = Tool(
+        name="autonomy_grant", description="g", input_model=_Args, handler=_noop,
+        effect=Effect.EXTERNAL,
+    )  # fmt: skip
+    yes = _Approver(answer=True)
+    decision = await Guardian(yes, approvals="equilibre").decide(
+        ActionProposal(grant, _Args(to="x"), Trust.WEB, "t")
+    )
+    assert not decision.allowed and yes.asked == []
 
 
 def test_orion_never_changes_what_it_asks_alone() -> None:

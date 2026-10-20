@@ -102,8 +102,8 @@ class AgentConfig(BaseModel):
         default="equilibre",
         description="When outside content (a web page, a mail) is in the conversation: "
         "'prudent' asks before each of Orion's own writes (memory, reminders, a voice message "
-        "to him); 'equilibre' asks only before acting on the world, which stays refused there "
-        "(D85)",
+        "to him) and refuses acting on the world; 'equilibre' writes its own things freely and "
+        "asks only before acting on the world, saying why (D85, D90)",
     )
     untrusted_idle_minutes: int = Field(
         default=120,
