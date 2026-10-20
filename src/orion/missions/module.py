@@ -332,7 +332,8 @@ class MissionsModule(Module):
             grouped(
                 "mission",
                 "Missions: goals you keep working on alone over days (find a flat, watch a price, "
-                "look for a slot), instead of answering once.",
+                "look for a slot), when the owner wants you to keep looking. For a question to "
+                "answer now, search and answer instead (and offer a mission if it fits).",
                 mission_tools(self.missions, self._clock, settings.max_active),
                 {
                     "mission_start": "start",

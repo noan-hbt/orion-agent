@@ -194,10 +194,10 @@ def computer_tools(
     return [
         Tool(
             name="computer_task",
-            description="Give a browsing task to your own computer (a browser run by a worker): "
-            "compare listings, go through a site, find a form or an opening hour. Read-only: it "
-            "can search, read and click, never send anything. Runs in the background; the "
-            "report comes later.",
+            description="Hand a long browsing task to a worker in the background (the report "
+            "comes later, by message): only when the owner does not need the answer now. To "
+            "look at a site now, browse it yourself with `browser`. Read-only: it can search, "
+            "read and click, never send anything.",
             input_model=TaskInput,
             handler=starter(reading, "lecture seule"),
             effect=Effect.INTERNAL,
