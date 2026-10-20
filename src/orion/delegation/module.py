@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 
 class DelegationModule(Module):
     name = "delegation"
+    offer = (
+        "Confier de longs travaux (code, scripts, documents) à Claude Code sur le serveur : "
+        "`[delegation] enabled = true`, puis `claude auth login` sur le serveur."
+    )
     instructions = "delegation.md"
 
     jobs: JobService | None = None

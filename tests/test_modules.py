@@ -140,8 +140,10 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         tools = [spec.name for spec in app.orion._registry.specs()]  # pyright: ignore[reportPrivateUsage]
         assert "weather" in tools and tools == sorted(tools)
         system = app.orion._compiler.system_message()["content"]  # pyright: ignore[reportPrivateUsage]
-        assert system.endswith("Tu connais la météo de Lyon avec `weather`.\n")
+        weather = system.index("Tu connais la météo de Lyon avec `weather`.")
+        assert weather < system.index("# Ce que tu pourrais faire de plus")  # offers close it
         assert "# Ta voix" not in system  # the voice module is off: its section is too
+        assert "Lui parler au téléphone" in system  # …and it is offered instead
 
         inbox = owner_inbox(app)
         supervisor = Supervisor()

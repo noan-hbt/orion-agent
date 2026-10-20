@@ -1336,3 +1336,21 @@ qu'une photo : un fichier n'est gardé que tant qu'un événement le nomme.
 Inkbox ne donne pas le nom du fichier. On le reprend de son adresse quand elle en porte un ;
 sinon, le fichier s'appelle `fichier` avec l'extension de son type. Reste à vérifier en vrai
 quels types Inkbox laisse passer jusqu'à Orion.
+
+## D64 — Orion sait ce qu'il pourrait faire de plus
+
+*20/10/2026 · acceptée*
+
+Le 20 octobre, à « tu peux accéder à mon LinkedIn ? », Orion a répondu non. Le gardien sait
+pourtant garder une session que le propriétaire lui prête (`orion login`), mais Orion ne savait
+pas que cette possibilité existait, puisqu'elle était éteinte. Il en allait de même pour
+l'agenda, le mail, la voix et les mains sur le Mac.
+
+Chaque module déclare désormais son `offer` : une ligne qui dit ce qu'il permettrait et comment
+l'activer. Un module allumé peut aussi nommer ce qui lui manque encore (`offers()`) : un agenda
+qu'Orion peut lire mais pas écrire, ou un navigateur sans session prêtée. Ces lignes ferment le
+message système, sous « Ce que tu pourrais faire de plus ». Elles ne dépendent que de la
+configuration : fixées au démarrage, elles ne cassent pas le cache. La consigne : quand une
+demande en aurait besoin, dire en une phrase ce qui serait possible et la commande à lancer,
+une seule fois par sujet. Un refus du propriétaire est retenu avec `remember`. Pas de liste de
+fonctions, ni dans un message de bienvenue, ni ailleurs.

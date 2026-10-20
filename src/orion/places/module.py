@@ -346,6 +346,11 @@ def place_tools(places: Places) -> list[Tool]:
 
 class PlacesModule(Module):
     name = "places"
+    offer = (
+        "Des rappels qui se déclenchent quand il arrive à un endroit ou en part (« quand je "
+        "passe à la boulangerie ») : `[modules.places] enabled = true`, puis une automatisation"
+        " sur son iPhone (`orion places`)."
+    )
     instructions = "places.md"
     settings_model = PlaceSettings
 

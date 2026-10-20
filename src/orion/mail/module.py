@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 
 class MailModule(Module):
     name = "mail"
+    offer = (
+        "Lire ses mails (Gmail, iCloud) en quarantaine, lui signaler l'important et répondre "
+        "avec son accord : un mot de passe d'application dans `[modules.mail]`."
+    )
     instructions = "mail.md"
     settings_model = MailSettings
 

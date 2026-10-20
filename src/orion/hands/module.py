@@ -137,6 +137,10 @@ def hands_tools(desk: HandsDesk) -> list[Tool]:
 
 class HandsModule(Module):
     name = "hands"
+    offer = (
+        "Des mains sur son Mac : retrouver et lui envoyer un fichier, le notifier, ouvrir une "
+        "page : `[modules.hands] enabled = true`, puis `orion hands pair mac` sur le serveur."
+    )
     instructions = "hands.md"
     settings_model = HandsSettings
 

@@ -17,6 +17,21 @@ if TYPE_CHECKING:
 
 class CalendarModule(Module):
     name = "calendar"
+    offer = (
+        "Lire ses agendas (Google, iCloud, Outlook) et le prévenir avant chaque rendez-vous : "
+        "l'adresse iCal secrète de chaque agenda dans `[modules.calendar]`."
+    )
+
+    def offers(self) -> list[str]:
+        if not self.enabled:
+            return super().offers()
+        if any(account.write is not None for account in self.settings.accounts):
+            return []
+        return [
+            "Ajouter des événements à ses agendas (chacun avec son accord) : `orion google auth` "
+            "pour Google, ou un compte CalDAV dans `[modules.calendar.accounts.write]`."
+        ]
+
     instructions = "calendar.md"
     settings_model = CalendarSettings
 

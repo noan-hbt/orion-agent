@@ -461,6 +461,10 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
 
 class SecretaryModule(Module):
     name = "secretary"
+    offer = (
+        "Laisser ses proches t'écrire, selon ses règles : leurs numéros dans "
+        "`[modules.secretary]`, puis `orion inkbox setup`."
+    )
     instructions = "secretary.md"
     settings_model = SecretarySettings
     requires = ("imessage",)

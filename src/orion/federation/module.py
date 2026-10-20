@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 
 class FederationModule(Module):
     name = "federation"
+    offer = (
+        "S'arranger avec l'Orion d'un proche pour fixer un rendez-vous, chacun d'accord une "
+        "fois : `[federation]` dans orion.toml, avec le gardien séparé et l'agenda."
+    )
     requires = ("calendar",)
     instructions = "federation.md"
 
