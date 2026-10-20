@@ -172,18 +172,50 @@ class Side:
         await self.desk.settle()
 
 
+def free_port() -> int:
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+async def serve_for_real(stack: AsyncExitStack, app: Any, port: int) -> None:
+    """A real HTTP listener on this machine, stopped when the stack closes."""
+    import asyncio
+
+    import uvicorn
+
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, lifespan="off", log_config=None)
+    )
+    task = asyncio.create_task(server.serve())
+
+    async def stop() -> None:
+        server.should_exit = True
+        await task
+
+    stack.push_async_callback(stop)
+    async with asyncio.timeout(5):
+        while not server.started:  # noqa: ASYNC110 - waiting for the listener to bind
+            await asyncio.sleep(0.01)
+
+
 @asynccontextmanager
 async def orion_of(
-    stack: AsyncExitStack, tmp_path: Path, net: Net, name: str, busy: str
+    stack: AsyncExitStack, tmp_path: Path, net: Net | None, name: str, busy: str
 ) -> AsyncGenerator[Side]:
+    """`net` routes in-process; None puts each guardian on a real HTTP port."""
     instance = f"orion-{name.lower()}"
+    port = free_port()
+    public = f"https://{name.lower()}.test" if net is not None else f"http://127.0.0.1:{port}"
     config = guardian_config(
         tmp_path / name,
         instance=instance,
         federation={
             "enabled": True,
             "owner_name": name,
-            "public_url": f"https://{name.lower()}.test",
+            "public_url": public,
         },
         modules={
             "calendar": {
@@ -211,14 +243,15 @@ async def orion_of(
         return f"uid-{len(written)}"
 
     def prepare(service: GuardianService) -> None:
-        edge = FederationEdge(
-            service,
-            Identity(generate_secret()),
-            "admin-token",
-            http=httpx.AsyncClient(transport=net),
+        http = (
+            httpx.AsyncClient(transport=net)
+            if net is not None
+            else httpx.AsyncClient(trust_env=False, timeout=10.0)
         )
+        edge = FederationEdge(service, Identity(generate_secret()), "admin-token", http=http)
         edge.install()
-        net.hosts[f"{name.lower()}.test"] = httpx.ASGITransport(app=edge.public_app())
+        if net is not None:
+            net.hosts[f"{name.lower()}.test"] = httpx.ASGITransport(app=edge.public_app())
         edges.append(edge)
 
     fake = FakeInkbox()
@@ -241,14 +274,18 @@ async def orion_of(
     )
     assert federation.desk is not None
     stack.push_async_callback(edges[0].aclose)
+    if net is None:
+        await serve_for_real(stack, edges[0].public_app(), port)
     side = Side(name, guardian, app, edges[0], federation.desk)
     side.written = written
     yield side
 
 
 @asynccontextmanager
-async def two_orions(tmp_path: Path, pair: bool = True) -> AsyncGenerator[tuple[Side, Side]]:
-    net = Net()
+async def two_orions(
+    tmp_path: Path, pair: bool = True, real: bool = False
+) -> AsyncGenerator[tuple[Side, Side]]:
+    net = None if real else Net()
     async with AsyncExitStack() as stack:
         noan = await stack.enter_async_context(
             orion_of(stack, tmp_path, net, "Noan", ics((at(20, 9), at(20, 12))))
@@ -346,6 +383,24 @@ async def test_a_meeting_is_arranged_with_both_owners_agreement(tmp_path: Path) 
         assert len(noan.owner.asked) == 1 and len(paul.owner.asked) == 1
         # Once agreed, that hour is busy for the next proposal.
         assert (at(20, 14), at(20, 15)) in await noan.desk.busy(at(20, 0), at(21, 0))
+
+
+async def test_two_orions_arrange_a_meeting_over_real_http(tmp_path: Path) -> None:
+    """The same story with each guardian on its own TCP port: real HTTP, real JSON-RPC."""
+    async with two_orions(tmp_path, real=True) as (noan, paul):
+        async with httpx.AsyncClient(trust_env=False) as http:
+            url = noan.app.config.federation.public_url + "/.well-known/agent-card.json"
+            card = (await http.get(url)).json()
+        assert card["orion"]["instance"] == "orion-noan"
+        text, failed = await propose(noan)
+        assert not failed, text
+        await paul.step()
+        await noan.step()
+        await paul.step()
+        for side in (noan, paul):
+            [meeting] = side.desk.state.meetings.values()
+            assert meeting.status == "agreed" and meeting.slot == at(20, 14)
+            assert len(side.written) == 1
 
 
 async def test_the_invited_owner_can_say_no(tmp_path: Path) -> None:
