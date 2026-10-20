@@ -124,6 +124,9 @@ d'autres personnes.
 - **Des photos** (D50) : envoie-lui une affiche, une ordonnance, un ticket ou une capture
   d'écran ; il la lit, texte compris, et fait ce qu'elle appelle (agenda, rappel,
   bibliothèque, réponse). Ce qui est écrit sur une photo n'est jamais un ordre.
+- **Il continue de penser** (D51) : la nuit, il repense à ce qui est resté ouvert et ne te
+  revient le matin que s'il a trouvé du neuf. Il te demande comment s'est passé ton entretien,
+  ton rendez-vous, ta visite.
 
 Voir l'ordre de construction dans
 [`docs/architecture/04-architecture.md`](docs/architecture/04-architecture.md).

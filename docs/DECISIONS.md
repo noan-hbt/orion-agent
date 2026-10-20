@@ -1051,3 +1051,26 @@ une ordonnance, un ticket, une capture d'écran.
   le nomme plus.
 - **Lien qui expire** : Inkbox donne un lien valable une heure ; après un redémarrage, le
   message est relu pour en obtenir un neuf.
+
+## D51 — Il continue de penser, il prend des nouvelles
+
+*20/10/2026 · acceptée*
+
+Module `thinking`, actif par défaut. Un assistant s'arrête quand la conversation s'arrête ;
+Orion, non.
+- **La nuit** (5 h par défaut), un modèle fort (Opus) relit la journée avec le propriétaire et
+  ce qu'il sait de lui. Pour chaque question restée ouverte (une décision, un problème, une
+  hésitation), il réfléchit, et ne garde une pensée que si elle apporte du neuf. Deux par nuit
+  au plus. Elles arrivent le matin comme une pensée qui lui est venue.
+- **Promettre d'y réfléchir** : `think_later`. Une question promise reçoit toujours une
+  réponse, même « je maintiens », et en plus des deux pensées de la nuit.
+- **Prendre des nouvelles** : après un moment qui compte (entretien, médecin, visite, examen),
+  Orion demande une fois comment ça s'est passé, quelques heures après. Il le prévoit pendant la
+  conversation (`follow_up`), ou la lecture de nuit le trouve. La réponse reste dans la
+  conversation, et la mémoire en garde l'issue.
+
+Tout passe par le moteur d'initiative : heures calmes, budget, vérificateur, et `SILENCE` si
+la question a été réglée entre-temps. La nuit ne relit que les tours de confiance : ce que
+disait une page, un mail ou une photo n'oriente jamais sa réflexion. Les dates des moments
+sont demandées en absolu, calculées depuis la date de chaque message, et refusées si elles sont
+passées ou à plus de 90 jours.

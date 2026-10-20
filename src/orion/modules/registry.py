@@ -30,6 +30,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.missions.module import MissionsModule
     from orion.onboarding.module import OnboardingModule
     from orion.photos.module import PhotosModule
+    from orion.thinking.module import ThinkingModule
     from orion.voice.module import VoiceModule
     from orion.web.module import WebModule
 
@@ -49,6 +50,7 @@ def builtin_modules() -> list[type[Module]]:
         MissionsModule,
         LibraryModule,
         PhotosModule,
+        ThinkingModule,
         ConsoleModule,
         HandsModule,
     ]
