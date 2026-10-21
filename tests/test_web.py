@@ -143,6 +143,59 @@ async def test_orion_opens_only_addresses_it_was_given(journal: SqliteJournal) -
     await desk.aclose()
 
 
+SHOP = """<html><head><title>Collier Rayonnante</title>
+<meta property="og:image" content="https://cdn.shop.fr/rayonnante-1.jpg?v=3">
+<script>track()</script></head><body><img src="/static/logo.png" alt="Ylume">
+<img src="data:image/gif;base64,R0" data-src="/img/rayonnante-2.webp" alt="La Rayonnante portée">
+<img srcset="/img/r-400.jpg 400w, /img/r-1200.jpg 1200w" alt="Détail">
+<img src="/icons/cart.svg"><p>170 €</p></body></html>"""
+
+
+async def test_the_pictures_of_a_page_read_may_be_downloaded(journal: SqliteJournal) -> None:
+    page = extract("https://ylume.fr/rayonnante", SHOP)
+    assert [(i.url, i.text) for i in page.images] == [
+        ("https://cdn.shop.fr/rayonnante-1.jpg?v=3", "aperçu de la page"),
+        ("https://ylume.fr/img/rayonnante-2.webp", "La Rayonnante portée"),
+        ("https://ylume.fr/img/r-1200.jpg", "Détail"),
+    ]  # no logo, no icon, no placeholder; the largest of a srcset
+    provider = ScriptedProvider(answer({"answer": "170 €.", "links": []}))
+    client = site({"https://ylume.fr/rayonnante": html(SHOP)})
+    desk = WebDesk(journal, WebClerk(provider, "fake/clerk"), client, allow_all)
+    await desk.start()
+    await journal.append(
+        [
+            NewEvent(
+                kind="message.received",
+                payload={"text": "https://ylume.fr/rayonnante"},
+                provenance=Provenance(source="telegram:owner", actor="owner:main"),
+                trust=Trust.OWNER,
+            )
+        ]
+    )
+    assert not await desk.may_open("https://cdn.shop.fr/rayonnante-1.jpg?v=3")
+    reading = await desk.read("https://ylume.fr/rayonnante", "prix ?")
+    assert len(reading.images) == 3
+    assert await desk.may_open("https://cdn.shop.fr/rayonnante-1.jpg?v=3")  # now it may fetch it
+    assert not await desk.may_open("https://cdn.shop.fr/rayonnante-9.jpg")  # never one made up
+    # The same for a page its browser showed.
+    await journal.append(
+        [
+            NewEvent(
+                kind="browser.page",
+                payload={
+                    "url": "https://agatha.fr/c",
+                    "links": [],
+                    "images": ["https://i.ag/h.jpg"],
+                },
+                provenance=Provenance(source="web:https://ag.fr/c", actor="orion:browser"),
+                trust=Trust.WEB,
+            )
+        ]
+    )
+    assert await desk.may_open("https://i.ag/h.jpg")
+    await desk.aclose()
+
+
 async def test_a_stranger_cannot_widen_what_orion_opens(journal: SqliteJournal) -> None:
     await journal.append(
         [

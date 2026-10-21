@@ -2231,3 +2231,14 @@ quinzaine d'étapes et lui a envoyé une capture après coup. Désormais :
 - **la boucle d'Orion demande, avant chaque étape, si le travail a été annulé** (`halted`) : une
   mission close pendant son passage s'arrête là, les appels prévus ne partent pas, rien n'est
   dit ni rapporté. Un appel déjà en cours n'est jamais coupé net.
+
+## D107 — Les photos d'une page lue peuvent être envoyées telles quelles
+
+Constaté en vrai : il voulait les photos des colliers trouvés, et Orion a passé trois minutes à
+deviner l'adresse des images, refusées une à une (une adresse inventée peut faire sortir ses
+données dans l'URL), avant de se rabattre sur des captures. Désormais, les images d'une page
+qu'Orion a lue (`web_read`) ou ouverte dans son navigateur sont relevées par le code, sur la page
+elle-même : l'image d'aperçu (`og:image`), puis les photos (sans logos, icônes ni images de
+remplissage ; dans le navigateur, les plus grandes affichées). Elles lui sont montrées avec leur
+adresse, et il peut les télécharger pour les envoyer. Il ne peut toujours pas télécharger une
+adresse inventée.

@@ -229,6 +229,7 @@ class BrowserDesk:
                         "url": snapshot.url,
                         "title": snapshot.title,
                         "links": [normalize(link) or link for link in links],
+                        "images": [normalize(url) for url, _ in snapshot.images if normalize(url)],
                     },
                     provenance=Provenance(source=f"web:{snapshot.url}", actor="orion:browser"),
                     trust=Trust.WEB,
@@ -255,6 +256,9 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
         "Éléments (utilise leur numéro) :",
         *snapshot.elements,
     ]
+    if snapshot.images:
+        lines += ["", "Images de la page (à envoyer avec `file`, action download) :"]
+        lines += [f"- {text or 'image'} — {url}" for url, text in snapshot.images]
     if blocked:
         lines += [
             "",

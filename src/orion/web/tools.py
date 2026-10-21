@@ -60,6 +60,9 @@ def web_tools(desk: WebDesk) -> list[Tool]:
         if reading.links:
             lines.append("Liens à suivre :")
             lines += [f"- {link.text or link.url} — {link.url}" for link in reading.links]
+        if reading.images:
+            lines.append("Images de la page (à envoyer avec `file`, action download) :")
+            lines += [f"- {image.text or 'image'} — {image.url}" for image in reading.images]
         return ToolResult("\n".join(lines), trust=Trust.WEB)
 
     return [
@@ -67,7 +70,7 @@ def web_tools(desk: WebDesk) -> list[Tool]:
             name="web_read",
             description="Read one web page and answer a question about it (prices, conditions, "
             "opening hours…). Only addresses the owner gave, or that a search or a page "
-            "returned. Returns the answer and the links worth following.",
+            "returned. Returns the answer, the links worth following and the page's pictures.",
             input_model=ReadInput,
             handler=web_read,
             effect=Effect.NONE,

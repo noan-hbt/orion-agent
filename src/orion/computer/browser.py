@@ -37,6 +37,7 @@ log = structlog.get_logger(__name__)
 
 TEXT_CHARS = 10_000
 MAX_ELEMENTS = 150
+MAX_IMAGES = 8
 HostCheck = Callable[[str, int], Awaitable[None]]
 
 _SNAPSHOT = """(textChars) => {
@@ -58,9 +59,28 @@ _SNAPSHOT = """(textChars) => {
     out.push(`[${n}] ${tag}${kind} ${label}${href}`);
     if (n >= MAX_ELEMENTS) break;
   }
+  const pictures = [];
+  const meta = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+  if (meta && meta.content) pictures.push({url: new URL(meta.content, location.href).href,
+                                           text: 'aperçu de la page', area: Infinity});
+  for (const img of document.images) {
+    const r = img.getBoundingClientRect();
+    const url = img.currentSrc || img.src;
+    if (!url || url.startsWith('data:') || img.naturalWidth < 200 || img.naturalHeight < 200 ||
+        r.width < 80 || r.height < 80) continue;
+    pictures.push({url, text: (img.alt || '').replace(/\\s+/g, ' ').trim().slice(0, 100),
+                   area: r.width * r.height});
+  }
+  pictures.sort((a, b) => b.area - a.area);
+  const images = [];
+  for (const p of pictures) {
+    if (!images.some(i => i.url === p.url)) images.push({url: p.url, text: p.text});
+    if (images.length >= MAX_IMAGES) break;
+  }
   return {title: document.title, url: location.href,
-          text: (document.body ? document.body.innerText : '').slice(0, textChars), elements: out};
-}""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS))
+          text: (document.body ? document.body.innerText : '').slice(0, textChars), elements: out,
+          images};
+}""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS)).replace("MAX_IMAGES", str(MAX_IMAGES))
 
 
 @dataclass
@@ -69,6 +89,8 @@ class Snapshot:
     title: str
     text: str
     elements: list[str] = field(default_factory=list[str])
+    images: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    """The page's large pictures (address, alt text), biggest first: what a product looks like."""
 
     def render(self) -> str:
         return (
@@ -202,6 +224,7 @@ class Session:
             str(data["title"]),
             " ".join(str(data["text"]).split(" ")),
             [str(e) for e in data["elements"]],
+            [(str(i["url"]), str(i["text"])) for i in data.get("images", [])],
         )
 
     async def _do(self, action: Callable[[], Awaitable[object]]) -> None:

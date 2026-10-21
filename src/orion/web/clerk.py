@@ -12,7 +12,7 @@ it actually cited come back as results (the clerk cannot invent an address).
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -102,6 +102,8 @@ class Reading:
     answer: str
     links: list[Link]
     suspicious: bool = False
+    images: list[Link] = field(default_factory=list[Link])
+    """The page's pictures, taken by code from the page itself (not picked by the clerk)."""
 
 
 class ClerkError(RuntimeError):
@@ -179,4 +181,10 @@ class WebClerk:
         if answer.suspicious:
             return Reading(page.url, page.title, SUSPICIOUS, [], suspicious=True)
         links = [shown[i] for i in dict.fromkeys(answer.links) if 0 <= i < len(shown)][:10]
-        return Reading(page.url, _clip(page.title, 200), _clip(answer.answer, ANSWER_CHARS), links)
+        return Reading(
+            page.url,
+            _clip(page.title, 200),
+            _clip(answer.answer, ANSWER_CHARS),
+            links,
+            images=page.images,
+        )
