@@ -2252,3 +2252,28 @@ de répondre et épuisait ses 400 jetons sans verdict, compté comme un non ; et
 retard, ou coupé ? » comme « les deux ». Un juge sans verdict est maintenant signalé à part.
 `il_etait_coupe`, `veille_de_partiel` et `un_lien_sans_un_mot` (qui avait besoin du module
 web) passent 3/3.
+
+## D108 — Ce que le greffier a lu ne bloque plus rien (révise D90)
+D90 posait la question au lieu de refuser, mais une recherche web gênait encore : ce qu'il avait
+laissé Orion faire seul (écrire à Angèle, ses propres réglages) redevenait une question à chaque
+fois, et lui laisser faire quelque chose seul, ou installer un module, était refusé pendant 2 h.
+Et la consigne du web disait encore à Orion qu'il ne pouvait « rien envoyer », si bien qu'il
+refusait parfois avant même d'essayer.
+
+Or le modèle d'Orion ne lit jamais une page : le greffier (D31) la lit, sans outils, sans mémoire
+ni conversation, et répond dans une forme bornée et vérifiée. Une page qui essaie de donner des
+ordres est déjà écartée (« Page suspecte »), sans son contenu. Ce qui reste est le risque d'un
+résumé détourné, faible, et chaque action reste vérifiée par le gardien. Désormais :
+- un niveau de confiance de plus, `Trust.CLERKED` (45, entre un document à lui et le système) :
+  ce que `web_search` et `web_read` rapportent quand le greffier n'a rien trouvé de suspect. Ce
+  qu'il a trouvé suspect reste `Trust.WEB` ;
+- en mode `equilibre`, une conversation qui ne contient que ça se décide **comme une
+  conversation propre** : l'autonomie qu'il a donnée s'applique, `autonomy_grant` et
+  `module_install` lui sont demandés au lieu d'être refusés (et un module n'est jamais installé
+  seul). La question dit toujours qu'une recherche est dans la conversation ;
+- rien ne change pour `prudent`, ni pour ce qu'Orion voit lui-même (le navigateur, une capture),
+  un mail, le message d'un tiers ou d'un autre Orion ;
+- ce qui est écrit dans une telle conversation (mémoire, rappels) garde la confiance 45 : la nuit,
+  la chronique et la curiosité ne relisent toujours que ce qui est sûr ;
+- les mots d'un lien viennent de la page, pas du greffier : ils sont coupés à 80 caractères.
+Cas `apres_une_recherche`, 3/3 sur DeepSeek.

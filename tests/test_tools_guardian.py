@@ -173,3 +173,50 @@ def test_orion_never_changes_what_it_asks_alone() -> None:
     assert not within("configure_change", None, mode)
     times = {"changes": [{"path": "initiative.quiet_start", "value": "23:00:00"}], "why": "x"}
     assert within("configure_change", None, times)
+
+
+async def test_after_a_search_orion_decides_as_in_a_clean_conversation() -> None:
+    """D108: what the web clerk read no longer blocks anything in `equilibre`. What he let
+    Orion do alone, it does; letting it act alone is asked, not refused; he is still told a
+    search is in the conversation. `prudent`, and raw outside content, stay as they were."""
+    alone_ok: list[str] = []
+
+    async def autonomous(name: str, _args: dict[str, Any]) -> bool:
+        alone_ok.append(name)
+        return True
+
+    no = _Approver(answer=False)
+    decision = await Guardian(no, autonomous, approvals="equilibre").decide(
+        proposal(SEND, Trust.CLERKED)
+    )
+    assert decision.allowed and no.asked == [] and alone_ok == ["send"]
+
+    yes = _Approver(answer=True)
+    asked = await Guardian(yes, approvals="equilibre").decide(proposal(SEND, Trust.CLERKED))
+    assert asked.allowed and yes.reasons == [untrusted_reason(Trust.CLERKED)]
+    assert "une recherche ou une page web" in yes.reasons[0]
+
+    grant = Tool(
+        name="autonomy_grant", description="g", input_model=_Args, handler=_noop,
+        effect=Effect.EXTERNAL,
+    )  # fmt: skip
+    yes = _Approver(answer=True)
+    granted = await Guardian(yes, approvals="equilibre").decide(
+        ActionProposal(grant, _Args(to="x"), Trust.CLERKED, "t")
+    )
+    assert granted.allowed and len(yes.asked) == 1
+
+    # Not with `prudent`, nor with a page Orion saw itself (the browser) or a mail.
+    for guardian, trust in (
+        (Guardian(_Approver(answer=True), autonomous, approvals="prudent"), Trust.CLERKED),
+        (Guardian(_Approver(answer=True), autonomous, approvals="equilibre"), Trust.WEB),
+        (Guardian(_Approver(answer=True), autonomous, approvals="equilibre"), Trust.THIRD_PARTY),
+    ):
+        refused = await guardian.decide(ActionProposal(grant, _Args(to="x"), trust, "t"))
+        assert not refused.allowed
+    alone_ok.clear()
+    asked_raw = _Approver(answer=False)
+    raw = await Guardian(asked_raw, autonomous, approvals="equilibre").decide(
+        proposal(SEND, Trust.WEB)
+    )
+    assert not raw.allowed and alone_ok == [] and len(asked_raw.asked) == 1

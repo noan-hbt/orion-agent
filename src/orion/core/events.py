@@ -24,6 +24,10 @@ class Trust(IntEnum):
     THIRD_PARTY = 20
     TRUSTED_PEER = 30
     OWNER_INSTANCE = 40
+    CLERKED = 45
+    """Outside content Orion's model never read itself: a clerk (a model without tools, memory
+    or conversation) read it and answered in a bounded form, and found nothing suspicious. Still
+    content, not orders (D108)."""
     SYSTEM = 50
     OWNER = 60
 

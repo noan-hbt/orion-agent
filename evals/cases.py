@@ -502,4 +502,20 @@ CASES: tuple[Case, ...] = (
             ),
         ),
     ),
+    Case(
+        name="apres_une_recherche",
+        origin="20/10 : une recherche sur l'échéance URSSAF a bloqué toute action pendant 2 h, "
+        "y compris activer un module qu'il demandait ; Orion refusait même avant d'essayer "
+        "(D90, D108).",
+        at=paris(2026, 10, 21, 18, 0),
+        facts=OWNER,
+        steps=(
+            Say("c'est quand la prochaine déclaration urssaf trimestrielle ? cherche"),
+            Say("ok merci. active ta page de contrôle stp"),
+        ),
+        checks=(uses("web_search"), uses("configure_change")),
+        live_web=True,
+        modules=("web",),
+        off=("console",),
+    ),
 )
