@@ -19,7 +19,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 DOMAIN="${1:-}"
 if [ -z "$DOMAIN" ]; then
-    ip="$(curl -fsS4 https://api.ipify.org)"
+    ip="$(curl -fsS4 --max-time 10 https://api.ipify.org || curl -fsS4 --max-time 10 https://ifconfig.me || true)"
+    if ! [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "could not find this server's public IPv4 address: give a domain instead,"
+        echo "  sudo ./install.sh orion.example.com"
+        exit 1
+    fi
     DOMAIN="${ip//./-}.sslip.io"
 fi
 echo "==> domain: $DOMAIN"
