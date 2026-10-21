@@ -33,6 +33,13 @@ class MeetingProposeInput(BaseModel):
     )
 
 
+class PeerMessageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    peer: str = Field(description="Whose Orion: the name the owner paired it under (see peers)")
+    text: str = Field(min_length=1, max_length=2000, description="The exact words to send")
+
+
 class MeetingsInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -89,6 +96,18 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
             data={"meeting_id": meeting_id},
         )
 
+    async def peer_message(args: Any, ctx: ToolContext) -> ToolResult:
+        try:
+            label = await desk.say(args.peer, args.text, ctx.grant, ctx.correlation_id)
+        except LookupError as exc:
+            return ToolResult(f"Not sent: {exc}.", is_error=True)
+        except GuardianUnavailableError as exc:
+            return ToolResult(f"Not sent, the guardian refused: {exc}", is_error=True)
+        return ToolResult(
+            f"Envoyé à l'Orion de {label}. Sa réponse arrivera d'elle-même : tu lui répondras "
+            "dans votre conversation à vous, et il en entendra parler."
+        )
+
     async def meetings(args: Any, ctx: ToolContext) -> ToolResult:
         await desk.start()
         known = sorted(desk.state.meetings.values(), key=lambda m: m.id)
@@ -123,6 +142,18 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
             handler=meeting_propose,
             effect=Effect.EXTERNAL,
             reversibility=Reversibility.IRREVERSIBLE,
+        ),
+        Tool(
+            name="peer_message",
+            description="Write to someone's Orion, freely: a question, news, a favour. Its "
+            "answer comes back in a conversation of your own with that Orion, where you answer "
+            "it yourself; the owner hears of it. He approves the exact words of a first "
+            "message.",
+            input_model=PeerMessageInput,
+            handler=peer_message,
+            effect=Effect.EXTERNAL,
+            reversibility=Reversibility.IRREVERSIBLE,
+            accepts_untrusted_context=True,
         ),
         Tool(
             name="meetings",

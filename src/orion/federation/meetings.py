@@ -29,7 +29,7 @@ busy. Titles come from the other side: they are bounded, shown as content from a
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -52,8 +52,10 @@ from orion.federation.wire import (
     CONFIRM,
     DECLINE,
     INTRODUCE,
+    MAX_SAY,
     POLL,
     PROPOSE,
+    SAY,
     Accept,
     Available,
     Cancel,
@@ -61,16 +63,17 @@ from orion.federation.wire import (
     Decline,
     Envelope,
     Propose,
+    Say,
     WireError,
     clean_title,
     parse_body,
 )
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import ActionProposal, Approver
-from orion.initiative.engine import Report
+from orion.initiative.engine import Alert, Report
 from orion.initiative.tools import describe_moment
 from orion.memory.service import MemoryService, Origin
-from orion.runtime import OWNER_THREAD
+from orion.runtime import OWNER_THREAD, is_silence
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 log = structlog.get_logger(__name__)
@@ -89,6 +92,11 @@ GROUP_PROPOSED = "meeting.group.proposed"
 GROUP_AGREED = "meeting.group.agreed"
 GROUP_FAILED = "meeting.group.failed"
 CANCELLED = "meeting.cancelled"
+CHATTED = "federation.chat"
+"""Another Orion wrote, and what Orion answered (D102)."""
+CHAT_SENT = "federation.chat.sent"
+"""Orion wrote first to another Orion, with the owner's yes."""
+CHAT_TOLD = timedelta(hours=12)
 _OUTCOMES = (
     ANSWERED,
     AGREED,
@@ -99,6 +107,7 @@ _OUTCOMES = (
     AVAILABILITY,
     PEER_ACCEPTED,
     CANCELLED,
+    CHATTED,
 )
 _GROUP = (GROUP_PROPOSED, GROUP_AGREED, GROUP_FAILED)
 _WHY = {
@@ -163,6 +172,21 @@ class PeerMessage:
     envelope: Envelope
 
 
+@dataclass(frozen=True)
+class Chat:
+    event_id: str
+    peer: str
+    label: str
+    them: str
+    reply: str
+    at: datetime
+
+
+Answer = Callable[[str, str, str, str], Awaitable[str]]
+"""(thread, the other Orion's name, what it wrote, what we had written to it) → Orion's reply,
+from a turn of Orion itself (`Orion.handle_peer_message`)."""
+
+
 @dataclass
 class MeetingState:
     name: str = "meetings"
@@ -173,6 +197,9 @@ class MeetingState:
     messages: dict[str, PeerMessage] = field(default_factory=dict[str, PeerMessage])
     handled: set[str] = field(default_factory=set[str])
     reports: list[Report] = field(default_factory=list[Report])
+    chats: list[Chat] = field(default_factory=list[Chat])
+    opened: dict[str, str] = field(default_factory=dict[str, str])
+    """Peer → what we wrote first, until it answers."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -184,6 +211,8 @@ class MeetingState:
         self.messages.clear()
         self.handled.clear()
         self.reports.clear()
+        self.chats.clear()
+        self.opened.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -196,6 +225,9 @@ class MeetingState:
             self.cursor = max(self.cursor, int(p["seq"]))
             envelope = Envelope.model_validate(p["envelope"])
             self.messages[envelope.id] = PeerMessage(int(p["seq"]), event.id, envelope)
+            return
+        if kind == CHAT_SENT:
+            self.opened[str(p["peer"])] = str(p["text"])
             return
         if kind == PROPOSED:
             status = "polling" if p.get("poll") else "proposed"
@@ -210,7 +242,19 @@ class MeetingState:
             self.handled.add(str(p["envelope_id"]))
         meeting_id = str(p.get("meeting_id", ""))
         known = self.meetings.get(meeting_id)
-        if kind == POLLED:
+        if kind == CHATTED:
+            self.opened.pop(str(p["peer"]), None)
+            self.chats.append(
+                Chat(
+                    event.id,
+                    str(p["peer"]),
+                    str(p["label"]),
+                    str(p["them"]),
+                    str(p.get("reply", "")),
+                    datetime.fromisoformat(str(p["at"])),
+                )
+            )
+        elif kind == POLLED:
             self.meetings[meeting_id] = _meeting(p, "invited", "polled")
         elif kind == AVAILABILITY and known is not None:
             self.meetings[meeting_id] = replace(
@@ -406,6 +450,8 @@ class MeetingDesk:
         self._working: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         self._groups = asyncio.Lock()
+        self.answer: Answer | None = None
+        """Orion itself, set when serving: who answers another Orion's words (D102)."""
         """Answers from a group arrive together: one at a time decides what comes next."""
 
     async def start(self) -> None:
@@ -604,6 +650,8 @@ class MeetingDesk:
             await self._handled(message, "paired", paired=True, label=label)
         elif envelope.type == POLL and isinstance(body, Propose):
             await self._polled(message, body, label)
+        elif isinstance(body, Say):
+            await self._chatted(message, body, label)
         elif isinstance(body, Available):
             await self._available(message, body)
         elif isinstance(body, Cancel):
@@ -661,6 +709,83 @@ class MeetingDesk:
         else:
             reason = "declined" if approval.reached else "unreachable"
             await self._answer(message, base, DECLINE, {"reason": reason}, accepted=False)
+
+    async def say(
+        self, peer_name: str, text: str, grant: str | None, correlation_id: str | None = None
+    ) -> str:
+        """Write first to another Orion; the owner said yes to these exact words."""
+        peer = await self.find(peer_name)
+        if peer is None:
+            raise LookupError(f"no Orion paired as {peer_name!r}")
+        body = Say(text=text)
+        await self.guardian.federation_send(
+            str(peer["instance"]), SAY, f"chat-{new_id()}", body.model_dump(), grant
+        )
+        await self._append(
+            CHAT_SENT,
+            {"peer": peer["instance"], "label": peer["label"], "text": body.text},
+            Trust.SYSTEM,
+            correlation_id=correlation_id,
+        )
+        return str(peer["label"])
+
+    async def _chatted(self, message: PeerMessage, body: Say, label: str) -> None:
+        """Another Orion's words: Orion itself answers, and the owner hears of it."""
+        envelope = message.envelope
+        if self.answer is None:
+            await self._handled(message, "nobody to answer: Orion is not serving")
+            return
+        sent = self.state.opened.get(envelope.sender, "")
+        reply = (await self.answer(f"peer:{envelope.sender}", label, body.text, sent)).strip()
+        if is_silence(reply):
+            reply = ""
+        error = ""
+        if reply:
+            try:
+                await self.guardian.federation_send(
+                    envelope.sender, SAY, envelope.context, {"text": reply[:MAX_SAY]}
+                )
+            except GuardianUnavailableError as exc:
+                log.warning("federation.chat_unsent", peer=envelope.sender, error=str(exc))
+                error = str(exc)[:200]
+        await self._append(
+            CHATTED,
+            {
+                "peer": envelope.sender,
+                "label": label,
+                "them": body.text,
+                "reply": "" if error else reply,
+                "unsent": reply if error else "",
+                "error": error,
+                "at": self.clock().isoformat(),
+                "envelope_id": envelope.id,
+            },
+            Trust.TRUSTED_PEER,
+            message,
+        )
+
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """What another Orion said, and what Orion answered: he hears of it, within reason."""
+        await self._runner.catch_up()
+        return [
+            Alert(
+                key=f"federation:chat:{c.event_id}",
+                notice=f"L'Orion de {c.label} t'a écrit : « {c.them[:500]} ». "
+                + (
+                    f"Tu lui as répondu : « {c.reply[:500]} »."
+                    if c.reply
+                    else "Tu ne lui as pas répondu."
+                )
+                + " Dis-le-lui en une ou deux phrases, si ça l'intéresse.",
+                why=f"l'Orion de {c.label} t'a écrit",
+                fallback=f"L'Orion de {c.label} m'a écrit : « {c.them[:200]} »",
+                trust=Trust.TRUSTED_PEER,
+                expires_at=c.at + CHAT_TOLD,
+                importance=0.4,
+            )
+            for c in self.state.chats
+            if c.at <= now < c.at + CHAT_TOLD
+        ]
 
     async def _polled(self, message: PeerMessage, body: Propose, label: str) -> None:
         """Which of the starts are free: code answers, the owner is asked for the one found."""

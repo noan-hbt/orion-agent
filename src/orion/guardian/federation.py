@@ -48,6 +48,7 @@ from orion.federation.wire import (
     INTRODUCE,
     POLL,
     PROPOSE,
+    SAY,
     SCHEDULING,
     Envelope,
     Introduce,
@@ -81,6 +82,10 @@ log = structlog.get_logger(__name__)
 
 ADMIN_HEADER = "X-Orion-Admin"
 CLOCK_SKEW = timedelta(minutes=10)
+ANSWER_WINDOW = timedelta(hours=6)
+"""An Orion that wrote may be answered without asking the owner, this long after (D102)."""
+SAYS_PER_DAY = 30
+"""What one conversation between two Orions may cost: a ping-pong stops here."""
 MAX_BODY = 16_000
 
 
@@ -166,6 +171,7 @@ class FederationEdge:
         )
         self.service.renderers["meeting_propose"] = self._render_propose
         self.service.renderers["meeting_accept"] = self._render_accept
+        self.service.renderers["peer_message"] = self._render_say
 
     def public_app(self) -> Starlette:
         return Starlette(
@@ -227,6 +233,29 @@ class FederationEdge:
         return (
             f"L'Orion de {who} propose {what}. Tu es libre {self._human(params.get('slot'))} : "
             "je confirme ce créneau ?"
+        )
+
+    def _render_say(self, params: dict[str, Any]) -> str:
+        peer = self.find(str(params.get("peer", "")))
+        who = peer.label if peer else params.get("peer")
+        return f"Avant que je le fasse : écrire à l'Orion de {who} : « {params.get('text')} »"
+
+    def _says_today(self, peer: Peer) -> int:
+        since = self.service.clock() - timedelta(days=1)
+        return sum(
+            1
+            for item in self.state.exchanged
+            if item.direction == "out"
+            and item.envelope["recipient"] == peer.instance
+            and item.envelope["type"] == SAY
+            and datetime.fromisoformat(item.envelope["sent_at"]) >= since
+        )
+
+    def _answering(self, peer: Peer) -> bool:
+        """It wrote a moment ago: Orion may answer, as it would a person (D102)."""
+        heard = self._exchanged("in", peer, None, SAY)
+        return heard is not None and (
+            self.service.clock() - datetime.fromisoformat(heard["sent_at"]) < ANSWER_WINDOW
         )
 
     # -- core-facing (Unix socket) ------------------------------------------------------------
@@ -299,6 +328,17 @@ class FederationEdge:
     async def _outbound_policy(
         self, peer: Peer, kind: str, context: str, body: Any, grant: str | None
     ) -> str | None:
+        if kind == SAY:
+            if self._says_today(peer) >= SAYS_PER_DAY:
+                return f"{SAYS_PER_DAY} messages to {peer.label}'s Orion in a day: that is enough"
+            if self._answering(peer):
+                return None
+            return await self.service.use_grant(
+                grant,
+                "peer_message",
+                lambda p: self.find(str(p.get("peer", ""))) == peer and p.get("text") == body.text,
+                consume=True,
+            )
         if kind == POLL:  # one yes covers every Orion of the group, until it expires
             return await self.service.use_grant(
                 grant,
@@ -384,8 +424,9 @@ class FederationEdge:
         )
 
     def _exchanged(
-        self, direction: str, peer: Peer | None, context: str, kind: str
+        self, direction: str, peer: Peer | None, context: str | None, kind: str
     ) -> dict[str, Any] | None:
+        """The latest such envelope with this peer; in any context when `context` is None."""
         if peer is None:
             return None
         other = "recipient" if direction == "out" else "sender"
@@ -394,7 +435,7 @@ class FederationEdge:
             if (
                 item.direction == direction
                 and envelope[other] == peer.instance
-                and envelope["context"] == context
+                and (context is None or envelope["context"] == context)
                 and envelope["type"] == kind
             ):
                 return envelope

@@ -2139,3 +2139,22 @@ choisi de taire, et pourquoi (budget épuisé, pas assez important, trop tard), 
 puisse dire « ça, il fallait me le dire » ; ce qu'il a fait hors de lui-même sans demander ; et
 ce qu'il a coûté sur sept jours, avec la part relue depuis le cache. Pas de script : des barres
 en HTML, comme le reste de la console, lisibles sur un téléphone.
+
+## D102 — Les Orion se parlent librement
+
+Jusqu'ici, deux Orion ne pouvaient échanger que des rendez-vous. Noan voulait qu'ils discutent,
+et que ce soit Orion lui-même qui réponde, avec tout ce qu'il sait, plutôt qu'un appel séparé
+sans données comme le secrétaire de ses proches : le risque d'une fuite est accepté en
+connaissance de cause, pour une conversation qui sert vraiment.
+
+- `orion.say` : quelques mots libres (2 000 caractères au plus), signés comme le reste.
+- Écrire le premier (`peer_message`) : le propriétaire approuve les mots exacts, et le gardien
+  vérifie ce oui. Répondre ne demande rien : le gardien laisse partir une réponse dans les six
+  heures qui suivent un message de cet Orion, comme Orion répond à quelqu'un qui lui écrit.
+- Orion répond dans un fil à part pour chaque Orion (`peer:<instance>`), avec sa mémoire et ses
+  outils. Ce que l'autre écrit garde la confiance d'un pair : toute action sur le monde que la
+  conversation lui ferait faire passe par l'accord du propriétaire, comme pour un mail.
+- La conversation a une fin : chaque Orion peut répondre `SILENCE`, et le gardien arrête à 30
+  messages par jour vers un même Orion.
+- Le propriétaire en entend parler : ce qui a été dit et répondu lui arrive comme un message de
+  l'initiative, sous le budget du jour.

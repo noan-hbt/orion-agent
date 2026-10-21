@@ -61,8 +61,15 @@ class FederationModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.desk is None:  # pragma: no cover - assemble always runs first
             return
+        orion = daemon.orion
+
+        async def answer(thread: str, label: str, text: str, sent: str) -> str:
+            return (await orion.handle_peer_message(thread, label, text, sent)).text
+
+        self.desk.answer = answer
         daemon.add_service("federation.inbox", self.desk.run)
         daemon.reports.append(self.desk)
+        daemon.alerts.append(self.desk)
 
     def doctor(self) -> list[str]:
         f = self.config.federation

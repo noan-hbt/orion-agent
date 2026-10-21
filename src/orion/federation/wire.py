@@ -28,6 +28,8 @@ CONFIRM = "meeting.confirm"
 POLL = "meeting.poll"
 AVAILABLE = "meeting.available"
 CANCEL = "meeting.cancel"
+SAY = "orion.say"
+MAX_SAY = 2000
 MAX_SLOTS = 8
 MAX_GROUP = 5
 """Other Orions invited to the same meeting, besides the one a message goes to."""
@@ -111,6 +113,21 @@ class Cancel(_Body):
     reason: Literal["group_failed"]
 
 
+class Say(_Body):
+    """Free words between two Orions (D102): read by the other Orion as a peer's message, never
+    as an instruction."""
+
+    text: str = Field(min_length=1, max_length=MAX_SAY)
+
+    @field_validator("text")
+    @classmethod
+    def _text(cls, value: str) -> str:
+        kept = "".join(c for c in value if c.isprintable() or c == "\n").strip()
+        if not kept:
+            raise ValueError("nothing to say")
+        return kept
+
+
 class Decline(_Body):
     reason: Literal["no_slot", "declined", "unreachable"]
     """`unreachable`: nobody could be asked on that side; nothing was refused (D98)."""
@@ -125,6 +142,7 @@ BODIES: dict[str, type[_Body]] = {
     POLL: Propose,
     AVAILABLE: Available,
     CANCEL: Cancel,
+    SAY: Say,
 }
 
 

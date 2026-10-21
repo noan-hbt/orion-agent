@@ -212,6 +212,8 @@ class Mailbox:
         self._zone = ZoneInfo(timezone)
         self._fetch = fetch or imap_fetch
         self._clock = clock or (lambda: datetime.now(self._zone))
+        self.now = self._clock
+        """The mailbox's time: what « the last two days » are counted from."""
         self._owners = {e.strip().lower() for e in settings.owner_emails}
         self.state = MailState()
         self._runner = ProjectionRunner(journal, [self.state])
