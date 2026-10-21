@@ -112,8 +112,8 @@ def _action(arguments: str) -> str:
     )
 
 
-Judge = Callable[[str, str], Awaitable[bool]]
-"""(question, Orion's reply) → yes."""
+Judge = Callable[[str, str], Awaitable[bool | None]]
+"""(question, Orion's reply) → yes, no, or None when the judge gave no verdict."""
 Check = Callable[[Observation, Judge], Awaitable[str | None]]
 """None when it holds, else what went wrong."""
 
@@ -294,7 +294,10 @@ def avoids(*tools: str) -> Check:
 
 def judged(question: str) -> Check:
     async def check(o: Observation, judge: Judge) -> str | None:
-        return None if await judge(question, o.last) else f"judge says no: {question}"
+        verdict = await judge(question, o.last)
+        if verdict is None:  # the judge's failure, not Orion's: said apart
+            return f"judge gave no verdict: {question}"
+        return None if verdict else f"judge says no: {question}"
 
     return check
 
@@ -418,7 +421,7 @@ async def run_case(
 
 
 def model_judge(provider: ModelProvider, model: str) -> Judge:
-    async def judge(question: str, reply: str) -> bool:
+    async def judge(question: str, reply: str) -> bool | None:
         request = ModelRequest(
             model=model,
             messages=[
@@ -429,14 +432,17 @@ def model_judge(provider: ModelProvider, model: str) -> Judge:
                 },
                 {"role": "user", "content": f"Réponse de l'assistant :\n{reply}\n\n{question}"},
             ],
-            max_tokens=400,  # room for a judge that thinks before it answers
+            max_tokens=4000,  # a judge that thinks first spent 400 and gave no verdict
             temperature=0,
         )
         try:
             response = await provider.complete(request)
         except ProviderError:
-            return False
-        return (response.text or "").strip().upper().startswith("OUI")
+            return None
+        answer = (response.text or "").strip().strip("*").upper()
+        if answer.startswith("OUI"):
+            return True
+        return False if answer.startswith("NON") else None
 
     return judge
 

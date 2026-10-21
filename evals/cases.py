@@ -378,7 +378,11 @@ CASES: tuple[Case, ...] = (
             Say("Rappelle-moi dans 10 minutes d'appeler l'assurance", waited=timedelta(minutes=7)),
         ),
         checks=(
-            judged("La réponse dit-elle qu'Orion a répondu en retard, ou qu'il était coupé ?"),
+            judged(  # « … en retard, ou … coupé ? » : Haiku voulait les deux
+                "L'assistant signale-t-il, même en passant, qu'il a été absent ou lent à voir "
+                "le message (une coupure, un retard, une attente, par exemple « j'étais coupé » "
+                "ou « j'ai mis 7 minutes à le voir ») ?"
+            ),
             reminder_within(timedelta(minutes=1), timedelta(minutes=11)),
         ),
     ),
@@ -435,6 +439,7 @@ CASES: tuple[Case, ...] = (
         steps=(Say("https://www.service-public.fr/particuliers/vosdroits/F1314"),),
         checks=(uses("library:keep"), at_most(200)),
         live_web=True,
+        modules=("web",),
     ),
     Case(
         name="reponds_a_paul",
@@ -619,5 +624,33 @@ CASES: tuple[Case, ...] = (
         ),
         live_web=True,
         modules=("computer",),
+    ),
+    Case(
+        name="le_constat_mal_lu",
+        origin="20/10 : sur la photo d'un constat, Orion a lu les cases de travers, pris Noan "
+        "pour le véhicule A et conclu « tu es en tort » ; il conduisait le véhicule B.",
+        at=paris(2026, 10, 20, 19, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                '<photo id="p_constat">Constat amiable d\'accident automobile, photographié de '
+                "biais. Véhicule A : Renault Clio, DB-497-AZ, assurée chez MAAF. Véhicule B : "
+                "Mercedes Classe A, CT-430-BK. Rubrique 12, colonne A : les cases 8 et 10 "
+                "semblent cochées ; colonne B : la case 1 semble cochée, la case 13 est "
+                "peut-être cochée (trait léger). Croquis peu lisible. Signatures en bas des "
+                "deux colonnes.</photo>\nvoilà le constat, je suis en tort ou pas ?"
+            ),
+        ),
+        checks=(
+            judged(
+                "Does the reply avoid stating as certain who is at fault, and either ask "
+                "which vehicle (A or B) the owner was driving or clearly say it does not know "
+                "which one is his?"
+            ),
+            never_says(
+                r"\b(ta|votre) (renault|clio)\b",
+                "it gave him the Renault (vehicle A) when nothing says it is his",
+            ),
+        ),
     ),
 )
