@@ -52,7 +52,7 @@ from orion.memory.model import FACT_ASSERTED
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
-from orion.providers.base import Message, ModelProvider, Usage
+from orion.providers.base import Message, ModelProvider, Usage, cache_minutes
 from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
 
@@ -688,8 +688,11 @@ class Orion:
     def _prunable(self, thread: Thread, when: datetime) -> list[int]:
         """Old bulky tool results to shorten, once the conversation paused long enough for the
         provider's cache to have gone: shortening them then costs nothing (OpenClaw does the
-        same). The last two exchanges stay whole."""
+        same). Sooner, the next turn would pay the whole conversation again to save a little on
+        cached tokens. The last two exchanges stay whole."""
         idle = self._agent.prune_idle_minutes
+        if idle:
+            idle = max(idle, cache_minutes(self._agent.model))
         if not idle or thread.last_at is None or when - thread.last_at < timedelta(minutes=idle):
             return []
         return thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)

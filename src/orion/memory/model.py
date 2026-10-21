@@ -42,11 +42,15 @@ class Category(StrEnum):
     OTHER = "other"
 
 
+MAX_STATEMENT = 1000
+"""Characters a fact's statement may hold."""
+
+
 class FactAsserted(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fact_id: str
-    statement: str = Field(min_length=1, max_length=1000)
+    statement: str = Field(min_length=1, max_length=MAX_STATEMENT)
     about: list[str] = Field(default_factory=list[str], description="Names of people/things")
     category: Category = Category.OTHER
     valid_from: str | None = Field(default=None, description="ISO date the fact became true")

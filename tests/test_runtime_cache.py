@@ -206,11 +206,16 @@ async def test_untrusted_turns_are_not_summarized(journal: SqliteJournal) -> Non
 
 
 async def test_old_bulky_results_are_shortened_only_after_a_pause(journal: SqliteJournal) -> None:
-    """Like a rebase, pruning changes the prefix once; it waits until the cache is gone."""
+    """Like a rebase, pruning changes the prefix once; it waits until the cache is gone. The
+    default model's (DeepSeek) lasts hours: shortening after a 15-minute pause made the next
+    turn pay the whole conversation again."""
+    from datetime import timedelta
+
     page = "annonce " * 600
     provider = ScriptedProvider(
         call_tools(("echo", {"text": page})),
         reply("trois annonces"),
+        reply("ok"),
         reply("ok"),
         reply("ok"),
         reply("ok"),
@@ -222,7 +227,11 @@ async def test_old_bulky_results_are_shortened_only_after_a_pause(journal: Sqlit
     assert_prefix_stable(provider)
     assert page in str(provider.requests[-1].messages)
 
-    await orion.handle_owner_message("t1", "re", "terminal", now=at(20))  # after a pause
+    await orion.handle_owner_message("t1", "re", "terminal", now=at(20))  # cache still warm
+    assert_prefix_stable(provider)
+    assert page in str(provider.requests[-1].messages)
+
+    await orion.handle_owner_message("t1", "re", "terminal", now=at(20) + timedelta(hours=5))
     shown = [str(m["content"]) for m in provider.requests[-1].messages if m["role"] == "tool"]
     assert len(shown) == 1 and "ancien résultat allégé" in shown[0] and len(shown[0]) < 800
     # The journal keeps the page whole, and the projection rebuilds the same window.
@@ -280,3 +289,12 @@ async def test_memory_gets_a_last_look_at_what_a_rebase_drops(journal: SqliteJou
     flushed_owner, flushed_orion = seen[0]
     assert "message 0" in flushed_owner and "r" * 50 in flushed_orion
     await store.close()
+
+
+def test_each_model_has_its_cache_lifetime() -> None:
+    from orion.providers.base import cache_minutes
+
+    assert cache_minutes("anthropic/claude-haiku-5.5") == 5
+    assert cache_minutes("openrouter:deepseek/deepseek-v4.1-flash") == 240
+    assert cache_minutes("claude-code:opus") == 5
+    assert cache_minutes("chatgpt:gpt-5.5") == 60

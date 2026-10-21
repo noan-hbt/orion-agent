@@ -107,8 +107,9 @@ class AgentConfig(BaseModel):
     prune_idle_minutes: int = Field(
         default=10,
         ge=0,
-        description="After this long without messages (the model cache has expired anyway), "
-        "old bulky tool results are shown shortened; 0 never does",
+        description="After this long without messages, and once the model's cache has "
+        "expired anyway (5 min for Claude, hours for DeepSeek), old bulky tool results are "
+        "shown shortened; 0 never does",
     )
     approvals: Literal["prudent", "equilibre"] = Field(
         default="equilibre",

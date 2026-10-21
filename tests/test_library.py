@@ -162,3 +162,27 @@ async def test_a_link_kept_for_later_comes_back_when_the_topic_does(
     assert "plafond des loyers" in fact.statement and doc[0] in fact.statement
     assert fact.trust <= T.WEB  # web content stays web content in memory
     await store.close()
+
+
+def test_a_long_reading_still_fits_in_one_fact() -> None:
+    """A long title, address, gist and topics used to overflow a fact (1 000 characters), and
+    the reading was kept without its memory note: the address goes, then the gist shortens."""
+    from datetime import datetime
+
+    from orion.library.module import KeepInput, kept_note
+    from orion.memory.model import MAX_STATEMENT
+
+    args = KeepInput(
+        title="T" * 200,
+        url="https://example.org/" + "a" * 1900,
+        gist="Le plafond des loyers reste en vigueur. " + "x" * 760,
+        topics=["s" * 60] * 8,
+    )
+    note = kept_note(args, "d_1", datetime(2026, 10, 21))
+    assert len(note) <= MAX_STATEMENT
+    assert "d_1" in note and "Le plafond des loyers" in note and "example.org" not in note
+
+    short = KeepInput(
+        title="Loyers", url="https://example.org", gist="Le plafond reste.", topics=["loyer"]
+    )
+    assert "https://example.org" in kept_note(short, "d_2", datetime(2026, 10, 21))

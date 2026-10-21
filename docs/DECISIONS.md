@@ -2231,3 +2231,24 @@ quinzaine d'étapes et lui a envoyé une capture après coup. Désormais :
 - **la boucle d'Orion demande, avant chaque étape, si le travail a été annulé** (`halted`) : une
   mission close pendant son passage s'arrête là, les appels prévus ne partent pas, rien n'est
   dit ni rapporté. Un appel déjà en cours n'est jamais coupé net.
+
+## D107 — Alléger seulement quand le cache est parti ; un constat se lit avec doute
+Trois points de la passation, vérifiés le 21/10 :
+- **l'élagage cassait un cache encore chaud** : les vieux résultats d'outils étaient allégés
+  après 10 minutes sans message, en supposant le cache du modèle expiré. C'est vrai pour Claude
+  (5 minutes), pas pour DeepSeek, le modèle par défaut, qui garde le sien des heures : le tour
+  suivant repayait toute la conversation pour économiser quelques jetons déjà en cache.
+  L'élagage attend maintenant aussi la durée de vie du cache du modèle (`cache_minutes` :
+  5 min pour Claude, 4 h pour DeepSeek, 1 h ailleurs) ;
+- **`library` (keep)** : la note de mémoire d'une lecture gardée (titre, adresse, résumé,
+  sujets) pouvait dépasser les 1 000 caractères d'un fait. Le document était gardé, mais la note
+  refusée. L'adresse sort de la note d'abord (le document la garde), puis le résumé raccourcit ;
+- **le constat mal lu** : une photo de formulaire se lit mal, quel que soit le modèle. Orion dit
+  ce dont il doute et demande de quel côté est le propriétaire avant de conclure, et
+  l'extracteur de mémoire ne retient pas sa lecture d'une photo tant que le propriétaire ne l'a
+  pas confirmée (cas `le_constat_mal_lu`, 5/5 sur DeepSeek, 2/3 sans la consigne).
+Les évals faibles l'étaient en partie à cause du juge : Haiku, par OpenRouter, réfléchit avant
+de répondre et épuisait ses 400 jetons sans verdict, compté comme un non ; et il lisait « en
+retard, ou coupé ? » comme « les deux ». Un juge sans verdict est maintenant signalé à part.
+`il_etait_coupe`, `veille_de_partiel` et `un_lien_sans_un_mot` (qui avait besoin du module
+web) passent 3/3.
