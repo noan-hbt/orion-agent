@@ -2744,3 +2744,33 @@ de répondre et épuisait ses 400 jetons sans verdict, compté comme un non ; et
 retard, ou coupé ? » comme « les deux ». Un juge sans verdict est maintenant signalé à part.
 `il_etait_coupe`, `veille_de_partiel` et `un_lien_sans_un_mot` (qui avait besoin du module
 web) passent 3/3.
+
+## D129 — Attendre une réponse, et décider de relancer
+
+*26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D109)*
+
+Orion envoie des choses qui appellent une réponse (une question à un proche, un message à un
+autre Orion, un mail, une question au propriétaire), puis les oublie. Un rendez-vous de groupe
+restait bloqué pour toujours par un invité muet (D99). Noan voulait qu'Orion puisse décider de
+relancer, les autres comme lui. Module `awaiting`, allumé par défaut :
+- **Orion décide de ce qu'il attend** : `awaiting` (wait) dit qui doit répondre (lui, un proche,
+  un autre Orion, une adresse mail), à propos de quoi, et quand y revenir si rien n'arrive ;
+- **une réponse clôt l'attente seule**, lue dans le journal : le message d'un proche (le
+  secrétaire), n'importe quel message de cet Orion, un mail de cette adresse. Le prochain
+  message du propriétaire ne la clôt pas, car il peut parler d'autre chose : au moment venu,
+  Orion relit la conversation et se tait s'il a déjà eu sa réponse ;
+- **au moment venu sans réponse, Orion décide** dans un tour d'initiative : relancer (avec
+  `contact_message`, `peer_message` ou `mail_send` : les accords et l'autonomie s'appliquent
+  comme d'habitude), le dire au propriétaire, ou laisser tomber (`SILENCE`). Une relance suit
+  la précédente (`follows`) : deux au plus sur un même sujet (`max_rounds`), puis il le dit ;
+- **certaines attentes s'ouvrent seules** : une demande d'accord restée sans réponse (c'était
+  donc non) revient une fois, 3 h plus tard, pour lui demander s'il le veut toujours ; un
+  sondage ou une proposition de rendez-vous qu'un autre Orion laisse sans réponse revient au
+  bout de 24 h. Une réponse à une nouvelle demande pour la même action clôt l'ancienne ;
+- c'est une alerte du moteur d'initiative : heures calmes, budget du jour, vérificateur ;
+- tout se reconstruit depuis le journal : les seuls événements sont les attentes qu'Orion ouvre
+  (`awaiting.opened`) et celles qu'il retire (`awaiting.cancelled`).
+Les budgets du message système et des outils (D84) passent à 38 600 et 36 600 caractères. Cas
+`relance_le` et `il_a_deja_repondu`, 3/3 sur DeepSeek.
+Pas encore : annuler un rendez-vous de groupe qu'un invité laisse sans réponse (il n'y a pas
+d'outil d'annulation pour celui qui propose) ; Orion peut seulement relancer ou prévenir.
