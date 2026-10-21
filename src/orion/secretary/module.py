@@ -447,6 +447,7 @@ class Secretary:
                     trust=Trust.THIRD_PARTY,
                     expires_at=x.at + TELL_EXPIRES,
                     importance=0.85 if x.urgent else 0.5,
+                    spoken_to=True,
                 )
             )
         return found
@@ -467,6 +468,7 @@ class Secretary:
                 trust=Trust.THIRD_PARTY,
                 expires_at=s.at + TELL_EXPIRES,
                 importance=0.4,
+                spoken_to=True,
             )
             for s in self.state.strangers.values()
             if f"telegram:{s.user_id}" not in self.contacts and s.at <= now < s.at + TELL_EXPIRES

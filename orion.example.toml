@@ -88,7 +88,7 @@ enabled = true
 digests = ["08:30:00", "13:00:00", "19:00:00"]
 quiet_start = "22:30:00"
 quiet_end = "08:00:00"
-daily_budget = 6                 # unrequested messages per day
+daily_budget = 12                # what Orion says of its own accord, per day
 tick_seconds = 30
 
 # How Orion learns to work with you: from what you tell it (immediately), from your reactions

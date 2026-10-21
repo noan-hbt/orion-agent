@@ -73,23 +73,32 @@ def _attention(
         for e in events
         if e.kind == "initiative.delivered" and e.payload.get("day") == today.isoformat()
     ]
-    counted = [e for e in said if not e.payload.get("explicit") and not e.payload.get("bundled")]
+    counted = [
+        e for e in said if not any(e.payload.get(k) for k in ("explicit", "bundled", "unbudgeted"))
+    ]
     budget = settings.daily_budget
     spent = len(counted)
     rows = (
         f"<tr><td class=muted>{moment(e, zone):%H:%M}</td>"
         f"<td>{escape(str(e.payload.get('why', '')))}</td>"
-        f"<td class=muted>{'demandé' if e.payload.get('explicit') else ''}</td></tr>"
+        f"<td class=muted>{escape(_why_free(e.payload))}</td></tr>"
         for e in reversed(said)
     )
     return (
         "<h2>Mon attention aujourd'hui</h2>"
         f"<p>{spent} message(s) de moi-même sur {budget} par jour"
         + (" : je me tais jusqu'à demain, sauf ce que tu m'as demandé." if spent >= budget else ".")
-        + " Ce que tu m'as demandé (rappels, réponses attendues) ne compte pas.</p>"
+        + " Ne comptent ni ce que tu m'as demandé, ni ce qu'on t'écrit (tes proches, les "
+        "autres Orion) : je te le transmets à part.</p>"
         + _bar(spent, budget, warn=spent >= budget)
         + _rows(rows, "Je ne t'ai encore rien écrit de moi-même aujourd'hui.")
     )
+
+
+def _why_free(payload: dict[str, Any]) -> str:
+    if payload.get("explicit"):
+        return "demandé"
+    return "on t'a écrit" if payload.get("unbudgeted") else ""
 
 
 def _silences(events: list[Event], zone: ZoneInfo) -> str:

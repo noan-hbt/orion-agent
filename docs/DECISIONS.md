@@ -2176,3 +2176,13 @@ Le premier test des conversations entre Orion (21/10) a montré deux défauts :
   sert qu'en dernier recours, et il est écrit pour le propriétaire. Le vérificateur voit aussi
   le début de ce qu'Orion a lu (sa mémoire), plus seulement la fin : un vrai fait de mémoire
   était pris pour une invention.
+
+## D104 — Le budget d'attention ne compte que ce qu'Orion dit de lui-même
+
+Six messages par jour, c'était trop bas pour un usage réel, et le 21/10 l'a montré : les
+messages de Victor relayés la nuit ont tout pris, et le point de 8 h 30 a sauté. Or quand
+quelqu'un écrit à Noan (un proche, par le secrétaire, ou un autre Orion), Orion ne décide pas
+de le déranger : il transmet. Ces messages-là ne comptent plus (`Alert.spoken_to`) ; les heures
+calmes et l'arbitre (il a l'air occupé) s'appliquent toujours. Le budget ne limite plus que les
+initiatives d'Orion (points du jour, idées, alertes), et passe à 12 par défaut. Le tableau de
+bord marque à part ce qu'on lui a écrit.

@@ -275,7 +275,12 @@ class InitiativeConfig(BaseModel):
     digests: list[time] = Field(default_factory=lambda: [time(8, 30), time(13, 0), time(19, 0)])
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
-    daily_budget: int = Field(default=6, ge=0, description="Unrequested messages per day, max")
+    daily_budget: int = Field(
+        default=12,
+        ge=0,
+        description="What Orion says of its own accord per day, max (what people write to "
+        "the owner is passed on outside it)",
+    )
     tick_seconds: float = Field(default=30.0, ge=1.0)
 
 

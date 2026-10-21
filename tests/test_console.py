@@ -234,7 +234,8 @@ async def test_the_dashboard_tells_attention_silences_actions_and_cost(
     late = "daily attention budget spent"
     await journal.append(
         [
-            ev("initiative.delivered", **said, key="a", why="Victor t'a écrit"),
+            ev("initiative.delivered", **said, key="a", why="une idée"),
+            ev("initiative.delivered", **said, key="e", why="Victor t'a écrit", unbudgeted=True),
             ev("initiative.delivered", **{**said, "explicit": True}, key="b", why="ton rappel"),
             ev("initiative.suppressed", **said, key="c", why="point", reason=late,
                fallback="Le loyer est dû lundi"),
@@ -249,8 +250,8 @@ async def test_the_dashboard_tells_attention_silences_actions_and_cost(
     )  # fmt: skip
     await logged_in(http, gate)
     page = (await http.get("/console/dashboard")).text
-    assert "1 message(s) de moi-même sur 6" in page  # the asked-for reminder does not count
-    assert "Victor t&#x27;a écrit" in page and "demandé" in page
+    assert "1 message(s) de moi-même sur 12" in page  # neither the reminder nor Victor counts
+    assert "Victor t&#x27;a écrit" in page and "demandé" in page and "on t&#x27;a écrit" in page
     assert "Le loyer est dû lundi" in page and "budget du jour épuisé" in page
     alone = page.split("sans te demander")[1]
     assert "contact_message" in alone and "recall" not in alone

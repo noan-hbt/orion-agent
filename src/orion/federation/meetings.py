@@ -801,6 +801,7 @@ class MeetingDesk:
                 trust=Trust.TRUSTED_PEER,
                 expires_at=c.at + CHAT_TOLD,
                 importance=0.4,
+                spoken_to=True,
             )
             for c in self.state.chats
             if c.at <= now < c.at + CHAT_TOLD

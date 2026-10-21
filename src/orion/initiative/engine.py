@@ -104,6 +104,10 @@ class Alert:
     expires_at: datetime | None = None
     importance: float = 0.5
     """0 to 1: how much the owner would mind missing it (the arbiter weighs it)."""
+    spoken_to: bool = False
+    """Someone wrote to him (one of his contacts, another Orion): passed on, not Orion's own
+    idea, so it does not spend the day's budget (D104). Quiet hours and the arbiter still
+    apply."""
 
 
 class AlertSource(Protocol):
@@ -134,7 +138,7 @@ class InitiativeSettings:
     digest_window: timedelta = timedelta(hours=2)
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
-    daily_budget: int = 6
+    daily_budget: int = 12
     heads_up: timedelta = timedelta(minutes=60)
 
     def is_quiet(self, moment: time) -> bool:
@@ -183,6 +187,8 @@ class Candidate:
     mentions: tuple[str, ...] = ()
     expires_at: datetime | None = None
     importance: float = 0.5
+    budgeted: bool = True
+    """Spends the day's attention budget: what Orion says of its own accord (D104)."""
 
 
 @dataclass(frozen=True)
@@ -238,7 +244,7 @@ class Ledger:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
                 self.last_mention[str(item)] = day
-            if not payload.get("explicit") and not payload.get("bundled"):
+            if not (payload.get("explicit") or payload.get("bundled") or payload.get("unbudgeted")):
                 self.spent[day] = self.spent.get(day, 0) + 1
         self._seq = event.seq
 
@@ -435,6 +441,7 @@ class InitiativeEngine:
                     trust=a.trust,
                     expires_at=a.expires_at,
                     importance=a.importance,
+                    budgeted=not a.spoken_to,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -674,7 +681,8 @@ class InitiativeEngine:
         if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
             return "quiet hours"
         if (
-            self.ledger.spent.get(self._settings.attention_day(now), 0)
+            candidate.budgeted
+            and self.ledger.spent.get(self._settings.attention_day(now), 0)
             >= self._settings.daily_budget
         ):
             return "daily attention budget spent"
@@ -773,6 +781,8 @@ class InitiativeEngine:
             payload["arbiter"] = arbiter
         if bundled:
             payload["bundled"] = True
+        if not candidate.budgeted:
+            payload["unbudgeted"] = True
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)
