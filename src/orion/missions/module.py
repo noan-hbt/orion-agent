@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -44,11 +45,15 @@ class MissionWork:
         self._orion = orion
         self._clock = clock
         self._tick = tick
+        self._woken = asyncio.Event()
+        missions.started.append(self._woken.set)
 
     async def run(self) -> None:
         while True:
             await self.once()
-            await asyncio.sleep(self._tick)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._woken.wait(), self._tick)
+            self._woken.clear()
 
     async def once(self) -> list[str]:
         """Work on every mission that is due; returns those worked on."""
@@ -61,9 +66,16 @@ class MissionWork:
         return done
 
     async def work(self, mission: Mission, now: datetime) -> str:
+        async def closed() -> bool:
+            current = await self._missions.get(mission.id)
+            return current is None or current.closed is not None
+
         turn = await self._orion.handle_initiative(
-            mission.thread, mission.brief(), "mission", mission.trust, now=now
+            mission.thread, mission.brief(), "mission", mission.trust, now=now, halted=closed
         )
+        if turn.reason is StopReason.HALTED:
+            log.info("mission.called_off", mission=mission.id, steps=turn.steps)
+            return ""
         text = turn.text.strip()
         silent = is_silence(text) or (turn.reason is not StopReason.COMPLETED and not text)
         # What it says is only as trustworthy as what the run read.
@@ -122,7 +134,9 @@ class NoteInput(BaseModel):
 class Item(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    key: str = Field(min_length=3, max_length=500, description="Its address or reference")
+    key: str = Field(
+        min_length=3, max_length=500, description="Its address (URL) or reference, in full"
+    )
     label: str = Field(default="", max_length=200, description="A few words: price, place…")
 
 

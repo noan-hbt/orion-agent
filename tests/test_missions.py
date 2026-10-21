@@ -111,3 +111,23 @@ async def test_what_a_mission_read_on_the_web_keeps_its_trust(journal: SqliteJou
     await world.work.once()
     [alert] = await world.work.alerts(world.now)
     assert alert.trust <= Trust.WEB
+
+
+async def test_a_mission_called_off_while_it_runs_stops_there(journal: SqliteJournal) -> None:
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    assert not world.work._woken.is_set()  # pyright: ignore[reportPrivateUsage]
+    await world.use("mission_start", owner, goal="Des billets pour Amsterdam", every_hours=24)
+    assert world.work._woken.is_set()  # pyright: ignore[reportPrivateUsage]  # its first run: now
+    [mission] = await world.missions.active()
+    # He says "leave it" while the run is under way (here, as its first step lands).
+    provider.extend(
+        call_tools(("mission_close", {"mission": mission.id, "outcome": "laisse tomber"})),
+        call_tools(("mission_note", {"note": "Kombo marche bien"})),
+        reply("Premier passage : 96 € l'A/R."),
+    )
+    assert await world.work.once() == [mission.id]
+    assert len(provider.requests) == 2  # it stopped there: no third step, no report
+    assert (await world.missions.get(mission.id)).notes == []  # pyright: ignore[reportOptionalMemberAccess]
+    assert await world.work.alerts(world.now) == []
