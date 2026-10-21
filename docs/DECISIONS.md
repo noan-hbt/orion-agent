@@ -2304,3 +2304,27 @@ Les budgets du message système et des outils (D84) passent à 38 500 et 41 500 
 `relance_le` et `il_a_deja_repondu`, 3/3 sur DeepSeek.
 Pas encore : annuler un rendez-vous de groupe qu'un invité laisse sans réponse (il n'y a pas
 d'outil d'annulation pour celui qui propose) ; Orion peut seulement relancer ou prévenir.
+
+## D110 — Un seul Orion, qui sait ce qu'il peut dire à qui (étend D54 et D91)
+Le 21/10, Noan a ajouté son ami Victor comme proche en lui « autorisant tout ». Le secrétaire
+ne pouvait lui donner que ses disponibilités. Surtout, Victor croyait parler à Orion alors qu'il
+parlait à un appel à part, sans mémoire ni outils, qui porte le même nom : une illusion, que Noan
+ne voulait pas. Désormais, chaque proche a un réglage `talks_with` :
+- `secretary` (par défaut, inchangé) : l'appel à part, qui ne sait que `about` et, si c'est
+  permis, les disponibilités ;
+- `orion` : **Orion lui-même** lui répond, avec sa mémoire, sa personnalité et ses outils, dans
+  un fil à lui (`contact:<adresse>`), comme entre deux Orion (D102). Ce qu'il peut dire est
+  écrit dans `about`, dans les mots du propriétaire (jusqu'à 1 500 caractères) : « tout sauf ma
+  santé ». C'est Orion qui fait le tri, comme un ami à qui on a confié des choses ;
+- ce que le proche écrit garde la confiance d'un tiers : toute action sur le monde que la
+  conversation lui ferait faire est demandée au propriétaire, et la question dit qui l'a demandée
+  (« Victor m'a écrit « … » ») ; `prudent` la refuse ;
+- `tell_owner` : depuis cette conversation, Orion transmet au propriétaire ce qu'il doit savoir
+  ou décider. L'urgent tout de suite, le reste dans le point, avec le reste des échanges ;
+- le reste ne change pas : le gardien n'envoie qu'en réponse, dans les 12 h, sous le plafond du
+  jour ; écrire le premier demande toujours `contact_message`.
+Le risque est accepté en connaissance de cause, comme en D102 : quelqu'un d'habile, ou un message
+piégé envoyé depuis le compte du proche, peut obtenir d'Orion plus que prévu. C'est pourquoi ce
+réglage est réservé aux proches que le propriétaire nomme, et n'est jamais celui par défaut. Il
+est rangé avec les contacts, parmi les réglages du propriétaire : son oui au changement exact,
+jamais Orion seul (D92).
