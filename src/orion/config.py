@@ -67,11 +67,23 @@ class ChatGPTConfig(BaseModel):
     )
 
 
+class ClaudeCodeConfig(BaseModel):
+    """The owner's Claude plan (D100): models named `claude-code:<model>` (`sonnet`, `opus`,
+    `haiku`) are answered by the `claude` command, signed in by the owner (`claude login`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    binary: str = Field(default="claude", description="The Claude Code command")
+    timeout_seconds: float = Field(default=300.0, gt=0)
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     openrouter: OpenRouterConfig = OpenRouterConfig()
     chatgpt: ChatGPTConfig = ChatGPTConfig()
+    claude_code: ClaudeCodeConfig = ClaudeCodeConfig()
 
 
 STRONG_MODEL = "anthropic/claude-opus-5.5"

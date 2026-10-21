@@ -274,7 +274,8 @@ def _scratch_config(base: OrionConfig, data_dir: Path) -> Path | None:
 
 
 def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionConfig:
-    """Production, minus what reaches the outside: no channel, no guardian, no voice, and a
+    """Production, minus what reaches the outside: no channel, no guardian (so no other Orion),
+    no voice, and a
     copy of the config file to change (the owner never approves during an eval, so it stays
     as it is)."""
     channels = base.channels.model_copy(
@@ -289,6 +290,7 @@ def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionCo
             "channels": channels,
             "agent": agent,
             "guardian": base.guardian.model_copy(update={"enabled": False}),
+            "federation": base.federation.model_copy(update={"enabled": False}),
             "voice": base.voice.model_copy(update={"enabled": False}),
         }
     )

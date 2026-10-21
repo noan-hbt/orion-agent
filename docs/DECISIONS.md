@@ -2108,3 +2108,24 @@ nommant tous les invités (`also`) ; après un sondage, il ne laisse partir qu'u
 une disponibilité ne répond qu'à un sondage reçu ; seul celui qui a proposé peut annuler.
 
 Pas encore : un invité qui ne répond jamais bloque le groupe (pas de délai).
+
+## D100 — Le forfait Claude par Claude Code
+
+Noan voulait brancher son abonnement Claude. Les conditions d'Anthropic réservent la connexion
+par compte Claude à Claude Code et aux applications d'Anthropic : une application tierce ne
+doit ni recueillir ni faire transiter ces identifiants. Elles permettent en revanche à
+l'utilisateur de se connecter lui-même au binaire Claude Code non modifié, pour un usage
+individuel. Orion ne touche donc à aucun jeton : il lance `claude --print`, connecté par son
+propriétaire (`claude login` sur le serveur), modèles `claude-code:<modèle>`.
+
+- Claude Code ne prête rien de lui-même : aucun outil (`--tools ""`), ni réglages, ni serveurs
+  MCP, ni session gardée, un dossier vide comme répertoire de travail, et le message système
+  d'Orion à la place du sien (`--system-prompt-file`).
+- Les outils d'Orion voyagent en texte dans ce message système, triés, toujours pareils ; la
+  réponse est un objet JSON vérifié par un schéma (`--json-schema`) : le texte et les appels
+  d'outils. La conversation passe sur stdin, rendue à l'identique d'un appel à l'autre : le
+  préfixe mis en cache chez Anthropic ne bouge pas.
+- Ce qu'il ne sait pas faire ici (images, recherche web) est refusé pour que le routeur passe à
+  un autre fournisseur, comme un forfait épuisé.
+- Si Orion est distribué, chaque utilisateur se connecte avec son propre compte ; Orion n'en
+  revend ni n'en partage jamais l'usage.

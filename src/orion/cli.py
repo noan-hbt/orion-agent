@@ -30,7 +30,7 @@ def _provider(config: OrionConfig) -> Router | None:
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
-        if not config.providers.chatgpt.enabled:
+        if not (config.providers.chatgpt.enabled or config.providers.claude_code.enabled):
             print(f"Impossible de démarrer : {exc}")
             return None
     else:
@@ -50,6 +50,16 @@ def _provider(config: OrionConfig) -> Router | None:
             return None
         providers["chatgpt"] = ChatGPTProvider(
             auth, default_effort=config.providers.chatgpt.reasoning_effort
+        )
+    if config.providers.claude_code.enabled:
+        from orion.providers.claude_code import ClaudeCodeProvider
+
+        cc = config.providers.claude_code
+        if not ClaudeCodeProvider.available(cc.binary):
+            print(f"Impossible de démarrer : la commande {cc.binary!r} (Claude Code) est absente.")
+            return None
+        providers["claude-code"] = ClaudeCodeProvider(
+            config.data_dir / "claude-code", cc.binary, cc.timeout_seconds
         )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
