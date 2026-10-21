@@ -409,6 +409,40 @@ def _write_private(path: Path, text: str) -> None:
     path.chmod(0o600)
 
 
+def _modules(config: OrionConfig, args: argparse.Namespace) -> int:
+    """On the server, as the core's user (`orion-admin --core modules …`): the files only.
+    Turning a module on or off stays a config change, by message or in orion.toml (D105)."""
+    from orion.modules.installer import Installer, InstallError
+
+    installer = Installer(config)
+    here = installer.installed()
+    if args.modules_command == "list":
+        for name, m in sorted(here.items()):
+            on = config.modules.get(name, {}).get("enabled", False)
+            print(f"{name:16} installé, {'allumé' if on else 'éteint'}  ({m.source})")
+        for entry in installer.catalog().values():
+            if entry.name not in here:
+                print(f"{entry.name:16} au catalogue : {entry.description}")
+        return 0
+    try:
+        if args.modules_command == "install":
+            entry = installer.install(args.name)
+            print(
+                f"« {entry.name} » est installé, pas encore allumé : demande-le à Orion, ou "
+                f"`modules.{entry.name}.enabled = true` dans orion.toml, puis redémarre."
+            )
+        else:
+            if config.modules.get(args.name, {}).get("enabled", False):
+                print(f"« {args.name} » est allumé : éteins-le d'abord (demande-le à Orion).")
+                return 1
+            installer.remove(args.name)
+            print(f"« {args.name} » est désinstallé.")
+    except InstallError as exc:
+        print(exc)
+        return 1
+    return 0
+
+
 async def _sessions(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.guardian.ledger import Ledger
     from orion.guardian.sessions import SessionError, add_session, read_state, remove_session
@@ -637,7 +671,7 @@ async def _doctor(config: OrionConfig) -> int:
     except ModuleError as exc:
         print(f"modules:   {exc}")
         return 2
-    for kind in discover():
+    for kind in discover(config):
         module = enabled.get(kind.name)
         detail = "; ".join(module.doctor()) if module else ""
         state = "on" if module else "off"
@@ -859,6 +893,11 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("name", help="A short name for the session, e.g. 'doctolib'")
     login.add_argument("url", help="The site's sign-in page")
     login.add_argument("--out", type=Path, help="Where to write it (default: <name>.session.json)")
+    modules = sub.add_parser("modules", help="Install or remove modules from the catalog (D105)")
+    modules_sub = modules.add_subparsers(dest="modules_command", required=True)
+    modules_sub.add_parser("list", help="Installed modules, and the catalog")
+    for verb in ("install", "remove"):
+        modules_sub.add_parser(verb).add_argument("name")
     sessions = sub.add_parser("sessions", help="Logged-in sessions the guardian keeps")
     sessions_sub = sessions.add_subparsers(dest="sessions_command", required=True)
     sessions_add = sessions_sub.add_parser("add", help="Keep a session made with `orion login`")
@@ -927,6 +966,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_login(args.name, args.url, args.out))
     if args.command == "sessions":
         return asyncio.run(_sessions(config, args))
+    if args.command == "modules":
+        return _modules(config, args)
     if args.command == "places":
         return asyncio.run(_places_token(config))
     if args.command == "library":

@@ -91,9 +91,11 @@ SOURCES_FOR_OWNER = {
 ALONE = "the owner lets Orion do this alone"
 """The reason given when an autonomy the owner granted covers the call."""
 
-NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant"})
+NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant", "module_install", "module_remove"})
 """Never done from a context holding outside content, even with his yes: letting Orion act
-alone is decided in a clean conversation."""
+alone, or adding code to it (D105), is decided in a clean conversation."""
+NEVER_ALONE = frozenset({"module_install", "module_remove"})
+"""Always put to him, whatever autonomy the config lists: code that runs with his memory."""
 
 
 def untrusted_reason(trust: Trust) -> str:
@@ -206,6 +208,7 @@ class Guardian:
         if (
             proposal.context_trust >= TRUSTED_FLOOR
             and self._autonomous is not None
+            and tool.name not in NEVER_ALONE
             and await self._autonomous(tool.name, proposal.arguments.model_dump())
         ):
             return Decision(Verdict.ALLOW, ALONE)

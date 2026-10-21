@@ -183,16 +183,21 @@ class GuardianClient:
         await self.post("/v1/secrets/ask", {"name": name, "why": why})
 
     async def configure(
-        self, changes: list[dict[str, Any]], why: str, grant: str | None
+        self,
+        changes: list[dict[str, Any]],
+        why: str,
+        grant: str | None,
+        module: str = "",
+        removing: bool = False,
     ) -> dict[str, Any]:
         """orion.toml changed by the guardian, which checks the owner's yes itself (D92).
-        Returns whether it changed and the file's digests before and after."""
+        With `module`, the yes is the one to install (or remove) it (D105). Returns whether it
+        changed and the file's digests before and after."""
+        body: dict[str, Any] = {"changes": changes, "why": why}
+        if module:
+            body |= {"module": module, "removing": removing}
         return dict(
-            await self.post(
-                "/v1/config",
-                {"changes": changes, "why": why},
-                headers={GRANT_HEADER: grant} if grant else None,
-            )
+            await self.post("/v1/config", body, headers={GRANT_HEADER: grant} if grant else None)
         )
 
     async def lend_session(

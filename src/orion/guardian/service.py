@@ -220,6 +220,35 @@ def _items(value: object) -> list[Any]:
     return list(cast(list[Any], value)) if isinstance(value, list) else []
 
 
+def _module_install(params: dict[str, Any]) -> str:
+    """The guardian reads the catalog itself: the owner sees its source, not the model's."""
+    from orion.modules.installer import read_catalog
+
+    name = str(params.get("name", ""))
+    entry = read_catalog().get(name)
+    if entry is None:
+        return f"Avant que je le fasse : installer le module « {name} » (absent du catalogue)."
+    reaches = f"\nCe qu'il atteint : {entry.accesses}" if entry.accesses else ""
+    return (
+        f"Avant que je le fasse : installer le module « {name} » : {entry.description}\n"
+        f"Source : {entry.source}{reaches}\n"
+        "C'est du code qui tournera dans Orion avec les mêmes accès que moi, ta mémoire "
+        "comprise : n'accepte que si tu fais confiance à cette source."
+    )
+
+
+def _module_remove(params: dict[str, Any]) -> str:
+    return f"Avant que je le fasse : désinstaller le module « {params.get('name')} »."
+
+
+def _module_switch(action: str, name: str) -> list[dict[str, Any]]:
+    """The one config change a yes to install (or remove) a module also covers."""
+    from orion.configure.module import Change
+
+    on = action == "module_install"
+    return [Change(path=f"modules.{name}.enabled", value=on).described()]
+
+
 def _call_someone(params: dict[str, Any]) -> str:
     return (
         f"Avant que je le fasse : appeler {params.get('name')} au {params.get('number')}.\n"
@@ -283,6 +312,8 @@ class GuardianService:
             "autonomy_grant": _autonomy_grant,
             "computer_task_send": _computer_task_send,
             "configure_change": _configure_change,
+            "module_install": _module_install,
+            "module_remove": _module_remove,
         }
         self.restart: Callable[[], Coroutine[Any, Any, None]] | None = None
         """Restarts this process once it wrote orion.toml (set by `orion guardian`)."""
@@ -749,7 +780,17 @@ class GuardianService:
             return refused("no change", 400)
         params = {"changes": [c.described() for c in changes], "why": body.get("why")}
         grant = request.headers.get(GRANT_HEADER)
-        if grant or not await self.autonomous("configure_change", params):
+        module = str(body.get("module") or "")
+        if module:  # turning on what he just let install, or off what he lets remove (D105)
+            action = "module_remove" if body.get("removing") else "module_install"
+            if params["changes"] != _module_switch(action, module):
+                return await self.deny("configure", f"{action} covers only that module's switch")
+            reason = await self.use_grant(
+                grant, action, lambda p: p.get("name") == module, consume=True
+            )
+            if reason is not None:
+                return await self.deny("configure", reason)
+        elif grant or not await self.autonomous("configure_change", params):
             reason = await self.use_grant(
                 grant,
                 "configure_change",

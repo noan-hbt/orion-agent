@@ -114,7 +114,7 @@ def constitution(
 
 def offers(config: OrionConfig) -> list[str]:
     """Every installed module's offer, in discovery order."""
-    return [offer for kind in discover() for offer in kind(config).offers()]
+    return [offer for kind in discover(config) for offer in kind(config).offers()]
 
 
 def core_tools(plate: Plate) -> list[Tool]:

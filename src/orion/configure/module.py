@@ -53,6 +53,8 @@ from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
+from orion.modules.installer import Installer
+from orion.modules.tools import module_tools
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -208,7 +210,7 @@ def editable_view(config: OrionConfig) -> str:
 
     sections = {name for name in (*ORION_SECTIONS, *OWNER_SECTIONS) if name != "modules"}
     data = _changeable(config.model_dump(mode="json", include=sections))
-    modules = {kind.name: kind(config).enabled for kind in discover()}
+    modules = {kind.name: kind(config).enabled for kind in discover(config)}
     lines = [
         json.dumps(data, ensure_ascii=False, indent=1),
         "Modules (chacun s'active ou s'éteint par `modules.<nom>.enabled`, même absent du "
@@ -265,15 +267,22 @@ class Configurator:
         return None
 
     async def change(
-        self, changes: list[Change], why: str, origin: Provenance, grant: str | None = None
+        self,
+        changes: list[Change],
+        why: str,
+        origin: Provenance,
+        grant: str | None = None,
+        module: str = "",
+        removing: bool = False,
     ) -> str:
+        """`module`: the switch of a module he just let install or remove, under that yes."""
         if self.source is None:
             raise ConfigureError("Orion runs without an orion.toml: nothing to change")
         async with self._lock:
             if self.guardian is not None:
                 try:
                     done = await self.guardian.configure(
-                        [c.described() for c in changes], why, grant
+                        [c.described() for c in changes], why, grant, module, removing
                     )
                 except GuardianUnavailableError as exc:
                     raise ConfigureError(str(exc)) from exc
@@ -422,6 +431,7 @@ class ConfigureModule(Module):
         # `configure_change` by name, and autonomy is granted to it by name (D92).
         self.configurator = Configurator(plate.journal, self.config.source, plate.guardian)
         tools = configure_tools(self.configurator, self.config)
+        tools += module_tools(Installer(self.config), self.configurator)
         if plate.guardian is not None and self.config.guardian.secrets_url:
             tools.append(secret_tool(plate.guardian))
         return tools

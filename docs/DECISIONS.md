@@ -2186,3 +2186,36 @@ de le déranger : il transmet. Ces messages-là ne comptent plus (`Alert.spoken_
 calmes et l'arbitre (il a l'air occupé) s'appliquent toujours. Le budget ne limite plus que les
 initiatives d'Orion (points du jour, idées, alertes), et passe à 12 par défaut. Le tableau de
 bord marque à part ce qu'on lui a écrit.
+
+## D105 — Installer et retirer des modules natifs
+
+Un module tiers pouvait déjà exister (un paquet Python sous `orion.modules`), mais rien ne
+permettait de l'installer, et la mise à jour automatique (`uv sync --frozen`) l'aurait effacé
+au passage suivant, laissant Orion refuser de démarrer. Désormais :
+
+- **un catalogue** (`catalog/modules/<nom>.toml`) : description, ce que le module atteint, ce
+  qu'il faut régler, et une source à une seule version exacte (`path:` dans le dépôt,
+  `paquet==version`, ou `git+…@commit complet`) ; une source non épinglée n'est pas proposée ;
+- **un dossier à part** : chaque module dans `data/modules/site/<nom>`, listé dans
+  `installed.toml`, ajouté au chemin d'Orion après ses propres paquets. L'environnement du code
+  n'est pas touché : une mise à jour les garde, et retirer un module, c'est effacer son dossier ;
+- **installer** : dans un dossier temporaire ; un autre processus Python vérifie que le point
+  d'entrée se charge et que c'est bien le module annoncé ; puis il prend sa place, et
+  l'interrupteur `modules.<nom>.enabled` est écrit si Orion démarre avec (sinon il reste éteint
+  et dit ce qu'il faut régler) ; Orion redémarre ;
+- **qui fait quoi** : un module tourne dans le cœur, avec ses accès, la mémoire comprise. C'est
+  donc le cœur qui l'installe : les scripts d'un paquet tournent avec exactement les droits
+  qu'aura le module, jamais près des secrets. Le gardien n'importe jamais le code d'un module :
+  il sait seulement lesquels sont installés. Il vérifie le oui du propriétaire et, sous ce même
+  oui, écrit l'interrupteur, et rien d'autre ;
+- **le oui** : `module_install` et `module_remove` sont toujours demandés au propriétaire
+  (jamais seuls, quelle que soit l'autonomie listée), jamais depuis une conversation qui
+  contient du contenu extérieur ; la question, écrite par le gardien à partir du catalogue,
+  montre la source exacte et rappelle que ce code aura accès à sa mémoire ;
+- **retirer** : l'interrupteur passe à faux, puis le dossier est effacé ; une section éteinte
+  laissée par un module retiré n'empêche plus Orion de démarrer ;
+- sur le serveur : `orion-admin --core modules list|install|remove <nom>`.
+
+Un module d'exemple, `des` (`examples/modules/orion-des`), montre la forme : il lance des dés
+au hasard, sans réseau ni mémoire. Les modules isolés (hors du processus d'Orion, sans accès à
+sa mémoire), pour une bibliothèque ouverte à tous, viendront ensuite.

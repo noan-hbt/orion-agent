@@ -1,0 +1,4 @@
+name = "des"
+description = "Lancer des dés ou tirer à pile ou face, vraiment au hasard (un module d'exemple)."
+source = "path:examples/modules/orion-des"
+accesses = "rien : il tire des nombres au hasard, sans réseau ni mémoire"

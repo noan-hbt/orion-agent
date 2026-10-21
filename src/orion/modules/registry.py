@@ -1,4 +1,5 @@
-"""Finding and ordering modules: the built-in ones, then those installed as packages."""
+"""Finding and ordering modules: the built-in ones, then those installed as packages (in
+Orion's environment, or by `orion modules install` into its data folder, D105)."""
 
 from __future__ import annotations
 
@@ -98,8 +99,12 @@ def builtin_modules() -> list[type[Module]]:
     ]
 
 
-def discover() -> list[type[Module]]:
+def discover(config: OrionConfig | None = None) -> list[type[Module]]:
     """Every module Orion knows about, built-in first. Names must be unique."""
+    if config is not None:
+        from orion.modules.installer import activate, modules_dir
+
+        activate(modules_dir(config))
     found = builtin_modules()
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         loaded = entry.load()
@@ -116,11 +121,19 @@ def discover() -> list[type[Module]]:
 def load(config: OrionConfig, available: list[type[Module]] | None = None) -> list[Module]:
     """The enabled modules, each after the modules it requires. Fails closed on a module that
     is configured but not installed, or enabled without what it needs."""
-    kinds = available if available is not None else discover()
+    from orion.modules.installer import imports_modules, installed, modules_dir
+
+    kinds = available if available is not None else discover(config)
     known = {kind.name for kind in kinds}
-    for name in config.modules:
-        if name not in known:
-            raise ModuleError(f"[modules.{name}] is configured but no such module is installed")
+    unread: set[str] = set()
+    if not imports_modules():  # the guardian: installed modules are known, never imported
+        unread = set(installed(modules_dir(config))) - known
+    for name, section in config.modules.items():
+        if name in known or name in unread:
+            continue
+        if not section.get("enabled", False):
+            continue  # left behind by a removed module, off: harmless
+        raise ModuleError(f"[modules.{name}] is configured but no such module is installed")
     enabled = {module.name: module for module in (kind(config) for kind in kinds) if module.enabled}
     for module in enabled.values():
         for needed in module.requires:

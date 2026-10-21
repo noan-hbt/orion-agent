@@ -122,6 +122,9 @@ def federation_edge(service: GuardianService) -> FederationEdge:
 
 
 async def run(config: OrionConfig) -> None:
+    from orion.modules.installer import trust_no_module
+
+    trust_no_module()  # a module's code runs in the core, never beside the secrets (D105)
     os.umask(0o077)  # the ledger and everything else the guardian writes: its own only
     _private_dir(config.guardian.data_dir)
     clock = HybridClock(f"{config.instance}-guardian")
