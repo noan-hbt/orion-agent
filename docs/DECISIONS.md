@@ -2085,3 +2085,26 @@ Désormais :
   1 h et 2 h comptaient pour le mercredi, et le budget du jour (6) était épuisé avant le
   point de 8 h 30. Ce qui part pendant les heures calmes après minuit compte désormais pour la
   veille (`InitiativeSettings.attention_day`).
+
+## D99 — Un rendez-vous à plusieurs Orion
+
+Le test du 21/10 a marché à deux ; un groupe demandait plus que des propositions en parallèle :
+chaque Orion aurait pris le premier créneau libre pour lui, pas pour tous. Un rendez-vous à
+plusieurs reste une négociation à deux par invité, liées par un identifiant de groupe :
+
+- **sondage** (`meeting.poll`) : l'Orion qui demande envoie à chacun ses créneaux libres, avec
+  le nom des autres invités. Chacun répond par du code (`meeting.available`) lesquels sont
+  libres pour lui : c'est ce qu'un refus « aucun créneau » disait déjà à deux, et personne
+  n'est dérangé ;
+- **proposition** : le premier créneau libre pour tous (et toujours pour lui) est proposé à
+  chacun comme une proposition ordinaire, d'un seul créneau. Chaque propriétaire dit oui une
+  fois, en voyant avec qui ;
+- **confirmation** seulement quand tous ont accepté : un engagement et une ligne d'agenda pour
+  le groupe, un seul message au propriétaire. Un refus annule chez ceux qui avaient dit oui
+  (`meeting.cancel`), qui retrouvent leur créneau, et le propriétaire apprend qui et pourquoi.
+
+Le gardien tient chaque étape : un seul oui du propriétaire couvre les sondages du groupe, en
+nommant tous les invités (`also`) ; après un sondage, il ne laisse partir qu'un créneau sondé ;
+une disponibilité ne répond qu'à un sondage reçu ; seul celui qui a proposé peut annuler.
+
+Pas encore : un invité qui ne répond jamais bloque le groupe (pas de délai).

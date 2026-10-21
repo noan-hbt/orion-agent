@@ -26,6 +26,11 @@ class MeetingProposeInput(BaseModel):
     duration_minutes: int = Field(ge=15, le=480)
     window_start: str = Field(description="ISO date-time: earliest start, local time")
     window_end: str = Field(description="ISO date-time: latest end, local time")
+    also: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description="For a meeting of several: the other people's Orions invited too",
+    )
 
 
 class MeetingsInput(BaseModel):
@@ -64,12 +69,20 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
                 end,
                 ctx.grant,
                 ctx.correlation_id,
+                also=args.also,
             )
         except LookupError as exc:
             return ToolResult(f"Not sent: {exc}.", is_error=True)
         except GuardianUnavailableError as exc:
             return ToolResult(f"Not sent, the guardian refused: {exc}", is_error=True)
         offered = ", ".join(describe_moment(s, ctx.timezone) for s in slots)
+        if args.also:
+            return ToolResult(
+                f"Sondage envoyé ({meeting_id}) à {len(args.also) + 1} Orion avec "
+                f"{len(slots)} créneau(x) libre(s) : {offered}. Le premier qui va à tout le "
+                "monde leur sera proposé ; la réponse arrivera d'elle-même.",
+                data={"meeting_id": meeting_id},
+            )
         return ToolResult(
             f"Proposition envoyée ({meeting_id}) avec {len(slots)} créneau(x) libre(s) : "
             f"{offered}. La réponse arrivera d'elle-même.",
@@ -103,8 +116,9 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
             name="meeting_propose",
             description="Arrange a meeting with someone through their Orion: offers the owner's "
             "free slots in the window (nothing else of their calendar), the other Orion picks "
-            "one with its owner's agreement. Needs the owner's approval. The outcome is "
-            "reported when it lands.",
+            "one with its owner's agreement. Several people: `also`, and the first slot free "
+            "for everyone is found. Needs the owner's approval. The outcome is reported when it "
+            "lands.",
             input_model=MeetingProposeInput,
             handler=meeting_propose,
             effect=Effect.EXTERNAL,

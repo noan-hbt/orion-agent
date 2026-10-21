@@ -594,3 +594,131 @@ async def test_the_guardian_will_not_federate_without_an_address_or_a_key(
         monkeypatch.delenv("ORION_FEDERATION_KEY", raising=False)
         with pytest.raises(GuardianError, match="keygen"):
             federation_edge(g.service)
+
+
+# -- three Orions (D99) -----------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def three_orions(tmp_path: Path) -> AsyncGenerator[tuple[Side, Side, Side]]:
+    """Noan is busy 9-12, Paul 12-14 and Lea 14-16 on the 20th: the 21st at 9:00 is common."""
+    net = Net()
+    async with AsyncExitStack() as stack:
+        noan = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Noan", ics((at(20, 9), at(20, 12))))
+        )
+        paul = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Paul", ics((at(20, 12), at(20, 14))))
+        )
+        lea = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Lea", ics((at(20, 14), at(20, 16))))
+        )
+        for side in (paul, lea):
+            invite = await noan.guardian.client.post(
+                "/v1/federation/invites", {"label": side.name}, ADMIN
+            )
+            await side.guardian.client.post(
+                "/v1/federation/accept", {"code": invite["code"], "label": "Noan"}, ADMIN
+            )
+        await noan.step()  # the introductions
+        yield noan, paul, lea
+
+
+async def test_three_orions_find_the_first_slot_free_for_everyone(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        text, failed = await propose(noan, also=["Lea"])
+        assert not failed, text
+        assert "l'Orion de Paul et de Lea" in noan.owner.asked[0]
+        await paul.step()
+        await lea.step()  # each answers the poll by code: nobody is asked yet
+        assert paul.owner.asked == [] and lea.owner.asked == []
+        await noan.step()  # both answers in: the 21st at 9:00 goes to each
+        await paul.step()
+        await lea.step()
+        for side in (paul, lea):
+            [question] = side.owner.asked
+            assert "mercredi 2026-10-21 à 09:00" in question and "avec aussi" in question
+        assert "avec aussi Lea" in paul.owner.asked[0]
+        await noan.step()  # both accepted: confirmed to each
+        await paul.step()
+        await lea.step()
+        assert len(noan.owner.asked) == 1
+        [commitment] = await noan.app.memory.store.commitments()
+        assert commitment.what.startswith("Déjeuner avec Paul et Lea")
+        assert commitment.due == at(21, 9).isoformat()
+        told = [r.notice for r in await noan.desk.reports() if "calé" in r.notice]
+        assert told == [told[0]] and "les Orion de Paul et Lea" in told[0]
+        [written] = noan.written
+        assert written.start == at(21, 9)
+        [theirs] = await paul.app.memory.store.commitments()
+        assert theirs.what.startswith("Déjeuner avec Noan et Lea")
+        assert any("avec aussi Lea" in r.notice for r in await paul.desk.reports())
+
+
+async def test_one_no_calls_the_group_off_for_everyone(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        lea.owner.says = False
+        await propose(noan, also=["Lea"])
+        for side in (paul, lea, noan, paul, lea, noan, paul):
+            await side.step()
+        assert [m.status for m in paul.desk.state.meetings.values()] == ["cancelled"]
+        assert any("annule « Déjeuner »" in r.notice for r in await paul.desk.reports())
+        assert await paul.app.memory.store.commitments() == []
+        assert await noan.app.memory.store.commitments() == []
+        assert any(
+            "pour Lea, son propriétaire a décliné" in r.notice for r in await noan.desk.reports()
+        )
+        # The slot Paul had said yes to is his again.
+        assert (at(21, 9), at(21, 10)) not in await paul.desk.busy(at(21, 0), at(22, 0))
+
+
+async def test_no_slot_for_everyone_asks_nobody(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        await propose(
+            noan, also=["Lea"], window_start="2026-10-20T12:00", window_end="2026-10-20T16:00"
+        )
+        for side in (paul, lea, noan):
+            await side.step()
+        assert paul.owner.asked == [] and lea.owner.asked == []
+        assert any("Pas de créneau commun" in r.notice for r in await noan.desk.reports())
+
+
+async def test_the_guardian_keeps_a_group_to_what_was_polled(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, _lea):
+        client = noan.guardian.client
+        approved = {
+            "peer": "Paul",
+            "also": ["Lea"],
+            "title": "Déjeuner",
+            "duration_minutes": 60,
+            "window_start": "2026-10-20T09:00",
+            "window_end": "2026-10-21T19:00",
+        }
+        grant, message_id = await client.request_approval(
+            "meeting_propose", approved, "", CONVERSATION
+        )
+        noan.guardian.fake.react(message_id, "like")
+        body: dict[str, object] = {
+            "title": "Déjeuner",
+            "duration_minutes": 60,
+            "window_start": at(20, 9).isoformat(),
+            "window_end": at(21, 19).isoformat(),
+            "slots": [at(21, 9).isoformat(), at(21, 11).isoformat()],
+            "group": ["Lea"],
+        }
+        await client.federation_send("Paul", "meeting.poll", "m1", body, grant)
+        await client.federation_send("Lea", "meeting.poll", "m2", body, grant)  # one yes, both
+        other = {**body, "slots": [at(21, 15).isoformat()]}
+        with pytest.raises(GuardianUnavailableError, match="one of the slots polled"):
+            await client.federation_send("Paul", PROPOSE, "m1", other)
+        with pytest.raises(GuardianUnavailableError, match="only answers a poll"):
+            await paul.guardian.client.federation_send(
+                "Noan", "meeting.available", "m7", {"slots": []}
+            )
+        with pytest.raises(GuardianUnavailableError, match="only the one who proposed"):
+            await paul.guardian.client.federation_send(
+                "Noan", "meeting.cancel", "m1", {"reason": "group_failed"}
+            )
+        await client.federation_send(
+            "Paul", PROPOSE, "m1", {**body, "slots": [at(21, 9).isoformat()]}
+        )

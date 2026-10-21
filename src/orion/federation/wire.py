@@ -25,7 +25,12 @@ PROPOSE = "meeting.propose"
 ACCEPT = "meeting.accept"
 DECLINE = "meeting.decline"
 CONFIRM = "meeting.confirm"
+POLL = "meeting.poll"
+AVAILABLE = "meeting.available"
+CANCEL = "meeting.cancel"
 MAX_SLOTS = 8
+MAX_GROUP = 5
+"""Other Orions invited to the same meeting, besides the one a message goes to."""
 SCHEDULING = "scheduling"
 INVITE_PREFIX = "orion-invite:"
 
@@ -70,11 +75,19 @@ class Propose(_Body):
     window_start: datetime
     window_end: datetime
     slots: tuple[datetime, ...] = Field(min_length=1, max_length=MAX_SLOTS)
+    group: tuple[str, ...] = Field(default=(), max_length=MAX_GROUP)
+    """A meeting of several: the names of the others invited, as the sender knows them. Shown
+    to the owner asked, nothing more."""
 
     @field_validator("title")
     @classmethod
     def _title(cls, value: str) -> str:
         return clean_title(value)
+
+    @field_validator("group")
+    @classmethod
+    def _group(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return tuple(_clean(name, 60) or "?" for name in value)
 
 
 class Accept(_Body):
@@ -83,6 +96,19 @@ class Accept(_Body):
 
 class Confirm(_Body):
     slot: datetime
+
+
+class Available(_Body):
+    """The answer to a poll: which of the starts offered are free. Code answers it, the owner
+    is asked once the group has a common slot (D99)."""
+
+    slots: tuple[datetime, ...] = Field(max_length=MAX_SLOTS)
+
+
+class Cancel(_Body):
+    """From the one who proposed: the group meeting will not happen, forget the slot."""
+
+    reason: Literal["group_failed"]
 
 
 class Decline(_Body):
@@ -96,6 +122,9 @@ BODIES: dict[str, type[_Body]] = {
     ACCEPT: Accept,
     DECLINE: Decline,
     CONFIRM: Confirm,
+    POLL: Propose,
+    AVAILABLE: Available,
+    CANCEL: Cancel,
 }
 
 

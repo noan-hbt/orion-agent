@@ -41,9 +41,12 @@ from orion.core.ids import new_id
 from orion.federation.crypto import Identity, fingerprint, verify
 from orion.federation.wire import (
     ACCEPT,
+    AVAILABLE,
+    CANCEL,
     CONFIRM,
     DECLINE,
     INTRODUCE,
+    POLL,
     PROPOSE,
     SCHEDULING,
     Envelope,
@@ -198,7 +201,10 @@ class FederationEdge:
 
     def _render_propose(self, params: dict[str, Any]) -> str:
         peer = self.find(str(params.get("peer", "")))
-        who = peer.label if peer else params.get("peer")
+        who = peer.label if peer else str(params.get("peer"))
+        names = [who, *_also(params)]
+        if len(names) > 1:
+            who = ", de ".join(names[:-1]) + f" et de {names[-1]}"
         return (
             f"Avant que je le fasse : proposer à l'Orion de {who} « {params.get('title')} » "
             f"({params.get('duration_minutes')} min), entre "
@@ -215,6 +221,8 @@ class FederationEdge:
             if proposal
             else "un rendez-vous"
         )
+        if proposal and proposal.group:
+            what += ", avec aussi " + ", ".join(proposal.group)
         who = peer.label if peer else params.get("peer")
         return (
             f"L'Orion de {who} propose {what}. Tu es libre {self._human(params.get('slot'))} : "
@@ -291,6 +299,22 @@ class FederationEdge:
     async def _outbound_policy(
         self, peer: Peer, kind: str, context: str, body: Any, grant: str | None
     ) -> str | None:
+        if kind == POLL:  # one yes covers every Orion of the group, until it expires
+            return await self.service.use_grant(
+                grant,
+                "meeting_propose",
+                lambda p: self._matches_proposal(p, peer, body),
+                consume=False,
+            )
+        if kind == PROPOSE and (polled := self._exchanged("out", peer, context, POLL)):
+            asked = Propose.model_validate(polled["body"])
+            if (
+                len(body.slots) != 1
+                or body.slots[0] not in asked.slots
+                or (body.title, body.duration_minutes) != (asked.title, asked.duration_minutes)
+            ):
+                return "after a poll, propose one of the slots polled, for the same meeting"
+            return None
         if kind == PROPOSE:
             return await self.service.use_grant(
                 grant,
@@ -312,6 +336,17 @@ class FederationEdge:
                 ),
                 consume=True,
             )
+        if kind == AVAILABLE:
+            polled = self._exchanged("in", peer, context, POLL)
+            if polled is None or not set(body.slots) <= set(
+                Propose.model_validate(polled["body"]).slots
+            ):
+                return "availability only answers a poll received, with the starts it offered"
+            return None
+        if kind == CANCEL:
+            if self._exchanged("out", peer, context, PROPOSE) is None:
+                return "only the one who proposed a meeting can call it off"
+            return None
         if kind == DECLINE:
             if self._received_proposal(peer, context) is None:
                 return "a refusal only answers a proposal received from this peer"
@@ -333,8 +368,9 @@ class FederationEdge:
             self._moment(params.get("window_start")),
             self._moment(params.get("window_end")),
         )
+        invited = [str(params.get("peer", "")), *_also(params)]
         return (
-            self.find(str(params.get("peer", ""))) == peer
+            peer in [self.find(name) for name in invited]
             and clean_title(str(params.get("title", ""))) == body.title
             and params.get("duration_minutes") == body.duration_minutes
             and start == body.window_start
@@ -541,6 +577,12 @@ class FederationEdge:
             return False
         recent.append(now)
         return True
+
+
+def _also(params: dict[str, Any]) -> list[str]:
+    """The other Orions of a meeting of several, as the owner approved it (D99)."""
+    also: Any = params.get("also") or []
+    return [str(a) for a in cast(list[Any], also)] if isinstance(also, list) else []
 
 
 def _fp(card: PeerCard) -> str:
