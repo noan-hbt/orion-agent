@@ -116,6 +116,7 @@ def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None
         "photos",
         "papers",
         "thinking",
+        "awaiting",
         "chronicle",
         "intentions",
         "relations",

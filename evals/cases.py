@@ -32,6 +32,12 @@ OWNER = (
     "A eu un constat (accident) et doit remplir les papiers d'assurance.",
 )
 """What Orion knew of the owner on 20/10, for cases where an empty memory would not be real."""
+AWAITING_OWNER = (
+    "Le mardi 21/10 à 10:00, tu attendais sa réponse : {about}. Rien depuis. Si ça compte "
+    "encore, relance-le en une phrase, sans reproche ; s'il a répondu autrement ou que ça ne "
+    "vaut plus la peine, réponds SILENCE."
+)
+"""The notice `awaiting` writes for a question to him left unanswered (D109)."""
 WEEKDAY_OR_DATE = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|\b\d{1,2}/\d{1,2}\b"
 
 CASES: tuple[Case, ...] = (
@@ -517,5 +523,44 @@ CASES: tuple[Case, ...] = (
         live_web=True,
         modules=("web",),
         off=("console",),
+    ),
+    Case(
+        name="relance_le",
+        origin="Attendre une réponse (D109) : la question est restée sans réponse ; Orion "
+        "revient dessus, court et sans reproche.",
+        at=paris(2026, 10, 21, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say("faut que je choisisse le resto pour l'anniv de ma mère, je te redis le jour"),
+            Notice(
+                AWAITING_OWNER.format(about="quel jour il fête l'anniversaire de sa mère"),
+                "pas de réponse",
+                Trust.SYSTEM,
+                at=paris(2026, 10, 22, 18, 0),
+            ),
+        ),
+        checks=(
+            judged(
+                "La réponse lui redemande-t-elle le jour de l'anniversaire de sa mère, en une "
+                "ou deux phrases, sans reproche ?"
+            ),
+        ),
+    ),
+    Case(
+        name="il_a_deja_repondu",
+        origin="Témoin du précédent : il a répondu entre-temps ; Orion ne relance pas.",
+        at=paris(2026, 10, 21, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say("faut que je choisisse le resto pour l'anniv de ma mère, je te redis le jour"),
+            Say("c'est samedi midi finalement", at=paris(2026, 10, 21, 14, 0)),
+            Notice(
+                AWAITING_OWNER.format(about="quel jour il fête l'anniversaire de sa mère"),
+                "pas de réponse",
+                Trust.SYSTEM,
+                at=paris(2026, 10, 22, 18, 0),
+            ),
+        ),
+        checks=(says(r"^\s*SILENCE\.?\s*$", "it nudged him about what he already answered"),),
     ),
 )

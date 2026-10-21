@@ -20,10 +20,12 @@ from orion.modules.base import Module, ModuleError
 from orion.modules.registry import builtin_modules
 from tests.fakes import ScriptedProvider
 
-CONSTITUTION_ALL_MODULES = 38_000
-"""Characters of the system message with every built-in module on (34.7k on 20/10/2026)."""
-TOOLS_DEFAULT = 40_000
-"""Characters of the tool schemas with the default modules (35.2k on 20/10/2026)."""
+CONSTITUTION_ALL_MODULES = 38_500
+"""Characters of the system message with every built-in module on (34.7k on 20/10/2026; 38.4k
+on 21/10 with `awaiting`, D109)."""
+TOOLS_DEFAULT = 41_500
+"""Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 41.0k on
+21/10 with `awaiting`, D109)."""
 ONE_TOOL = 2_600
 """Characters of one tool's schema, actions included (the largest, `mission`: 2.3k)."""
 
