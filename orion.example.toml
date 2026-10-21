@@ -17,8 +17,8 @@ max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
 prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
 approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
-                             # acting on the world (refused there anyway); "prudent" also asks
-                             # before each memory, reminder or voice message (D85)
+                             # acting on the world, saying why (D90); "prudent" refuses that, and
+                             # asks before each memory, reminder or voice message (D85)
 extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
 fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
 verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family
@@ -35,7 +35,7 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # What Orion may spend on models (D79). What it does on its own (the night, curiosity,
 # missions, initiative) stops at the day's or the month's ceiling; answering you never does.
 # It tells you at 80 % of the month, and when it pauses. `spending` answers « combien tu m'as
-# coûté ? ». Not changeable by message.
+# coûté ? ». Changed by message only with your yes, never alone (D92).
 [budget]
 daily_usd = 3.0
 monthly_usd = 40.0
@@ -75,7 +75,8 @@ approval_timeout_seconds = 900   # no answer means no
 # Telegram through a bot of your own (D88): free, no daily cap, beside iMessage or instead of it.
 # Create the bot with @BotFather, set TELEGRAM_BOT_TOKEN on the server, write to the bot once:
 # Orion logs your user id (telegram.stranger), which goes in owner_id. Orion answers where you
-# wrote from. Not yet through the guardian process: it refuses to load with [guardian] enabled.
+# wrote from. With [guardian] enabled, TELEGRAM_BOT_TOKEN goes in the guardian's environment
+# only: it holds the token and asks for approvals itself (D89).
 [channels.telegram]
 enabled = false
 bot_token = { env = "TELEGRAM_BOT_TOKEN" }
@@ -87,7 +88,7 @@ enabled = true
 digests = ["08:30:00", "13:00:00", "19:00:00"]
 quiet_start = "22:30:00"
 quiet_end = "08:00:00"
-daily_budget = 6                 # unrequested messages per day
+daily_budget = 12                # what Orion says of its own accord, per day
 tick_seconds = 30
 
 # How Orion learns to work with you: from what you tell it (immediately), from your reactions
@@ -133,7 +134,7 @@ approval_ttl_seconds = 1800      # an approval is used once, within this delay
 max_sends_per_minute = 30
 core_silence_alert_seconds = 300 # the guardian texts you when the core has been silent this long; 0 = never
 heartbeat_seconds = 60           # the core tells the guardian it is alive
-autonomable = ["calendar_add", "configure_change"]   # actions you may let Orion do alone,
+autonomable = ["calendar_add", "configure_change", "contact_message"]   # actions you may let Orion do alone,
                                  # once earned (configure_change: its own settings, D72); add
                                  # "mail_send" and "computer_task_send" to allow them within
                                  # limits you state (recipients, sites)
@@ -154,8 +155,8 @@ listen_port = 8788
 invite_days = 7
 max_inbound_per_hour = 60            # per paired Orion
 meeting_start = "09:00:00"           # meetings start no earlier…
-meeting_end = "19:00:00"             # …and end no later
-weekends = false
+meeting_end = "23:00:00"             # …and end no later (a film, a dinner)
+weekends = true
 
 # Your calendars (M6), read through their secret iCal address:
 # - Google: calendar settings > "Secret address in iCal format";
@@ -278,7 +279,8 @@ max_steps = 30
 # The control page: memory, commitments, playbook, autonomy, activity, suspicious sources.
 # Served by the core on host:port; reach it through a one-time link Orion texts you (ask it),
 # or `orion console link`. Put it behind your HTTPS proxy and set public_url to use it from
-# your phone.
+# your phone. With Telegram, a « Console » button then sits in your chat with the bot: it opens
+# the console inside Telegram, no link needed (D91).
 [modules.console]
 enabled = false
 host = "127.0.0.1"
@@ -287,16 +289,19 @@ port = 8790
 
 # Orion's hands (D1): `orion hand` on your own machines dials out to the server and offers what
 # you allow there (notifications, finding and reading files in chosen folders, opening pages
-# with your approval). Pair a machine: `orion hands pair mac` on the server gives a code, then
-# on the Mac: `uv tool install git+https://github.com/noan-hbt/orion-agent` and
+# with your approval). Pair a machine: `orion hands pair <name>` on the server gives a code,
+# then on that machine (Windows, Linux or Mac): `uv tool install git+https://github.com/noan-hbt/orion-agent` and
 # `orion hand pair https://orion.example.com <code> --root ~/Documents`, then `orion hand run`.
 [modules.hands]
 enabled = false
 host = "127.0.0.1"               # behind your HTTPS proxy at /hands/
 port = 8792
 
-# Le secrétaire (D54) : les proches qui peuvent écrire à Orion. Relance `orion inkbox setup`
-# après chaque changement, puis demande-leur d'envoyer la commande de connexion qu'il affiche.
+# Le secrétaire (D54, D91, D93) : les proches qui peuvent écrire à Orion, et à qui il écrit
+# (« dis à Angèle que j'arrive », ou seul si tu le lui permets pour cette personne). Sur
+# Telegram, ils écrivent au bot ; Orion te donne leur id et les ajoute lui-même si tu veux (D92).
+# Sur iMessage, leur numéro, puis relance `orion inkbox setup` et demande-leur d'envoyer la
+# commande de connexion.
 # [modules.secretary]
 # enabled = true
 # [[modules.secretary.contacts]]
@@ -304,3 +309,37 @@ port = 8792
 # number = "+33600000001"
 # about = "ma mère, elle s'inquiète vite"
 # share = ["availability"]
+# [[modules.secretary.contacts]]
+# name = "Angèle"
+# telegram_id = 123456789
+# about = "ma copine"
+# share = ["availability"]
+
+# Le récap du soir (D93) : le dernier point de la journée (`[initiative] digests`) commence par
+# ce qu'Orion a fait pour toi aujourd'hui. Allumé par défaut.
+# [modules.recap]
+# enabled = false
+
+# Les skills (D95) : du savoir-faire en texte (data/skills/*.md), lu quand une tâche l'appelle.
+# « Retiens cette procédure comme skill », ou pioche dans le catalogue public (`catalog/`).
+# [modules.skills]
+# catalog_urls = ["https://exemple.org/orion-catalog/index.json"]   # d'autres catalogues
+
+# Les serveurs MCP (D95) : leurs outils deviennent ceux d'Orion. Chaque outil demande ton oui,
+# sauf ceux de `read_only`. Le jeton se saisit par le formulaire du gardien (D94).
+# [modules.mcp]
+# enabled = true
+# [[modules.mcp.servers]]
+# name = "github"
+# url = "https://api.githubcopilot.com/mcp/"
+# token = { env = "GITHUB_MCP_TOKEN" }
+# read_only = ["search_repositories", "get_file_contents"]
+# [[modules.mcp.servers]]
+# name = "fichiers"
+# command = ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/srv/partage"]  # serveur seulement
+
+# Le shell (D96) : Orion lance une commande sur son serveur, dans data/workspace, avec un
+# environnement sans aucune clé. Tu approuves chaque commande exacte. L'allumer : ton oui.
+# [modules.shell]
+# enabled = true
+# max_seconds = 120

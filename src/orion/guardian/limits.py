@@ -5,7 +5,7 @@ actions can only be granted with them: Orion never mails a stranger alone, and n
 form alone on a site the owner did not name.
 
 - `recipients`: every recipient must be one of these addresses, or end with one of these
-  `@domains`;
+  `@domains` (for `contact_message`: the contacts' names);
 - `domains`: every site the action may send to must be one of these domains (or under one).
 
 The guardian process checks them (it holds what the action needs: the mail password, the
@@ -18,7 +18,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-REQUIRED = {"mail_send": "recipients", "computer_task_send": "domains"}
+from orion.configure.paths import owners
+
+REQUIRED = {
+    "mail_send": "recipients",
+    "computer_task_send": "domains",
+    "contact_message": "recipients",
+}
 """Actions that can only be granted with this limit set."""
 ASKED_ALWAYS = ("agent.approvals",)
 """Settings Orion never changes alone, whatever it was granted: what it asks him (D85)."""
@@ -69,16 +75,19 @@ def _recipient_in(address: str, allowed: list[str]) -> bool:
 
 def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
     """Whether an action with these parameters stays inside the autonomy's limits."""
-    if action == "configure_change" and any(
-        _path(change) in ASKED_ALWAYS for change in _items(params.get("changes"))
+    if action == "configure_change" and (
+        owners(_items(params.get("changes")))
+        or any(_path(change) in ASKED_ALWAYS for change in _items(params.get("changes")))
     ):
-        return False
+        return False  # the owner's settings, and what Orion asks him, never alone (D92)
     if limits is None:
         return action not in REQUIRED
     if missing(action, limits):
         return False
     if limits.recipients:
-        recipients = [r for key in ("to", "cc", "bcc") for r in _strings(params.get(key)) if r]
+        recipients = [
+            r for key in ("to", "cc", "bcc", "contact") for r in _strings(params.get(key)) if r
+        ]
         if not recipients or not all(_recipient_in(r, limits.recipients) for r in recipients):
             return False
     if limits.domains:
@@ -101,6 +110,8 @@ def _path(change: object) -> str:
 
 
 def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
     if isinstance(value, list | tuple):
         items: list[object] = list(value)  # pyright: ignore[reportUnknownArgumentType]
         return [str(item) for item in items]

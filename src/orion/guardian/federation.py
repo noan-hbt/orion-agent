@@ -41,10 +41,14 @@ from orion.core.ids import new_id
 from orion.federation.crypto import Identity, fingerprint, verify
 from orion.federation.wire import (
     ACCEPT,
+    AVAILABLE,
+    CANCEL,
     CONFIRM,
     DECLINE,
     INTRODUCE,
+    POLL,
     PROPOSE,
+    SAY,
     SCHEDULING,
     Envelope,
     Introduce,
@@ -78,6 +82,10 @@ log = structlog.get_logger(__name__)
 
 ADMIN_HEADER = "X-Orion-Admin"
 CLOCK_SKEW = timedelta(minutes=10)
+ANSWER_WINDOW = timedelta(hours=6)
+"""An Orion that wrote may be answered without asking the owner, this long after (D102)."""
+SAYS_PER_DAY = 30
+"""What one conversation between two Orions may cost: a ping-pong stops here."""
 MAX_BODY = 16_000
 
 
@@ -163,6 +171,7 @@ class FederationEdge:
         )
         self.service.renderers["meeting_propose"] = self._render_propose
         self.service.renderers["meeting_accept"] = self._render_accept
+        self.service.renderers["peer_message"] = self._render_say
 
     def public_app(self) -> Starlette:
         return Starlette(
@@ -198,7 +207,10 @@ class FederationEdge:
 
     def _render_propose(self, params: dict[str, Any]) -> str:
         peer = self.find(str(params.get("peer", "")))
-        who = peer.label if peer else params.get("peer")
+        who = peer.label if peer else str(params.get("peer"))
+        names = [who, *_also(params)]
+        if len(names) > 1:
+            who = ", de ".join(names[:-1]) + f" et de {names[-1]}"
         return (
             f"Avant que je le fasse : proposer à l'Orion de {who} « {params.get('title')} » "
             f"({params.get('duration_minutes')} min), entre "
@@ -215,10 +227,35 @@ class FederationEdge:
             if proposal
             else "un rendez-vous"
         )
+        if proposal and proposal.group:
+            what += ", avec aussi " + ", ".join(proposal.group)
         who = peer.label if peer else params.get("peer")
         return (
             f"L'Orion de {who} propose {what}. Tu es libre {self._human(params.get('slot'))} : "
             "je confirme ce créneau ?"
+        )
+
+    def _render_say(self, params: dict[str, Any]) -> str:
+        peer = self.find(str(params.get("peer", "")))
+        who = peer.label if peer else params.get("peer")
+        return f"Avant que je le fasse : écrire à l'Orion de {who} : « {params.get('text')} »"
+
+    def _says_today(self, peer: Peer) -> int:
+        since = self.service.clock() - timedelta(days=1)
+        return sum(
+            1
+            for item in self.state.exchanged
+            if item.direction == "out"
+            and item.envelope["recipient"] == peer.instance
+            and item.envelope["type"] == SAY
+            and datetime.fromisoformat(item.envelope["sent_at"]) >= since
+        )
+
+    def _answering(self, peer: Peer) -> bool:
+        """It wrote a moment ago: Orion may answer, as it would a person (D102)."""
+        heard = self._exchanged("in", peer, None, SAY)
+        return heard is not None and (
+            self.service.clock() - datetime.fromisoformat(heard["sent_at"]) < ANSWER_WINDOW
         )
 
     # -- core-facing (Unix socket) ------------------------------------------------------------
@@ -291,6 +328,33 @@ class FederationEdge:
     async def _outbound_policy(
         self, peer: Peer, kind: str, context: str, body: Any, grant: str | None
     ) -> str | None:
+        if kind == SAY:
+            if self._says_today(peer) >= SAYS_PER_DAY:
+                return f"{SAYS_PER_DAY} messages to {peer.label}'s Orion in a day: that is enough"
+            if self._answering(peer):
+                return None
+            return await self.service.use_grant(
+                grant,
+                "peer_message",
+                lambda p: self.find(str(p.get("peer", ""))) == peer and p.get("text") == body.text,
+                consume=True,
+            )
+        if kind == POLL:  # one yes covers every Orion of the group, until it expires
+            return await self.service.use_grant(
+                grant,
+                "meeting_propose",
+                lambda p: self._matches_proposal(p, peer, body),
+                consume=False,
+            )
+        if kind == PROPOSE and (polled := self._exchanged("out", peer, context, POLL)):
+            asked = Propose.model_validate(polled["body"])
+            if (
+                len(body.slots) != 1
+                or body.slots[0] not in asked.slots
+                or (body.title, body.duration_minutes) != (asked.title, asked.duration_minutes)
+            ):
+                return "after a poll, propose one of the slots polled, for the same meeting"
+            return None
         if kind == PROPOSE:
             return await self.service.use_grant(
                 grant,
@@ -312,6 +376,17 @@ class FederationEdge:
                 ),
                 consume=True,
             )
+        if kind == AVAILABLE:
+            polled = self._exchanged("in", peer, context, POLL)
+            if polled is None or not set(body.slots) <= set(
+                Propose.model_validate(polled["body"]).slots
+            ):
+                return "availability only answers a poll received, with the starts it offered"
+            return None
+        if kind == CANCEL:
+            if self._exchanged("out", peer, context, PROPOSE) is None:
+                return "only the one who proposed a meeting can call it off"
+            return None
         if kind == DECLINE:
             if self._received_proposal(peer, context) is None:
                 return "a refusal only answers a proposal received from this peer"
@@ -333,8 +408,9 @@ class FederationEdge:
             self._moment(params.get("window_start")),
             self._moment(params.get("window_end")),
         )
+        invited = [str(params.get("peer", "")), *_also(params)]
         return (
-            self.find(str(params.get("peer", ""))) == peer
+            peer in [self.find(name) for name in invited]
             and clean_title(str(params.get("title", ""))) == body.title
             and params.get("duration_minutes") == body.duration_minutes
             and start == body.window_start
@@ -348,8 +424,9 @@ class FederationEdge:
         )
 
     def _exchanged(
-        self, direction: str, peer: Peer | None, context: str, kind: str
+        self, direction: str, peer: Peer | None, context: str | None, kind: str
     ) -> dict[str, Any] | None:
+        """The latest such envelope with this peer; in any context when `context` is None."""
         if peer is None:
             return None
         other = "recipient" if direction == "out" else "sender"
@@ -358,7 +435,7 @@ class FederationEdge:
             if (
                 item.direction == direction
                 and envelope[other] == peer.instance
-                and envelope["context"] == context
+                and (context is None or envelope["context"] == context)
                 and envelope["type"] == kind
             ):
                 return envelope
@@ -541,6 +618,12 @@ class FederationEdge:
             return False
         recent.append(now)
         return True
+
+
+def _also(params: dict[str, Any]) -> list[str]:
+    """The other Orions of a meeting of several, as the owner approved it (D99)."""
+    also: Any = params.get("also") or []
+    return [str(a) for a in cast(list[Any], also)] if isinstance(also, list) else []
 
 
 def _fp(card: PeerCard) -> str:

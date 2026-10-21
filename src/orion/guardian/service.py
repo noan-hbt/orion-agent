@@ -13,6 +13,8 @@ request is checked against rules that hold even if the core is compromised:
   its parameters, so the owner sees what will run. A gated request then presents the
   approval, and the guardian checks with Inkbox that the owner really said yes (a 👍 on that
   message, or a "oui" after it) before letting it through, once;
+- **Telegram** (D89): the same rules for the bot (`orion.guardian.telegram`), which holds the
+  bot's token; the owner's answers to its questions are read as the core's updates pass;
 - **calendars and mail**: fetched here, so the secret addresses and passwords never reach the
   core; what comes back is the content the core asked for, nothing else.
 
@@ -28,9 +30,9 @@ import json
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import date, datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -45,6 +47,7 @@ from orion.calendar.service import CalendarAccount, CalendarSettings, fetch_feed
 from orion.calendar.write import CalendarWriteError, NewCalendarEvent, write_event
 from orion.channels.imessage import REACTION_NO, REACTION_YES, answer_word, normalize_number
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient, InkboxError, verify_signature
+from orion.channels.telegram import TelegramError
 from orion.config import OrionConfig
 from orion.core.ids import new_id
 from orion.federation.wire import CONFIRM
@@ -54,6 +57,7 @@ from orion.guardian.ledger import (
     AUTONOMOUS,
     AUTONOMY_GRANTED,
     AUTONOMY_REVOKED,
+    CONFIG_CHANGED,
     CORE_BACK,
     CORE_SILENT,
     DENIED,
@@ -70,6 +74,9 @@ from orion.mail.service import Fetch as MailFetch
 from orion.mail.service import MailAccount, MailSettings, imap_fetch
 from orion.mail.smtp import Outgoing, SendError, smtp_send
 from orion.secretary.settings import REPLY_WINDOW_HOURS, Contact, SecretarySettings
+
+if TYPE_CHECKING:
+    from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
 
@@ -186,6 +193,62 @@ def _contact_message(params: dict[str, Any]) -> str:
     return f"Avant que je l'envoie à {params.get('contact')} : « {params.get('text')} »"
 
 
+def _configure_change(params: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for change in _items(params.get("changes")):
+        if not isinstance(change, dict):
+            continue
+        item = cast(dict[str, Any], change)
+        value = json.dumps(item.get("value"), ensure_ascii=False)
+        op = item.get("op", "set")
+        did = {"add": "ajouter", "remove": "retirer"}.get(str(op), "mettre")
+        lines.append(f"- {item.get('path')} : {did} {value}")
+    return "Avant que je change mes réglages :\n" + "\n".join(lines) + f"\n({params.get('why')})"
+
+
+def _described(value: object) -> list[dict[str, Any]] | None:
+    """The approved changes as the core sends them, or None if they cannot be read."""
+    from orion.configure.module import Change
+
+    try:
+        return [Change.model_validate(c).described() for c in _items(value)]
+    except ValidationError:
+        return None
+
+
+def _items(value: object) -> list[Any]:
+    return list(cast(list[Any], value)) if isinstance(value, list) else []
+
+
+def _module_install(params: dict[str, Any]) -> str:
+    """The guardian reads the catalog itself: the owner sees its source, not the model's."""
+    from orion.modules.installer import read_catalog
+
+    name = str(params.get("name", ""))
+    entry = read_catalog().get(name)
+    if entry is None:
+        return f"Avant que je le fasse : installer le module « {name} » (absent du catalogue)."
+    reaches = f"\nCe qu'il atteint : {entry.accesses}" if entry.accesses else ""
+    return (
+        f"Avant que je le fasse : installer le module « {name} » : {entry.description}\n"
+        f"Source : {entry.source}{reaches}\n"
+        "C'est du code qui tournera dans Orion avec les mêmes accès que moi, ta mémoire "
+        "comprise : n'accepte que si tu fais confiance à cette source."
+    )
+
+
+def _module_remove(params: dict[str, Any]) -> str:
+    return f"Avant que je le fasse : désinstaller le module « {params.get('name')} »."
+
+
+def _module_switch(action: str, name: str) -> list[dict[str, Any]]:
+    """The one config change a yes to install (or remove) a module also covers."""
+    from orion.configure.module import Change
+
+    on = action == "module_install"
+    return [Change(path=f"modules.{name}.enabled", value=on).described()]
+
+
 def _call_someone(params: dict[str, Any]) -> str:
     return (
         f"Avant que je le fasse : appeler {params.get('name')} au {params.get('number')}.\n"
@@ -225,10 +288,15 @@ class GuardianService:
         self._send_mail = send_mail or smtp_send
         self._sends: deque[float] = deque()
         secretary = SecretarySettings.model_validate(config.modules.get("secretary", {}))
-        self.contacts: dict[str, Contact] = (
-            {normalize_number(c.number): c for c in secretary.contacts} if secretary.enabled else {}
-        )
+        allowed = secretary.contacts if secretary.enabled else []
+        self.contacts: dict[str, Contact] = {
+            normalize_number(c.number): c for c in allowed if c.number
+        }
         """The people the owner lets write to Orion (D54), by number."""
+        self.telegram_contacts: dict[int, Contact] = {
+            c.telegram_id: c for c in allowed if c.telegram_id
+        }
+        """The same, on Telegram, by user id."""
         self._contact_cap = secretary.max_replies_per_day
         self._contact_sends: dict[tuple[str, date], int] = {}
         self.monotonic: Callable[[], float] = time.monotonic
@@ -243,7 +311,14 @@ class GuardianService:
             "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
             "computer_task_send": _computer_task_send,
+            "configure_change": _configure_change,
+            "module_install": _module_install,
+            "module_remove": _module_remove,
         }
+        self.restart: Callable[[], Coroutine[Any, Any, None]] | None = None
+        """Restarts this process once it wrote orion.toml (set by `orion guardian`)."""
+        self.telegram: TelegramGate | None = None
+        """Telegram through the guardian (D89), installed by `orion.guardian.telegram`."""
         self.routes: list[BaseRoute] = []
         """Extra routes for the core (federation adds its own)."""
         self.listeners: list[tuple[str, Starlette, str, int]] = []
@@ -291,6 +366,8 @@ class GuardianService:
                 Route("/v1/mail/{account}/tidy", self._mail_tidy, methods=["POST"]),
                 Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
+                Route("/v1/config", self._configure, methods=["POST"]),
+                Route("/v1/mcp/{name}", self._mcp, methods=["POST"]),
                 *self.routes,
             ]
         )
@@ -302,7 +379,12 @@ class GuardianService:
 
     async def _health(self, _request: Request) -> Response:
         return JSONResponse(
-            {"ok": True, "instance": self.config.instance, "inkbox": self._inkbox is not None}
+            {
+                "ok": True,
+                "instance": self.config.instance,
+                "inkbox": self._inkbox is not None,
+                "telegram": self.telegram is not None,
+            }
         )
 
     # -- watching the core ----------------------------------------------------------------------
@@ -339,6 +421,12 @@ class GuardianService:
     async def _tell_owner(self, what: str, text: str) -> None:
         await self.ledger.catch_up()
         conversations = sorted(self.ledger.state.owner_conversations)
+        if (self._inkbox is None or not conversations) and self.telegram is not None:
+            try:
+                await self.telegram.tell(text)
+            except TelegramError:
+                log.exception("guardian.tell_owner_failed", what=what, channel="telegram")
+            return
         if self._inkbox is None or not conversations:
             log.warning("guardian.owner_unreachable", what=what)
             return
@@ -418,7 +506,7 @@ class GuardianService:
                 return await self._to_contact(
                     path, conversation, body_media=bool(body.get("media_urls"))
                 )
-            if path == "/imessage/messages" and not self._may_send():
+            if path == "/imessage/messages" and not self.may_send():
                 return "too many messages this minute"
             return None
         if method == "PUT" and path == "/phone/hosted-agent-config":
@@ -465,10 +553,14 @@ class GuardianService:
             return "Orion sends files to the owner only"
         if not starting and not contact[1]:
             return f"{contact[0].name} has not written to Orion in the last hours"
-        key = (normalize_number(contact[0].number), self.clock().date())
+        return self.contact_quota(contact[0], normalize_number(contact[0].number))
+
+    def contact_quota(self, contact: Contact, address: str) -> str | None:
+        """A message to a contact fits in the day's cap and the minute's (and is counted)."""
+        key = (address, self.clock().date())
         if self._contact_sends.get(key, 0) >= self._contact_cap:
-            return f"too many messages to {contact[0].name} today"
-        if not self._may_send():
+            return f"too many messages to {contact.name} today"
+        if not self.may_send():
             return "too many messages this minute"
         self._contact_sends[key] = self._contact_sends.get(key, 0) + 1
         return None
@@ -492,17 +584,27 @@ class GuardianService:
         return contact, recent
 
     async def _contact_send(self, request: Request) -> Response:
-        """A message the owner approved for a contact (`contact_message`): it may start a
-        conversation, so it needs their yes to this very text."""
+        """A message for a contact (`contact_message`): it may start a conversation, so it
+        needs the owner's yes to this very text, or an autonomy he granted for this person."""
         body = await _body(request)
         name, text = str(body.get("contact", "")), str(body.get("text", ""))
         conversation = str(body.get("conversation_id", ""))
-        reason = await self.use_grant(
-            request.headers.get(GRANT_HEADER),
-            "contact_message",
-            lambda p: p.get("contact") == name and p.get("text") == text,
-            consume=True,
-        )
+        grant = request.headers.get(GRANT_HEADER)
+        if not grant and await self.autonomous("contact_message", {"contact": name}):
+            reason = None
+        else:
+            reason = await self.use_grant(
+                grant,
+                "contact_message",
+                lambda p: p.get("contact") == name and p.get("text") == text,
+                consume=True,
+            )
+        if conversation.startswith("telegram:"):
+            if reason is not None:
+                return await self.deny(f"message to {name}", reason)
+            if self.telegram is None:
+                return refused("Telegram is not configured on the guardian", 503)
+            return await self.telegram.contact_send(name, conversation, text)
         if reason is None:
             contact = await self.contact_of(conversation)
             if contact is None or contact[0].name != name:
@@ -516,7 +618,8 @@ class GuardianService:
         sent = await self._inkbox.send(conversation, text, f"contact-{new_id()}", self._identity_id)
         return JSONResponse({"message_id": sent.id})
 
-    def _may_send(self) -> bool:
+    def may_send(self) -> bool:
+        """A message to the owner fits in `max_sends_per_minute` (and is counted)."""
         now = time.monotonic()
         while self._sends and now - self._sends[0] > 60:
             self._sends.popleft()
@@ -546,23 +649,36 @@ class GuardianService:
     # -- approvals ----------------------------------------------------------------------------
 
     async def _approval(self, request: Request) -> Response:
-        if self._inkbox is None:
-            return refused("approvals go through iMessage, which is not configured", 503)
         try:
             asked = ApprovalRequest.model_validate_json(await request.body())
         except ValidationError:
             return refused("malformed approval request", 400)
-        if not await self.is_owner_conversation(asked.conversation_id):
-            return await self.deny("approval", "that conversation is not the owner's")
         approval_id = f"g_{new_id()}"
         render = self.renderers.get(asked.action, _generic(asked.action))
-        text = (
+        question = (
             render(asked.params)
             + "\n"
             + (f"Je demande parce que {asked.reason}.\n" if asked.reason else "")
-            + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
         )
-        sent = await self._inkbox.send(asked.conversation_id, text, approval_id, self._identity_id)
+        if asked.conversation_id.startswith("telegram:"):
+            if self.telegram is None:
+                return refused("Telegram is not configured on the guardian", 503)
+            if asked.conversation_id != self.telegram.conversation:
+                return await self.deny("approval", "that chat is not the owner's")
+            try:
+                message_id = str(await self.telegram.ask(question + "Oui ou non ?"))
+            except TelegramError as exc:
+                return refused(f"Telegram unreachable: {exc}", 502)
+        else:
+            if self._inkbox is None:
+                return refused("approvals go through iMessage, which is not configured", 503)
+            if not await self.is_owner_conversation(asked.conversation_id):
+                return await self.deny("approval", "that conversation is not the owner's")
+            text = question + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
+            sent = await self._inkbox.send(
+                asked.conversation_id, text, approval_id, self._identity_id
+            )
+            message_id = sent.id
         expires = self.clock() + timedelta(seconds=self.config.guardian.approval_ttl_seconds)
         await self.ledger.record(
             APPROVAL_REQUESTED,
@@ -570,12 +686,12 @@ class GuardianService:
                 "approval_id": approval_id,
                 "action": asked.action,
                 "params": asked.params,
-                "message_id": sent.id,
+                "message_id": message_id,
                 "conversation_id": asked.conversation_id,
                 "expires_at": expires.isoformat(),
             },
         )
-        return JSONResponse({"approval_id": approval_id, "message_id": sent.id})
+        return JSONResponse({"approval_id": approval_id, "message_id": message_id})
 
     # -- autonomy -----------------------------------------------------------------------------
 
@@ -608,6 +724,97 @@ class GuardianService:
         )
         log.info("guardian.autonomy_granted", action=action, limits=limits.describe())
         return JSONResponse({"action": action})
+
+    # -- MCP servers (D95) --------------------------------------------------------------------
+
+    async def _mcp(self, request: Request) -> Response:
+        """Relay to an MCP server whose token the guardian holds: only to that server's own
+        address, the token added here. Which calls the owner approves is the core's policy."""
+        from orion.mcp.settings import McpSettings
+
+        name = str(request.path_params["name"])
+        settings = McpSettings.model_validate(self.config.modules.get("mcp", {}))
+        server = next((s for s in settings.servers if s.name == name and s.url), None)
+        if server is None or server.token is None or not settings.enabled:
+            return refused(f"no MCP server {name!r} with a token", 404)
+        try:
+            token = server.token.resolve().get_secret_value()
+        except LookupError as exc:
+            return refused(str(exc), 503)
+        headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k in ("accept", "content-type", "mcp-session-id", "mcp-protocol-version")
+        }
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=60.0)
+        try:
+            answer = await self._http.post(
+                server.url,
+                content=await request.body(),
+                headers={**headers, "authorization": f"Bearer {token}"},
+            )
+        except httpx.HTTPError as exc:
+            return refused(f"{name} unreachable: {exc!r}", 502)
+        back = {k: v for k, v in answer.headers.items() if k in ("content-type", "mcp-session-id")}
+        return Response(answer.content, status_code=answer.status_code, headers=back)
+
+    # -- orion.toml (D92) -------------------------------------------------------------------
+
+    async def _configure(self, request: Request) -> Response:
+        """The guardian writes orion.toml: Orion's own settings with the owner's yes or alone
+        within an autonomy he granted; his settings (what protects him, who may write to
+        Orion) only with his yes to this exact change. Never a secret, never a path."""
+        from orion.configure.module import Change, digest, rewrite, write
+        from orion.configure.paths import ConfigureError
+
+        body = await _body(request)
+        source = self.config.source
+        if source is None:
+            return refused("Orion runs without an orion.toml", 409)
+        try:
+            changes = [Change.model_validate(c) for c in _items(body.get("changes"))]
+        except ValidationError:
+            return refused("malformed changes", 400)
+        if not changes:
+            return refused("no change", 400)
+        params = {"changes": [c.described() for c in changes], "why": body.get("why")}
+        grant = request.headers.get(GRANT_HEADER)
+        module = str(body.get("module") or "")
+        if module:  # turning on what he just let install, or off what he lets remove (D105)
+            action = "module_remove" if body.get("removing") else "module_install"
+            if params["changes"] != _module_switch(action, module):
+                return await self.deny("configure", f"{action} covers only that module's switch")
+            reason = await self.use_grant(
+                grant, action, lambda p: p.get("name") == module, consume=True
+            )
+            if reason is not None:
+                return await self.deny("configure", reason)
+        elif grant or not await self.autonomous("configure_change", params):
+            reason = await self.use_grant(
+                grant,
+                "configure_change",
+                lambda p: _described(p.get("changes")) == params["changes"],
+                consume=True,
+            )
+            if reason is not None:
+                return await self.deny("configure", reason)
+        try:
+            before, after = await asyncio.to_thread(rewrite, source, changes)
+            if after != before:
+                write(source, before, after)
+        except ConfigureError as exc:
+            return refused(str(exc), 422)
+        if after == before:
+            return JSONResponse({"changed": False})
+        await self.ledger.record(
+            CONFIG_CHANGED,
+            {**params, "before": digest(before), "after": digest(after), "grant": grant},
+        )
+        log.info("guardian.config_changed", paths=[c.path for c in changes])
+        if self.restart is not None:
+            asyncio.get_running_loop().create_task(self.restart())
+        return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
 
     # -- logged-in sessions ---------------------------------------------------------------------
 
@@ -688,6 +895,8 @@ class GuardianService:
         return None
 
     async def _owner_said_yes(self, approval: PendingApproval) -> bool:
+        if approval.conversation_id.startswith("telegram:"):
+            return self.telegram is not None and await self.telegram.owner_said_yes(approval)
         if self._inkbox is None:
             return False
         message = await self._inkbox.message(approval.message_id, self._identity_id)

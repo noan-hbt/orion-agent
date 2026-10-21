@@ -13,7 +13,7 @@ Restart=always
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/srv/orion/guardian /srv/orion/run
+ReadWritePaths=/srv/orion/guardian /srv/orion/run /srv/orion/config
 PrivateTmp=true
 
 [Install]

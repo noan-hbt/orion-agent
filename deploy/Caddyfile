@@ -23,6 +23,10 @@
 	handle /hands/* {
 		reverse_proxy 127.0.0.1:8792
 	}
+	# The guardian's own form for secrets (D94): opened from Telegram, owner only.
+	handle /secrets/* {
+		reverse_proxy 127.0.0.1:8794
+	}
 	# The control page: reachable only with a one-time link Orion sends you.
 	handle /console/* {
 		reverse_proxy 127.0.0.1:8790

@@ -264,3 +264,35 @@ async def test_calls_not_started_are_skipped_when_the_owner_writes() -> None:
     assert results[0] == "a" and all("owner wrote" in r for r in results[1:])
     assert len(results) == 3  # every call still has its answer
     assert finished(events).reason is StopReason.COMPLETED
+
+
+async def test_a_shown_plan_leaves_before_a_slow_tool() -> None:
+    from orion.cognition.loop import Told, ToolExecuted
+
+    provider = ScriptedProvider(
+        call_tools(
+            ("echo", {"text": "lent"}),
+            (
+                "plan",
+                {
+                    "steps": [
+                        {"text": "chercher les horaires", "status": "doing"},
+                        {"text": "réserver", "status": "todo"},
+                    ],
+                    "show": True,
+                },
+            ),
+        ),
+        reply("Voilà."),
+    )
+    events, messages = await collect(provider)
+    kinds = [type(e).__name__ for e in events]
+    told = [e.text for e in events if isinstance(e, Told)]
+    assert told == ["Je m'y mets :\n→ chercher les horaires\n· réserver"]
+    assert kinds.index("Told") < kinds.index("ToolExecuted")  # before the slow call ran
+    # Results stay in the order of the calls.
+    names = [e.call.name for e in events if isinstance(e, ToolExecuted)]
+    assert names == ["echo", "plan"]
+    results = [m["content"] for m in messages if m["role"] == "tool"]
+    assert results[1].startswith("Plan : 0/2 fait.") and "Ensuite : chercher" in results[1]
+    assert finished(events).text == "Voilà."

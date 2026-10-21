@@ -121,6 +121,8 @@ class Case:
     """Reads the real web (slower; skipped with --offline)."""
     modules: tuple[str, ...] = ()
     """Modules off by default that this case turns on."""
+    off: tuple[str, ...] = ()
+    """Modules this case turns off, whatever the config it runs on."""
 
 
 # -- checks ----------------------------------------------------------------------------------
@@ -216,6 +218,19 @@ def uses(*tools: str) -> Check:
     return check
 
 
+def called_with(tool: str, *fragments: str) -> Check:
+    """`tool` was called with arguments holding every fragment (JSON as the model wrote it,
+    spaces removed)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        calls = ["".join(a.split()) for name, a in o.tools if name == tool]
+        if any(all(f in call for f in fragments) for call in calls):
+            return None
+        return f"no {tool} call with {', '.join(fragments)} (calls: {calls})"
+
+    return check
+
+
 def avoids(*tools: str) -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         used = [t for t in tools if o.used(t)]
@@ -249,9 +264,20 @@ class Refuse:
         return Approval(False)
 
 
+def _scratch_config(base: OrionConfig, data_dir: Path) -> Path | None:
+    if base.source is None:
+        return None
+    data_dir.mkdir(parents=True, exist_ok=True)
+    copy = data_dir / "orion.toml"
+    copy.write_text(base.source.read_text("utf-8"), "utf-8")
+    return copy
+
+
 def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionConfig:
-    """Production, minus what reaches the outside: no channel, no guardian, no voice, and no
-    config file to change (configure writes nothing during an eval)."""
+    """Production, minus what reaches the outside: no channel, no guardian (so no other Orion),
+    no voice, and a
+    copy of the config file to change (the owner never approves during an eval, so it stays
+    as it is)."""
     channels = base.channels.model_copy(
         update={"imessage": base.channels.imessage.model_copy(update={"enabled": False})}
     )
@@ -260,10 +286,11 @@ def eval_config(base: OrionConfig, data_dir: Path, model: str | None) -> OrionCo
         update={
             "data_dir": data_dir,
             "instance": "orion-eval",
-            "source": None,
+            "source": _scratch_config(base, data_dir),
             "channels": channels,
             "agent": agent,
             "guardian": base.guardian.model_copy(update={"enabled": False}),
+            "federation": base.federation.model_copy(update={"enabled": False}),
             "voice": base.voice.model_copy(update={"enabled": False}),
         }
     )
@@ -278,6 +305,9 @@ async def run_case(
         if case.modules:
             on = {name: {**config.modules.get(name, {}), "enabled": True} for name in case.modules}
             config = config.model_copy(update={"modules": {**config.modules, **on}})
+        if case.off:
+            off = {name: {**config.modules.get(name, {}), "enabled": False} for name in case.off}
+            config = config.model_copy(update={"modules": {**config.modules, **off}})
         with time_machine.travel(case.at, tick=True) as clock:
             async with build_app(config, provider, modules=load(config)) as app:
                 refuse = Refuse()

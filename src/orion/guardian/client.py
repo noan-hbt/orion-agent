@@ -8,15 +8,17 @@ the request.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from orion.calendar.service import CalendarAccount
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient
+from orion.channels.telegram import TelegramClient
 from orion.guardian.wire import ApprovalRequest, MailRequest, batch_from_json
 from orion.mail.imap import Batch
 from orion.mail.service import MailAccount
@@ -62,6 +64,19 @@ class GuardianClient:
             transport=self._transports(),
             max_attempts=max_attempts,
         )
+
+    def telegram(self) -> TelegramClient:
+        """A Telegram client without the bot's token: the guardian adds it (D89)."""
+        return GuardedTelegramClient(f"{BASE_URL}/v1/telegram", self._transports())
+
+    async def telegram_login(self, init_data: str) -> int | None:
+        """Who opened the console from Telegram: the guardian checks the signature (D91)."""
+        try:
+            response = await self._http.post("/v1/telegram-login", content=init_data.encode())
+        except httpx.TransportError as exc:
+            raise GuardianUnavailableError(f"guardian unreachable: {exc!r}") from exc
+        found = _json(response).get("user_id")
+        return found if isinstance(found, int) else None
 
     async def request_approval(
         self, action: str, params: dict[str, Any], reason: str, conversation_id: str
@@ -159,6 +174,32 @@ class GuardianClient:
         )
         return str(data["message_id"])
 
+    def relay(self) -> httpx.AsyncClient:
+        """Calls to an MCP server whose token the guardian holds (`/v1/mcp/<name>`, D95)."""
+        return httpx.AsyncClient(base_url=BASE_URL, transport=self._transports(), timeout=60.0)
+
+    async def ask_secret(self, name: str, why: str) -> None:
+        """The guardian sends the owner its own form for this secret (D94)."""
+        await self.post("/v1/secrets/ask", {"name": name, "why": why})
+
+    async def configure(
+        self,
+        changes: list[dict[str, Any]],
+        why: str,
+        grant: str | None,
+        module: str = "",
+        removing: bool = False,
+    ) -> dict[str, Any]:
+        """orion.toml changed by the guardian, which checks the owner's yes itself (D92).
+        With `module`, the yes is the one to install (or remove) it (D105). Returns whether it
+        changed and the file's digests before and after."""
+        body: dict[str, Any] = {"changes": changes, "why": why}
+        if module:
+            body |= {"module": module, "removing": removing}
+        return dict(
+            await self.post("/v1/config", body, headers={GRANT_HEADER: grant} if grant else None)
+        )
+
     async def lend_session(
         self, name: str, params: dict[str, Any], grant: str | None
     ) -> dict[str, Any]:
@@ -208,6 +249,27 @@ class GuardianClient:
         except httpx.TransportError as exc:
             raise GuardianUnavailableError(f"guardian unreachable: {exc!r}") from exc
         return _json(response)
+
+
+class GuardedTelegramClient(TelegramClient):
+    """The Bot API through the guardian: same calls, no token in the URL, and files sent as
+    JSON so the guardian reads where they go before sending them itself."""
+
+    def __init__(self, base_url: str, transport: httpx.AsyncBaseTransport) -> None:
+        super().__init__("held-by-the-guardian", base_url, transport=transport)
+
+    def method_url(self, method: str) -> str:
+        return f"{self._base}/{method}"
+
+    def file_url(self, file_path: str) -> str:
+        return f"{self._base}/file/{file_path}"
+
+    async def send_file(
+        self, chat_id: int, method: str, field_name: str, name: str, data: bytes, caption: str
+    ) -> int:
+        file = {"name": name, "data": base64.b64encode(data).decode("ascii")}
+        sent = await self.call(method, chat_id=chat_id, caption=caption or None, file=file)
+        return int(cast(dict[str, Any], sent)["message_id"])
 
 
 def _json(response: httpx.Response) -> Any:

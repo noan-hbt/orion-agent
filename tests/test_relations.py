@@ -121,6 +121,20 @@ async def test_birthdays_come_in_time_and_on_the_day(
     assert day.key != ahead[0].key and day.importance > ahead[0].importance
 
 
+async def test_the_owners_own_birthday_is_not_a_relation(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    relations, tools = relations_for(journal, memory, [TUESDAY])
+    for name in ("Noan", "noan herbeth gomes"):
+        tool = tools["person_birthday"]
+        result = await tool.handler(
+            tool.parse(json.dumps({"person": name, "month": 11, "day": 14, "year": 2006})), CTX
+        )
+        assert result.is_error and "remember" in result.content
+    assert await relations.alerts(datetime(2026, 11, 14, 9, 30, tzinfo=PARIS)) == []
+    assert not relations.is_owner("Noanne")
+
+
 async def test_too_long_without_seeing_someone_is_said_once_a_week(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:

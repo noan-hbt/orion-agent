@@ -67,11 +67,23 @@ class ChatGPTConfig(BaseModel):
     )
 
 
+class ClaudeCodeConfig(BaseModel):
+    """The owner's Claude plan (D100): models named `claude-code:<model>` (`sonnet`, `opus`,
+    `haiku`) are answered by the `claude` command, signed in by the owner (`claude login`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    binary: str = Field(default="claude", description="The Claude Code command")
+    timeout_seconds: float = Field(default=300.0, gt=0)
+
+
 class ProvidersConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     openrouter: OpenRouterConfig = OpenRouterConfig()
     chatgpt: ChatGPTConfig = ChatGPTConfig()
+    claude_code: ClaudeCodeConfig = ClaudeCodeConfig()
 
 
 STRONG_MODEL = "anthropic/claude-opus-5.5"
@@ -102,8 +114,8 @@ class AgentConfig(BaseModel):
         default="equilibre",
         description="When outside content (a web page, a mail) is in the conversation: "
         "'prudent' asks before each of Orion's own writes (memory, reminders, a voice message "
-        "to him); 'equilibre' asks only before acting on the world, which stays refused there "
-        "(D85)",
+        "to him) and refuses acting on the world; 'equilibre' writes its own things freely and "
+        "asks only before acting on the world, saying why (D85, D90)",
     )
     untrusted_idle_minutes: int = Field(
         default=120,
@@ -263,7 +275,12 @@ class InitiativeConfig(BaseModel):
     digests: list[time] = Field(default_factory=lambda: [time(8, 30), time(13, 0), time(19, 0)])
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
-    daily_budget: int = Field(default=6, ge=0, description="Unrequested messages per day, max")
+    daily_budget: int = Field(
+        default=12,
+        ge=0,
+        description="What Orion says of its own accord per day, max (what people write to "
+        "the owner is passed on outside it)",
+    )
     tick_seconds: float = Field(default=30.0, ge=1.0)
 
 
@@ -343,8 +360,15 @@ class GuardianConfig(BaseModel):
         "(the core can't say it is down); 0: never",
     )
     heartbeat_seconds: float = Field(default=60.0, gt=0, description="The core's heartbeat")
+    secrets_url: str = Field(
+        default="",
+        description="Public HTTPS address where the guardian's own form for secrets is reached "
+        "(`/secrets/`, D94); empty: secrets are only set on the server",
+    )
+    secrets_host: str = "127.0.0.1"
+    secrets_port: int = Field(default=8794, ge=1, le=65535)
     autonomable: list[str] = Field(
-        default_factory=lambda: ["calendar_add", "configure_change"],
+        default_factory=lambda: ["calendar_add", "configure_change", "contact_message"],
         description="Actions the owner may let Orion do alone, once earned (never calls or "
         "mail to strangers unless listed here)",
     )
@@ -373,8 +397,10 @@ class FederationConfig(BaseModel):
     invite_days: int = Field(default=7, ge=1, le=60)
     max_inbound_per_hour: int = Field(default=60, ge=1, description="Per peer")
     meeting_start: time = Field(default=time(9, 0), description="Earliest meeting start")
-    meeting_end: time = Field(default=time(19, 0), description="Latest meeting end")
-    weekends: bool = False
+    meeting_end: time = Field(
+        default=time(23, 0), description="Latest meeting end: a film or a dinner ends late"
+    )
+    weekends: bool = True
 
 
 class BudgetConfig(BaseModel):
@@ -460,6 +486,11 @@ def load_config(path: Path | None = None) -> OrionConfig:
         return OrionConfig()
     with target.open("rb") as f:
         data = tomllib.load(f)
+    return parse_config(data, target)
+
+
+def parse_config(data: dict[str, Any], target: Path) -> OrionConfig:
+    """The config in `data`, as if read from `target` (relative paths are beside it)."""
     config = OrionConfig.model_validate(data)
     return config.model_copy(
         update={

@@ -123,5 +123,5 @@ async def test_a_refused_calendar_or_a_failed_task_is_said(journal: SqliteJourna
 async def test_a_past_slot_is_refused(journal: SqliteJournal) -> None:
     keeper, _ = bookings(journal, FakeCalendar())
     (tool,) = booking_tools(keeper)
-    args = tool.parse(json.dumps({"action": "book", "what": "x", "start": "2026-10-19T10:00"}))
+    args = tool.parse(json.dumps({"action": "book", "what": "rdv", "start": "2026-10-19T10:00"}))
     assert (await tool.handler(args, ToolContext("owner", "c"))).is_error

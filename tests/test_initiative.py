@@ -264,3 +264,28 @@ def test_digest_lines_rules() -> None:
 def test_quiet_hours_wrap_midnight() -> None:
     assert SETTINGS.is_quiet(time(23, 0)) and SETTINGS.is_quiet(time(7, 59))
     assert not SETTINGS.is_quiet(time(8, 0)) and not SETTINGS.is_quiet(time(22, 29))
+
+
+def test_quiet_hours_do_not_hold_orion_back_while_the_owner_is_up() -> None:
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+
+    from orion.initiative.engine import InitiativeEngine
+
+    night = datetime(2026, 10, 20, 23, 30, tzinfo=ZoneInfo("Europe/Paris"))
+    engine = object.__new__(InitiativeEngine)
+    engine._orion = SimpleNamespace(owner_wrote_at=night - timedelta(minutes=5))  # pyright: ignore[reportAttributeAccessIssue]
+    assert engine._owner_is_up(night)  # pyright: ignore[reportPrivateUsage]
+    engine._orion = SimpleNamespace(owner_wrote_at=night - timedelta(hours=2))  # pyright: ignore[reportAttributeAccessIssue]
+    assert not engine._owner_is_up(night)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_what_he_reads_at_night_counts_for_the_evening_not_the_next_day() -> None:
+    """Contacts relayed at 1 a.m. spent the next day's budget: no digest at 8:30 (D98)."""
+    from zoneinfo import ZoneInfo
+
+    paris = ZoneInfo("Europe/Paris")
+    settings = InitiativeSettings()
+    assert settings.attention_day(datetime(2026, 10, 21, 1, 30, tzinfo=paris)) == date(2026, 10, 20)
+    assert settings.attention_day(datetime(2026, 10, 21, 8, 30, tzinfo=paris)) == date(2026, 10, 21)
+    assert settings.attention_day(datetime(2026, 10, 21, 23, 0, tzinfo=paris)) == date(2026, 10, 21)

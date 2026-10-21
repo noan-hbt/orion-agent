@@ -42,7 +42,7 @@ from orion.modules.base import ModuleError
 from orion.tools.base import ToolContext
 from tests.fake_guardian import Running, guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, FakeInkbox
-from tests.fakes import ScriptedProvider
+from tests.fakes import ScriptedProvider, call_tools, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 19, 10, 0, tzinfo=PARIS)  # a Monday
@@ -139,8 +139,11 @@ class Owner:
     side: Side
     says: bool = True
     asked: list[str] = field(default_factory=list[str])
+    reachable: bool = True
 
     async def approve(self, proposal: ActionProposal) -> Approval:
+        if not self.reachable:  # he never wrote to his bot: nobody to ask
+            return Approval(False, reached=False)
         g = self.side.guardian
         grant, message_id = await g.client.request_approval(
             proposal.tool.name,
@@ -162,6 +165,7 @@ class Side:
     desk: MeetingDesk
     owner: Owner = field(init=False)
     written: list[NewCalendarEvent] = field(default_factory=list[NewCalendarEvent])
+    provider: ScriptedProvider = field(default_factory=ScriptedProvider)
 
     def __post_init__(self) -> None:
         self.owner = Owner(self)
@@ -264,10 +268,11 @@ async def orion_of(
         return busy
 
     federation = FederationModule(config, clock=lambda: NOW)
+    provider = ScriptedProvider()
     app = await stack.enter_async_context(
         build_app(
             config,
-            ScriptedProvider(),
+            provider,
             [CalendarModule(config, fetch=feed, clock=lambda: NOW), federation],
             guardian=guardian.client,
         )
@@ -278,6 +283,7 @@ async def orion_of(
         await serve_for_real(stack, edges[0].public_app(), port)
     side = Side(name, guardian, app, edges[0], federation.desk)
     side.written = written
+    side.provider = provider
     yield side
 
 
@@ -414,6 +420,25 @@ async def test_the_invited_owner_can_say_no(tmp_path: Path) -> None:
         assert DECLINED in await kinds(noan)
         assert any("son propriétaire a décliné" in r.notice for r in await noan.desk.reports())
         assert await noan.app.memory.store.commitments() == []
+
+
+async def test_an_owner_who_could_not_be_asked_did_not_refuse(tmp_path: Path) -> None:
+    """20/10 23:38: Victor never wrote to his bot, and Noan was told Victor said no, twice."""
+    async with two_orions(tmp_path) as (noan, paul):
+        paul.owner.reachable = False
+        await propose(noan)
+        await paul.step()
+        answered = next(e for e in await paul.app.journal.read(0, 10_000) if e.kind == ANSWERED)
+        assert answered.payload["reason"] == "unreachable"
+        assert any("pas pu te joindre" in r.notice for r in await paul.desk.reports())
+        await noan.step()
+        told = [
+            r.notice
+            for r in await noan.desk.reports()
+            if "Café" in r.notice or "a répondu" in r.notice
+        ]
+        assert any("n'a pas pu le joindre" in t for t in told), told
+        assert not any("a décliné" in t for t in told)
 
 
 async def test_no_common_slot_is_declined_without_bothering_the_owner(tmp_path: Path) -> None:
@@ -572,3 +597,218 @@ async def test_the_guardian_will_not_federate_without_an_address_or_a_key(
         monkeypatch.delenv("ORION_FEDERATION_KEY", raising=False)
         with pytest.raises(GuardianError, match="keygen"):
             federation_edge(g.service)
+
+
+# -- three Orions (D99) -----------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def three_orions(tmp_path: Path) -> AsyncGenerator[tuple[Side, Side, Side]]:
+    """Noan is busy 9-12, Paul 12-14 and Lea 14-16 on the 20th: the 21st at 9:00 is common."""
+    net = Net()
+    async with AsyncExitStack() as stack:
+        noan = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Noan", ics((at(20, 9), at(20, 12))))
+        )
+        paul = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Paul", ics((at(20, 12), at(20, 14))))
+        )
+        lea = await stack.enter_async_context(
+            orion_of(stack, tmp_path, net, "Lea", ics((at(20, 14), at(20, 16))))
+        )
+        for side in (paul, lea):
+            invite = await noan.guardian.client.post(
+                "/v1/federation/invites", {"label": side.name}, ADMIN
+            )
+            await side.guardian.client.post(
+                "/v1/federation/accept", {"code": invite["code"], "label": "Noan"}, ADMIN
+            )
+        await noan.step()  # the introductions
+        yield noan, paul, lea
+
+
+async def test_three_orions_find_the_first_slot_free_for_everyone(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        text, failed = await propose(noan, also=["Lea"])
+        assert not failed, text
+        assert "l'Orion de Paul et de Lea" in noan.owner.asked[0]
+        await paul.step()
+        await lea.step()  # each answers the poll by code: nobody is asked yet
+        assert paul.owner.asked == [] and lea.owner.asked == []
+        await noan.step()  # both answers in: the 21st at 9:00 goes to each
+        await paul.step()
+        await lea.step()
+        for side in (paul, lea):
+            [question] = side.owner.asked
+            assert "mercredi 2026-10-21 à 09:00" in question and "avec aussi" in question
+        assert "avec aussi Lea" in paul.owner.asked[0]
+        await noan.step()  # both accepted: confirmed to each
+        await paul.step()
+        await lea.step()
+        assert len(noan.owner.asked) == 1
+        [commitment] = await noan.app.memory.store.commitments()
+        assert commitment.what.startswith("Déjeuner avec Paul et Lea")
+        assert commitment.due == at(21, 9).isoformat()
+        told = [r.notice for r in await noan.desk.reports() if "calé" in r.notice]
+        assert told == [told[0]] and "les Orion de Paul et Lea" in told[0]
+        [written] = noan.written
+        assert written.start == at(21, 9)
+        [theirs] = await paul.app.memory.store.commitments()
+        assert theirs.what.startswith("Déjeuner avec Noan et Lea")
+        assert any("avec aussi Lea" in r.notice for r in await paul.desk.reports())
+
+
+async def test_one_no_calls_the_group_off_for_everyone(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        lea.owner.says = False
+        await propose(noan, also=["Lea"])
+        for side in (paul, lea, noan, paul, lea, noan, paul):
+            await side.step()
+        assert [m.status for m in paul.desk.state.meetings.values()] == ["cancelled"]
+        assert any("annule « Déjeuner »" in r.notice for r in await paul.desk.reports())
+        assert await paul.app.memory.store.commitments() == []
+        assert await noan.app.memory.store.commitments() == []
+        assert any(
+            "pour Lea, son propriétaire a décliné" in r.notice for r in await noan.desk.reports()
+        )
+        # The slot Paul had said yes to is his again.
+        assert (at(21, 9), at(21, 10)) not in await paul.desk.busy(at(21, 0), at(22, 0))
+
+
+async def test_no_slot_for_everyone_asks_nobody(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        await propose(
+            noan, also=["Lea"], window_start="2026-10-20T12:00", window_end="2026-10-20T16:00"
+        )
+        for side in (paul, lea, noan):
+            await side.step()
+        assert paul.owner.asked == [] and lea.owner.asked == []
+        assert any("Pas de créneau commun" in r.notice for r in await noan.desk.reports())
+
+
+async def test_the_guardian_keeps_a_group_to_what_was_polled(tmp_path: Path) -> None:
+    async with three_orions(tmp_path) as (noan, paul, _lea):
+        client = noan.guardian.client
+        approved = {
+            "peer": "Paul",
+            "also": ["Lea"],
+            "title": "Déjeuner",
+            "duration_minutes": 60,
+            "window_start": "2026-10-20T09:00",
+            "window_end": "2026-10-21T19:00",
+        }
+        grant, message_id = await client.request_approval(
+            "meeting_propose", approved, "", CONVERSATION
+        )
+        noan.guardian.fake.react(message_id, "like")
+        body: dict[str, object] = {
+            "title": "Déjeuner",
+            "duration_minutes": 60,
+            "window_start": at(20, 9).isoformat(),
+            "window_end": at(21, 19).isoformat(),
+            "slots": [at(21, 9).isoformat(), at(21, 11).isoformat()],
+            "group": ["Lea"],
+        }
+        await client.federation_send("Paul", "meeting.poll", "m1", body, grant)
+        await client.federation_send("Lea", "meeting.poll", "m2", body, grant)  # one yes, both
+        other = {**body, "slots": [at(21, 15).isoformat()]}
+        with pytest.raises(GuardianUnavailableError, match="one of the slots polled"):
+            await client.federation_send("Paul", PROPOSE, "m1", other)
+        with pytest.raises(GuardianUnavailableError, match="only answers a poll"):
+            await paul.guardian.client.federation_send(
+                "Noan", "meeting.available", "m7", {"slots": []}
+            )
+        with pytest.raises(GuardianUnavailableError, match="only the one who proposed"):
+            await paul.guardian.client.federation_send(
+                "Noan", "meeting.cancel", "m1", {"reason": "group_failed"}
+            )
+        await client.federation_send(
+            "Paul", PROPOSE, "m1", {**body, "slots": [at(21, 9).isoformat()]}
+        )
+
+
+# -- free words between Orions (D102) ---------------------------------------------------------
+
+
+async def say(side: Side, peer: str, text: str) -> tuple[str, bool]:
+    registry = side.app.orion._registry  # pyright: ignore[reportPrivateUsage]
+    tool = registry.get("peer_message")
+    assert tool is not None
+    arguments = tool.parse(_json({"peer": peer, "text": text}))
+    decision = await Guardian(side.app.approver).decide(
+        ActionProposal(tool, arguments, Trust.OWNER, "owner")
+    )
+    result = await tool.handler(
+        arguments, ToolContext("owner", "corr", context_trust=Trust.OWNER, grant=decision.grant)
+    )
+    return result.content, result.is_error
+
+
+def answered_by_orion(side: Side) -> None:
+    async def answer(thread: str, label: str, text: str, sent: str) -> str:
+        return (await side.app.orion.handle_peer_message(thread, label, text, sent)).text
+
+    side.desk.answer = answer
+
+
+async def test_two_orions_talk_and_orion_itself_answers(tmp_path: Path) -> None:
+    async with two_orions(tmp_path) as (noan, paul):
+        answered_by_orion(noan)
+        answered_by_orion(paul)
+        text, failed = await say(noan, "Paul", "Salut ! Paul a toujours la perceuse de Noan ?")
+        assert not failed, text
+        assert "écrire à l'Orion de Paul : « Salut ! Paul a toujours" in noan.owner.asked[0]
+
+        paul.provider.extend(reply("Oui, elle est dans son garage."))
+        await paul.step()  # Orion itself answers, in a thread of its own for Noan's Orion
+        thread = paul.app.orion.threads.get("peer:orion-noan").messages
+        assert '<orion de="Noan">' in str(thread[-2]["content"])
+        assert thread[-1]["content"] == "Oui, elle est dans son garage."
+        assert paul.owner.asked == []  # answering needs no yes
+        [told] = await paul.desk.alerts(NOW)
+        assert "t'a écrit" in told.notice and "dans son garage" in told.notice
+
+        noan.provider.extend(reply("SILENCE"))
+        await noan.step()  # it knows what it had asked; nothing more to say
+        assert "<tu_lui_avais_ecrit>" in str(
+            noan.app.orion.threads.get("peer:orion-paul").messages[-2]["content"]
+        )
+        assert [c.reply for c in noan.desk.state.chats] == [""]
+        sent = [e for e in noan.guardian.service.ledger.state.exchanged if e.direction == "out"]
+        assert [e.envelope["type"] for e in sent] == ["orion.say"]
+
+
+async def test_a_first_word_needs_the_owner_and_a_chat_has_an_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import orion.guardian.federation as edge
+
+    async with two_orions(tmp_path) as (noan, paul):
+        with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
+            await noan.guardian.client.federation_send("Paul", "orion.say", "c1", {"text": "yo"})
+        noan.owner.says = False
+        _, failed = await say(noan, "Paul", "Tu es là ?")
+        assert failed
+        noan.owner.says = True
+        await say(noan, "Paul", "Tu es là ?")
+        monkeypatch.setattr(edge, "SAYS_PER_DAY", 1)
+        client = paul.guardian.client
+        await client.federation_send("Noan", "orion.say", "c2", {"text": "Oui !"})  # an answer
+        with pytest.raises(GuardianUnavailableError, match="that is enough"):
+            await client.federation_send("Noan", "orion.say", "c2", {"text": "Et toi ?"})
+
+
+async def test_an_approval_from_a_chat_says_what_the_other_orion_wrote(tmp_path: Path) -> None:
+    """21/10: Victor was asked to approve a proposal coming out of a chat he never saw."""
+    async with two_orions(tmp_path) as (noan, paul):
+        answered_by_orion(paul)
+        await say(noan, "Paul", "Paul est dispo pour un ciné ce soir ?")
+        window = {"window_start": "2026-10-20T14:00", "window_end": "2026-10-20T19:00"}
+        propose: dict[str, object] = {"peer": "Noan", "title": "Ciné", "duration_minutes": 60}
+        propose |= window
+        paul.provider.extend(
+            call_tools(("meeting_propose", propose)), reply("Je t'ai proposé 14 h.")
+        )
+        await paul.step()
+        [question] = paul.owner.asked
+        assert "l'Orion de Noan m'a écrit « Paul est dispo pour un ciné ce soir ? »" in question

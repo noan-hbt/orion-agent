@@ -21,10 +21,12 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from orion.console.auth import COOKIE, SESSION_DAYS, Gate
+from orion.console.dashboard import dashboard
 from orion.core.events import Event, Trust
 from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.guardian.autonomy import Autonomy, label
+from orion.initiative.engine import InitiativeSettings, effective_settings
 from orion.memory.model import CommitmentStatus
 from orion.memory.provenance import Provenances
 from orion.memory.service import MemoryService, Origin
@@ -78,6 +80,12 @@ class Console:
     """What Orion will do on its own (D78)."""
     spending: Spending | None = None
     """What it spent (D79)."""
+    telegram_login: Callable[[str], Awaitable[int | None]] | None = None
+    """Who opened the console from Telegram, from the Mini App's signed launch data (D91):
+    checked with the bot's token, by the Telegram module or the guardian that holds it."""
+    owner_telegram: int = 0
+    initiative: InitiativeSettings | None = None
+    """The engine's settings from the config file, for the dashboard's attention (D101)."""
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -85,6 +93,7 @@ def _page(title: str, body: str) -> HTMLResponse:
         f'<a href="{PREFIX}/{path}">{name}</a>'
         for path, name in (
             ("", "Accueil"),
+            ("dashboard", "Tableau de bord"),
             ("memory", "Mémoire"),
             ("commitments", "Engagements"),
             ("playbook", "Manuel"),
@@ -149,6 +158,44 @@ def console_app(console: Console) -> Starlette:
         )
         return response
 
+    async def from_telegram(_request: Request) -> Response:
+        """The Mini App: Telegram's script hands over the signed launch data, posted back."""
+        script = (
+            "const d=window.Telegram&&Telegram.WebApp?Telegram.WebApp.initData:'';"
+            "if(Telegram.WebApp)Telegram.WebApp.ready();"
+            f"fetch('{PREFIX}/telegram',{{method:'POST',body:d,credentials:'same-origin'}})"
+            f".then(r=>{{if(r.ok)location.replace('{PREFIX}/');else "
+            "document.getElementById('m').textContent="
+            "'Seul le propriétaire peut ouvrir la console.';}});"
+        )
+        html = (
+            '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<script src="https://telegram.org/js/telegram-web-app.js"></script>'
+            f"<title>Orion</title><style>{STYLE}</style></head>"
+            f'<body><main><p id="m">Un instant…</p></main><script>{script}</script></body></html>'
+        )
+        return HTMLResponse(html, headers={"cache-control": "no-store"})
+
+    async def telegram_login(request: Request) -> Response:
+        check = console.telegram_login
+        if check is None or not console.owner_telegram:
+            return Response("Telegram is not connected", status_code=404)
+        user = await check((await request.body()).decode(errors="replace"))
+        if user is None or user != console.owner_telegram:
+            return Response("not the owner", status_code=403)
+        response = Response("ok")
+        response.set_cookie(
+            COOKIE,
+            await console.gate.telegram_session(user),
+            max_age=SESSION_DAYS * 86400,
+            httponly=True,
+            secure=console.secure_cookie,
+            samesite="strict",
+            path=PREFIX,
+        )
+        return response
+
     async def home(_request: Request) -> Response:
         store = console.memory.store
         facts, commitments, rules = (
@@ -177,6 +224,14 @@ def console_app(console: Console) -> Starlette:
                 + "</p>"
             )
         return _page("Ce que je sais et ce que je fais", body)
+
+    async def board(_request: Request) -> Response:
+        base = console.initiative or InitiativeSettings(timezone=console.timezone)
+        settings = effective_settings(base, await console.memory.store.settings())
+        last = await console.journal.last_seq()
+        events = await console.journal.read(max(0, last - 20_000), 20_000)
+        now = datetime.now(ZoneInfo(settings.timezone))
+        return _page("Tableau de bord", dashboard(events, settings, now))
 
     async def planned(_request: Request) -> Response:
         if console.planned is None:
@@ -360,6 +415,8 @@ def console_app(console: Console) -> Starlette:
     return Starlette(
         routes=[
             Route(f"{PREFIX}/login", login, methods=["GET"]),
+            Route(f"{PREFIX}/telegram", from_telegram, methods=["GET"]),
+            Route(f"{PREFIX}/telegram", telegram_login, methods=["POST"]),
             get("/", home),
             get("/memory", memory),
             post("/facts/{id}/forget", forget_fact),
@@ -369,6 +426,7 @@ def console_app(console: Console) -> Starlette:
             post("/rules/{id}/retire", retire_rule),
             get("/autonomy", autonomy),
             post("/autonomy/{action}/revoke", revoke),
+            get("/dashboard", board),
             get("/planned", planned),
             get("/activity", activity),
             get("/sources", sources),

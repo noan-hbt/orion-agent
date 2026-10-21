@@ -1,15 +1,15 @@
 """Who may write to Orion besides the owner, and what Orion may tell them.
 
 Read by the core (the secretary module) and by the guardian process, which only lets Orion
-write to these people: the list lives in the owner's configuration, never in what the core
-can change.
+write to these people: the list is the owner's. Orion changes it by message only with his yes
+to the exact change, which the guardian checks itself when Orion runs split (D92).
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from orion.modules.base import ModuleSettings
 
@@ -22,7 +22,14 @@ class Contact(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=60, description="How the owner calls them")
-    number: str = Field(description="Their phone number, E.164 (e.g. +33612345678)")
+    number: str = Field(
+        default="", description="Their phone number, E.164 (e.g. +33612345678), for iMessage"
+    )
+    telegram_id: int = Field(
+        default=0,
+        description="Their Telegram user id, for Telegram: Orion tells the owner when someone "
+        "unknown writes to the bot, with their id",
+    )
     about: str = Field(
         default="",
         max_length=500,
@@ -33,6 +40,20 @@ class Contact(BaseModel):
         description="What Orion may tell them: 'availability' = when the owner is busy or free "
         "(never what they are doing)",
     )
+
+    @model_validator(mode="after")
+    def _reachable(self) -> Contact:
+        if not self.number and not self.telegram_id:
+            raise ValueError(f"{self.name}: give a `number` (iMessage) or a `telegram_id`")
+        return self
+
+    def addresses(self) -> list[str]:
+        """How the secretary and the guardian key this person: their number for iMessage,
+        `telegram:<id>` for Telegram."""
+        from orion.channels.imessage import normalize_number
+
+        found = [normalize_number(self.number)] if self.number else []
+        return [*found, f"telegram:{self.telegram_id}"] if self.telegram_id else found
 
 
 class SecretarySettings(ModuleSettings):

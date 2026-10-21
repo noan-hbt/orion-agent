@@ -4,14 +4,16 @@ Free and without a daily cap. It does what the iMessage channel does, through th
 
 - updates come by long polling (`getUpdates`); each one is journaled before anything else
   happens, so a restart resumes after the last one and requeues an owner message never
-  answered. Only the owner's user id is obeyed; anyone else is journaled and ignored;
+  answered. Only the owner's user id is obeyed; anyone else is journaled and handed to the
+  secretary (`others`), which answers the contacts he allowed and nobody else;
 - photos, voice messages and files reach the inbox as attachments the channel fetches itself:
   the download link carries the bot's token, which never leaves this module;
 - the reply goes through the outbox as one message (cut only past Telegram's 4 096
   characters); a file goes as a photo, a voice message (OGG Opus) or a document;
 - while Orion thinks, Telegram shows « en train d'écrire… »;
 - an action is put to the owner with two buttons (Oui / Non), or a one-word answer; no answer
-  before the timeout means no;
+  before the timeout means no. Run split, the guardian writes the question and checks the
+  answer itself (D89);
 - his reactions on Orion's messages (👍, ❤️, 👎…) are signals for adaptation.
 
     telegram.inbound  (every update read: a message, a reaction, a button)
@@ -21,20 +23,29 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
+import json
 import mimetypes
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import parse_qsl
 
 import httpx
 import structlog
 
 from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
-from orion.channels.imessage import APPROVAL_DECIDED, APPROVAL_REQUESTED, answer_word
-from orion.channels.inbox import Attachment, OwnerInbox
+from orion.channels.imessage import (
+    APPROVAL_DECIDED,
+    APPROVAL_REQUESTED,
+    ApprovalDesk,
+    answer_word,
+)
+from orion.channels.inbox import Attachment, Incoming, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -76,6 +87,11 @@ class TelegramError(RuntimeError):
         self.retryable = retryable
 
 
+RECONNECT = (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.WriteError)
+"""Failures of the connection itself, before Telegram answered: worth one more try."""
+RETRY_PAUSES = (0.5, 2.0)
+
+
 class TelegramClient:
     """The Bot API, as little of it as Orion needs. The token is in every URL: errors never
     carry a URL, so it cannot reach a log."""
@@ -95,21 +111,47 @@ class TelegramClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    @property
+    def token(self) -> str:
+        """For checking what Telegram signed with it (a Mini App's launch data), in the
+        process that holds it."""
+        return self._token
+
+    def method_url(self, method: str) -> str:
+        return f"{self._base}/bot{self._token}/{method}"
+
+    def file_url(self, file_path: str) -> str:
+        return f"{self._base}/file/bot{self._token}/{file_path}"
+
     async def call(
         self, method: str, files: dict[str, tuple[str, bytes, str]] | None = None, **params: Any
     ) -> Any:
-        url = f"{self._base}/bot{self._token}/{method}"
-        try:
-            if files:
-                data = {k: str(v) for k, v in params.items() if v is not None}
-                response = await self._client.post(url, data=data, files=files)
-            else:
-                body = {k: v for k, v in params.items() if v is not None}
-                response = await self._client.post(url, json=body)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            raise TelegramError(
-                f"{method}: transport error ({type(exc).__name__})", retryable=True
-            ) from None
+        url = self.method_url(method)
+        attempt = 0
+        while True:
+            try:
+                if files:
+                    data = {k: str(v) for k, v in params.items() if v is not None}
+                    response = await self._client.post(url, data=data, files=files)
+                else:
+                    body = {k: v for k, v in params.items() if v is not None}
+                    response = await self._client.post(url, json=body)
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                # A connection the network dropped while idle (the 23:16 approval that never
+                # left, D98): tried again on a fresh one. The long poll retries on its own.
+                if (
+                    method != "getUpdates"
+                    and isinstance(exc, RECONNECT)
+                    and attempt < len(RETRY_PAUSES)
+                ):
+                    log.info("telegram.retry", method=method, error=type(exc).__name__)
+                    await asyncio.sleep(RETRY_PAUSES[attempt])
+                    attempt += 1
+                    continue
+                raise TelegramError(
+                    f"{method}: transport error ({type(exc).__name__})", retryable=True
+                ) from None
         try:
             answer = cast(dict[str, Any], response.json())
         except ValueError:
@@ -160,6 +202,15 @@ class TelegramClient:
         )
         return int(cast(dict[str, Any], sent)["message_id"])
 
+    async def menu_button(self, chat_id: int, text: str, url: str) -> None:
+        """The button beside his message field that opens a page inside Telegram (a Mini
+        App): the console (D91)."""
+        await self.call(
+            "setChatMenuButton",
+            chat_id=chat_id,
+            menu_button={"type": "web_app", "text": text, "web_app": {"url": url}},
+        )
+
     async def typing(self, chat_id: int) -> None:
         await self.call("sendChatAction", chat_id=chat_id, action="typing")
 
@@ -175,7 +226,10 @@ class TelegramClient:
 
     async def file_bytes(self, file_id: str) -> bytes:
         found = cast(dict[str, Any], await self.call("getFile", file_id=file_id))
-        url = f"{self._base}/file/bot{self._token}/{found['file_path']}"
+        return await self.download(str(found["file_path"]))
+
+    async def download(self, file_path: str) -> bytes:
+        url = self.file_url(file_path)
         try:
             response = await self._client.get(url)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -271,8 +325,10 @@ class TelegramChannel:
         journal: EventStore,
         inbox: OwnerInbox,
         settings: TelegramSettings,
+        desk: ApprovalDesk | None = None,
     ) -> None:
         self._client = client
+        self._desk = desk
         self._journal = journal
         self._inbox = inbox
         self._settings = settings
@@ -280,6 +336,8 @@ class TelegramChannel:
         self.state = TelegramState()
         self._runner = ProjectionRunner(journal, [self.state])
         self._approvals: dict[int, asyncio.Future[tuple[bool, str, list[str]]]] = {}
+        self.others: Callable[[Incoming], None] | None = None
+        """Where a private message from someone else goes (the secretary, D54)."""
         inbox.register(self)
 
     async def start(self) -> None:
@@ -439,6 +497,7 @@ class TelegramChannel:
                 "text": text,
                 "date": message.get("date"),
                 "media": [m.__dict__ for m in media],
+                **({} if is_owner else {"name": _name(sender)}),
             },
             source=f"telegram:{chat.get('id')}",
             actor="owner:main" if is_owner else f"telegram:{sender.get('id')}",
@@ -450,6 +509,16 @@ class TelegramChannel:
                 name=sender.get("first_name"),
                 hint="the owner? put this id in [channels.telegram] owner_id",
             )
+            if self.others is not None and chat.get("type") == "private" and sender.get("id"):
+                self.others(
+                    Incoming(
+                        CHANNEL,
+                        f"{CHANNEL}:{sender['id']}",
+                        f"{CHANNEL}:{chat['id']}",
+                        ref,
+                        text or ("(une pièce jointe)" if media else ""),
+                    )
+                )
             return
         if not media and self._approvals and self._resolve_by_word(text, ref):
             return
@@ -523,7 +592,7 @@ class TelegramChannel:
     async def approve(self, proposal: ActionProposal) -> Approval:
         chat = self.state.owner_chat
         if chat is None:
-            return Approval(False)
+            return Approval(False, reached=False)
         approval_id = f"a_{new_id()}"
         arguments = proposal.arguments.model_dump(mode="json")
         await self._approval_event(
@@ -535,11 +604,19 @@ class TelegramChannel:
             + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
             + "Oui ou non ?"
         )
+        grant: str | None = None
         try:
-            message_id = await self._client.send_message(
-                chat, question[:MAX_TEXT], [("Oui", YES), ("Non", NO)]
-            )
-        except TelegramError:
+            if self._desk is not None:
+                # The guardian writes the question itself and will check the answer itself.
+                grant, asked = await self._desk.request_approval(
+                    proposal.tool.name, arguments, proposal.ask_reason, f"telegram:{chat}"
+                )
+                message_id = int(asked)
+            else:
+                message_id = await self._client.send_message(
+                    chat, question[:MAX_TEXT], [("Oui", YES), ("Non", NO)]
+                )
+        except (TelegramError, ConnectionError):
             log.warning("telegram.approval_unsent", tool=proposal.tool.name, exc_info=True)
             approved, how, refs = False, "unsent", []
         else:
@@ -557,9 +634,15 @@ class TelegramChannel:
                 self._approvals.pop(message_id, None)
         await self._approval_event(
             APPROVAL_DECIDED,
-            {"approval_id": approval_id, "approved": approved, "how": how, "refs": refs},
+            {
+                "approval_id": approval_id,
+                "approved": approved,
+                "how": how,
+                "refs": refs,
+                **({"grant": grant} if grant else {}),
+            },
         )
-        return Approval(approved)
+        return Approval(approved, grant if approved else None, reached=how != "unsent")
 
     def _resolve_by_word(self, text: str, ref: str) -> bool:
         answer = answer_word(text)
@@ -614,6 +697,42 @@ def _media(message: dict[str, Any]) -> tuple[Media, ...]:
                 )
             )
     return tuple(found)
+
+
+LOGIN_MAX_AGE = 3600.0
+"""Seconds a Mini App's signed launch data stays good for logging in."""
+
+
+def check_init_data(init_data: str, token: str, now: float) -> int | None:
+    """The Telegram user a Mini App was opened by, if Telegram really signed its launch data
+    with this bot's token, less than an hour ago (core.telegram.org/bots/webapps)."""
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+    given = pairs.pop("hash", "")
+    if not given:
+        return None
+    check = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    expected = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, given):
+        return None
+    signed = pairs.get("auth_date", "")
+    if not signed.isdigit() or now - int(signed) > LOGIN_MAX_AGE:
+        return None
+    try:
+        user: Any = json.loads(pairs.get("user") or "{}")
+    except json.JSONDecodeError:
+        return None
+    found = cast(dict[str, Any], user).get("id") if isinstance(user, dict) else None
+    return found if isinstance(found, int) and found > 0 else None
+
+
+def _name(sender: dict[str, Any]) -> str:
+    """How the owner will recognise them: « Angèle (@angele) »."""
+    full = " ".join(str(sender.get(k) or "") for k in ("first_name", "last_name")).strip()
+    handle = f"@{sender['username']}" if sender.get("username") else ""
+    if full and handle:
+        return f"{full} ({handle})"
+    return full or handle
 
 
 def _parts(text: str) -> list[str]:

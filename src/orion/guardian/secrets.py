@@ -17,6 +17,7 @@ def guarded(config: OrionConfig) -> list[SecretRef]:
     refs = [
         config.channels.imessage.api_key,
         config.channels.imessage.signing_key,
+        config.channels.telegram.bot_token,
         config.federation.key,
     ]
     if "calendar" in config.modules:
@@ -28,6 +29,11 @@ def guarded(config: OrionConfig) -> list[SecretRef]:
                 refs.append(account.write.password)
             elif isinstance(account.write, GoogleWriter):
                 refs += [account.write.client_secret, account.write.refresh_token]
+    if "mcp" in config.modules:
+        from orion.mcp.settings import McpSettings
+
+        servers = McpSettings.model_validate(config.modules["mcp"]).servers
+        refs += [s.token for s in servers if s.token is not None]
     if "mail" in config.modules:
         refs += [a.password for a in MailSettings.model_validate(config.modules["mail"]).accounts]
     return refs

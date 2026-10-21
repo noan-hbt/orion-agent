@@ -20,12 +20,9 @@ from orion.channels.telegram import (
     TelegramSettings,
     _parts,  # pyright: ignore[reportPrivateUsage]
 )
-from orion.channels.telegram_module import TelegramModule
-from orion.config import OrionConfig
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import ActionProposal
-from orion.modules.base import ModuleError
 from orion.runtime import Orion, Photo
 from orion.tools.base import Tool, ToolContext, ToolResult
 from tests.fake_telegram import OWNER, STRANGER, TOKEN, FakeTelegram
@@ -186,13 +183,22 @@ def test_a_long_answer_is_cut_at_paragraphs() -> None:
     assert _parts("court") == ["court"]
 
 
-async def test_the_module_refuses_to_bypass_the_guardian(tmp_path: Path) -> None:
-    config = OrionConfig.model_validate(
-        {
-            "data_dir": str(tmp_path),
-            "channels": {"telegram": {"enabled": True, "owner_id": OWNER}},
-            "guardian": {"enabled": True},
-        }
-    )
-    with pytest.raises(ModuleError, match="guardian"):
-        await TelegramModule(config).assemble(None)  # type: ignore[arg-type]
+async def test_a_dropped_connection_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """20/10 23:16: an approval never left because the network dropped an idle connection."""
+    import httpx
+
+    import orion.channels.telegram as telegram
+
+    monkeypatch.setattr(telegram, "RETRY_PAUSES", (0.0, 0.0))
+    tries: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        tries.append(request.url.path)
+        if len(tries) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response")
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 9}})
+
+    client = telegram.TelegramClient("t", transport=httpx.MockTransport(handle))
+    assert await client.send_message(1, "Oui ou non ?") == 9
+    assert len(tries) == 2
+    await client.aclose()

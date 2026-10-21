@@ -1,0 +1,8 @@
+[Unit]
+Description=Orion updates itself from its branch, and goes back if the new code fails (D94)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/srv/orion/app/deploy/orion-update

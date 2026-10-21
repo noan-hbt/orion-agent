@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -83,7 +84,7 @@ async def test_bursts_coalesce_per_channel_and_answer_where_they_came_from(
     await until(lambda: bool(tui.sent))
     assert imessage.sent == ["pour iMessage"] and tui.sent == ["pour la TUI"]
     assert provider.requests[0].messages[-1]["content"].endswith("un\ndeux")
-    assert "· tui]" in provider.requests[1].messages[-1]["content"]
+    assert re.search(r"· tui[] ·]", provider.requests[1].messages[-1]["content"])
     assert imessage.shown == ["deux"]
 
 

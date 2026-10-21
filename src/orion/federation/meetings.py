@@ -1,4 +1,4 @@
-"""Meetings arranged between two Orions (D29, first use of M7).
+"""Meetings arranged between Orions (D29, first use of M7), two or more (D99).
 
     meeting.proposed        (we asked: the slots we offered)
     peer.message.received   (what the guardian took from another Orion, with its envelope)
@@ -7,6 +7,14 @@
     meeting.declined        (the other side said no)
     meeting.failed          (a message could not leave)
     peer.message.handled    (anything else read, and set aside)
+
+A meeting of several (D99) is one meeting per other Orion, tied by a group id. The one who
+asks polls them all with the same free starts; each answers by code which of them are free
+(`meeting.polled` there, `meeting.availability` here). The first start free for everyone is
+then proposed to each as an ordinary proposal, which each owner approves. Only when all have
+accepted are they confirmed (`meeting.group.agreed`); a refusal calls the others off
+(`meeting.cancel`, `meeting.cancelled` there) and the owner hears why
+(`meeting.group.failed`).
 
 The negotiator is code, not a model: another Orion's message is data that is checked, and
 nothing it says can steer a decision. Each owner agrees once: the one who asks approves the
@@ -21,7 +29,7 @@ busy. Titles come from the other side: they are bounded, shown as content from a
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -39,25 +47,33 @@ from orion.core.projections import ProjectionRunner
 from orion.federation.slots import Busy, Hours, free_slots, is_free
 from orion.federation.wire import (
     ACCEPT,
+    AVAILABLE,
+    CANCEL,
     CONFIRM,
     DECLINE,
     INTRODUCE,
+    MAX_SAY,
+    POLL,
     PROPOSE,
+    SAY,
     Accept,
+    Available,
+    Cancel,
     Confirm,
     Decline,
     Envelope,
     Propose,
+    Say,
     WireError,
     clean_title,
     parse_body,
 )
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import ActionProposal, Approver
-from orion.initiative.engine import Report
+from orion.initiative.engine import Alert, Report
 from orion.initiative.tools import describe_moment
 from orion.memory.service import MemoryService, Origin
-from orion.runtime import OWNER_THREAD
+from orion.runtime import OWNER_THREAD, is_silence
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 log = structlog.get_logger(__name__)
@@ -69,7 +85,36 @@ AGREED = "meeting.agreed"
 DECLINED = "meeting.declined"
 FAILED = "meeting.failed"
 HANDLED = "peer.message.handled"
-_OUTCOMES = (ANSWERED, AGREED, DECLINED, FAILED, HANDLED)
+POLLED = "meeting.polled"
+AVAILABILITY = "meeting.availability"
+PEER_ACCEPTED = "meeting.peer_accepted"
+GROUP_PROPOSED = "meeting.group.proposed"
+GROUP_AGREED = "meeting.group.agreed"
+GROUP_FAILED = "meeting.group.failed"
+CANCELLED = "meeting.cancelled"
+CHATTED = "federation.chat"
+"""Another Orion wrote, and what Orion answered (D102)."""
+CHAT_SENT = "federation.chat.sent"
+"""Orion wrote first to another Orion, with the owner's yes."""
+CHAT_TOLD = timedelta(hours=12)
+_OUTCOMES = (
+    ANSWERED,
+    AGREED,
+    DECLINED,
+    FAILED,
+    HANDLED,
+    POLLED,
+    AVAILABILITY,
+    PEER_ACCEPTED,
+    CANCELLED,
+    CHATTED,
+)
+_GROUP = (GROUP_PROPOSED, GROUP_AGREED, GROUP_FAILED)
+_WHY = {
+    "no_slot": "aucun des créneaux ne lui va",
+    "unreachable": "son Orion n'a pas pu le joindre pour lui demander. Rien n'est "
+    "refusé : il pourra reproposer plus tard, ou lui demander directement",
+}
 
 
 class MeetingAcceptInput(BaseModel):
@@ -108,6 +153,12 @@ class Meeting:
     slots: tuple[datetime, ...]
     status: str
     slot: datetime | None = None
+    group: str | None = None
+    """The meeting of several this one belongs to, on the side that proposed it."""
+    others: tuple[str, ...] = ()
+    """The others invited along, by name."""
+    available: tuple[datetime, ...] = ()
+    """Their answer to the poll: which of our starts are free for them."""
 
     @property
     def end(self) -> datetime | None:
@@ -121,6 +172,21 @@ class PeerMessage:
     envelope: Envelope
 
 
+@dataclass(frozen=True)
+class Chat:
+    event_id: str
+    peer: str
+    label: str
+    them: str
+    reply: str
+    at: datetime
+
+
+Answer = Callable[[str, str, str, str], Awaitable[str]]
+"""(thread, the other Orion's name, what it wrote, what we had written to it) → Orion's reply,
+from a turn of Orion itself (`Orion.handle_peer_message`)."""
+
+
 @dataclass
 class MeetingState:
     name: str = "meetings"
@@ -131,6 +197,9 @@ class MeetingState:
     messages: dict[str, PeerMessage] = field(default_factory=dict[str, PeerMessage])
     handled: set[str] = field(default_factory=set[str])
     reports: list[Report] = field(default_factory=list[Report])
+    chats: list[Chat] = field(default_factory=list[Chat])
+    opened: dict[str, str] = field(default_factory=dict[str, str])
+    """Peer → what we wrote first, until it answers."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -142,6 +211,8 @@ class MeetingState:
         self.messages.clear()
         self.handled.clear()
         self.reports.clear()
+        self.chats.clear()
+        self.opened.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -155,8 +226,15 @@ class MeetingState:
             envelope = Envelope.model_validate(p["envelope"])
             self.messages[envelope.id] = PeerMessage(int(p["seq"]), event.id, envelope)
             return
+        if kind == CHAT_SENT:
+            self.opened[str(p["peer"])] = str(p["text"])
+            return
         if kind == PROPOSED:
-            self.meetings[str(p["meeting_id"])] = _meeting(p, "asked", "proposed")
+            status = "polling" if p.get("poll") else "proposed"
+            self.meetings[str(p["meeting_id"])] = _meeting(p, "asked", status)
+            return
+        if kind in _GROUP:
+            self._group(event, p)
             return
         if kind not in _OUTCOMES:
             return
@@ -164,11 +242,52 @@ class MeetingState:
             self.handled.add(str(p["envelope_id"]))
         meeting_id = str(p.get("meeting_id", ""))
         known = self.meetings.get(meeting_id)
-        if kind == ANSWERED:
+        if kind == CHATTED:
+            self.opened.pop(str(p["peer"]), None)
+            self.chats.append(
+                Chat(
+                    event.id,
+                    str(p["peer"]),
+                    str(p["label"]),
+                    str(p["them"]),
+                    str(p.get("reply", "")),
+                    datetime.fromisoformat(str(p["at"])),
+                )
+            )
+        elif kind == POLLED:
+            self.meetings[meeting_id] = _meeting(p, "invited", "polled")
+        elif kind == AVAILABILITY and known is not None:
+            self.meetings[meeting_id] = replace(
+                known, status="available", available=tuple(_at(s) for s in p["slots"])
+            )
+        elif kind == PEER_ACCEPTED and known is not None:
+            self.meetings[meeting_id] = replace(known, status="peer_accepted")
+        elif kind == CANCELLED and known is not None:
+            self.meetings[meeting_id] = replace(known, status="cancelled", slot=None)
+            when = describe_moment(known.slot, self.timezone) if known.slot else "le créneau"
+            self._report(
+                event,
+                f"L'Orion de {known.label} annule « {known.title} » ({when}) : quelqu'un "
+                "d'autre du groupe n'a pas pu. Le créneau est libre à nouveau.",
+                f"l'Orion de {known.label} a annulé un rendez-vous de groupe",
+                f"« {known.title} » ({when}) est annulé : quelqu'un du groupe n'a pas pu. Ton "
+                "créneau est libre.",
+            )
+        elif kind == ANSWERED:
             invited = _meeting(p, "invited", "accepted" if p["accepted"] else "refused")
             self.meetings[meeting_id] = replace(
                 invited, slot=_at(p.get("slot")) if p["accepted"] else None
             )
+            if p.get("reason") == "unreachable":
+                self._report(
+                    event,
+                    f"L'Orion de {p['label']} a proposé « {p['title']} », mais je n'ai pas pu te "
+                    "joindre pour te demander : j'ai répondu que tu n'étais pas joignable, sans "
+                    "rien refuser. Dis-le-lui ; il peut redemander à son Orion de reproposer.",
+                    f"l'Orion de {p['label']} a proposé un rendez-vous",
+                    f"{p['label']} proposait « {p['title']} », mais je n'ai pas pu te joindre : "
+                    "j'ai répondu que tu n'étais pas joignable, sans rien refuser.",
+                )
             if p.get("reason") == "no_slot":
                 self._report(
                     event,
@@ -176,30 +295,35 @@ class MeetingState:
                     "créneaux proposés n'est libre pour lui : j'ai répondu que ça ne marchait "
                     "pas. Dis-le-lui, il peut proposer d'autres dates.",
                     f"l'Orion de {p['label']} a proposé un rendez-vous",
+                    f"{p['label']} proposait « {p['title']} », mais aucun des créneaux ne "
+                    "t'allait : j'ai répondu que ça ne marchait pas.",
                 )
         elif kind == AGREED and known is not None:
             start = _at(p["start"])
             self.meetings[meeting_id] = replace(known, status="agreed", slot=start)
+            if known.group:  # the group says it once, when everyone is in
+                return
             when = describe_moment(start, self.timezone)
+            also = f" (avec aussi {_names(list(known.others))})" if known.others else ""
             self._report(
                 event,
-                f"C'est calé avec l'Orion de {known.label} : « {known.title} », {when} "
-                f"({known.duration_minutes} min). Noté dans ses engagements ; son agenda est en "
-                "lecture seule, rappelle-lui de l'y ajouter.",
+                f"C'est calé avec l'Orion de {known.label}{also} : « {known.title} », {when} "
+                f"({known.duration_minutes} min). Noté dans ses engagements ; s'il ne le voit pas "
+                "dans son agenda, propose-lui de l'y ajouter.",
                 f"l'Orion de {known.label} a confirmé le rendez-vous",
+                f"C'est calé avec {known.label}{also} : « {known.title} », {when}.",
             )
         elif kind == DECLINED and known is not None:
             self.meetings[meeting_id] = replace(known, status="declined")
-            why = (
-                "aucun des créneaux ne lui va"
-                if p.get("reason") == "no_slot"
-                else "son propriétaire a décliné"
-            )
+            if known.group:
+                return
+            why = _WHY.get(str(p.get("reason")), "son propriétaire a décliné")
             self._report(
                 event,
                 f"L'Orion de {known.label} a répondu pour « {known.title} » : {why}. "
                 "Propose-lui d'essayer une autre fenêtre.",
                 f"l'Orion de {known.label} a répondu",
+                f"Pour « {known.title} », l'Orion de {known.label} a répondu : {why}.",
             )
         elif kind == FAILED:
             self._report(
@@ -212,17 +336,72 @@ class MeetingState:
             self._report(
                 event,
                 f"Ton Orion est maintenant relié à celui de {p['label']} : vous pouvez caler "
-                "des rendez-vous ensemble.",
+                "des rendez-vous ensemble. Le lien s'est fait par une invitation créée sur ton "
+                "serveur (`orion federation invite`) et acceptée par l'Orion de "
+                f"{p['label']} : pas par toi, Orion, qui ne peux ni créer ni accepter une "
+                "invitation. Ses empreintes : `orion federation peers` sur le serveur.",
                 f"l'Orion de {p['label']} vient de se présenter avec ton invitation",
+                f"Je suis maintenant relié à l'Orion de {p['label']} : on peut caler des "
+                "rendez-vous et se parler.",
             )
 
-    def _report(self, event: Event, notice: str, why: str) -> None:
+    def group(self, group: str) -> list[Meeting]:
+        return sorted((m for m in self.meetings.values() if m.group == group), key=lambda m: m.id)
+
+    def _group(self, event: Event, p: dict[str, Any]) -> None:
+        members = self.group(str(p["group"]))
+        if not members:
+            return
+        names = _names([m.label for m in members])
+        title, minutes = members[0].title, members[0].duration_minutes
+        if event.kind == GROUP_PROPOSED:
+            slot = _at(p["slot"])
+            for m in members:
+                self.meetings[m.id] = replace(m, status="proposed", slots=(slot,))
+        elif event.kind == GROUP_AGREED:
+            when = describe_moment(_at(p["start"]), self.timezone)
+            self._report(
+                event,
+                f"C'est calé avec les Orion de {names} : « {title} », {when} ({minutes} min). "
+                "Noté dans ses engagements ; s'il ne le voit pas dans son agenda, propose-lui de "
+                "l'y ajouter.",
+                "tout le groupe a confirmé le rendez-vous",
+                f"C'est calé avec {names} : « {title} », {when}.",
+            )
+        elif event.kind == GROUP_FAILED:
+            for m in members:
+                if m.status not in ("declined",):
+                    self.meetings[m.id] = replace(m, status="failed")
+            reason = str(p.get("reason"))
+            if reason == "no_common":
+                text = (
+                    f"Pas de créneau commun pour « {title} » avec {names} : chacun a répondu, "
+                    "mais aucun de ses créneaux libres ne convient à tout le monde."
+                )
+            elif reason == "unsent":
+                text = f"« {title} » avec {names} : un message n'est pas parti ({p.get('error')})."
+            else:
+                why = _WHY.get(reason, "son propriétaire a décliné")
+                text = (
+                    f"« {title} » avec {names} ne se fait pas : pour {p.get('who')}, {why}. "
+                    "J'ai prévenu les autres Orion."
+                )
+            self._report(
+                event,
+                text + " Propose-lui d'essayer une autre fenêtre.",
+                "un rendez-vous de groupe n'a pas abouti",
+                text,
+            )
+
+    def _report(self, event: Event, notice: str, why: str, fallback: str = "") -> None:
+        """`notice` is for Orion to write from; `fallback` is what he reads if it cannot: a
+        sentence for him, never an instruction for Orion."""
         self.reports.append(
             Report(
                 key=f"federation:{event.id}",
                 notice=notice,
                 why=why,
-                fallback=notice,
+                fallback=fallback or notice,
                 trust=Trust.TRUSTED_PEER,
             )
         )
@@ -247,7 +426,14 @@ def _meeting(p: dict[str, Any], role: str, status: str) -> Meeting:
         int(p["duration_minutes"]),
         tuple(_at(s) for s in p.get("slots", [])),
         status,
+        group=str(p["group"]) if p.get("group") else None,
+        others=tuple(str(o) for o in p.get("others", [])),
     )
+
+
+def _names(names: list[str]) -> str:
+    """« Victor et Camille », « Victor, Camille et Léa »."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" et {names[-1]}"
 
 
 class MeetingDesk:
@@ -277,6 +463,10 @@ class MeetingDesk:
         self._runner = ProjectionRunner(journal, [self.state])
         self._working: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._groups = asyncio.Lock()
+        self.answer: Answer | None = None
+        """Orion itself, set when serving: who answers another Orion's words (D102)."""
+        """Answers from a group arrive together: one at a time decides what comes next."""
 
     async def start(self) -> None:
         await self._runner.catch_up()
@@ -316,15 +506,32 @@ class MeetingDesk:
         end: datetime,
         grant: str | None,
         correlation_id: str | None = None,
+        also: list[str] | None = None,
     ) -> tuple[str, list[datetime]]:
         peer = await self.find(peer_name)
         if peer is None:
             raise LookupError(f"no Orion paired as {peer_name!r}")
+        invited = [peer]
+        for name in also or []:
+            other = await self.find(name)
+            if other is None:
+                raise LookupError(f"no Orion paired as {name!r}")
+            if other["instance"] not in [i["instance"] for i in invited]:
+                invited.append(other)
         slots = free_slots(
             start, end, duration, await self.busy(start, end), self.hours, self.clock()
         )
         if not slots:
-            raise LookupError("no free slot in that window")
+            days = "any day" if self.hours.weekends else "weekdays only"
+            raise LookupError(
+                f"no free slot in that window: he meets between {self.hours.start:%H:%M} and "
+                f"{self.hours.end:%H:%M}, {days} (federation.meeting_start/meeting_end), and "
+                "outside his busy times. Tell him before trying another window"
+            )
+        if len(invited) > 1:
+            return await self._send_polls(
+                invited, title, duration, start, end, slots, grant, correlation_id
+            )
         meeting_id = f"m_{new_id()}"
         body = Propose(
             title=title,
@@ -350,6 +557,51 @@ class MeetingDesk:
             correlation_id=correlation_id,
         )
         return meeting_id, slots
+
+    async def _send_polls(
+        self,
+        invited: list[dict[str, Any]],
+        title: str,
+        duration: timedelta,
+        start: datetime,
+        end: datetime,
+        slots: list[datetime],
+        grant: str | None,
+        correlation_id: str | None,
+    ) -> tuple[str, list[datetime]]:
+        group = f"g_{new_id()}"
+        labels = [str(p["label"]) for p in invited]
+        for peer in invited:
+            others = tuple(name for name in labels if name != peer["label"])
+            body = Propose(
+                title=title,
+                duration_minutes=int(duration.total_seconds() // 60),
+                window_start=start,
+                window_end=end,
+                slots=tuple(slots),
+                group=others,
+            )
+            meeting_id = f"m_{new_id()}"
+            await self.guardian.federation_send(
+                str(peer["instance"]), POLL, meeting_id, body.model_dump(mode="json"), grant
+            )
+            await self._append(
+                PROPOSED,
+                {
+                    "meeting_id": meeting_id,
+                    "peer": peer["instance"],
+                    "label": peer["label"],
+                    "title": body.title,
+                    "duration_minutes": body.duration_minutes,
+                    "slots": [s.isoformat() for s in slots],
+                    "group": group,
+                    "others": list(others),
+                    "poll": True,
+                },
+                Trust.SYSTEM,
+                correlation_id=correlation_id,
+            )
+        return group, slots
 
     # -- what other Orions send ---------------------------------------------------------------
 
@@ -415,6 +667,14 @@ class MeetingDesk:
         label = str(peer["label"])
         if envelope.type == INTRODUCE:
             await self._handled(message, "paired", paired=True, label=label)
+        elif envelope.type == POLL and isinstance(body, Propose):
+            await self._polled(message, body, label)
+        elif isinstance(body, Say):
+            await self._chatted(message, body, label)
+        elif isinstance(body, Available):
+            await self._available(message, body)
+        elif isinstance(body, Cancel):
+            await self._cancelled(message)
         elif isinstance(body, Propose):
             await self._invited(message, body, label)
         elif isinstance(body, Accept):
@@ -440,6 +700,7 @@ class MeetingDesk:
             "duration_minutes": body.duration_minutes,
             "slots": [s.isoformat() for s in body.slots],
             "envelope_id": envelope.id,
+            "others": list(body.group),
         }
         if not free:
             await self._answer(message, base, DECLINE, {"reason": "no_slot"}, accepted=False)
@@ -465,7 +726,215 @@ class MeetingDesk:
                 grant=approval.grant,
             )
         else:
-            await self._answer(message, base, DECLINE, {"reason": "declined"}, accepted=False)
+            reason = "declined" if approval.reached else "unreachable"
+            await self._answer(message, base, DECLINE, {"reason": reason}, accepted=False)
+
+    async def say(
+        self, peer_name: str, text: str, grant: str | None, correlation_id: str | None = None
+    ) -> str:
+        """Write first to another Orion; the owner said yes to these exact words."""
+        peer = await self.find(peer_name)
+        if peer is None:
+            raise LookupError(f"no Orion paired as {peer_name!r}")
+        body = Say(text=text)
+        await self.guardian.federation_send(
+            str(peer["instance"]), SAY, f"chat-{new_id()}", body.model_dump(), grant
+        )
+        await self._append(
+            CHAT_SENT,
+            {"peer": peer["instance"], "label": peer["label"], "text": body.text},
+            Trust.SYSTEM,
+            correlation_id=correlation_id,
+        )
+        return str(peer["label"])
+
+    async def _chatted(self, message: PeerMessage, body: Say, label: str) -> None:
+        """Another Orion's words: Orion itself answers, and the owner hears of it."""
+        envelope = message.envelope
+        if self.answer is None:
+            await self._handled(message, "nobody to answer: Orion is not serving")
+            return
+        sent = self.state.opened.get(envelope.sender, "")
+        reply = (await self.answer(f"peer:{envelope.sender}", label, body.text, sent)).strip()
+        if is_silence(reply):
+            reply = ""
+        error = ""
+        if reply:
+            try:
+                await self.guardian.federation_send(
+                    envelope.sender, SAY, envelope.context, {"text": reply[:MAX_SAY]}
+                )
+            except GuardianUnavailableError as exc:
+                log.warning("federation.chat_unsent", peer=envelope.sender, error=str(exc))
+                error = str(exc)[:200]
+        await self._append(
+            CHATTED,
+            {
+                "peer": envelope.sender,
+                "label": label,
+                "them": body.text,
+                "reply": "" if error else reply,
+                "unsent": reply if error else "",
+                "error": error,
+                "at": self.clock().isoformat(),
+                "envelope_id": envelope.id,
+            },
+            Trust.TRUSTED_PEER,
+            message,
+        )
+
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """What another Orion said, and what Orion answered: he hears of it, within reason."""
+        await self._runner.catch_up()
+        return [
+            Alert(
+                key=f"federation:chat:{c.event_id}",
+                notice=f"L'Orion de {c.label} t'a écrit : « {c.them[:500]} ». "
+                + (
+                    f"Tu lui as répondu : « {c.reply[:500]} »."
+                    if c.reply
+                    else "Tu ne lui as pas répondu."
+                )
+                + " Dis-le-lui en une ou deux phrases, si ça l'intéresse.",
+                why=f"l'Orion de {c.label} t'a écrit",
+                fallback=f"L'Orion de {c.label} m'a écrit : « {c.them[:200]} »",
+                trust=Trust.TRUSTED_PEER,
+                expires_at=c.at + CHAT_TOLD,
+                importance=0.4,
+                spoken_to=True,
+            )
+            for c in self.state.chats
+            if c.at <= now < c.at + CHAT_TOLD
+        ]
+
+    async def _polled(self, message: PeerMessage, body: Propose, label: str) -> None:
+        """Which of the starts are free: code answers, the owner is asked for the one found."""
+        envelope = message.envelope
+        duration = timedelta(minutes=body.duration_minutes)
+        busy = await self.busy(min(body.slots), max(body.slots) + duration)
+        now = self.clock()
+        free = [s for s in body.slots if is_free(s, duration, busy, self.hours, now)]
+        payload: dict[str, object] = {
+            "meeting_id": envelope.context,
+            "peer": envelope.sender,
+            "label": label,
+            "title": body.title,
+            "duration_minutes": body.duration_minutes,
+            "slots": [s.isoformat() for s in body.slots],
+            "others": list(body.group),
+            "free": [s.isoformat() for s in free],
+            "envelope_id": envelope.id,
+        }
+        try:
+            await self.guardian.federation_send(
+                envelope.sender,
+                AVAILABLE,
+                envelope.context,
+                Available(slots=tuple(free)).model_dump(mode="json"),
+            )
+        except GuardianUnavailableError as exc:
+            await self._failed(message, payload, str(exc))
+            return
+        await self._append(POLLED, payload, Trust.TRUSTED_PEER, message)
+
+    async def _available(self, message: PeerMessage, body: Available) -> None:
+        envelope = message.envelope
+        meeting = self.state.meetings.get(envelope.context)
+        if (
+            meeting is None
+            or meeting.group is None
+            or meeting.peer != envelope.sender
+            or meeting.status != "polling"
+        ):
+            await self._handled(message, "availability for no poll of ours")
+            return
+        free = [s for s in body.slots if s in meeting.slots]
+        await self._append(
+            AVAILABILITY,
+            {
+                "meeting_id": meeting.id,
+                "slots": [s.isoformat() for s in free],
+                "envelope_id": envelope.id,
+            },
+            Trust.TRUSTED_PEER,
+            message,
+        )
+        async with self._groups:
+            await self._runner.catch_up()
+            await self._everyone_answered(meeting.group)
+
+    async def _everyone_answered(self, group: str) -> None:
+        members = self.state.group(group)
+        if any(m.status != "available" for m in members):
+            return
+        first = members[0]
+        duration = timedelta(minutes=first.duration_minutes)
+        common = set(first.slots).intersection(*(set(m.available) for m in members))
+        busy = await self.busy(min(first.slots), max(first.slots) + duration)
+        now = self.clock()
+        free = sorted(s for s in common if is_free(s, duration, busy, self.hours, now))
+        if not free:
+            await self._append(GROUP_FAILED, {"group": group, "reason": "no_common"}, Trust.SYSTEM)
+            return
+        slot = free[0]
+        sent: list[Meeting] = []
+        for m in members:
+            body = Propose(
+                title=m.title,
+                duration_minutes=m.duration_minutes,
+                window_start=slot,
+                window_end=slot + duration,
+                slots=(slot,),
+                group=m.others,
+            )
+            try:
+                await self.guardian.federation_send(
+                    m.peer, PROPOSE, m.id, body.model_dump(mode="json")
+                )
+            except GuardianUnavailableError as exc:
+                await self._call_off(sent)
+                await self._append(
+                    GROUP_FAILED,
+                    {"group": group, "reason": "unsent", "error": str(exc)[:200]},
+                    Trust.SYSTEM,
+                )
+                return
+            sent.append(m)
+        await self._append(
+            GROUP_PROPOSED,
+            {"group": group, "slot": slot.isoformat(), "meetings": [m.id for m in members]},
+            Trust.SYSTEM,
+        )
+
+    async def _call_off(self, members: list[Meeting]) -> None:
+        for m in members:
+            try:
+                await self.guardian.federation_send(
+                    m.peer, CANCEL, m.id, Cancel(reason="group_failed").model_dump(mode="json")
+                )
+            except GuardianUnavailableError:
+                log.warning("federation.cancel_unsent", meeting=m.id, exc_info=True)
+
+    async def _cancelled(self, message: PeerMessage) -> None:
+        envelope = message.envelope
+        meeting = self.state.meetings.get(envelope.context)
+        if (
+            meeting is None
+            or meeting.role != "invited"
+            or meeting.peer != envelope.sender
+            or meeting.status not in ("accepted", "polled")
+        ):
+            await self._handled(message, "a cancellation for nothing we hold")
+            return
+        if meeting.status == "polled":  # nothing was asked of the owner yet: nothing to say
+            await self._handled(message, "poll called off")
+            return
+        await self._append(
+            CANCELLED,
+            {"meeting_id": meeting.id, "envelope_id": envelope.id},
+            Trust.TRUSTED_PEER,
+            message,
+        )
 
     async def _answer(
         self,
@@ -505,6 +974,22 @@ class MeetingDesk:
         ):
             await self._handled(message, "an acceptance for no open proposal of ours")
             return
+        if meeting.group is not None:
+            await self._append(
+                PEER_ACCEPTED,
+                {
+                    "meeting_id": meeting.id,
+                    "slot": body.slot.isoformat(),
+                    "signature": envelope.signature,
+                    "envelope_id": envelope.id,
+                },
+                Trust.TRUSTED_PEER,
+                message,
+            )
+            async with self._groups:
+                await self._runner.catch_up()
+                await self._everyone_accepted(meeting.group, body.slot, message)
+            return
         try:
             sent = await self.guardian.federation_send(
                 envelope.sender, CONFIRM, envelope.context, {"slot": body.slot.isoformat()}
@@ -513,6 +998,43 @@ class MeetingDesk:
             await self._failed(message, _summary(meeting), str(exc))
             return
         await self._agree(message, meeting, body.slot, theirs=envelope.signature, ours=sent)
+
+    async def _everyone_accepted(self, group: str, slot: datetime, message: PeerMessage) -> None:
+        members = self.state.group(group)
+        if any(m.status != "peer_accepted" for m in members):
+            return
+        for m in members:
+            try:
+                sent = await self.guardian.federation_send(
+                    m.peer, CONFIRM, m.id, {"slot": slot.isoformat()}
+                )
+            except GuardianUnavailableError as exc:
+                await self._failed(message, _summary(m), str(exc))
+                continue
+            await self._append(
+                AGREED,
+                {
+                    "meeting_id": m.id,
+                    "peer": m.peer,
+                    "start": slot.isoformat(),
+                    "end": (slot + timedelta(minutes=m.duration_minutes)).isoformat(),
+                    "receipts": {"ours": sent.get("signature")},
+                    "group": group,
+                },
+                Trust.TRUSTED_PEER,
+                message,
+            )
+        first = members[0]
+        end = slot + timedelta(minutes=first.duration_minutes)
+        await self._append(
+            GROUP_AGREED,
+            {"group": group, "start": slot.isoformat(), "end": end.isoformat()},
+            Trust.TRUSTED_PEER,
+            message,
+        )
+        group_meeting = replace(first, label=_names([m.label for m in members]))
+        await self._to_calendar(group_meeting, slot, end)
+        await self._commit(group_meeting, slot, message, "leurs Orion")
 
     async def _confirmed(self, message: PeerMessage, body: Confirm) -> None:
         envelope = message.envelope
@@ -540,6 +1062,20 @@ class MeetingDesk:
             Trust.TRUSTED_PEER,
             message,
         )
+        if meeting.group is None:
+            return
+        async with self._groups:
+            await self._runner.catch_up()
+            members = self.state.group(meeting.group)
+            if any(m.status == "failed" for m in members):
+                return
+            await self._call_off([m for m in members if m.status == "peer_accepted"])
+            await self._append(
+                GROUP_FAILED,
+                {"group": meeting.group, "reason": body.reason, "who": meeting.label},
+                Trust.TRUSTED_PEER,
+                message,
+            )
 
     async def _agree(
         self,
@@ -566,10 +1102,17 @@ class MeetingDesk:
             Trust.TRUSTED_PEER,
             message,
         )
+        if meeting.others:  # invited to a meeting of several: the others are there too
+            meeting = replace(meeting, label=_names([meeting.label, *meeting.others]))
         await self._to_calendar(meeting, slot, end)
+        await self._commit(meeting, slot, message, "son Orion")
+
+    async def _commit(
+        self, meeting: Meeting, slot: datetime, message: PeerMessage, via: str
+    ) -> None:
         await self._memory.add_commitment(
             f"{meeting.title} avec {meeting.label}, {describe_moment(slot, self.hours.timezone)}"
-            f" ({meeting.duration_minutes} min), calé avec son Orion",
+            f" ({meeting.duration_minutes} min), calé avec {via}",
             Origin(
                 actor="orion:federation",
                 source=f"peer:{meeting.peer}",

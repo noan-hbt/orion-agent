@@ -89,3 +89,26 @@ async def test_papers_are_filed_found_warned_and_assembled(
     passport = next(p for p in vault.papers() if p.kind == "passeport")
     await call(tool, ctx, action="remove", paper=passport.id)
     assert all(p.kind != "passeport" for p in vault.papers())
+
+
+async def test_a_kbis_is_filed_as_one(journal: SqliteJournal, tmp_path: Path) -> None:
+    store = FileStore(journal, tmp_path / "files")
+    vault = Vault(journal, store, Kept(), "Europe/Paris", render)  # type: ignore[arg-type]
+    (tool,) = paper_tools(vault)
+    said = await call(tool, ToolContext("owner", "c1"), action="file", attachment="at_pay0",
+                      kind="extrait Kbis", label="Kbis NERB Solutions")  # fmt: skip
+    assert not said.is_error, said.content
+    found = await call(tool, ToolContext("owner", "c1"), action="find", kind="extrait Kbis")
+    assert "Kbis NERB Solutions" in found.content
+
+
+async def test_a_kind_not_in_the_list_is_filed_as_other(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    store = FileStore(journal, tmp_path / "files")
+    vault = Vault(journal, store, Kept(), "Europe/Paris", render)  # type: ignore[arg-type]
+    (tool,) = paper_tools(vault)
+    said = await call(tool, ToolContext("owner", "c1"), action="file", attachment="at_pay1",
+                      kind="relevé bancaire", label="Relevé Revolut juin")  # fmt: skip
+    assert not said.is_error, said.content
+    assert [p.kind for p in vault.papers()] == ["autre"]

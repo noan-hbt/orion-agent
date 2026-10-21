@@ -6,9 +6,8 @@ import base64
 import re
 from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -115,7 +114,7 @@ def mail_tools(
         await mailbox.ensure_fresh()
         if not mailbox.state.synced:
             return ToolResult("No mailbox could be read yet.", is_error=True)
-        since = datetime.now(ZoneInfo(ctx.timezone)) - timedelta(days=args.days)
+        since = mailbox.now() - timedelta(days=args.days)
         if args.bulk:
             return ToolResult(_bulk(mailbox.recent(since)), trust=Trust.THIRD_PARTY)
         cards = mailbox.recent(since, worth_it=not args.everything)

@@ -23,7 +23,7 @@ from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.client import GuardianUnavailableError
 from orion.guardian.ledger import MAIL_SENT, SENT, WRITTEN
-from orion.guardian.policy import UNTRUSTED_REASON, ActionProposal, Approval, Guardian
+from orion.guardian.policy import ActionProposal, Approval, Guardian, untrusted_reason
 from orion.mail.quarantine import BULK_CARD
 from orion.mail.service import MailAccount, MailCard
 from orion.mail.smtp import Outgoing, build
@@ -256,7 +256,11 @@ async def test_acting_on_outside_content_is_asked_with_that_reason() -> None:
         tool, MailSendInput(to=["a@b.fr"], subject="s", body="b"), Trust.THIRD_PARTY, "owner"
     )
     decision = await Guardian(Approver()).decide(proposal)
-    assert decision.allowed and decision.grant == "g" and asked == [UNTRUSTED_REASON]
+    assert (
+        decision.allowed
+        and decision.grant == "g"
+        and asked == [untrusted_reason(Trust.THIRD_PARTY)]
+    )
 
 
 async def test_the_google_consent_gives_a_refresh_token() -> None:

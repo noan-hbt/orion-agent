@@ -191,13 +191,19 @@ Voir l'ordre de construction dans
 
 ## Démarrer
 
+Sur un serveur : `sudo deploy/install.sh` installe tout et pose les questions (voir
+[`deploy/`](deploy/)). Sur ta machine :
+
 ```bash
 uv sync
-cp orion.example.toml orion.toml
-export OPENROUTER_API_KEY=...
-uv run orion doctor
-uv run orion chat
+uv run orion setup     # prénom, clé OpenRouter, bot Telegram : chaque clé est vérifiée
+uv run orion serve     # (avec le gardien : `uv run orion guardian` à côté)
 ```
+
+`orion setup` écrit `orion.toml`, et les secrets dans `core.env` et `guardian.env` à côté
+(jamais dans `orion.toml`). Ensuite, plus besoin d'éditer de fichier : dis à Orion « active le
+mail », « ajoute Angèle », « mets tes points à 9 h ». Il change ses réglages lui-même, avec ton
+accord (D92). Toutes les options sont décrites dans `orion.example.toml`.
 
 ### iMessage
 

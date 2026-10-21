@@ -12,10 +12,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from orion.calendar.ics import Occurrence, Standing
+from orion.channels.inbox import Incoming
 from orion.channels.inkbox import IMessage
 from orion.core.journal import SqliteJournal
 from orion.guardian.client import GuardianUnavailableError
-from orion.secretary.module import REPLIED, Secretary, secretary_tools
+from orion.guardian.ledger import AUTONOMY_GRANTED, AUTONOMY_REVOKED
+from orion.secretary.module import REPLIED, Secretary, from_imessage, secretary_tools
 from orion.secretary.settings import Contact, SecretarySettings
 from orion.tools.base import ToolContext
 from tests.fake_guardian import guardian_config, running_guardian
@@ -58,14 +60,16 @@ def answer(**fields: object) -> ScriptedProvider:
     return ScriptedProvider(reply(json.dumps(fields, ensure_ascii=False)))
 
 
-def message(text: str, sender: str = MUM, conversation: str = MUM_CHAT, n: int = 1) -> IMessage:
-    return IMessage(
-        id=f"m{n}",
-        conversation_id=conversation,
-        direction="inbound",
-        remote_number=sender,
-        content=text,
-        created_at=NOW.isoformat(),
+def message(text: str, sender: str = MUM, conversation: str = MUM_CHAT, n: int = 1) -> Incoming:
+    return from_imessage(
+        IMessage(
+            id=f"m{n}",
+            conversation_id=conversation,
+            direction="inbound",
+            remote_number=sender,
+            content=text,
+            created_at=NOW.isoformat(),
+        )
     )
 
 
@@ -85,7 +89,7 @@ def secretary_with(
         lambda: NOW,
     )
 
-    async def send(conversation: str, text: str, cid: str) -> str:
+    async def send(channel: str, conversation: str, text: str, cid: str) -> str:
         sent.append((conversation, text))
         return "out-1"
 
@@ -222,3 +226,109 @@ async def test_writing_first_needs_the_owners_yes_to_that_text(tmp_path: Path) -
             await g.client.contact_send("Maman", MUM_CHAT, "Autre chose", grant)
         await g.client.contact_send("Maman", MUM_CHAT, "Je passe dimanche !", grant)
         assert g.fake.texts()[-1] == "Je passe dimanche !"
+        # « Tu peux écrire à Maman sans me demander »: granted for her by name, nobody else.
+        await g.service.ledger.record(
+            AUTONOMY_GRANTED,
+            {"action": "contact_message", "limits": {"recipients": ["maman"], "domains": []}},
+        )
+        await g.client.contact_send("Maman", MUM_CHAT, "J'arrive à 19 h", None)
+        assert g.fake.texts()[-1] == "J'arrive à 19 h"
+        await g.service.ledger.record(AUTONOMY_REVOKED, {"action": "contact_message"})
+        with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
+            await g.client.contact_send("Maman", MUM_CHAT, "Encore", None)
+
+
+async def test_written_alone_the_owner_is_told_and_telegram_needs_no_history(
+    journal: SqliteJournal,
+) -> None:
+    angele = Contact(name="Angèle", telegram_id=5151)
+    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    secretary.contacts = {a: angele for a in angele.addresses()}
+    assert secretary.conversation_with(angele) == "telegram:5151"
+    out: list[tuple[str, str, str]] = []
+
+    async def send(channel: str, conversation: str, text: str, _cid: str) -> str:
+        out.append((channel, conversation, text))
+        return "out-2"
+
+    secretary.send = send
+    tool = {t.name: t for t in secretary_tools(secretary, None)}["contact_message"]
+    args = tool.parse(json.dumps({"contact": "Angèle", "text": "Il arrive à 19 h"}))
+    done = await tool.handler(args, ToolContext("owner", "c", alone=True))
+    assert out == [("telegram", "telegram:5151", "Il arrive à 19 h")]
+    assert "sans lui demander" in done.content and "Dis-lui" in done.content
+    nobody = await tool.handler(
+        tool.parse(json.dumps({"contact": "Zoé", "text": "x"})), ToolContext("owner", "c")
+    )
+    assert nobody.is_error and "offer to add them" in nobody.content
+
+
+async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
+    journal: SqliteJournal,
+) -> None:
+    from orion.channels.inbox import OwnerInbox
+    from orion.channels.telegram import TelegramChannel, TelegramSettings
+    from tests.fake_telegram import OWNER, STRANGER, FakeTelegram
+    from tests.test_imessage import make_orion
+
+    angele = 5151
+    settings = SecretarySettings(
+        enabled=True, contacts=[Contact(name="Angèle", telegram_id=angele, about="sa copine")]
+    )
+    sent: list[tuple[str, str, str]] = []
+    provider = answer(reply="Il est au boulot, je lui dis.", tell_owner="Angèle t'a cherché.")
+    secretary = Secretary(
+        journal, provider, settings, "m", "Noan", "Europe/Paris", None, lambda: NOW
+    )
+
+    async def send(channel: str, conversation: str, text: str, cid: str) -> str:
+        sent.append((channel, conversation, text))
+        return "1"
+
+    secretary.send = send
+    fake = FakeTelegram()
+    inbox = OwnerInbox(make_orion(journal, ScriptedProvider()), coalesce_seconds=0.05)
+    channel = TelegramChannel(fake.client(), journal, inbox, TelegramSettings(owner_id=OWNER))
+    heard: list[Incoming] = []
+    channel.others = heard.append
+    fake.write("il est où Noan ?", sender=angele)
+    fake.write("salut le bot", sender=STRANGER)
+    await channel.poll_once()
+
+    assert [m.address for m in heard] == [f"telegram:{angele}", f"telegram:{STRANGER}"]
+    exchange = await secretary.answer(heard[0])
+    assert exchange is not None and exchange.contact == "Angèle"
+    assert sent == [("telegram", f"telegram:{angele}", "Il est au boulot, je lui dis.")]
+    assert await secretary.answer(heard[1]) is None  # not his contact: never answered
+    assert "Telegram" in provider.requests[0].messages[0]["content"]
+
+    later = datetime.fromtimestamp(1_760_000_000, ZoneInfo("UTC")) + timedelta(minutes=1)
+    stranger = [a for a in await secretary.alerts(later) if "stranger" in a.key]
+    assert len(stranger) == 1 and f"`telegram_id` = {STRANGER}" in stranger[0].notice
+    assert "Noan" in stranger[0].notice  # FakeTelegram names everyone Noan
+
+
+async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
+    journal: SqliteJournal,
+) -> None:
+    from orion.core.events import NewEvent, Provenance, Trust
+
+    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    payload = {"type": "message", "is_owner": False, "chat_id": 777, "sender": 777,
+               "name": "Victor (@v)", "text": "ww", "date": 1_760_000_000,
+               "ref": "telegram:777:1"}  # fmt: skip
+    await journal.append(
+        [
+            NewEvent(
+                kind="telegram.inbound",
+                payload=payload,
+                provenance=Provenance(source="telegram:777", actor="telegram"),
+                trust=Trust.THIRD_PARTY,
+            )
+        ]
+    )
+    tool = {t.name: t for t in secretary_tools(secretary, None)}["contacts"]
+    listed = await tool.handler(tool.parse("{}"), ToolContext("owner", "c"))
+    assert "Le secrétaire est allumé" in listed.content
+    assert "Victor (@v) (telegram_id 777)" in listed.content and "« ww »" in listed.content
+    assert listed.trust is Trust.THIRD_PARTY  # it quotes others' messages

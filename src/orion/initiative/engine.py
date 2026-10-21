@@ -45,6 +45,9 @@ from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
 
+AWAKE = timedelta(minutes=20)
+"""The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
+
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
 _OWNER_SIDE = {"owner", "orion"}
@@ -101,6 +104,10 @@ class Alert:
     expires_at: datetime | None = None
     importance: float = 0.5
     """0 to 1: how much the owner would mind missing it (the arbiter weighs it)."""
+    spoken_to: bool = False
+    """Someone wrote to him (one of his contacts, another Orion): passed on, not Orion's own
+    idea, so it does not spend the day's budget (D104). Quiet hours and the arbiter still
+    apply."""
 
 
 class AlertSource(Protocol):
@@ -131,13 +138,20 @@ class InitiativeSettings:
     digest_window: timedelta = timedelta(hours=2)
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
-    daily_budget: int = 6
+    daily_budget: int = 12
     heads_up: timedelta = timedelta(minutes=60)
 
     def is_quiet(self, moment: time) -> bool:
         if self.quiet_start <= self.quiet_end:
             return self.quiet_start <= moment < self.quiet_end
         return moment >= self.quiet_start or moment < self.quiet_end
+
+    def attention_day(self, moment: datetime) -> date:
+        """The day a message counts against: from waking to waking. What he reads at 1 a.m.
+        belongs to the evening still going on, not to the day he has not started yet."""
+        if self.quiet_start > self.quiet_end and moment.time() < self.quiet_end:
+            return moment.date() - timedelta(days=1)
+        return moment.date()
 
 
 def effective_settings(
@@ -173,6 +187,8 @@ class Candidate:
     mentions: tuple[str, ...] = ()
     expires_at: datetime | None = None
     importance: float = 0.5
+    budgeted: bool = True
+    """Spends the day's attention budget: what Orion says of its own accord (D104)."""
 
 
 @dataclass(frozen=True)
@@ -228,7 +244,7 @@ class Ledger:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
                 self.last_mention[str(item)] = day
-            if not payload.get("explicit") and not payload.get("bundled"):
+            if not (payload.get("explicit") or payload.get("bundled") or payload.get("unbudgeted")):
                 self.spent[day] = self.spent.get(day, 0) + 1
         self._seq = event.seq
 
@@ -320,7 +336,12 @@ def _read_while_writing(messages: Sequence[Message]) -> str:
         for m in messages
         if m.get("role") in ("user", "tool") and isinstance(m.get("content"), str)
     ]
-    return "\n---\n".join(p for p in parts if p)[-VERIFIER_READ_CHARS:]
+    read = "\n---\n".join(p for p in parts if p)
+    if len(read) <= VERIFIER_READ_CHARS:
+        return read
+    # The memory comes first in the turn, the searches after: keep both ends.
+    head = VERIFIER_READ_CHARS // 3
+    return read[:head] + "\n[…]\n" + read[-(VERIFIER_READ_CHARS - head) :]
 
 
 def _point(lines: str, extra: list[str]) -> str:
@@ -420,6 +441,7 @@ class InitiativeEngine:
                     trust=a.trust,
                     expires_at=a.expires_at,
                     importance=a.importance,
+                    budgeted=not a.spoken_to,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -558,7 +580,7 @@ class InitiativeEngine:
             candidate.importance,
             now,
             await self._moment(now),
-            self.ledger.spent.get(now.date(), 0),
+            self.ledger.spent.get(self._settings.attention_day(now), 0),
             self._settings.daily_budget,
             candidate.expires_at,
             self._waiting.get(candidate.key),
@@ -646,14 +668,23 @@ class InitiativeEngine:
         await self._timers.fired(candidate.timer.id, correlation_id)
         return True
 
+    def _owner_is_up(self, now: datetime) -> bool:
+        """He wrote a moment ago: quiet hours are for his sleep, not for a conversation."""
+        wrote = getattr(self._orion, "owner_wrote_at", None)
+        return isinstance(wrote, datetime) and timedelta(0) <= now - wrote < AWAKE
+
     def _gate(self, candidate: Candidate, now: datetime) -> str | None:
         if not candidate.notice:
             return "nothing to say"
         if candidate.expires_at is not None and now > candidate.expires_at:
             return "missed its window"
-        if self._settings.is_quiet(now.time()):
+        if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
             return "quiet hours"
-        if self.ledger.spent.get(now.date(), 0) >= self._settings.daily_budget:
+        if (
+            candidate.budgeted
+            and self.ledger.spent.get(self._settings.attention_day(now), 0)
+            >= self._settings.daily_budget
+        ):
             return "daily attention budget spent"
         return None
 
@@ -683,17 +714,46 @@ class InitiativeEngine:
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
-        read = _read_while_writing(
-            self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
-        )
-        if read:
-            facts += f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
         conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
-        verification = await self._verifier.check(draft, facts, conversation)
-        if not verification.ok:
+        for attempt in (1, 2):
+            read = _read_while_writing(
+                self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
+            )
+            known = facts + (
+                f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
+                if read
+                else ""
+            )
+            verification = await self._verifier.check(draft, known, conversation)
+            if verification.ok:
+                return draft, "verified" if attempt == 1 else "verified on a second draft"
             log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
-            return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
-        return draft, "verified"
+            if attempt == 2:
+                break
+            # Orion rewrites it in its own words rather than a canned text going out (D103).
+            try:
+                again = await self._orion.handle_initiative(
+                    self._settings.thread_id,
+                    "Ton message n'est pas parti : une relecture y a vu un problème ("
+                    + "; ".join(verification.issues)[:500]
+                    + "). Réécris-le en t'en tenant à ce que tu sais, ou réponds SILENCE.",
+                    candidate.why,
+                    candidate.trust,
+                    now,
+                )
+            except Exception:
+                log.exception("initiative.rewrite_failed", key=candidate.key)
+                break
+            if again.reason is not StopReason.COMPLETED or not again.text.strip():
+                break
+            if is_silence(again.text):
+                return (
+                    (candidate.fallback, "fallback: silence after a rejection")
+                    if (candidate.explicit)
+                    else (None, "silence")
+                )
+            draft = again.text.strip()
+        return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
 
     async def _record(
         self,
@@ -709,7 +769,7 @@ class InitiativeEngine:
         payload: dict[str, object] = {
             "key": candidate.key,
             "why": candidate.why,
-            "day": now.date().isoformat(),
+            "day": self._settings.attention_day(now).isoformat(),
             "explicit": candidate.explicit,
             "mentions": list(candidate.mentions),
         }
@@ -721,6 +781,8 @@ class InitiativeEngine:
             payload["arbiter"] = arbiter
         if bundled:
             payload["bundled"] = True
+        if not candidate.budgeted:
+            payload["unbudgeted"] = True
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)

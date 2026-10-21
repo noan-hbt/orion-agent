@@ -1808,3 +1808,414 @@ d'autre chemin. Désormais :
   activé, le module refuse de se charger.
 
     telegram.inbound
+
+## D89 — Telegram par le gardien
+
+*20/10/2026 · acceptée · révise D88*
+
+Avec Telegram, le gardien séparé (D28) ne pouvait pas tourner : le jeton du bot restait dans le
+cœur. Sans gardien, pas de session prêtée (D49), donc rien sur les comptes du propriétaire, et
+pas de fédération. Désormais, avec `[guardian] enabled = true` :
+- `TELEGRAM_BOT_TOKEN` ne vit que dans l'environnement du gardien ; le cœur refuse de démarrer
+  s'il le voit. Le cœur garde le même client Telegram, pointé sur le gardien
+  (`GuardianClient.telegram`) ;
+- le gardien laisse passer les lectures (`getMe`, `getUpdates`, `getFile`, le téléchargement
+  d'un fichier reçu). Un message, un fichier, « en train d'écrire » ou le retrait des boutons
+  ne vont qu'au chat du propriétaire (`owner_id`), au plus `max_sends_per_minute` par minute.
+  Tout le reste est refusé : webhook, transfert, autre chat, réglages du bot. Les fichiers
+  arrivent au gardien en JSON, qui lit où ils vont avant de les envoyer lui-même ;
+- **les demandes d'accord.** Le gardien écrit la question lui-même, avec les boutons Oui / Non.
+  L'API des bots ne garde pas d'historique que le gardien pourrait relire, comme il le fait
+  chez Inkbox. Mais chaque mise à jour que lit le cœur passe par lui : il note dans son registre
+  les réponses du propriétaire à ses propres questions (`guardian.telegram.answer`). Comptent
+  un bouton, un 👍 ou un 👎, ou un « oui » / « non » écrit après la question. Le cœur ne peut
+  pas en fabriquer une, puisqu'il ne parle jamais à Telegram lui-même. Un mot ne répond qu'à
+  la dernière question posée avant lui ;
+- quand le cœur se tait, le gardien prévient le propriétaire par Telegram s'il n'y a pas
+  d'iMessage.
+
+Limite connue : si le cœur ne relit pas une mise à jour (un `offset` sauté), le gardien ne voit
+pas la réponse, et l'action est refusée. Le système échoue alors dans le sens sûr.
+
+    guardian.telegram.answer
+
+## D90 — Après une recherche, Orion demande au lieu de refuser (révise D26 et D85)
+
+*20/10/2026 · acceptée*
+
+Constat du 20/10 : une recherche web sur l'échéance URSSAF a suffi pour bloquer pendant 2 h
+toute action sur le monde, y compris activer un module à sa propre demande. Le propriétaire ne
+peut pas s'en servir comme d'une conversation normale. En mode `equilibre` (par défaut), une
+action sur le monde depuis une conversation qui contient du contenu venu d'ailleurs lui est
+désormais **demandée** au lieu d'être refusée :
+- la question donne l'action exacte et dit pourquoi elle est posée, en nommant la source :
+  « la conversation contient une page web ou un résultat de recherche, qui pourrait m'avoir
+  influencé : vérifie que c'est bien ce que tu veux » ;
+- elle n'est jamais faite seule : l'autonomie acquise (D30) ne s'applique pas dans ce
+  contexte, et accorder de l'autonomie (`autonomy_grant`) y reste refusé, même avec un oui ;
+- `prudent` garde le refus de D26.
+
+Le risque que D26 voulait écarter (le propriétaire qui apprend à dire oui sans lire) est réduit
+par la question elle-même. Elle n'arrive que pour une vraie action, et pas pour chaque rappel
+(D85). Elle est écrite par le gardien à partir des paramètres réels (D28), pas par le modèle.
+
+## D91 — Les proches sur Telegram ; la console dans Telegram
+
+*20/10/2026 · acceptée · étend D54 et D88*
+
+Il faut que d'autres personnes puissent parler à Orion, et le propriétaire n'utilise plus que
+Telegram. Désormais :
+- **un contact** de `[modules.secretary]` se déclare par son numéro (iMessage), son
+  `telegram_id`, ou les deux. Ses messages au bot vont au secrétaire, comme sur iMessage :
+  c'est un modèle à part, sans outils, qui ne voit pas la mémoire du propriétaire. La réponse
+  part sur le canal d'où il a écrit ;
+- **un inconnu** qui écrit au bot n'a pas de réponse. Le propriétaire est prévenu une fois, avec
+  le nom et l'id qui permettraient de l'ajouter ;
+- **en mode séparé**, le gardien laisse partir vers un contact une réponse en texte seul,
+  seulement dans les 12 h qui suivent un message de lui qu'il a vu passer, et dans le plafond
+  du jour. Il garde ce moment en mémoire : après un redémarrage, Orion répond de nouveau dès
+  que le contact réécrit. Pour écrire le premier, il faut toujours le oui du propriétaire sur
+  ce texte exact (`contact_message`) ;
+- **la console** s'ouvre dans Telegram (Mini App), par un bouton « Console » dans la
+  conversation avec le bot. Telegram signe l'identité de qui l'ouvre ; la signature est vérifiée
+  avec le jeton du bot, par le gardien en mode séparé. Seul l'id du propriétaire reçoit le
+  cookie de session, et chaque ouverture est journalisée (`console.login.telegram`). Il faut
+  une adresse HTTPS publique (`[modules.console] public_url`), et le gardien ne pose le bouton
+  que vers cette adresse.
+
+Ajouter un contact demande encore de modifier `orion.toml` sur le serveur : la liste de ceux
+qui peuvent écrire reste celle du propriétaire, hors de portée du cœur.
+
+    console.login.telegram
+
+## D92 — Orion change tous ses réglages ; `orion setup` installe le reste
+
+*20/10/2026 · acceptée · étend D72, révise la dernière phrase de D91*
+
+Éditer `orion.toml` sur le serveur pour chaque changement est pénible, et Orion peut le faire
+lui-même. Désormais :
+- **trois sortes de réglages** (`orion.configure.paths`) :
+  - **ceux d'Orion** (`agent`, `initiative`, `modules`…) : changés avec le oui du
+    propriétaire, ou seul s'il le lui a laissé (`configure_change` est autonomable) ;
+  - **ceux du propriétaire** : ce qui le protège et qui Orion écoute. Ce sont les sections
+    `guardian`, `channels`, `federation`, `budget`, `providers`, `logging`, les contacts de
+    `modules.secretary.contacts`, et toute clé de compte ou qui désigne un secret (`accounts`,
+    `env`, `password`, `host`, `url`…, aussi en suffixe comme `public_url`). Ils changent
+    seulement avec son oui au changement exact, jamais seul ;
+  - **jamais par message** : les secrets et ce qui tourne sur le serveur (`api_key`,
+    `base_url`, `binary`, `allow_bash`, `socket`, les chemins `*_dir`, `path`), même cachés
+    dans une valeur ;
+- `configure_change` sait **ajouter ou retirer** un élément d'une liste (`op` = `add` /
+  `remove`, un contact par son nom). Orion ajoute lui-même un proche que le propriétaire veut
+  laisser entrer, par exemple l'inconnu qui vient d'écrire au bot ;
+- le fichier est **vérifié en entier avant de poser la question** (le propriétaire n'approuve
+  jamais un changement avec lequel Orion ne démarrerait pas), puis de nouveau avant l'écriture ;
+- **en mode séparé, c'est le gardien qui écrit le fichier** (`POST /v1/config`). Il vérifie
+  lui-même le oui du propriétaire à ce changement exact, ou l'autonomie pour les réglages
+  d'Orion. Sur le serveur, `orion.toml` est dans `/srv/orion/config`, à `orion-guardian`, et le
+  cœur le lit par le groupe. Un cœur compromis ne peut donc ni s'ouvrir lui-même ni changer ce
+  qui protège le propriétaire. Après l'écriture, le gardien redémarre, puis le cœur ;
+- `configure` redevient **deux outils** (`configure_show`, `configure_change`). Regroupé en
+  un seul, il s'appelait `configure` : l'autonomie accordée à `configure_change` ne
+  s'appliquait jamais, et le gardien n'aurait pas pu vérifier le oui par le nom de l'action ;
+- **`orion setup` installe Orion** en quelques questions : son prénom, le fuseau horaire, le
+  gardien ou non, la clé OpenRouter (vérifiée en ligne) et Telegram. Pour Telegram, il
+  vérifie le jeton du bot, puis lit l'id du propriétaire dans le message qu'il envoie au bot :
+  rien à recopier. Les secrets vont dans `core.env` et `guardian.env` (0600), jamais dans
+  `orion.toml`. Le cœur ne charge jamais `guardian.env`. On peut relancer `orion setup` : il
+  garde ce qui est là. `deploy/install.sh` le lance tout seul à la première installation.
+
+Les secrets ne passent toujours pas par message : un message est journalisé, et le modèle le
+voit. Un secret ajouté plus tard (le mot de passe d'une boîte mail) se met dans `guardian.env`.
+
+    guardian.config.changed
+
+## D93 — Orion écrit aux proches, y compris de lui-même ; le récap du soir
+
+*20/10/2026 · acceptée · étend D54 et D91*
+
+Pouvoir écrire aux autres est essentiel ; jusqu'ici, il fallait un oui à chaque message. Désormais :
+- **sur demande** (« dis à Angèle que j'arrive à 19 h ») : `contact_message` part tout de suite,
+  avec le oui sur le texte exact. Sur Telegram, un proche est joignable par son `telegram_id`
+  même si Orion n'a pas encore d'échange enregistré avec lui (il doit seulement avoir ouvert le bot) ;
+- **seul, par personne** : « tu peux écrire à Angèle sans me demander » accorde l'autonomie
+  `contact_message` (autonomable par défaut) avec, obligatoirement, la liste des proches
+  (`recipients`, leurs noms). Le gardien la vérifie lui-même, dans le plafond du jour du
+  contact. Après chaque message envoyé seul, Orion dit au propriétaire en une ligne ce qu'il a
+  écrit ;
+- **de sa propre initiative** : quand un proche devrait savoir quelque chose que le
+  propriétaire voudrait qu'on lui dise, Orion l'écrit s'il en a le droit pour cette personne.
+  Sinon, il propose le message exact sans l'envoyer. Il ne dit jamais aux proches ce que le
+  propriétaire ne leur dirait pas (santé, argent, ce qu'il fait) ;
+- **le récap du soir** (`[modules.recap]`, allumé par défaut) : le dernier point de la
+  journée commence par ce qu'Orion a fait pour lui. Ce sont les messages aux proches, les mails,
+  l'agenda, les rappels, les réglages et les démarches, lus dans le journal (`tool.executed`,
+  appels réussis). Le reste du point y était déjà : les échanges avec les proches, les mails et
+  le lendemain.
+
+Pas encore : un message programmé à une heure (« dis-lui à 18 h… »), ni Orion qui répond à sa
+place à un proche sur autre chose que ses disponibilités.
+
+## D94 — Le serveur se met à jour seul ; les secrets se saisissent depuis le téléphone
+
+*20/10/2026 · acceptée · étend D28 et D92*
+
+Reconfigurer le VPS à chaque changement est pénible, et ajouter un secret demandait de s'y
+connecter en SSH. Désormais :
+- **mise à jour automatique** (`deploy/orion-update`, `orion-update.timer`, toutes les 15 min) :
+  - quand la branche suivie avance, le serveur installe le nouveau code et vérifie la config
+    (`doctor`) ;
+  - puis il redémarre les deux processus et les surveille 75 s : actifs, et sans redémarrage
+    automatique ;
+  - si une étape échoue, il revient au commit d'avant et écarte le mauvais : il ne le retente
+    qu'à l'arrivée d'un commit plus récent ;
+  - il prévient le propriétaire dans les deux cas, par `orion notify`, qui écrit directement
+    avec le jeton du bot, même quand Orion ne démarre plus ;
+- **secrets depuis le téléphone** (`orion.guardian.vault`) :
+  - le cœur demande un nom de variable (`secret_ask`) ;
+  - le gardien envoie au propriétaire un bouton Telegram qui ouvre **son propre formulaire**
+    (Mini App, écouteur public à lui, `/secrets/`, jeton à usage unique de 15 min). Le cœur
+    n'est jamais devant ;
+  - le gardien vérifie la signature Telegram avec le jeton du bot et que c'est bien le
+    propriétaire. Il écrit la valeur dans `guardian/secrets.env` (0600) et ne journalise que le
+    nom. Puis il prévient le propriétaire et redémarre pour la charger ;
+  - une variable déjà posée sur le serveur n'est jamais remplacée de là ;
+  - le cœur ne fait que nommer la variable dans `orion.toml` (`{ env = … }`), avec le oui du
+    propriétaire (D92).
+
+    guardian.secret.asked  guardian.secret.set
+
+## D95 — Brancher ce que d'autres ont fait : serveurs MCP, skills, catalogue public
+
+*20/10/2026 · acceptée · étend D24*
+
+Les modules Python (D24) restent le niveau développeur. Pour qu'un utilisateur normal branche
+des choses, trois briques s'ajoutent :
+- **les skills** (`[modules.skills]`, allumé par défaut) : du savoir-faire en texte, un fichier
+  Markdown avec un nom et une description dans `<data_dir>/skills/`. Orion voit la liste, et
+  lit une skill en entier quand une tâche l'appelle : le message système ne change pas. Il en
+  écrit une quand le propriétaire le lui demande, avec son oui sur le texte exact, parce qu'une
+  skill oriente Orion par la suite ;
+- **les serveurs MCP** (`[modules.mcp]`) : leurs outils deviennent ceux d'Orion
+  (`mcp_<serveur>_<outil>`), listés au démarrage. Le client est écrit à la main (HTTP « streamable »
+  et stdio, sans dépendance). Ce qui protège :
+  - chaque outil est une action sur le monde, soumise au oui du propriétaire, sauf ceux qu'il
+    a déclarés en lecture seule (`read_only`) ;
+  - ce qu'un outil renvoie est du contenu venu d'ailleurs (`THIRD_PARTY`) ;
+  - en mode séparé, le jeton d'un serveur distant est gardé par le gardien, qui relaie les
+    appels vers la seule adresse de ce serveur (`/v1/mcp/<nom>`) ;
+  - un serveur lancé par commande (`command`) ne se règle que sur le serveur ;
+  - un serveur qui ne répond pas au démarrage est laissé de côté : Orion démarre sans ses outils ;
+- **le catalogue public** (`catalog/`, livré avec le code, donc à jour à chaque mise à jour D94) :
+  - des skills et des fiches de serveurs MCP, où chaque Orion pioche (`skill` : catalog,
+    install) ; on y ajoute quelque chose par une pull request ;
+  - d'autres catalogues peuvent s'ajouter (`catalog_urls`, un `index.json`). Ce qui en vient
+    est du contenu venu d'ailleurs, et une skill installée de là est lue comme telle ;
+  - installer un serveur MCP, c'est un changement de réglages qu'Orion propose
+    (`configure_change`), avec son jeton demandé par le formulaire du gardien (`secret_ask`).
+
+Limite : en mode séparé, le gardien relaie les appels MCP sans vérifier lui-même le oui du
+propriétaire. C'est la politique du cœur qui le demande.
+
+## D96 — Un shell sur le serveur, chaque commande approuvée
+
+*20/10/2026 · acceptée*
+
+`[modules.shell]` (éteint par défaut) donne à Orion l'outil `shell`, pour ce qu'aucun autre
+outil ne fait : convertir un fichier, vérifier quelque chose, lancer un script.
+- chaque commande est soumise au propriétaire telle quelle avant de tourner. Ce n'est pas une
+  action autonomable par défaut ;
+- l'allumer est un réglage du propriétaire (`modules.shell`, comme `modules.mcp`, D92) : son
+  oui, jamais seul ;
+- la commande tourne dans `<data_dir>/workspace`, sous l'utilisateur d'Orion, avec un
+  environnement nu (PATH, HOME, LANG) : aucune clé d'Orion ne l'atteint. En mode séparé, le
+  cœur n'a de toute façon que la clé du modèle ;
+- elle s'arrête après son délai (`max_seconds` au plus), avec tout son groupe de processus. La
+  sortie est bornée et compte comme du contenu venu d'ailleurs.
+
+## D97 — Un plan pendant le tour
+
+*20/10/2026 · acceptée*
+
+Sur une tâche longue, Orion se perdait parfois entre les étapes, et le propriétaire attendait
+sans savoir où il en était. Désormais :
+- `plan` : pour une tâche de trois étapes ou plus, Orion tient la liste de ses étapes, chacune
+  à faire, en cours ou faite. Il renvoie la liste entière à chaque avancée : le plan vit dans la
+  conversation, nulle part ailleurs, et se rejoue avec elle. Une seule étape en cours à la fois.
+  `show` envoie le plan au propriétaire au départ ;
+- `plan` passe **avant les autres appels de la même étape** : le plan montré part avant qu'un
+  outil lent tourne (événement `Told`). Les résultats restent dans l'ordre des appels. Rien
+  n'est envoyé quand personne n'attend (un tour d'initiative).
+
+Le texte qu'Orion écrit à côté d'un appel d'outil est envoyé tout de suite. Un outil `tell`
+pour écrire en cours de route a été essayé, puis retiré à la demande du propriétaire.
+
+## D98 — Qui a écrit au bot ; les heures calmes quand il est réveillé
+
+*20/10/2026 · acceptée · corrige D91*
+
+Le 20/10 à 23 h 25, un ami du propriétaire a écrit au bot. Le message a bien été reçu, mais
+deux choses ont manqué :
+- l'alerte « quelqu'un a écrit au bot » attendait la fin des heures calmes (8 h), alors que le
+  propriétaire était en train de parler à Orion ;
+- quand il a demandé « tu as reçu des messages de Victor ? », `contacts` ne listait que les
+  proches déclarés. Orion a répondu « rien », puis a inventé que le secrétaire était éteint.
+
+Désormais :
+- **`contacts`** liste aussi ceux qui ont écrit au bot sans être autorisés, avec leur id, la
+  date et leur message, et dit que le secrétaire est allumé. Son contenu est du contenu venu
+  d'ailleurs : il cite les messages des autres ;
+- **les heures calmes ne retiennent plus Orion** quand le propriétaire a écrit il y a moins de
+  20 minutes. Elles sont là pour son sommeil, pas pour interrompre une conversation.
+- **une connexion coupée par le réseau est réessayée** (`TelegramClient.call`, deux fois, après
+  0,5 puis 2 s) : le 20/10 à 23 h 16, une demande d'accord n'est jamais partie parce qu'une
+  connexion inactive avait été coupée, et l'action a été refusée. Seules les pannes de la
+  connexion elle-même sont réessayées, pas les refus de Telegram. La longue attente des messages
+  (`getUpdates`) reprend déjà d'elle-même.
+- **ne pas avoir pu demander n'est pas un refus** : le 20/10 à 23 h 38, l'Orion de Victor ne
+  pouvait pas joindre son propriétaire (il n'avait jamais écrit à son bot). Il a donc répondu
+  « décliné », deux fois, et l'Orion de Noan a annoncé deux refus. Une approbation porte
+  désormais `reached`, faux quand personne n'a pu être interrogé (aucun canal, ou la question
+  n'est pas partie). Un rendez-vous reçu est alors refusé avec la raison `unreachable`, et les
+  deux propriétaires l'apprennent comme tel ;
+- **l'appairage dit d'où il vient** : une invitation créée sur le serveur et acceptée par
+  l'autre Orion. Orion ne peut ni créer ni accepter une invitation, et le disait mal quand on
+  lui demandait.
+- **la journée d'attention va du réveil au réveil** : les messages de Victor relayés entre
+  1 h et 2 h comptaient pour le mercredi, et le budget du jour (6) était épuisé avant le
+  point de 8 h 30. Ce qui part pendant les heures calmes après minuit compte désormais pour la
+  veille (`InitiativeSettings.attention_day`).
+
+## D99 — Un rendez-vous à plusieurs Orion
+
+Le test du 21/10 a marché à deux ; un groupe demandait plus que des propositions en parallèle :
+chaque Orion aurait pris le premier créneau libre pour lui, pas pour tous. Un rendez-vous à
+plusieurs reste une négociation à deux par invité, liées par un identifiant de groupe :
+
+- **sondage** (`meeting.poll`) : l'Orion qui demande envoie à chacun ses créneaux libres, avec
+  le nom des autres invités. Chacun répond par du code (`meeting.available`) lesquels sont
+  libres pour lui : c'est ce qu'un refus « aucun créneau » disait déjà à deux, et personne
+  n'est dérangé ;
+- **proposition** : le premier créneau libre pour tous (et toujours pour lui) est proposé à
+  chacun comme une proposition ordinaire, d'un seul créneau. Chaque propriétaire dit oui une
+  fois, en voyant avec qui ;
+- **confirmation** seulement quand tous ont accepté : un engagement et une ligne d'agenda pour
+  le groupe, un seul message au propriétaire. Un refus annule chez ceux qui avaient dit oui
+  (`meeting.cancel`), qui retrouvent leur créneau, et le propriétaire apprend qui et pourquoi.
+
+Le gardien tient chaque étape : un seul oui du propriétaire couvre les sondages du groupe, en
+nommant tous les invités (`also`) ; après un sondage, il ne laisse partir qu'un créneau sondé ;
+une disponibilité ne répond qu'à un sondage reçu ; seul celui qui a proposé peut annuler.
+
+Pas encore : un invité qui ne répond jamais bloque le groupe (pas de délai).
+
+## D100 — Le forfait Claude par Claude Code
+
+Noan voulait brancher son abonnement Claude. Les conditions d'Anthropic réservent la connexion
+par compte Claude à Claude Code et aux applications d'Anthropic : une application tierce ne
+doit ni recueillir ni faire transiter ces identifiants. Elles permettent en revanche à
+l'utilisateur de se connecter lui-même au binaire Claude Code non modifié, pour un usage
+individuel. Orion ne touche donc à aucun jeton : il lance `claude --print`, connecté par son
+propriétaire (`claude login` sur le serveur), modèles `claude-code:<modèle>`.
+
+- Claude Code ne prête rien de lui-même : aucun outil (`--tools ""`), ni réglages, ni serveurs
+  MCP, ni session gardée, un dossier vide comme répertoire de travail, et le message système
+  d'Orion à la place du sien (`--system-prompt-file`).
+- Les outils d'Orion voyagent en texte dans ce message système, triés, toujours pareils ; la
+  réponse est un objet JSON vérifié par un schéma (`--json-schema`) : le texte et les appels
+  d'outils. La conversation passe sur stdin, rendue à l'identique d'un appel à l'autre : le
+  préfixe mis en cache chez Anthropic ne bouge pas.
+- Ce qu'il ne sait pas faire ici (images, recherche web) est refusé pour que le routeur passe à
+  un autre fournisseur, comme un forfait épuisé.
+- Si Orion est distribué, chaque utilisateur se connecte avec son propre compte ; Orion n'en
+  revend ni n'en partage jamais l'usage.
+
+## D101 — Le tableau de bord
+
+La console montrait déjà ce qu'Orion sait et ce qu'il a fait, page par page. Le tableau de
+bord répond d'un coup d'œil à quatre questions, à partir du journal seul : combien de son
+attention du jour Orion a pris, et pour quoi (ce qui était demandé ne compte pas) ; ce qu'il a
+choisi de taire, et pourquoi (budget épuisé, pas assez important, trop tard), pour que Noan
+puisse dire « ça, il fallait me le dire » ; ce qu'il a fait hors de lui-même sans demander ; et
+ce qu'il a coûté sur sept jours, avec la part relue depuis le cache. Pas de script : des barres
+en HTML, comme le reste de la console, lisibles sur un téléphone.
+
+## D102 — Les Orion se parlent librement
+
+Jusqu'ici, deux Orion ne pouvaient échanger que des rendez-vous. Noan voulait qu'ils discutent,
+et que ce soit Orion lui-même qui réponde, avec tout ce qu'il sait, plutôt qu'un appel séparé
+sans données comme le secrétaire de ses proches : le risque d'une fuite est accepté en
+connaissance de cause, pour une conversation qui sert vraiment.
+
+- `orion.say` : quelques mots libres (2 000 caractères au plus), signés comme le reste.
+- Écrire le premier (`peer_message`) : le propriétaire approuve les mots exacts, et le gardien
+  vérifie ce oui. Répondre ne demande rien : le gardien laisse partir une réponse dans les six
+  heures qui suivent un message de cet Orion, comme Orion répond à quelqu'un qui lui écrit.
+- Orion répond dans un fil à part pour chaque Orion (`peer:<instance>`), avec sa mémoire et ses
+  outils. Ce que l'autre écrit garde la confiance d'un pair : toute action sur le monde que la
+  conversation lui ferait faire passe par l'accord du propriétaire, comme pour un mail.
+- La conversation a une fin : chaque Orion peut répondre `SILENCE`, et le gardien arrête à 30
+  messages par jour vers un même Orion.
+- Le propriétaire en entend parler : ce qui a été dit et répondu lui arrive comme un message de
+  l'initiative, sous le budget du jour.
+
+## D103 — Moins de texte en dur, des accords qui disent d'où ils viennent
+
+Le premier test des conversations entre Orion (21/10) a montré deux défauts :
+
+- **une demande d'accord sortie de nulle part** : l'Orion de Victor, en discutant avec celui de
+  Noan dans un fil que Victor ne voit pas, lui a demandé trois fois d'approuver une proposition
+  sans rien expliquer. Une demande née d'une conversation qu'il ne voit pas dit maintenant ce
+  qui l'a amenée (« l'Orion de Noan m'a écrit « … » »). Les deux premières avaient échoué parce
+  que les rendez-vous s'arrêtaient à 19 h en semaine : un ciné ou un dîner finit plus tard, le
+  défaut passe à 23 h et le week-end compte ; un échec dit les heures, pour que le modèle le
+  dise au lieu de redemander ;
+- **des messages en dur** : quand le vérificateur refusait un brouillon, le texte de secours
+  partait, et pour la fédération c'était la consigne écrite pour Orion (« rappelle-lui de… »).
+  Orion réécrit désormais une fois avec la remarque du vérificateur ; le texte de secours ne
+  sert qu'en dernier recours, et il est écrit pour le propriétaire. Le vérificateur voit aussi
+  le début de ce qu'Orion a lu (sa mémoire), plus seulement la fin : un vrai fait de mémoire
+  était pris pour une invention.
+
+## D104 — Le budget d'attention ne compte que ce qu'Orion dit de lui-même
+
+Six messages par jour, c'était trop bas pour un usage réel, et le 21/10 l'a montré : les
+messages de Victor relayés la nuit ont tout pris, et le point de 8 h 30 a sauté. Or quand
+quelqu'un écrit à Noan (un proche, par le secrétaire, ou un autre Orion), Orion ne décide pas
+de le déranger : il transmet. Ces messages-là ne comptent plus (`Alert.spoken_to`) ; les heures
+calmes et l'arbitre (il a l'air occupé) s'appliquent toujours. Le budget ne limite plus que les
+initiatives d'Orion (points du jour, idées, alertes), et passe à 12 par défaut. Le tableau de
+bord marque à part ce qu'on lui a écrit.
+
+## D105 — Installer et retirer des modules natifs
+
+Un module tiers pouvait déjà exister (un paquet Python sous `orion.modules`), mais rien ne
+permettait de l'installer, et la mise à jour automatique (`uv sync --frozen`) l'aurait effacé
+au passage suivant, laissant Orion refuser de démarrer. Désormais :
+
+- **un catalogue** (`catalog/modules/<nom>.toml`) : description, ce que le module atteint, ce
+  qu'il faut régler, et une source à une seule version exacte (`path:` dans le dépôt,
+  `paquet==version`, ou `git+…@commit complet`) ; une source non épinglée n'est pas proposée ;
+- **un dossier à part** : chaque module dans `data/modules/site/<nom>`, listé dans
+  `installed.toml`, ajouté au chemin d'Orion après ses propres paquets. L'environnement du code
+  n'est pas touché : une mise à jour les garde, et retirer un module, c'est effacer son dossier ;
+- **installer** : dans un dossier temporaire ; un autre processus Python vérifie que le point
+  d'entrée se charge et que c'est bien le module annoncé ; puis il prend sa place, et
+  l'interrupteur `modules.<nom>.enabled` est écrit si Orion démarre avec (sinon il reste éteint
+  et dit ce qu'il faut régler) ; Orion redémarre ;
+- **qui fait quoi** : un module tourne dans le cœur, avec ses accès, la mémoire comprise. C'est
+  donc le cœur qui l'installe : les scripts d'un paquet tournent avec exactement les droits
+  qu'aura le module, jamais près des secrets. Le gardien n'importe jamais le code d'un module :
+  il sait seulement lesquels sont installés. Il vérifie le oui du propriétaire et, sous ce même
+  oui, écrit l'interrupteur, et rien d'autre ;
+- **le oui** : `module_install` et `module_remove` sont toujours demandés au propriétaire
+  (jamais seuls, quelle que soit l'autonomie listée), jamais depuis une conversation qui
+  contient du contenu extérieur ; la question, écrite par le gardien à partir du catalogue,
+  montre la source exacte et rappelle que ce code aura accès à sa mémoire ;
+- **retirer** : l'interrupteur passe à faux, puis le dossier est effacé ; une section éteinte
+  laissée par un module retiré n'empêche plus Orion de démarrer ;
+- sur le serveur : `orion-admin --core modules list|install|remove <nom>`.
+
+Un module d'exemple, `des` (`examples/modules/orion-des`), montre la forme : il lance des dés
+au hasard, sans réseau ni mémoire. Les modules isolés (hors du processus d'Orion, sans accès à
+sa mémoire), pour une bibliothèque ouverte à tous, viendront ensuite.

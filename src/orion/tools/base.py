@@ -43,6 +43,8 @@ class ToolContext:
     grant: str | None = None
     """The owner's approval of this very call, as recorded by the guardian process: an action
     the guardian checks (calling a stranger, writing to another Orion) presents it."""
+    alone: bool = False
+    """Done without asking, within an autonomy the owner granted: he is told afterwards."""
 
 
 @dataclass
@@ -72,6 +74,9 @@ class Tool:
     """For a tool with several actions (`orion.tools.actions`): the effect of this call."""
     untrusted_of: Callable[[BaseModel], bool] | None = None
     """For a tool with several actions: whether this call may run in an untrusted context."""
+    check: Callable[[BaseModel], str | None] | None = None
+    """For a tool with several actions: what is wrong with this call's arguments, if anything.
+    Run by `parse`, so a bad call is refused before the owner is asked to approve it."""
 
     def effect_for(self, arguments: BaseModel) -> Effect:
         return self.effect_of(arguments) if self.effect_of is not None else self.effect
@@ -92,9 +97,13 @@ class Tool:
         except json.JSONDecodeError as exc:
             raise ToolInputError(f"arguments are not valid JSON: {exc.msg}") from exc
         try:
-            return self.input_model.model_validate(data)
+            parsed = self.input_model.model_validate(data)
         except ValidationError as exc:
             raise ToolInputError(f"invalid arguments: {exc.errors(include_url=False)}") from exc
+        wrong = self.check(parsed) if self.check is not None else None
+        if wrong is not None:
+            raise ToolInputError(wrong)
+        return parsed
 
 
 class ToolInputError(ValueError):

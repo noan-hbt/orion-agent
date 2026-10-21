@@ -1,0 +1,4 @@
+name = "context7"
+description = "La documentation à jour des bibliothèques de code"
+url = "https://mcp.context7.com/mcp"
+read_only = ["*"]

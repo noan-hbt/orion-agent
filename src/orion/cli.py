@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orion import __version__
-from orion.config import OrionConfig, load_config
+from orion.config import DEFAULT_CONFIG_PATH, OrionConfig, load_config
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.memory.store import MemoryStore
 from orion.observability.logging import configure_logging
+from orion.setup import load_env_files
 
 if TYPE_CHECKING:
     from orion.channels.inkbox import InkboxClient
@@ -29,7 +30,7 @@ def _provider(config: OrionConfig) -> Router | None:
     try:
         api_key = config.providers.openrouter.api_key.resolve()
     except LookupError as exc:
-        if not config.providers.chatgpt.enabled:
+        if not (config.providers.chatgpt.enabled or config.providers.claude_code.enabled):
             print(f"Impossible de démarrer : {exc}")
             return None
     else:
@@ -49,6 +50,16 @@ def _provider(config: OrionConfig) -> Router | None:
             return None
         providers["chatgpt"] = ChatGPTProvider(
             auth, default_effort=config.providers.chatgpt.reasoning_effort
+        )
+    if config.providers.claude_code.enabled:
+        from orion.providers.claude_code import ClaudeCodeProvider
+
+        cc = config.providers.claude_code
+        if not ClaudeCodeProvider.available(cc.binary):
+            print(f"Impossible de démarrer : la commande {cc.binary!r} (Claude Code) est absente.")
+            return None
+        providers["claude-code"] = ClaudeCodeProvider(
+            config.data_dir / "claude-code", cc.binary, cc.timeout_seconds
         )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
@@ -398,6 +409,40 @@ def _write_private(path: Path, text: str) -> None:
     path.chmod(0o600)
 
 
+def _modules(config: OrionConfig, args: argparse.Namespace) -> int:
+    """On the server, as the core's user (`orion-admin --core modules …`): the files only.
+    Turning a module on or off stays a config change, by message or in orion.toml (D105)."""
+    from orion.modules.installer import Installer, InstallError
+
+    installer = Installer(config)
+    here = installer.installed()
+    if args.modules_command == "list":
+        for name, m in sorted(here.items()):
+            on = config.modules.get(name, {}).get("enabled", False)
+            print(f"{name:16} installé, {'allumé' if on else 'éteint'}  ({m.source})")
+        for entry in installer.catalog().values():
+            if entry.name not in here:
+                print(f"{entry.name:16} au catalogue : {entry.description}")
+        return 0
+    try:
+        if args.modules_command == "install":
+            entry = installer.install(args.name)
+            print(
+                f"« {entry.name} » est installé, pas encore allumé : demande-le à Orion, ou "
+                f"`modules.{entry.name}.enabled = true` dans orion.toml, puis redémarre."
+            )
+        else:
+            if config.modules.get(args.name, {}).get("enabled", False):
+                print(f"« {args.name} » est allumé : éteins-le d'abord (demande-le à Orion).")
+                return 1
+            installer.remove(args.name)
+            print(f"« {args.name} » est désinstallé.")
+    except InstallError as exc:
+        print(exc)
+        return 1
+    return 0
+
+
 async def _sessions(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.guardian.ledger import Ledger
     from orion.guardian.sessions import SessionError, add_session, read_state, remove_session
@@ -626,7 +671,7 @@ async def _doctor(config: OrionConfig) -> int:
     except ModuleError as exc:
         print(f"modules:   {exc}")
         return 2
-    for kind in discover():
+    for kind in discover(config):
         module = enabled.get(kind.name)
         detail = "; ".join(module.doctor()) if module else ""
         state = "on" if module else "off"
@@ -710,12 +755,74 @@ async def _guardian_status(config: OrionConfig) -> str:
     return state + (f"; secrets visible here: {', '.join(visible)}" if visible else "")
 
 
+async def _notify(config: OrionConfig, text: str) -> int:
+    """Straight to the Bot API with the bot's token (the guardian's user has it): the
+    updater speaks even when the update broke Orion."""
+    from orion.channels.telegram import TelegramClient, TelegramError
+
+    telegram = config.channels.telegram
+    if not telegram.enabled or not telegram.owner_id:
+        print(text)
+        return 0
+    try:
+        token = telegram.bot_token.resolve().get_secret_value()
+    except LookupError as exc:
+        print(f"{text}\n(not sent: {exc})")
+        return 1
+    client = TelegramClient(token)
+    try:
+        await client.send_message(telegram.owner_id, text[:4000])
+    except TelegramError as exc:
+        print(f"{text}\n(not sent: {exc})")
+        return 1
+    finally:
+        await client.aclose()
+    return 0
+
+
+def _setup(config: Path | None, secrets: Path | None, server: bool) -> int:
+    import getpass
+
+    from orion.configure.paths import ConfigureError
+    from orion.setup import Setup, SetupError
+
+    target = (config or DEFAULT_CONFIG_PATH).resolve()
+    wizard = Setup(
+        target,
+        secrets.resolve() if secrets else target.parent,
+        ask=input,
+        secret=lambda prompt: getpass.getpass(prompt + "(rien ne s'affiche) "),
+        say=print,
+        server=server,
+    )
+    try:
+        return wizard.run()
+    except (SetupError, ConfigureError) as exc:
+        print(f"Installation arrêtée : {exc}")
+        return 1
+    except (KeyboardInterrupt, EOFError):
+        print("\nInstallation arrêtée : rien n'est écrit.")
+        return 130
+    finally:
+        wizard.http.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="orion")
     parser.add_argument("--config", type=Path, default=None, help="Path to orion.toml")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("version", help="Print the version")
+    setup_cmd = sub.add_parser("setup", help="Install Orion: the keys, and who you are (D92)")
+    setup_cmd.add_argument(
+        "--secrets", type=Path, default=None, help="Where core.env and guardian.env go "
+        "(default: beside orion.toml)",
+    )  # fmt: skip
+    setup_cmd.add_argument("--server", action="store_true", help="Run by deploy/install.sh")
     sub.add_parser("doctor", help="Check configuration and storage")
+    notify = sub.add_parser(
+        "notify", help="Text the owner on Telegram directly, even with Orion down (updates)"
+    )
+    notify.add_argument("text")
     sub.add_parser("chat", help="Talk to Orion in the terminal")
     sub.add_parser("serve", help="Run Orion: iMessage channel and initiative engine")
     sub.add_parser("guardian", help="Run the guardian process, which holds the secrets (D28)")
@@ -786,6 +893,11 @@ def main(argv: list[str] | None = None) -> int:
     login.add_argument("name", help="A short name for the session, e.g. 'doctolib'")
     login.add_argument("url", help="The site's sign-in page")
     login.add_argument("--out", type=Path, help="Where to write it (default: <name>.session.json)")
+    modules = sub.add_parser("modules", help="Install or remove modules from the catalog (D105)")
+    modules_sub = modules.add_subparsers(dest="modules_command", required=True)
+    modules_sub.add_parser("list", help="Installed modules, and the catalog")
+    for verb in ("install", "remove"):
+        modules_sub.add_parser(verb).add_argument("name")
     sessions = sub.add_parser("sessions", help="Logged-in sessions the guardian keeps")
     sessions_sub = sessions.add_subparsers(dest="sessions_command", required=True)
     sessions_add = sessions_sub.add_parser("add", help="Keep a session made with `orion login`")
@@ -830,10 +942,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check-backup":
         return _check_backup(args.path)
 
+    if args.command == "setup":
+        return _setup(args.config, args.secrets, args.server)
+
+    load_env_files((args.config or DEFAULT_CONFIG_PATH).resolve().parent, args.command)
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)
     if args.command == "doctor":
         return asyncio.run(_doctor(config))
+    if args.command == "notify":
+        return asyncio.run(_notify(config, args.text))
     if args.command == "memory":
         return asyncio.run(_memory(config))
     if args.command == "forget":
@@ -848,6 +966,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_login(args.name, args.url, args.out))
     if args.command == "sessions":
         return asyncio.run(_sessions(config, args))
+    if args.command == "modules":
+        return _modules(config, args)
     if args.command == "places":
         return asyncio.run(_places_token(config))
     if args.command == "library":

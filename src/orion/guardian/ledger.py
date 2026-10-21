@@ -10,6 +10,7 @@ from the ledger on every start, like the core's.
     guardian.calendar.written  guardian.mail.sent
     guardian.autonomy.granted  guardian.autonomy.revoked  guardian.autonomous
     guardian.session.added  guardian.session.removed  guardian.session.lent
+    guardian.telegram.answer
     federation.invite.created  federation.invite.used  federation.peer.added
     federation.peer.revoked  federation.received  federation.sent
 """
@@ -39,6 +40,8 @@ AUTONOMOUS = "guardian.autonomous"
 SESSION_ADDED = "guardian.session.added"
 SESSION_REMOVED = "guardian.session.removed"
 SESSION_LENT = "guardian.session.lent"
+TELEGRAM_ANSWER = "guardian.telegram.answer"
+CONFIG_CHANGED = "guardian.config.changed"
 INVITE_CREATED = "federation.invite.created"
 INVITE_USED = "federation.invite.used"
 PEER_ADDED = "federation.peer.added"
@@ -103,6 +106,9 @@ class GuardianState:
     """action → the limits its autonomy was granted with (`guardian.limits`)."""
     sessions: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     """Logged-in site sessions the guardian keeps: name → the sites they are for."""
+    telegram_answers: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    """The owner's answers to the guardian's Telegram questions, as they passed (D89)."""
+    telegram_updates: set[int] = field(default_factory=set[int])
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -120,6 +126,8 @@ class GuardianState:
         self.autonomous_days.clear()
         self.limits.clear()
         self.sessions.clear()
+        self.telegram_answers.clear()
+        self.telegram_updates.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -138,6 +146,9 @@ class GuardianState:
             self.sessions[str(payload["name"])] = [str(d) for d in payload["domains"]]
         elif kind == SESSION_REMOVED:
             self.sessions.pop(str(payload["name"]), None)
+        elif kind == TELEGRAM_ANSWER:
+            self.telegram_updates.add(int(payload["update_id"]))
+            self.telegram_answers.append(dict(payload))
         elif kind == AUTONOMOUS:
             day = str(payload["day"])
             self.autonomous_days[day] = self.autonomous_days.get(day, 0) + 1

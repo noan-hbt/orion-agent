@@ -50,6 +50,7 @@ LABELS = {
     "mail_tidy": "archiver tes mails et te désabonner des newsletters",
     "computer_task_send": "envoyer des formulaires sur des sites",
     "configure_change": "changer tes propres réglages",
+    "contact_message": "écrire à tes proches",
 }
 
 
@@ -114,7 +115,9 @@ class GrantInput(BaseModel):
     approved_times: int = Field(default=0, ge=0, description="How many times the owner said yes")
     recipients: list[str] = Field(
         default_factory=list[str],
-        description="mail_send: only to these addresses, or '@domain' (required for mail)",
+        description="mail_send: only to these addresses, or '@domain' (required for mail); "
+        "contact_message: the contacts' names (required; give them all, it replaces the "
+        "earlier list)",
     )
     domains: list[str] = Field(
         default_factory=list[str],

@@ -19,14 +19,20 @@ from starlette.types import ASGIApp
 
 from orion.channels.inkbox import InkboxClient
 from orion.config import OrionConfig
+from orion.configure.module import reexec
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.federation.crypto import Identity
 from orion.guardian.federation import FederationEdge, admin_token
 from orion.guardian.ledger import Ledger
 from orion.guardian.service import GuardianError, GuardianService
+from orion.guardian.telegram import TelegramGate
+from orion.guardian.vault import Vault, load_vault
 
 log = structlog.get_logger(__name__)
+
+GUARDIAN_RESTART_AFTER = 2.0
+"""Once it wrote orion.toml: its answer reaches the core, which restarts later."""
 
 
 def inkbox_client(config: OrionConfig) -> InkboxClient | None:
@@ -38,6 +44,21 @@ def inkbox_client(config: OrionConfig) -> InkboxClient | None:
     except LookupError as exc:
         raise GuardianError(f"Inkbox: {exc}") from exc
     return InkboxClient(key.get_secret_value(), cfg.base_url)
+
+
+def telegram_gate(service: GuardianService) -> TelegramGate:
+    """The bot's token lives here, never in the core (D89)."""
+    from orion.channels.telegram import TelegramClient
+
+    try:
+        token = service.config.channels.telegram.bot_token.resolve()
+    except LookupError as exc:
+        raise GuardianError(f"Telegram: {exc}") from exc
+    gate = TelegramGate(service, TelegramClient(token.get_secret_value()))
+    gate.install()
+    if not service.config.channels.telegram.owner_id:
+        log.warning("guardian.telegram_owner_unknown", hint="nothing goes out until owner_id")
+    return gate
 
 
 def _server(app: ASGIApp, host: str = "127.0.0.1", port: int = 0) -> uvicorn.Server:
@@ -101,12 +122,20 @@ def federation_edge(service: GuardianService) -> FederationEdge:
 
 
 async def run(config: OrionConfig) -> None:
+    from orion.modules.installer import trust_no_module
+
+    trust_no_module()  # a module's code runs in the core, never beside the secrets (D105)
     os.umask(0o077)  # the ledger and everything else the guardian writes: its own only
     _private_dir(config.guardian.data_dir)
     clock = HybridClock(f"{config.instance}-guardian")
     async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
+        from_vault = load_vault(config)
         service = GuardianService(config, Ledger(journal), inkbox_client(config))
+        service.restart = lambda: reexec(GUARDIAN_RESTART_AFTER)
         edge = federation_edge(service) if config.federation.enabled else None
+        gate = telegram_gate(service) if config.channels.telegram.enabled else None
+        if gate is not None and config.guardian.secrets_url:
+            Vault(service, gate, from_vault).install()
         try:
             await service.start()
             async with asyncio.TaskGroup() as group:
@@ -118,4 +147,6 @@ async def run(config: OrionConfig) -> None:
         finally:
             if edge is not None:
                 await edge.aclose()
+            if gate is not None:
+                await gate.aclose()
             await service.aclose()

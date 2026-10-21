@@ -88,7 +88,8 @@ def action_tool(
         picked: object = args.model_dump().get("action")
         return by_name[str(picked)]
 
-    async def handler(args: Any, ctx: ToolContext) -> ToolResult:
+    def own(args: BaseModel) -> BaseModel | str:
+        """The action's own arguments, or what is wrong with them."""
         action = chosen(args)
         given = {
             k: v
@@ -102,18 +103,21 @@ def action_tool(
         ]
         if others:
             takes = _params(action.input_model) or " (nothing else)"
-            return ToolResult(
-                f"{name}.{action.name} takes no {', '.join(others)}; it takes{takes}.",
-                is_error=True,
-            )
+            return f"{name}.{action.name} takes no {', '.join(others)}; it takes{takes}."
         try:
-            parsed = action.input_model.model_validate(given)
+            return action.input_model.model_validate(given)
         except ValidationError as exc:
-            return ToolResult(
-                f"invalid arguments for {name}.{action.name}: {exc.errors(include_url=False)}",
-                is_error=True,
-            )
-        return await action.handler(parsed, ctx)
+            return f"invalid arguments for {name}.{action.name}: {exc.errors(include_url=False)}"
+
+    def check(args: BaseModel) -> str | None:
+        found = own(args)
+        return found if isinstance(found, str) else None
+
+    async def handler(args: Any, ctx: ToolContext) -> ToolResult:
+        parsed = own(args)
+        if isinstance(parsed, str):
+            return ToolResult(parsed, is_error=True)
+        return await chosen(args).handler(parsed, ctx)
 
     def effect_of(args: BaseModel) -> Effect:
         return chosen(args).effect
@@ -133,6 +137,7 @@ def action_tool(
         accepts_untrusted_context=accepts_untrusted_context,
         effect_of=effect_of,
         untrusted_of=untrusted_of,
+        check=check,
     )
 
 

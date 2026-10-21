@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -61,3 +61,12 @@ def make_event(kind: str = "test.happened", source: str = "test:1", **payload: o
         provenance=Provenance(source=source, actor="test:runner"),
         trust=Trust.OWNER,
     )
+
+
+@pytest.fixture(autouse=True)
+def modules_run_in_this_process() -> Iterator[None]:
+    """A test that starts the real guardian turns modules off for the process (D105)."""
+    from orion.modules import installer
+
+    yield
+    installer._Process.imports_modules = True  # pyright: ignore[reportPrivateUsage]

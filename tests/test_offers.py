@@ -16,6 +16,9 @@ def test_a_module_that_is_off_offers_itself() -> None:
     assert any("[modules.web] enabled = true" in o for o in listed)
     assert not any("orion login" in o for o in listed)  # the browser itself is off
 
+    (browser,) = [o for o in listed if o.startswith("Un navigateur à toi")]
+    assert "session" in browser and "gardien" in browser  # its accounts need more than this
+
     on = offers(_config(modules={"web": {"enabled": True}}))
     assert not any("[modules.web]" in o for o in on)
 
@@ -37,3 +40,16 @@ def test_offers_close_the_constitution_and_are_stable() -> None:
     section = first[first.index("# Ce que tu pourrais faire de plus") :]
     assert "Une\nseule fois par sujet" in section and "- " in section
     assert "# Ce que tu pourrais faire de plus" not in constitution([], [])
+
+
+def test_no_offer_assumes_a_mac() -> None:
+    """20/10: « sur ton Mac », to an owner who has none."""
+    every = {name: {"enabled": True} for name in ("computer", "hands")}
+    for listed in (offers(_config()), offers(_config(modules=every))):
+        assert not any("son Mac" in o or "pair mac" in o for o in listed)
+
+
+def test_orion_knows_his_name_from_the_start() -> None:
+    """20/10: « tu sais déjà comment je m'appelle » — it did not; it is in the config."""
+    assert "Ton propriétaire s'appelle Noan." in constitution([], [], ["Noan"])
+    assert "s'appelle" not in constitution([], [])
