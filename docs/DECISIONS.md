@@ -2328,3 +2328,16 @@ piégé envoyé depuis le compte du proche, peut obtenir d'Orion plus que prévu
 réglage est réservé aux proches que le propriétaire nomme, et n'est jamais celui par défaut. Il
 est rangé avec les contacts, parmi les réglages du propriétaire : son oui au changement exact,
 jamais Orion seul (D92).
+
+## D111 — Laisser Orion faire seul se demande, même après un message d'un tiers (révise D90)
+Le 21/10, juste après qu'Orion lui eut relayé deux messages de Victor, Noan a écrit « discute
+avec lui sans me consulter ». `autonomy_grant` (`contact_message`, Victor) a été refusé pendant
+2 h : la conversation contenait le message d'un tiers, et accorder de l'autonomie faisait partie
+des actions jamais faites depuis un tel contexte, même avec son oui. Le mode n'y était pour rien :
+il était déjà en `equilibre`.
+
+Désormais, en `equilibre`, `autonomy_grant` depuis une conversation qui contient du contenu venu
+d'ailleurs lui est **demandé**, avec l'autonomie exacte et la raison de la question, comme toute
+action sur le monde depuis D90. Elle n'est jamais prise seule, et `prudent` la refuse toujours.
+Installer ou retirer un module (D105) reste refusé dans ce contexte : c'est du code qui tourne
+avec sa mémoire.

@@ -156,16 +156,39 @@ async def test_in_balanced_mode_orion_writes_its_own_state_without_asking() -> N
     assert AgentConfig().approvals == "equilibre"
 
 
-async def test_autonomy_is_never_granted_from_a_tainted_conversation() -> None:
+async def test_autonomy_from_a_tainted_conversation_is_asked_never_taken() -> None:
+    """D111: « discute avec lui sans me consulter », just after Victor's messages were relayed
+    to him, was refused for two hours. It is put to him with the exact grant and why; it is
+    never taken alone, and `prudent` still refuses it."""
     grant = Tool(
         name="autonomy_grant", description="g", input_model=_Args, handler=_noop,
         effect=Effect.EXTERNAL,
     )  # fmt: skip
     yes = _Approver(answer=True)
     decision = await Guardian(yes, approvals="equilibre").decide(
-        ActionProposal(grant, _Args(to="x"), Trust.WEB, "t")
+        ActionProposal(grant, _Args(to="x"), Trust.THIRD_PARTY, "t")
     )
-    assert not decision.allowed and yes.asked == []
+    assert decision.allowed and yes.asked == ['autonomy_grant({"to":"x"})']
+    assert yes.reasons == [untrusted_reason(Trust.THIRD_PARTY)]
+    no = _Approver(answer=False)
+    refused = await Guardian(no, approvals="equilibre").decide(
+        ActionProposal(grant, _Args(to="x"), Trust.THIRD_PARTY, "t")
+    )
+    assert not refused.allowed
+    prudent = _Approver(answer=True)
+    blocked = await Guardian(prudent, approvals="prudent").decide(
+        ActionProposal(grant, _Args(to="x"), Trust.THIRD_PARTY, "t")
+    )
+    assert not blocked.allowed and prudent.asked == []
+    install = Tool(
+        name="module_install", description="i", input_model=_Args, handler=_noop,
+        effect=Effect.EXTERNAL,
+    )  # fmt: skip
+    code = _Approver(answer=True)
+    never = await Guardian(code, approvals="equilibre").decide(
+        ActionProposal(install, _Args(to="x"), Trust.THIRD_PARTY, "t")
+    )
+    assert not never.allowed and code.asked == []
 
 
 def test_orion_never_changes_what_it_asks_alone() -> None:
@@ -206,14 +229,11 @@ async def test_after_a_search_orion_decides_as_in_a_clean_conversation() -> None
     )
     assert granted.allowed and len(yes.asked) == 1
 
-    # Not with `prudent`, nor with a page Orion saw itself (the browser) or a mail.
-    for guardian, trust in (
-        (Guardian(_Approver(answer=True), autonomous, approvals="prudent"), Trust.CLERKED),
-        (Guardian(_Approver(answer=True), autonomous, approvals="equilibre"), Trust.WEB),
-        (Guardian(_Approver(answer=True), autonomous, approvals="equilibre"), Trust.THIRD_PARTY),
-    ):
-        refused = await guardian.decide(ActionProposal(grant, _Args(to="x"), trust, "t"))
-        assert not refused.allowed
+    # Not with `prudent` (refused), nor alone with a page Orion saw itself (the browser).
+    refused = await Guardian(_Approver(answer=True), autonomous, approvals="prudent").decide(
+        ActionProposal(grant, _Args(to="x"), Trust.CLERKED, "t")
+    )
+    assert not refused.allowed
     alone_ok.clear()
     asked_raw = _Approver(answer=False)
     raw = await Guardian(asked_raw, autonomous, approvals="equilibre").decide(

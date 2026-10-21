@@ -92,9 +92,10 @@ SOURCES_FOR_OWNER = {
 ALONE = "the owner lets Orion do this alone"
 """The reason given when an autonomy the owner granted covers the call."""
 
-NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant", "module_install", "module_remove"})
-"""Never done from a context holding outside content, even with his yes: letting Orion act
-alone, or adding code to it (D105), is decided in a clean conversation."""
+NEVER_FROM_UNTRUSTED = frozenset({"module_install", "module_remove"})
+"""Never done from a context holding outside content, even with his yes: adding code to Orion
+(D105) is decided in a clean conversation. Letting Orion act alone is put to him there, with
+the exact grant and why he is asked (D111)."""
 NEVER_ALONE = frozenset({"module_install", "module_remove"})
 """Always put to him, whatever autonomy the config lists: code that runs with his memory."""
 
