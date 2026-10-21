@@ -32,8 +32,14 @@ class Contact(BaseModel):
     )
     about: str = Field(
         default="",
-        max_length=500,
-        description="Who they are and how to treat them, in the owner's words",
+        max_length=1500,
+        description="Who they are, how to treat them and what they may know, in the owner's words",
+    )
+    talks_with: Literal["secretary", "orion"] = Field(
+        default="secretary",
+        description="Who answers them: 'secretary' = a separate call that knows only `about` "
+        "and, if shared, availability; 'orion' = Orion itself, with its memory and tools, "
+        "telling them what `about` allows (D110: for people he trusts)",
     )
     share: list[Literal["availability"]] = Field(
         default_factory=list[Literal["availability"]],

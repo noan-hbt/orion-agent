@@ -49,6 +49,7 @@ from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert, DigestLine
 from orion.modules.base import Daemon, Module, Plate
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
+from orion.runtime import is_silence
 from orion.secretary.settings import Contact, SecretarySettings
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -61,6 +62,10 @@ log = structlog.get_logger(__name__)
 
 REPLIED = "secretary.replied"
 RELAYED = "secretary.relayed"
+TOLD = "secretary.told"
+"""Orion, talking with a contact itself (D110), passes something on to the owner."""
+CONTACT_THREAD = "contact:"
+"""Prefix of the thread where Orion itself talks with a contact: `contact:<address>`."""
 TELL_EXPIRES = timedelta(hours=12)
 HISTORY = 20
 AVAILABILITY_DAYS = 14
@@ -208,6 +213,19 @@ class SecretaryState:
                     at,
                 )
             )
+        elif event.kind == TOLD:
+            self.exchanges.append(
+                Exchange(
+                    event.id,
+                    str(payload["number"]),
+                    str(payload["contact"]),
+                    "",
+                    "",
+                    str(payload["text"]),
+                    bool(payload.get("urgent")),
+                    datetime.fromisoformat(str(payload["at"])),
+                )
+            )
         elif event.kind == RELAYED:
             number = str(payload["number"])
             self._said(number, datetime.fromisoformat(str(payload["at"])), "toi", payload["text"])
@@ -225,6 +243,8 @@ def _at(created_at: object, hlc: str) -> datetime:
         return datetime.now(ZoneInfo("UTC"))
 
 
+Converse = Callable[[str, Contact, str, str], Awaitable[str]]
+"""(thread, contact, their text, channel) → Orion's own answer, possibly `SILENCE` (D110)."""
 Send = Callable[[str, str, str, str], Awaitable[str]]
 """(channel, conversation, text, correlation id) → the sent message's id, through the
 channel's outbox."""
@@ -258,6 +278,8 @@ class Secretary:
         self._runner = ProjectionRunner(journal, [self.state])
         self._queue: asyncio.Queue[Incoming] = asyncio.Queue()
         self.send: Send | None = None
+        self.converse: Converse | None = None
+        """Orion itself, for the contacts it talks with (`talks_with = "orion"`)."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -299,7 +321,13 @@ class Secretary:
             return None
         them = message.text or "(une pièce jointe)"
         try:
-            answer = await self._think(contact, number, now, message, them)
+            if contact.talks_with == "orion" and self.converse is not None:
+                said = await self.converse(
+                    f"{CONTACT_THREAD}{number}", contact, them, message.channel
+                )
+                answer = _Answer(reply="" if is_silence(said) else said)
+            else:
+                answer = await self._think(contact, number, now, message, them)
         except (ProviderError, ValueError, ValidationError) as exc:
             log.warning("secretary.unanswered", contact=contact.name, error=str(exc))
             answer = _Answer(tell_owner=f"Je n'ai pas pu lui répondre : « {them[:300]} »")
@@ -334,6 +362,28 @@ class Secretary:
         await self.sync()
         log.info("secretary.replied", contact=contact.name, urgent=answer.urgent)
         return self.state.exchanges[-1]
+
+    async def told(
+        self, contact: Contact, number: str, text: str, urgent: bool, cid: str | None
+    ) -> None:
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=TOLD,
+                    payload={
+                        "number": number,
+                        "contact": contact.name,
+                        "text": text,
+                        "urgent": urgent,
+                        "at": self.clock().isoformat(),
+                    },
+                    provenance=Provenance(source=f"contact:{contact.name}", actor="orion:core"),
+                    trust=Trust.THIRD_PARTY,
+                    correlation_id=cid,
+                )
+            ]
+        )
+        await self.sync()
 
     async def _think(
         self, contact: Contact, number: str, now: datetime, message: Incoming, them: str
@@ -436,11 +486,15 @@ class Secretary:
             if not (x.tell_owner or x.urgent) or not x.at <= now < x.at + TELL_EXPIRES:
                 continue
             answered = f"Tu lui as répondu : « {x.reply} »." if x.reply else "Tu n'as pas répondu."
+            heard = (
+                f"{x.contact} t'a écrit (c'est un de ses proches) : « {x.them} ». {answered} "
+                if x.them
+                else f"En parlant avec {x.contact} (un de ses proches), tu as noté pour lui. "
+            )
             found.append(
                 Alert(
                     key=f"secretary:{x.event_id}",
-                    notice=f"{x.contact} t'a écrit (c'est un de ses proches) : « {x.them} ». "
-                    f"{answered} À lui transmettre : {x.tell_owner or x.them}\n"
+                    notice=f"{heard}À lui transmettre : {x.tell_owner or x.them}\n"
                     "Dis-le-lui en une ou deux phrases. S'il veut répondre, `contact_message`.",
                     why=f"{x.contact} t'a écrit",
                     fallback=f"{x.contact} m'a écrit : « {x.them} »",
@@ -498,6 +552,15 @@ class MessageInput(BaseModel):
 
 class ListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class TellInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(
+        min_length=3, max_length=500, description="What he should know, in a sentence"
+    )
+    urgent: bool = Field(default=False, description="Health, safety, something imminent")
 
 
 def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> list[Tool]:
@@ -573,7 +636,29 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
             f"Le secrétaire est allumé.\nSes proches :\n{known}{others}", trust=Trust.THIRD_PARTY
         )
 
+    async def tell(args: Any, ctx: ToolContext) -> ToolResult:
+        address = ctx.thread_id.removeprefix(CONTACT_THREAD)
+        contact = secretary.contacts.get(address)
+        if not ctx.thread_id.startswith(CONTACT_THREAD) or contact is None:
+            return ToolResult(
+                "Only in a conversation with one of his contacts; with him, just say it.",
+                is_error=True,
+            )
+        await secretary.told(contact, address, args.text, args.urgent, ctx.correlation_id)
+        return ToolResult("Ce sera transmis à ton propriétaire.")
+
     return [
+        Tool(
+            name="tell_owner",
+            description="While talking with one of his contacts yourself: pass something on "
+            "to the owner (what they ask of him, a decision for him, news he should hear). "
+            "Urgent reaches him at once; the rest in the next digest.",
+            input_model=TellInput,
+            handler=tell,
+            effect=Effect.INTERNAL,
+            reversibility=Reversibility.REVERSIBLE,
+            accepts_untrusted_context=True,
+        ),
         Tool(
             name="contact_message",
             description="Send a message to one of the owner's contacts (the people allowed to "
@@ -652,6 +737,16 @@ class SecretaryModule(Module):
             raise RuntimeError(f"secretary: no {channel} channel to answer on")
 
         secretary.send = send
+        orion = daemon.orion
+
+        async def converse(thread: str, contact: Contact, text: str, channel: str) -> str:
+            where = "Telegram" if channel == TELEGRAM else "iMessage"
+            turn = await orion.handle_contact_message(
+                thread, contact.name, contact.about, text, where
+            )
+            return turn.text
+
+        secretary.converse = converse
         calendar = daemon.plate.module(CalendarModule)
         secretary.calendar = calendar.calendar if calendar is not None else None
         if imessage is not None:

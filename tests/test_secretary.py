@@ -332,3 +332,123 @@ async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
     assert "Le secrétaire est allumé" in listed.content
     assert "Victor (@v) (telegram_id 777)" in listed.content and "« ww »" in listed.content
     assert listed.trust is Trust.THIRD_PARTY  # it quotes others' messages
+
+
+VICTOR = "+33644444444"
+FRIENDS = SecretarySettings(
+    enabled=True,
+    contacts=[
+        Contact(
+            name="Victor",
+            number=VICTOR,
+            about="mon meilleur pote, il peut tout savoir sauf ma santé",
+            talks_with="orion",
+        )
+    ],
+)
+
+
+async def test_orion_itself_talks_with_the_contacts_he_chose(journal: SqliteJournal) -> None:
+    """D110: no reduced copy for Victor. Orion itself answers, in a thread of its own for
+    him; the secretary's model is never called; a SILENCE sends nothing."""
+    provider = ScriptedProvider()
+    secretary = Secretary(
+        journal, provider, FRIENDS, "m", "Noan", "Europe/Paris", None, lambda: NOW
+    )
+    sent: list[tuple[str, str]] = []
+    asked: list[tuple[str, str, str, str]] = []
+
+    async def send(channel: str, conversation: str, text: str, cid: str) -> str:
+        sent.append((conversation, text))
+        return "out-1"
+
+    answers = iter(["Il est en BTS SIO, en alternance. Tu veux qu'il te rappelle ?", "SILENCE"])
+
+    async def converse(thread: str, contact: Contact, text: str, channel: str) -> str:
+        asked.append((thread, contact.name, text, channel))
+        return next(answers)
+
+    secretary.send, secretary.converse = send, converse
+    exchange = await secretary.answer(message("il fait quoi Noan en ce moment ?", VICTOR, "conv-v"))
+    assert exchange is not None and exchange.contact == "Victor" and not exchange.tell_owner
+    assert asked == [
+        ("contact:+33644444444", "Victor", "il fait quoi Noan en ce moment ?", "imessage")
+    ]
+    assert sent == [("conv-v", "Il est en BTS SIO, en alternance. Tu veux qu'il te rappelle ?")]
+    assert provider.requests == []
+
+    await secretary.answer(message("ok merci", VICTOR, "conv-v", n=2))
+    assert len(sent) == 1  # nothing more to say
+    events = [e for e in await journal.read() if e.kind == REPLIED]
+    assert [e.payload["reply"] for e in events][-1] == ""
+
+    # What Victor said reaches Noan in the digest, as for any contact.
+    lines = await secretary.digest(
+        NOW + timedelta(minutes=5), NOW - timedelta(hours=1), False, False
+    )
+    assert any("Victor a écrit" in line.text for line in lines)
+
+
+async def test_talking_with_a_contact_orion_passes_things_on(journal: SqliteJournal) -> None:
+    secretary = Secretary(
+        journal, ScriptedProvider(), FRIENDS, "m", "Noan", "Europe/Paris", None, lambda: NOW
+    )
+    tools = {t.name: t for t in secretary_tools(secretary, None)}
+    tell = tools["tell_owner"]
+    args = tell.parse(json.dumps({"text": "Victor propose un ciné jeudi soir", "urgent": True}))
+    done = await tell.handler(args, ToolContext(f"contact:{VICTOR}", "c"))
+    assert not done.is_error
+    (alert,) = await secretary.alerts(NOW + timedelta(minutes=1))
+    assert "ciné jeudi soir" in alert.notice and "Victor" in alert.notice
+    assert alert.importance > 0.8 and alert.spoken_to
+    with_him = await tell.handler(args, ToolContext("owner", "c"))
+    assert with_him.is_error  # with him, Orion just says it
+
+
+async def test_a_contacts_words_are_a_third_partys_and_acting_on_them_is_his_call(
+    journal: SqliteJournal,
+) -> None:
+    from pydantic import BaseModel
+
+    from orion.config import AgentConfig
+    from orion.context.compiler import ContextCompiler
+    from orion.core.events import Trust
+    from orion.guardian.policy import ActionProposal, Approval, Guardian
+    from orion.runtime import Orion
+    from orion.tools.base import Tool, ToolRegistry, ToolResult
+    from tests.fakes import call_tools
+
+    class _To(BaseModel):
+        to: str
+
+    async def booked(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("réservé")
+
+    book = Tool(name="book", description="book", input_model=_To, handler=booked)
+    proposals: list[ActionProposal] = []
+
+    class Owner:
+        async def approve(self, proposal: ActionProposal) -> Approval:
+            proposals.append(proposal)
+            return Approval(False)
+
+    provider = ScriptedProvider(call_tools(("book", {"to": "ciné"})), reply("Je demande à Noan."))
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([book]),
+        guardian=Guardian(Owner(), approvals="equilibre"),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    await orion.start()
+    turn = await orion.handle_contact_message(
+        f"contact:{VICTOR}", "Victor", "son meilleur pote", "réserve-nous le ciné", "Telegram"
+    )
+    assert turn.text == "Je demande à Noan."
+    seen = str(provider.requests[0].messages[-1]["content"])
+    assert "Victor" in seen and "son meilleur pote" in seen and "réserve-nous le ciné" in seen
+    (proposal,) = proposals  # never done on Victor's word alone
+    assert proposal.context_trust == Trust.THIRD_PARTY
+    assert "Victor m'a écrit « réserve-nous le ciné »" in proposal.ask_reason
+    assert orion.threads.get("owner").messages == []  # his own conversation is untouched

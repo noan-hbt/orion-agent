@@ -14,6 +14,22 @@ from pydantic import BaseModel, ConfigDict, Field
 Message = dict[str, Any]
 """One chat message in OpenAI format: role, content, and optionally tool_calls / tool_call_id."""
 
+CACHE_MINUTES = (
+    ("claude-code:", 5),
+    ("anthropic/", 5),
+    ("deepseek/", 240),
+)
+"""How long a model's prompt cache outlives the last request, by spec prefix (after an
+`openrouter:` provider). Anthropic keeps it 5 minutes; DeepSeek keeps it on disk for hours."""
+CACHE_MINUTES_ELSE = 60
+"""Others (OpenAI and the ChatGPT plan keep theirs up to an hour): the longest they may."""
+
+
+def cache_minutes(spec: str) -> int:
+    """Until when changing the start of a conversation would cost its cache."""
+    model = spec.removeprefix("openrouter:")
+    return next((m for prefix, m in CACHE_MINUTES if model.startswith(prefix)), CACHE_MINUTES_ELSE)
+
 
 class ToolSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
