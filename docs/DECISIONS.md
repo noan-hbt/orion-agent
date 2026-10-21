@@ -2129,3 +2129,13 @@ propriétaire (`claude login` sur le serveur), modèles `claude-code:<modèle>`.
   un autre fournisseur, comme un forfait épuisé.
 - Si Orion est distribué, chaque utilisateur se connecte avec son propre compte ; Orion n'en
   revend ni n'en partage jamais l'usage.
+
+## D101 — Le tableau de bord
+
+La console montrait déjà ce qu'Orion sait et ce qu'il a fait, page par page. Le tableau de
+bord répond d'un coup d'œil à quatre questions, à partir du journal seul : combien de son
+attention du jour Orion a pris, et pour quoi (ce qui était demandé ne compte pas) ; ce qu'il a
+choisi de taire, et pourquoi (budget épuisé, pas assez important, trop tard), pour que Noan
+puisse dire « ça, il fallait me le dire » ; ce qu'il a fait hors de lui-même sans demander ; et
+ce qu'il a coûté sur sept jours, avec la part relue depuis le cache. Pas de script : des barres
+en HTML, comme le reste de la console, lisibles sur un téléphone.

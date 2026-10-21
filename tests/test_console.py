@@ -210,3 +210,48 @@ async def test_the_owner_opens_the_console_from_telegram(
         http.cookies.set(COOKIE, opened.cookies[COOKIE], domain="orion.test", path="/console")
         assert "jazz" in (await http.get("/console/memory")).text
     await store.close()
+
+
+async def test_the_dashboard_tells_attention_silences_actions_and_cost(
+    world: World, journal: SqliteJournal
+) -> None:
+    """A week of Orion at a glance, from the journal alone (D101)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from orion.core.events import NewEvent, Provenance
+    from orion.guardian.policy import ALONE
+    from orion.initiative.engine import InitiativeSettings
+
+    http, gate, _memory, _autonomy = world
+    day = InitiativeSettings().attention_day(datetime.now(ZoneInfo("Europe/Paris"))).isoformat()
+    by = Provenance(source="orion:test", actor="orion:test")
+    said: dict[str, object] = {"day": day, "explicit": False, "mentions": []}
+
+    def ev(kind: str, **payload: object) -> NewEvent:
+        return NewEvent(kind=kind, payload=payload, provenance=by, trust=Trust.SYSTEM)
+
+    late = "daily attention budget spent"
+    await journal.append(
+        [
+            ev("initiative.delivered", **said, key="a", why="Victor t'a écrit"),
+            ev("initiative.delivered", **{**said, "explicit": True}, key="b", why="ton rappel"),
+            ev("initiative.suppressed", **said, key="c", why="point", reason=late,
+               fallback="Le loyer est dû lundi"),
+            ev("initiative.suppressed", **said, key="d", why="x", reason="nothing to say"),
+            ev("tool.executed", tool="contact_message", arguments='{"to": "Angèle"}',
+               decision=ALONE, is_error=False),
+            ev("tool.executed", tool="recall", arguments="{}", decision="side-effect free",
+               is_error=False),
+            ev("spend.recorded", cost_usd=0.25, foreground=False, session="orion:thinking"),
+            ev("model.usage", prompt_tokens=1000, cached_tokens=900),
+        ]
+    )  # fmt: skip
+    await logged_in(http, gate)
+    page = (await http.get("/console/dashboard")).text
+    assert "1 message(s) de moi-même sur 6" in page  # the asked-for reminder does not count
+    assert "Victor t&#x27;a écrit" in page and "demandé" in page
+    assert "Le loyer est dû lundi" in page and "budget du jour épuisé" in page
+    alone = page.split("sans te demander")[1]
+    assert "contact_message" in alone and "recall" not in alone
+    assert "0.25 $ sur 7 jours" in page and "90 %" in page and "thinking 0.25 $" in page

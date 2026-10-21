@@ -21,10 +21,12 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from orion.console.auth import COOKIE, SESSION_DAYS, Gate
+from orion.console.dashboard import dashboard
 from orion.core.events import Event, Trust
 from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.guardian.autonomy import Autonomy, label
+from orion.initiative.engine import InitiativeSettings, effective_settings
 from orion.memory.model import CommitmentStatus
 from orion.memory.provenance import Provenances
 from orion.memory.service import MemoryService, Origin
@@ -82,6 +84,8 @@ class Console:
     """Who opened the console from Telegram, from the Mini App's signed launch data (D91):
     checked with the bot's token, by the Telegram module or the guardian that holds it."""
     owner_telegram: int = 0
+    initiative: InitiativeSettings | None = None
+    """The engine's settings from the config file, for the dashboard's attention (D101)."""
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -89,6 +93,7 @@ def _page(title: str, body: str) -> HTMLResponse:
         f'<a href="{PREFIX}/{path}">{name}</a>'
         for path, name in (
             ("", "Accueil"),
+            ("dashboard", "Tableau de bord"),
             ("memory", "Mémoire"),
             ("commitments", "Engagements"),
             ("playbook", "Manuel"),
@@ -219,6 +224,14 @@ def console_app(console: Console) -> Starlette:
                 + "</p>"
             )
         return _page("Ce que je sais et ce que je fais", body)
+
+    async def board(_request: Request) -> Response:
+        base = console.initiative or InitiativeSettings(timezone=console.timezone)
+        settings = effective_settings(base, await console.memory.store.settings())
+        last = await console.journal.last_seq()
+        events = await console.journal.read(max(0, last - 20_000), 20_000)
+        now = datetime.now(ZoneInfo(settings.timezone))
+        return _page("Tableau de bord", dashboard(events, settings, now))
 
     async def planned(_request: Request) -> Response:
         if console.planned is None:
@@ -413,6 +426,7 @@ def console_app(console: Console) -> Starlette:
             post("/rules/{id}/retire", retire_rule),
             get("/autonomy", autonomy),
             post("/autonomy/{action}/revoke", revoke),
+            get("/dashboard", board),
             get("/planned", planned),
             get("/activity", activity),
             get("/sources", sources),
