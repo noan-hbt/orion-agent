@@ -46,7 +46,7 @@ class MissionWork:
         self._clock = clock
         self._tick = tick
         self._woken = asyncio.Event()
-        missions.started.append(self._woken.set)
+        missions.waking.append(self._woken.set)
 
     async def run(self) -> None:
         while True:
@@ -70,6 +70,7 @@ class MissionWork:
             current = await self._missions.get(mission.id)
             return current is None or current.closed is not None
 
+        rushes_seen = len(mission.rushes)
         turn = await self._orion.handle_initiative(
             mission.thread, mission.brief(), "mission", mission.trust, now=now, halted=closed
         )
@@ -80,7 +81,7 @@ class MissionWork:
         silent = is_silence(text) or (turn.reason is not StopReason.COMPLETED and not text)
         # What it says is only as trustworthy as what the run read.
         trust = self._orion.threads.get(mission.thread).window_trust()
-        await self._missions.ran(mission, now, "" if silent else text, trust)
+        await self._missions.ran(mission, now, "" if silent else text, trust, rushes_seen)
         log.info("mission.ran", mission=mission.id, silent=silent, steps=turn.steps)
         return "" if silent else text
 
@@ -160,6 +161,12 @@ class CloseInput(BaseModel):
 
     mission: str
     outcome: str = Field(max_length=300, description="Done, found, given up…, and why")
+
+
+class NowInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mission: str = Field(default="", description="The mission id; default: this mission")
 
 
 class ListInput(BaseModel):
@@ -246,6 +253,23 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
         await missions.close(args.mission, args.outcome, provenance(ctx), ctx.correlation_id)
         return ToolResult("Mission close.")
 
+    async def now(args: Any, ctx: ToolContext) -> ToolResult:
+        mission_id = _which(args.mission, ctx)
+        mission = await missions.get(mission_id)
+        if mission is None or mission.closed is not None:
+            return ToolResult(f"No mission {mission_id or '(none given)'} running.", is_error=True)
+        if not mission.rushes_left(clock()):
+            return ToolResult(
+                "Plus de passage immédiat possible aujourd'hui pour cette mission : le prochain "
+                f"vient à son rythme (toutes les {mission.every_hours} h).",
+                is_error=True,
+            )
+        left = await missions.rush(
+            mission_id, clock(), provenance(ctx), ctx.context_trust, ctx.correlation_id
+        )
+        when = "juste après celui-ci" if ctx.thread_id == mission.thread else "tout de suite"
+        return ToolResult(f"Un passage repart {when} (encore {left} possible(s) aujourd'hui).")
+
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
         active = await missions.active()
         if not active:
@@ -315,6 +339,14 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             accepts_untrusted_context=True,
         ),
         tool(
+            "mission_now",
+            "Another pass right away: he wants it now, or this pass has more to see. The only "
+            "way to keep working once you have answered.",
+            NowInput,
+            now,
+            accepts_untrusted_context=True,
+        ),
+        tool(
             "missions",
             "The missions in progress.",
             ListInput,
@@ -356,6 +388,7 @@ class MissionsModule(Module):
                     "mission_seen": "seen",
                     "mission_reject": "reject",
                     "mission_close": "close",
+                    "mission_now": "now",
                     "missions": "list",
                 },
             )

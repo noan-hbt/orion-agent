@@ -2242,3 +2242,13 @@ elle-même : l'image d'aperçu (`og:image`), puis les photos (sans logos, icône
 remplissage ; dans le navigateur, les plus grandes affichées). Elles lui sont montrées avec leur
 adresse, et il peut les télécharger pour les envoyer. Il ne peut toujours pas télécharger une
 adresse inventée.
+
+## D108 — « Je continue » doit être vrai : un passage de mission tout de suite
+
+Constaté en vrai : « fais tout maintenant », et Orion répond « je continue sur les autres
+maintenant »… puis rien, car une fois sa réponse partie il ne travaille plus que dans une
+mission, et celle-ci repassait toutes les 6 h. Désormais `mission` (now) demande un passage tout
+de suite : depuis la conversation (il le veut maintenant), ou depuis un passage qui a encore des
+pistes (le suivant part juste après). Huit par mission et par jour au plus, au-delà de son rythme ;
+le plafond de dépense reste celui de ce qu'Orion fait seul. Et la consigne : ne dire « je
+continue » que si c'est vrai.

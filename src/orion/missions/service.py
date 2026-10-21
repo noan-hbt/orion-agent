@@ -38,6 +38,9 @@ SEEN = "mission.seen"
 REJECTED = "mission.rejected"
 RAN = "mission.ran"
 CLOSED = "mission.closed"
+RUSHED = "mission.rushed"
+RUSHES_PER_DAY = 8
+"""Passes asked for right away (beyond its pace), per mission and per day."""
 NOTES_SHOWN = 6
 REJECTED_SHOWN = 20
 
@@ -65,6 +68,13 @@ class Mission:
     page content, so it is never more trusted than that."""
     closed: str | None = None
     """Why it ended (done, given up…), once closed."""
+    rushes: list[datetime] = field(default_factory=list[datetime])
+    """When a pass was asked for right away (by the owner, or by a pass with more to see)."""
+    rushes_seen: int = 0
+    """How many of those the last pass started after: one asked later makes it due again."""
+
+    def rushes_left(self, now: datetime) -> int:
+        return max(0, RUSHES_PER_DAY - sum(1 for at in self.rushes if at.date() == now.date()))
 
     @property
     def thread(self) -> str:
@@ -73,6 +83,8 @@ class Mission:
     def due(self, now: datetime) -> bool:
         if self.closed is not None:
             return False
+        if len(self.rushes) > self.rushes_seen:
+            return True
         return self.last_run is None or now - self.last_run >= timedelta(hours=self.every_hours)
 
     def brief(self) -> str:
@@ -103,6 +115,11 @@ class Mission:
             "SILENCE s'il n'y a rien de neuf qui vaille un message, sinon le message pour le "
             "propriétaire, court, avec les liens. Si la mission est accomplie ou n'a plus de "
             "sens, propose-lui de la clore."
+        )
+        lines.append(
+            "S'il reste des pistes que ce passage n'a pas le temps de voir, `mission` (now) : un "
+            "autre passage repart juste après celui-ci, et dis-le-lui. Sinon, ne lui promets "
+            "pas de continuer avant le prochain passage."
         )
         return "\n".join(lines)
 
@@ -154,6 +171,7 @@ class MissionState:
         elif event.kind == RAN:
             mission.runs += 1
             mission.last_run = datetime.fromisoformat(str(payload["at"]))
+            mission.rushes_seen = int(payload.get("rushes_seen", len(mission.rushes)))
             if payload.get("said"):
                 mission.reports.append(
                     (
@@ -163,6 +181,8 @@ class MissionState:
                         Trust[str(payload.get("trust", "WEB"))],
                     )
                 )
+        elif event.kind == RUSHED:
+            mission.rushes.append(datetime.fromisoformat(str(payload["at"])))
         elif event.kind == CLOSED:
             mission.closed = str(payload.get("outcome", "closed"))
 
@@ -172,8 +192,9 @@ class Missions:
         self._journal = journal
         self.state = MissionState()
         self._runner = ProjectionRunner(journal, [self.state])
-        self.started: list[Callable[[], None]] = []
-        """Told when a mission starts, so its first run comes now, not at the next tick."""
+        self.waking: list[Callable[[], None]] = []
+        """Told when a mission starts or is asked for now, so its pass comes at once, not at the
+        next tick."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -209,9 +230,32 @@ class Missions:
             Trust.OWNER,
             correlation_id,
         )
-        for tell in self.started:
-            tell()
+        self._wake()
         return mission_id
+
+    async def rush(
+        self,
+        mission_id: str,
+        now: datetime,
+        provenance: Provenance,
+        trust: Trust,
+        correlation_id: str | None,
+    ) -> int:
+        """Ask for a pass right away; returns how many more may be asked for today."""
+        await self._record(
+            RUSHED,
+            {"mission_id": mission_id, "at": now.isoformat()},
+            provenance,
+            trust,
+            correlation_id,
+        )
+        self._wake()
+        mission = await self.get(mission_id)
+        return mission.rushes_left(now) if mission is not None else 0
+
+    def _wake(self) -> None:
+        for tell in self.waking:
+            tell()
 
     async def update(
         self,
@@ -272,10 +316,20 @@ class Missions:
             correlation_id,
         )
 
-    async def ran(self, mission: Mission, now: datetime, said: str, trust: Trust) -> None:
+    async def ran(
+        self, mission: Mission, now: datetime, said: str, trust: Trust, rushes_seen: int = -1
+    ) -> None:
+        """`rushes_seen`: the passes asked for when this one started (by default, all of them);
+        one asked for during it still comes."""
         await self._record(
             RAN,
-            {"mission_id": mission.id, "at": now.isoformat(), "said": said, "trust": trust.name},
+            {
+                "mission_id": mission.id,
+                "at": now.isoformat(),
+                "said": said,
+                "trust": trust.name,
+                "rushes_seen": len(mission.rushes) if rushes_seen < 0 else rushes_seen,
+            },
             Provenance(source=f"mission:{mission.id}", actor="orion:missions"),
             Trust.SYSTEM,
             None,
