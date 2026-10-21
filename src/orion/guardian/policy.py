@@ -166,6 +166,8 @@ class Guardian:
             # world is put to him with the exact action and why he is asked (D90), never done
             # alone; `prudent` refuses it outright, as D26 did.
             reason = untrusted_reason(proposal.context_trust)
+            if proposal.ask_reason:  # what happened in a conversation he did not see, first
+                reason = f"{proposal.ask_reason}, et {reason}"
             if effect is Effect.EXTERNAL:
                 if self._approvals == "prudent" or tool.name in NEVER_FROM_UNTRUSTED:
                     return Decision(

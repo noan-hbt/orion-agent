@@ -67,6 +67,9 @@ class LoopSettings:
     budget: Budget = field(default_factory=Budget)
     wrap_up: bool = True
     """On a limit, one more model call (no tools) to report what was done and what is left."""
+    asking: str = ""
+    """What the owner must hear when asked from a conversation he does not see (another
+    Orion's, D102): an approval never arrives out of nowhere."""
 
 
 WRAP_UP = (
@@ -398,7 +401,7 @@ async def _execute_one(
         return ToolResult(str(exc), is_error=True), "invalid input"
 
     decision = await guardian.decide(
-        ActionProposal(tool, arguments, context_trust, settings.thread_id)
+        ActionProposal(tool, arguments, context_trust, settings.thread_id, settings.asking)
     )
     if not decision.allowed:
         return ToolResult(f"Refused by policy: {decision.reason}", is_error=True), decision.reason

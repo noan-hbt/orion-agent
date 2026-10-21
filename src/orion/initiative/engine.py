@@ -330,7 +330,12 @@ def _read_while_writing(messages: Sequence[Message]) -> str:
         for m in messages
         if m.get("role") in ("user", "tool") and isinstance(m.get("content"), str)
     ]
-    return "\n---\n".join(p for p in parts if p)[-VERIFIER_READ_CHARS:]
+    read = "\n---\n".join(p for p in parts if p)
+    if len(read) <= VERIFIER_READ_CHARS:
+        return read
+    # The memory comes first in the turn, the searches after: keep both ends.
+    head = VERIFIER_READ_CHARS // 3
+    return read[:head] + "\n[…]\n" + read[-(VERIFIER_READ_CHARS - head) :]
 
 
 def _point(lines: str, extra: list[str]) -> str:
@@ -701,17 +706,46 @@ class InitiativeEngine:
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
-        read = _read_while_writing(
-            self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
-        )
-        if read:
-            facts += f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
         conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
-        verification = await self._verifier.check(draft, facts, conversation)
-        if not verification.ok:
+        for attempt in (1, 2):
+            read = _read_while_writing(
+                self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
+            )
+            known = facts + (
+                f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
+                if read
+                else ""
+            )
+            verification = await self._verifier.check(draft, known, conversation)
+            if verification.ok:
+                return draft, "verified" if attempt == 1 else "verified on a second draft"
             log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
-            return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
-        return draft, "verified"
+            if attempt == 2:
+                break
+            # Orion rewrites it in its own words rather than a canned text going out (D103).
+            try:
+                again = await self._orion.handle_initiative(
+                    self._settings.thread_id,
+                    "Ton message n'est pas parti : une relecture y a vu un problème ("
+                    + "; ".join(verification.issues)[:500]
+                    + "). Réécris-le en t'en tenant à ce que tu sais, ou réponds SILENCE.",
+                    candidate.why,
+                    candidate.trust,
+                    now,
+                )
+            except Exception:
+                log.exception("initiative.rewrite_failed", key=candidate.key)
+                break
+            if again.reason is not StopReason.COMPLETED or not again.text.strip():
+                break
+            if is_silence(again.text):
+                return (
+                    (candidate.fallback, "fallback: silence after a rejection")
+                    if (candidate.explicit)
+                    else (None, "silence")
+                )
+            draft = again.text.strip()
+        return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
 
     async def _record(
         self,

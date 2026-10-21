@@ -2158,3 +2158,21 @@ connaissance de cause, pour une conversation qui sert vraiment.
   messages par jour vers un même Orion.
 - Le propriétaire en entend parler : ce qui a été dit et répondu lui arrive comme un message de
   l'initiative, sous le budget du jour.
+
+## D103 — Moins de texte en dur, des accords qui disent d'où ils viennent
+
+Le premier test des conversations entre Orion (21/10) a montré deux défauts :
+
+- **une demande d'accord sortie de nulle part** : l'Orion de Victor, en discutant avec celui de
+  Noan dans un fil que Victor ne voit pas, lui a demandé trois fois d'approuver une proposition
+  sans rien expliquer. Une demande née d'une conversation qu'il ne voit pas dit maintenant ce
+  qui l'a amenée (« l'Orion de Noan m'a écrit « … » »). Les deux premières avaient échoué parce
+  que les rendez-vous s'arrêtaient à 19 h en semaine : un ciné ou un dîner finit plus tard, le
+  défaut passe à 23 h et le week-end compte ; un échec dit les heures, pour que le modèle le
+  dise au lieu de redemander ;
+- **des messages en dur** : quand le vérificateur refusait un brouillon, le texte de secours
+  partait, et pour la fédération c'était la consigne écrite pour Orion (« rappelle-lui de… »).
+  Orion réécrit désormais une fois avec la remarque du vérificateur ; le texte de secours ne
+  sert qu'en dernier recours, et il est écrit pour le propriétaire. Le vérificateur voit aussi
+  le début de ce qu'Orion a lu (sa mémoire), plus seulement la fin : un vrai fait de mémoire
+  était pris pour une invention.

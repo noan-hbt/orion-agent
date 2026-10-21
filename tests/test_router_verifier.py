@@ -239,3 +239,31 @@ def test_a_point_reads_like_a_message() -> None:
         "- Appeler le garagiste, pour demain à 09:00\n- pour Paul : Rendre la perceuse, pour "
         "aujourd'hui"
     )
+
+
+async def test_a_rejected_draft_is_rewritten_by_orion_not_replaced_by_a_canned_text(
+    journal: SqliteJournal, setup: tuple[ScriptedProvider, Timers, Orion]
+) -> None:
+    """21/10: a draft was rejected and the notice meant for Orion went out as the message."""
+    provider, timers, orion = setup
+    provider.extend(reply("Mercredi, appelle Paul."), reply("Hé, c'est l'heure d'appeler Paul."))
+    checker = ScriptedProvider(
+        json_reply({"ok": False, "issues": ["says Wednesday, it is Tuesday"]}),
+        json_reply({"ok": True, "issues": []}),
+    )
+    inbox = Inbox()
+    engine = InitiativeEngine(
+        orion,
+        journal,
+        timers,
+        inbox,
+        InitiativeSettings(digests=()),
+        clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
+        verifier=Verifier(checker, "verifier"),
+    )
+    await engine.tick()
+    assert inbox.messages == ["Hé, c'est l'heure d'appeler Paul."]
+    asked = str(provider.requests[1].messages[-1]["content"])
+    assert "n'est pas parti" in asked and "says Wednesday" in asked
+    [record] = [e for e in await journal.read() if e.kind == DELIVERED]
+    assert record.payload["how"] == "verified on a second draft"

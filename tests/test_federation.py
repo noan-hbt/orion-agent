@@ -42,7 +42,7 @@ from orion.modules.base import ModuleError
 from orion.tools.base import ToolContext
 from tests.fake_guardian import Running, guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, FakeInkbox
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, call_tools, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 19, 10, 0, tzinfo=PARIS)  # a Monday
@@ -796,3 +796,19 @@ async def test_a_first_word_needs_the_owner_and_a_chat_has_an_end(
         await client.federation_send("Noan", "orion.say", "c2", {"text": "Oui !"})  # an answer
         with pytest.raises(GuardianUnavailableError, match="that is enough"):
             await client.federation_send("Noan", "orion.say", "c2", {"text": "Et toi ?"})
+
+
+async def test_an_approval_from_a_chat_says_what_the_other_orion_wrote(tmp_path: Path) -> None:
+    """21/10: Victor was asked to approve a proposal coming out of a chat he never saw."""
+    async with two_orions(tmp_path) as (noan, paul):
+        answered_by_orion(paul)
+        await say(noan, "Paul", "Paul est dispo pour un ciné ce soir ?")
+        window = {"window_start": "2026-10-20T14:00", "window_end": "2026-10-20T19:00"}
+        propose: dict[str, object] = {"peer": "Noan", "title": "Ciné", "duration_minutes": 60}
+        propose |= window
+        paul.provider.extend(
+            call_tools(("meeting_propose", propose)), reply("Je t'ai proposé 14 h.")
+        )
+        await paul.step()
+        [question] = paul.owner.asked
+        assert "l'Orion de Noan m'a écrit « Paul est dispo pour un ciné ce soir ? »" in question

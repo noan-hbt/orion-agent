@@ -392,8 +392,10 @@ class FederationConfig(BaseModel):
     invite_days: int = Field(default=7, ge=1, le=60)
     max_inbound_per_hour: int = Field(default=60, ge=1, description="Per peer")
     meeting_start: time = Field(default=time(9, 0), description="Earliest meeting start")
-    meeting_end: time = Field(default=time(19, 0), description="Latest meeting end")
-    weekends: bool = False
+    meeting_end: time = Field(
+        default=time(23, 0), description="Latest meeting end: a film or a dinner ends late"
+    )
+    weekends: bool = True
 
 
 class BudgetConfig(BaseModel):

@@ -270,6 +270,8 @@ class MeetingState:
                 f"L'Orion de {known.label} annule « {known.title} » ({when}) : quelqu'un "
                 "d'autre du groupe n'a pas pu. Le créneau est libre à nouveau.",
                 f"l'Orion de {known.label} a annulé un rendez-vous de groupe",
+                f"« {known.title} » ({when}) est annulé : quelqu'un du groupe n'a pas pu. Ton "
+                "créneau est libre.",
             )
         elif kind == ANSWERED:
             invited = _meeting(p, "invited", "accepted" if p["accepted"] else "refused")
@@ -283,6 +285,8 @@ class MeetingState:
                     "joindre pour te demander : j'ai répondu que tu n'étais pas joignable, sans "
                     "rien refuser. Dis-le-lui ; il peut redemander à son Orion de reproposer.",
                     f"l'Orion de {p['label']} a proposé un rendez-vous",
+                    f"{p['label']} proposait « {p['title']} », mais je n'ai pas pu te joindre : "
+                    "j'ai répondu que tu n'étais pas joignable, sans rien refuser.",
                 )
             if p.get("reason") == "no_slot":
                 self._report(
@@ -291,6 +295,8 @@ class MeetingState:
                     "créneaux proposés n'est libre pour lui : j'ai répondu que ça ne marchait "
                     "pas. Dis-le-lui, il peut proposer d'autres dates.",
                     f"l'Orion de {p['label']} a proposé un rendez-vous",
+                    f"{p['label']} proposait « {p['title']} », mais aucun des créneaux ne "
+                    "t'allait : j'ai répondu que ça ne marchait pas.",
                 )
         elif kind == AGREED and known is not None:
             start = _at(p["start"])
@@ -302,9 +308,10 @@ class MeetingState:
             self._report(
                 event,
                 f"C'est calé avec l'Orion de {known.label}{also} : « {known.title} », {when} "
-                f"({known.duration_minutes} min). Noté dans ses engagements ; son agenda est en "
-                "lecture seule, rappelle-lui de l'y ajouter.",
+                f"({known.duration_minutes} min). Noté dans ses engagements ; s'il ne le voit pas "
+                "dans son agenda, propose-lui de l'y ajouter.",
                 f"l'Orion de {known.label} a confirmé le rendez-vous",
+                f"C'est calé avec {known.label}{also} : « {known.title} », {when}.",
             )
         elif kind == DECLINED and known is not None:
             self.meetings[meeting_id] = replace(known, status="declined")
@@ -316,6 +323,7 @@ class MeetingState:
                 f"L'Orion de {known.label} a répondu pour « {known.title} » : {why}. "
                 "Propose-lui d'essayer une autre fenêtre.",
                 f"l'Orion de {known.label} a répondu",
+                f"Pour « {known.title} », l'Orion de {known.label} a répondu : {why}.",
             )
         elif kind == FAILED:
             self._report(
@@ -333,6 +341,8 @@ class MeetingState:
                 f"{p['label']} : pas par toi, Orion, qui ne peux ni créer ni accepter une "
                 "invitation. Ses empreintes : `orion federation peers` sur le serveur.",
                 f"l'Orion de {p['label']} vient de se présenter avec ton invitation",
+                f"Je suis maintenant relié à l'Orion de {p['label']} : on peut caler des "
+                "rendez-vous et se parler.",
             )
 
     def group(self, group: str) -> list[Meeting]:
@@ -353,9 +363,10 @@ class MeetingState:
             self._report(
                 event,
                 f"C'est calé avec les Orion de {names} : « {title} », {when} ({minutes} min). "
-                "Noté dans ses engagements ; son agenda est en lecture seule, rappelle-lui de "
+                "Noté dans ses engagements ; s'il ne le voit pas dans son agenda, propose-lui de "
                 "l'y ajouter.",
                 "tout le groupe a confirmé le rendez-vous",
+                f"C'est calé avec {names} : « {title} », {when}.",
             )
         elif event.kind == GROUP_FAILED:
             for m in members:
@@ -379,15 +390,18 @@ class MeetingState:
                 event,
                 text + " Propose-lui d'essayer une autre fenêtre.",
                 "un rendez-vous de groupe n'a pas abouti",
+                text,
             )
 
-    def _report(self, event: Event, notice: str, why: str) -> None:
+    def _report(self, event: Event, notice: str, why: str, fallback: str = "") -> None:
+        """`notice` is for Orion to write from; `fallback` is what he reads if it cannot: a
+        sentence for him, never an instruction for Orion."""
         self.reports.append(
             Report(
                 key=f"federation:{event.id}",
                 notice=notice,
                 why=why,
-                fallback=notice,
+                fallback=fallback or notice,
                 trust=Trust.TRUSTED_PEER,
             )
         )
@@ -508,7 +522,12 @@ class MeetingDesk:
             start, end, duration, await self.busy(start, end), self.hours, self.clock()
         )
         if not slots:
-            raise LookupError("no free slot in that window")
+            days = "any day" if self.hours.weekends else "weekdays only"
+            raise LookupError(
+                f"no free slot in that window: he meets between {self.hours.start:%H:%M} and "
+                f"{self.hours.end:%H:%M}, {days} (federation.meeting_start/meeting_end), and "
+                "outside his busy times. Tell him before trying another window"
+            )
         if len(invited) > 1:
             return await self._send_polls(
                 invited, title, duration, start, end, slots, grant, correlation_id

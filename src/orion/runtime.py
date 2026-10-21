@@ -280,6 +280,7 @@ class Orion:
             now=now,
             memory_query=text,
             owner_text="",
+            asking=f"l'Orion de {label} m'a écrit « {' '.join(text.split())[:300]} »",
         )
 
     def lock(self, thread_id: str) -> asyncio.Lock:
@@ -315,6 +316,7 @@ class Orion:
         interjections: Interjections | None = None,
         progress: Progress | None = None,
         waiting: Waiting | None = None,
+        asking: str = "",
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -331,6 +333,7 @@ class Orion:
                 interjections,
                 progress,
                 waiting,
+                asking,
             )
 
     async def _turn_locked(
@@ -348,6 +351,7 @@ class Orion:
         interjections: Interjections | None = None,
         progress: Progress | None = None,
         waiting: Waiting | None = None,
+        asking: str = "",
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -433,6 +437,7 @@ class Orion:
             correlation_id=correlation_id,
             origin_event_id=received.id,
             timezone=self._agent.timezone,
+            asking=asking,
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
