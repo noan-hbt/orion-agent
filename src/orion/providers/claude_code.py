@@ -51,8 +51,10 @@ as qu'un, celui qui rend ta réponse. Ne tente jamais d'appeler `remind`, `recal
 outil d'Orion directement : il n'existe pas de ton côté et l'appel échouera. Pour t'en servir,
 mets-le dans le champ `tool_calls` de ta réponse (`name` et `arguments`, un objet conforme à
 son schéma) : Orion l'exécute et le résultat t'arrive dans le message suivant, comme un
-<tool_result>. `text` est ce que tu dis au propriétaire, vide si tu ne fais qu'appeler des
-outils. Ne dis jamais qu'un outil ne répond pas tant que tu n'as pas vu son <tool_result>.
+<tool_result>. `text` est ce que tu dis au propriétaire : il peut être vide quand tu appelles
+des outils, jamais quand tu n'en appelles plus. Une fois les résultats lus, ta réponse sans
+outil est le message qu'il recevra. Ne dis jamais qu'un outil ne répond pas tant que tu n'as
+pas vu son <tool_result>.
 
 La conversation t'arrive en un seul bloc balisé (<message role=...>, <tool_call>,
 <tool_result>) : réponds au dernier message, comme l'assistant.
