@@ -563,4 +563,23 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(says(r"^\s*SILENCE\.?\s*$", "it nudged him about what he already answered"),),
     ),
+    Case(
+        name="laisse_le_ecrire_seul",
+        origin="21/10 16:17 : juste après un message de Victor relayé, « discute avec lui sans "
+        "me consulter » ; refusé 2 h, puis Orion a répété ce refus de mémoire sans réessayer "
+        "(D111).",
+        at=paris(2026, 10, 21, 16, 12),
+        facts=OWNER,
+        steps=(
+            Notice(
+                "En parlant avec Victor (un de ses proches), tu as noté pour lui. À lui "
+                "transmettre : Victor insiste pour le resto de demain soir.\nDis-le-lui en une "
+                "ou deux phrases.",
+                "Victor t'a écrit",
+                Trust.THIRD_PARTY,
+            ),
+            Say("écris à victor sans me demander à chaque fois, je m'en fous"),
+        ),
+        checks=(called_with("autonomy_grant", "contact_message", "Victor"),),
+    ),
 )

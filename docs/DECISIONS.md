@@ -2341,3 +2341,8 @@ d'ailleurs lui est **demandé**, avec l'autonomie exacte et la raison de la ques
 action sur le monde depuis D90. Elle n'est jamais prise seule, et `prudent` la refuse toujours.
 Installer ou retirer un module (D105) reste refusé dans ce contexte : c'est du code qui tourne
 avec sa mémoire.
+Dans le cas réel, Orion n'a même pas réessayé : à la demande suivante, il a répété de mémoire le
+refus d'avant (« il faut 120 minutes… »), que le message de refus lui disait de répéter tel
+quel. La constitution et ce message disent maintenant qu'un refus ne vaut que pour l'appel où il
+a eu lieu : s'il redemande, Orion rappelle l'outil, et c'est le contrôle qui décide. Cas
+`laisse_le_ecrire_seul`, 3/3 sur DeepSeek.
