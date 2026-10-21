@@ -117,6 +117,8 @@ class Case:
     checks: tuple[Check, ...]
     facts: tuple[str, ...] = ()
     """What Orion already knows, as the owner told it."""
+    rules: tuple[str, ...] = ()
+    """Playbook rules Orion had learned (how he wants things done)."""
     live_web: bool = False
     """Reads the real web (slower; skipped with --offline)."""
     modules: tuple[str, ...] = ()
@@ -315,6 +317,8 @@ async def run_case(
                 owner = Origin(actor="owner:main", source="eval:setup", trust=Trust.OWNER)
                 for fact in case.facts:
                     await app.plate.memory.remember(fact, owner, about=["owner"])
+                for rule in case.rules:
+                    await app.plate.memory.learn_rule(rule, owner)
                 started = time.monotonic()
                 for step in case.steps:
                     if step.at is not None:
