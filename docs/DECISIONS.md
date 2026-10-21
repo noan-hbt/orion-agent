@@ -2219,3 +2219,15 @@ au passage suivant, laissant Orion refuser de démarrer. Désormais :
 Un module d'exemple, `des` (`examples/modules/orion-des`), montre la forme : il lance des dés
 au hasard, sans réseau ni mémoire. Les modules isolés (hors du processus d'Orion, sans accès à
 sa mémoire), pour une bibliothèque ouverte à tous, viendront ensuite.
+
+## D106 — Une mission arrêtée s'arrête tout de suite, et démarre tout de suite
+
+Constaté en vrai : une mission lancée (« j'y travaille maintenant ») n'a commencé qu'au tour
+suivant du planificateur, huit minutes plus tard ; et quand il a dit « laisse tomber » pendant
+qu'elle tournait, Orion a répondu « je laisse tomber » mais le passage en cours a continué une
+quinzaine d'étapes et lui a envoyé une capture après coup. Désormais :
+
+- **démarrer réveille le travail des missions** : le premier passage part aussitôt ;
+- **la boucle d'Orion demande, avant chaque étape, si le travail a été annulé** (`halted`) : une
+  mission close pendant son passage s'arrête là, les appels prévus ne partent pas, rien n'est
+  dit ni rapporté. Un appel déjà en cours n'est jamais coupé net.

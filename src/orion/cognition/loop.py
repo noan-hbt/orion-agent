@@ -45,6 +45,11 @@ class StopReason(StrEnum):
     STALLED = "stalled"
     PROVIDER_ERROR = "provider_error"
     TRUNCATED = "truncated"
+    HALTED = "halted"
+
+
+Halted = Callable[[], Awaitable[bool]]
+"""Whether the work was called off meanwhile."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,9 @@ class LoopSettings:
     asking: str = ""
     """What the owner must hear when asked from a conversation he does not see (another
     Orion's, D102): an approval never arrives out of nowhere."""
+    halted: Halted | None = None
+    """Whether the work was called off meanwhile (a mission closed while it runs): checked
+    before each step, and the calls not run yet are dropped."""
 
 
 WRAP_UP = (
@@ -130,6 +138,7 @@ started yet are skipped, so Orion reads the owner before carrying on with a plan
 just changed (a running call is never interrupted)."""
 
 SKIPPED = "Not run: the owner wrote meanwhile; read their message first, then decide."
+CALLED_OFF = "Not run: this work was called off."
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -233,6 +242,15 @@ async def run_agent(
         # The model's output is only as trustworthy as what it read.
         yield MessageEmitted(response.message, min(context_trust, Trust.SYSTEM))
         last_text = response.text or last_text
+
+        if response.tool_calls and settings.halted is not None and await settings.halted():
+            # Called off while the model thought: nothing more runs, and nothing is said.
+            for call in response.tool_calls:
+                dropped: Message = {"role": "tool", "tool_call_id": call.id, "content": CALLED_OFF}
+                messages.append(dropped)
+                yield MessageEmitted(dropped, Trust.SYSTEM)
+            yield finished(StopReason.HALTED, "")
+            return
 
         if not response.tool_calls:
             reason = (

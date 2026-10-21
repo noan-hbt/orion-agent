@@ -18,6 +18,7 @@ next runs read it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -171,6 +172,8 @@ class Missions:
         self._journal = journal
         self.state = MissionState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self.started: list[Callable[[], None]] = []
+        """Told when a mission starts, so its first run comes now, not at the next tick."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -206,6 +209,8 @@ class Missions:
             Trust.OWNER,
             correlation_id,
         )
+        for tell in self.started:
+            tell()
         return mission_id
 
     async def update(

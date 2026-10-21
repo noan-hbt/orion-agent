@@ -22,6 +22,7 @@ import structlog
 from orion.cognition.loop import (
     Budget,
     Finished,
+    Halted,
     LoopSettings,
     MessageEmitted,
     ModelCalled,
@@ -232,10 +233,11 @@ class Orion:
         why: str,
         trust: Trust = Trust.SYSTEM,
         now: datetime | None = None,
+        halted: Halted | None = None,
     ) -> TurnResult:
         """Orion speaks first: a notice from the initiative engine becomes a turn in the owner's
         thread, so the owner's answer has the context. The reply may be `SILENCE` (nothing worth
-        sending), which callers must not deliver."""
+        sending), which callers must not deliver. `halted` stops work called off meanwhile."""
         body = f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
         return await self._turn(
             thread_id,
@@ -248,6 +250,7 @@ class Orion:
             now=now,
             memory_query=notice,
             owner_text="",
+            halted=halted,
         )
 
     async def handle_peer_message(
@@ -317,6 +320,7 @@ class Orion:
         progress: Progress | None = None,
         waiting: Waiting | None = None,
         asking: str = "",
+        halted: Halted | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -334,6 +338,7 @@ class Orion:
                 progress,
                 waiting,
                 asking,
+                halted,
             )
 
     async def _turn_locked(
@@ -352,6 +357,7 @@ class Orion:
         progress: Progress | None = None,
         waiting: Waiting | None = None,
         asking: str = "",
+        halted: Halted | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -438,6 +444,7 @@ class Orion:
             origin_event_id=received.id,
             timezone=self._agent.timezone,
             asking=asking,
+            halted=halted,
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
