@@ -2081,3 +2081,7 @@ Désormais :
 - **l'appairage dit d'où il vient** : une invitation créée sur le serveur et acceptée par
   l'autre Orion. Orion ne peut ni créer ni accepter une invitation, et le disait mal quand on
   lui demandait.
+- **la journée d'attention va du réveil au réveil** : les messages de Victor relayés entre
+  1 h et 2 h comptaient pour le mercredi, et le budget du jour (6) était épuisé avant le
+  point de 8 h 30. Ce qui part pendant les heures calmes après minuit compte désormais pour la
+  veille (`InitiativeSettings.attention_day`).

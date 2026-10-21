@@ -142,6 +142,13 @@ class InitiativeSettings:
             return self.quiet_start <= moment < self.quiet_end
         return moment >= self.quiet_start or moment < self.quiet_end
 
+    def attention_day(self, moment: datetime) -> date:
+        """The day a message counts against: from waking to waking. What he reads at 1 a.m.
+        belongs to the evening still going on, not to the day he has not started yet."""
+        if self.quiet_start > self.quiet_end and moment.time() < self.quiet_end:
+            return moment.date() - timedelta(days=1)
+        return moment.date()
+
 
 def effective_settings(
     base: InitiativeSettings, changes: dict[SettingKey, SettingChange]
@@ -561,7 +568,7 @@ class InitiativeEngine:
             candidate.importance,
             now,
             await self._moment(now),
-            self.ledger.spent.get(now.date(), 0),
+            self.ledger.spent.get(self._settings.attention_day(now), 0),
             self._settings.daily_budget,
             candidate.expires_at,
             self._waiting.get(candidate.key),
@@ -661,7 +668,10 @@ class InitiativeEngine:
             return "missed its window"
         if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
             return "quiet hours"
-        if self.ledger.spent.get(now.date(), 0) >= self._settings.daily_budget:
+        if (
+            self.ledger.spent.get(self._settings.attention_day(now), 0)
+            >= self._settings.daily_budget
+        ):
             return "daily attention budget spent"
         return None
 
@@ -717,7 +727,7 @@ class InitiativeEngine:
         payload: dict[str, object] = {
             "key": candidate.key,
             "why": candidate.why,
-            "day": now.date().isoformat(),
+            "day": self._settings.attention_day(now).isoformat(),
             "explicit": candidate.explicit,
             "mentions": list(candidate.mentions),
         }
