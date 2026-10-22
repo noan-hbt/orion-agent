@@ -7,8 +7,8 @@ j'ai pensé à toi ». Once a week Orion follows a lead of its own (D76):
   subjects he asked Orion to keep an eye on, and what Orion brought him before with what he
   thought of it. It picks one lead that intrigues Orion itself, where what he lives meets
   something he does not know yet, and up to three searches. Or nothing, which is fine.
-- **The hunt.** The searches and the page go through the web clerk (`orion.web`): Orion's
-  own model never reads a page, and an address can only be one a search returned.
+- **The hunt.** The searches and the page go through Orion's web desk (`orion.web`): an
+  address can only be one a search returned.
 - **The judgement.** A second call, which sees the lead and the results but not the memory,
   keeps one page only if it is worth his time, and says why it is for him. Most weeks,
   nothing is: nothing is sent.
@@ -46,14 +46,17 @@ from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate, n
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
-from orion.web.clerk import ClerkError, Findings, Reading
 from orion.web.fetch import FetchError
+from orion.web.search import Findings, Reading, SearchError
 from orion.web.service import NotAllowedError
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
 
 log = structlog.get_logger(__name__)
+
+SUMMARY_CHARS = 2000
+"""The start of the page found, kept for Orion to write about it (it reads it itself)."""
 
 INTEREST = "curiosity.interest"
 INTEREST_DROPPED = "curiosity.interest.dropped"
@@ -105,11 +108,11 @@ Réponds par UN objet JSON, en français :
 
 
 class Web(Protocol):
-    """The web clerk's desk (`orion.web.service.WebDesk`)."""
+    """Orion's web desk (`orion.web.service.WebDesk`)."""
 
     async def search(self, query: str, correlation_id: str | None = None) -> Findings: ...
 
-    async def read(self, url: str, question: str, correlation_id: str | None = None) -> Reading: ...
+    async def read(self, url: str, correlation_id: str | None = None) -> Reading: ...
 
 
 class CuriositySettings(ModuleSettings):
@@ -316,12 +319,12 @@ class Curiosity:
         for query in lead.recherches[:MAX_SEARCHES]:
             try:
                 findings = await self._web.search(query)
-            except ClerkError as exc:
+            except SearchError as exc:
                 log.warning("curiosity.search_failed", query=query, error=str(exc))
                 continue
             for r in findings.results:
                 if r.url not in sent and r.url not in {u for u, _, _ in results}:
-                    results.append((r.url, r.title, r.summary))
+                    results.append((r.url, r.title, ""))
         if not results:
             return Hunt(lead.piste, outcome="nothing found")
         judgement = await self._judge(lead, results)
@@ -329,17 +332,13 @@ class Curiosity:
             return Hunt(lead.piste, outcome="model unavailable")
         if not judgement.garder or not 0 <= judgement.page < len(results):
             return Hunt(lead.piste, outcome="not worth it")
-        url, title, summary = results[judgement.page]
+        url, title, _ = results[judgement.page]
         try:
-            reading = await self._web.read(url, judgement.question or lead.piste)
-        except (ClerkError, FetchError, NotAllowedError) as exc:
-            # A PDF, a page behind a wall: what the search said of it still holds.
+            reading = await self._web.read(url)
+        except (FetchError, NotAllowedError) as exc:
+            # A PDF, a page behind a wall: nothing for Orion to read, nothing to bring him.
             log.warning("curiosity.read_failed", url=url, error=str(exc))
-            if not summary:
-                return Hunt(lead.piste, outcome="page unreadable")
-            reading = Reading(url, title, summary, [])
-        if reading.suspicious:
-            return Hunt(lead.piste, outcome="page suspicious")
+            return Hunt(lead.piste, outcome="page unreadable")
         find_id = f"cu_{new_id()}"
         await self.record(
             FOUND,
@@ -349,7 +348,7 @@ class Curiosity:
                 "why": judgement.pour_lui or lead.pourquoi,
                 "url": url,
                 "title": reading.title or title,
-                "summary": reading.answer,
+                "summary": " ".join(reading.text.split())[:SUMMARY_CHARS],
                 "at": now.isoformat(),
             },
             Provenance(source=f"web:{url}", actor="orion:curiosity"),

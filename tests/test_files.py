@@ -20,7 +20,7 @@ from orion.files.module import MADE, FileStore, file_tool, page_html, render_pdf
 from orion.guardian.client import GuardianUnavailableError
 from orion.hands.hand import Hand, HandConfig
 from orion.tools.base import Tool, ToolContext, ToolResult
-from orion.web.clerk import WebClerk
+from orion.web.search import WebSearch
 from orion.web.service import DOWNLOADED, WebDesk
 from tests.fake_guardian import guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, FakeInkbox
@@ -190,7 +190,7 @@ async def test_any_file_on_the_web_is_kept_and_sent_as_it_is(
             "https://x.example/big.zip": httpx.Response(200, content=b"0" * (11 * 1024 * 1024)),
         }
     )
-    desk = WebDesk(journal, WebClerk(ScriptedProvider(), "m"), client, allow_all)
+    desk = WebDesk(journal, WebSearch(ScriptedProvider(), "m"), client, allow_all)
     await desk.start()
     store = FileStore(journal, tmp_path / "files")
     sent: list[tuple[Path, str]] = []

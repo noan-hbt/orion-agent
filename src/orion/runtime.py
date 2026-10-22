@@ -63,6 +63,8 @@ PRUNE_OVER = 2000
 """Tool results longer than this are shortened after a pause."""
 
 OWNER_THREAD = "owner"
+CONTACT_THREAD = "contact:"
+"""A thread where Orion answers someone the owner lets write to it (D114)."""
 """The owner's single conversation thread, shared by every owner channel."""
 
 
@@ -252,6 +254,34 @@ class Orion:
             memory_query=notice,
             owner_text="",
             halted=halted,
+        )
+
+    async def handle_contact(
+        self,
+        thread_id: str,
+        name: str,
+        brief: str,
+        text: str,
+        channel: str,
+        now: datetime | None = None,
+    ) -> TurnResult:
+        """Someone the owner lets write to Orion (D114): Orion itself answers, with all it
+        knows and all its tools, in a thread of its own for that person (`contact:…`), as for
+        another Orion (D102). What they write keeps their trust, so acting on it is put to the
+        owner; the reply goes to the person as it is, and may be `SILENCE`."""
+        body = f'{brief}\n<message de="{_attr(name)}">\n{text}\n</message>'
+        return await self._turn(
+            thread_id,
+            kind="contact.message",
+            payload={"thread_id": thread_id, "contact": name, "text": text},
+            provenance=Provenance(source=thread_id, actor="orion:secretary"),
+            trust=Trust.THIRD_PARTY,
+            body=body,
+            channel=channel,
+            now=now,
+            memory_query=text,
+            owner_text="",
+            asking=f"{name} m'a écrit « {' '.join(text.split())[:300]} »",
         )
 
     async def handle_peer_message(

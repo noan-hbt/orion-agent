@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
@@ -15,16 +15,9 @@ from orion.core.journal import SqliteJournal
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.mail import imap
+from orion.mail.card import BULK_CARD, HEADERS_CARD
 from orion.mail.imap import Batch, RawMail, parse_message
 from orion.mail.module import MailModule
-from orion.mail.quarantine import (
-    BULK_CARD,
-    FAILED_CARD,
-    SUSPICIOUS,
-    Category,
-    Importance,
-    Quarantine,
-)
 from orion.mail.service import CARD, MailAccount, Mailbox, MailSettings, MailState
 from orion.mail.tools import mail_tools
 from orion.memory.service import MemoryService
@@ -33,7 +26,7 @@ from orion.memory.tools import memory_tools
 from orion.modules.registry import load
 from orion.runtime import Orion
 from orion.tools.base import ToolContext, ToolRegistry
-from tests.fakes import ScriptedProvider, call_tools, fail, reply
+from tests.fakes import ScriptedProvider, call_tools, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 20, 8, 0, tzinfo=PARIS)
@@ -150,45 +143,6 @@ def json_reply(answer: dict[str, Any]) -> Any:
     return reply(json.dumps(answer))
 
 
-async def test_quarantine_makes_a_bounded_card_and_flags_injections() -> None:
-    provider = ScriptedProvider(
-        json_reply(
-            {
-                "category": "bill",
-                "importance": "high",
-                "needs_reply": False,
-                "due": "2026-10-30",
-                "amount": 54.2,
-                "currency": "EUR",
-                "summary": "EDF demande 54,20 € avant le 30/10. " * 20,
-                "suspicious": False,
-            }
-        ),
-        json_reply({"category": "work", "summary": "x", "suspicious": True}),
-        reply("not json"),
-        fail(),
-    )
-    quarantine = Quarantine(provider, "q-model")
-    edf = await quarantine.card(parse_message(8, HTML, NOW))
-    assert (edf.category, edf.importance, edf.due, edf.amount) == (
-        Category.BILL,
-        Importance.HIGH,
-        date(2026, 10, 30),
-        54.2,
-    )
-    assert len(edf.summary) <= 200
-    request = provider.requests[0]
-    assert request.tools == [] and request.model == "q-model"
-    assert "Montant : 54,20 EUR" in request.messages[1]["content"]
-
-    evil = await quarantine.card(parse_message(7, PLAIN, NOW))
-    assert evil.suspicious and evil.summary == SUSPICIOUS and evil.importance is Importance.LOW
-    assert await quarantine.card(parse_message(7, PLAIN, NOW)) == FAILED_CARD
-    assert await quarantine.card(parse_message(7, PLAIN, NOW)) == FAILED_CARD
-    assert await quarantine.card(parse_message(9, NEWSLETTER, NOW)) == BULK_CARD
-    assert len(provider.requests) == 4  # bulk mail never reaches a model
-
-
 def settings(**extra: Any) -> MailSettings:
     return MailSettings.model_validate(
         {
@@ -243,27 +197,27 @@ PAUL_CARD = {
 }
 
 
-def mailbox(journal: SqliteJournal, server: Server, provider: ScriptedProvider) -> Mailbox:
-    return Mailbox(
-        journal,
-        settings(),
-        Quarantine(provider, "q"),
-        "Europe/Paris",
-        server.fetch,
-        clock=lambda: NOW,
-    )
+def mailbox(
+    journal: SqliteJournal, server: Server, _provider: ScriptedProvider | None = None
+) -> Mailbox:
+    """No model reads the mail before Orion (D114): the provider is never called."""
+    return Mailbox(journal, settings(), "Europe/Paris", server.fetch, clock=lambda: NOW)
 
 
-async def test_sync_journals_cards_not_mail_and_resumes(journal: SqliteJournal) -> None:
+async def test_sync_keeps_the_mail_for_orion_to_read_and_resumes(journal: SqliteJournal) -> None:
     own = RawMail(13, "<n@x>", OWNER, "Noan", "note", NOW, "secret", False)
     server = Server(parse_message(10, PLAIN, NOW), parse_message(12, NEWSLETTER, NOW), own)
-    box = mailbox(journal, server, ScriptedProvider(json_reply(PAUL_CARD)))
+    provider = ScriptedProvider()
+    box = mailbox(journal, server, provider)
     await box.start()
     assert await box.sync_once() == {"perso": 2}  # the owner's own mail is skipped
+    assert provider.requests == []  # no model read it first
     cards = [e for e in await journal.read() if e.kind == CARD]
     assert all(e.trust is Trust.THIRD_PARTY for e in cards)
     assert cards[0].provenance.source == "mail:perso:<abc@example.com>"
-    assert "Dis-moi avant jeudi" not in str([e.payload for e in cards])  # no body kept
+    paul, news = box.state.cards.values()
+    assert paul.text == "Salut, on dine samedi soir ? Dis-moi avant jeudi."  # for Orion
+    assert paul.card == HEADERS_CARD and news.card == BULK_CARD and news.text == ""
 
     assert await box.sync_once() == {"perso": 0}
     assert server.cursors[-1] == (42, 13)
@@ -283,8 +237,12 @@ async def test_tool_alerts_and_digest_carry_third_party_trust(journal: SqliteJou
     result = await tool.handler(tool.parse("{}"), ToolContext(thread_id="o", correlation_id="c"))
     assert result.trust is Trust.THIRD_PARTY
     [line] = result.content.splitlines()[1:]
-    assert "Paul Martin <paul@example.com> — « Diner samedi ? » : Paul propose" in line
-    assert "[personal, important, réponse attendue]" in line
+    assert "Paul Martin <paul@example.com> — « Diner samedi ? » [mail]" in line
+    paul = line[1 : line.index(")")]
+    text = await tool.handler(
+        tool.parse(json.dumps({"read": paul})), ToolContext(thread_id="o", correlation_id="c")
+    )
+    assert text.trust is Trust.THIRD_PARTY and "Dis-moi avant jeudi." in text.content
     everything = await tool.handler(
         tool.parse('{"everything": true}'), ToolContext(thread_id="o", correlation_id="c")
     )
@@ -293,9 +251,9 @@ async def test_tool_alerts_and_digest_carry_third_party_trust(journal: SqliteJou
     assert await box.alerts(NOW) == []  # 13 h old: too late to alert
     [alert] = await box.alerts(datetime(2026, 10, 19, 22, 0, tzinfo=PARIS))
     assert (
-        alert.trust is Trust.THIRD_PARTY
-        and alert.why == "Paul Martin attend sans doute une réponse"
+        alert.trust is Trust.THIRD_PARTY and alert.why == "un mail de Paul Martin vient d'arriver"
     )
+    assert "Dis-moi avant jeudi." in alert.notice and "SILENCE" in alert.notice  # he judges
     digest = await box.digest(NOW, NOW - timedelta(days=1), first_slot=True, last_slot=False)
     assert [d.trust for d in digest] == [Trust.THIRD_PARTY, Trust.THIRD_PARTY]
     assert digest[1].text == "- et 1 autre(s) mail(s) sans intérêt particulier"
@@ -371,67 +329,3 @@ def test_the_module_loads_and_reports_in_doctor(tmp_path: Path) -> None:
     )
     [module] = [m for m in load(cfg) if isinstance(m, MailModule)]
     assert module.doctor() == ["perso (noan on imap.gmail.com) ok"]
-
-
-async def test_a_promise_in_a_mail_joins_the_ledger_and_closes_on_the_reply(
-    journal: SqliteJournal,
-) -> None:
-    from orion.mail.smtp import Outgoing, Postman
-    from orion.memory.model import CommitmentStatus
-    from orion.memory.service import MemoryService
-    from orion.memory.store import MemoryStore
-
-    store = MemoryStore(":memory:")
-    await store.open()
-    memory = MemoryService(journal, store)
-    card = {
-        **PAUL_CARD,
-        "commitment": {"by": "owner", "what": "Répondre à Paul pour le dîner", "due": "2026-10-22"},
-    }
-    server = Server(parse_message(10, PLAIN, NOW))
-    box = Mailbox(
-        journal,
-        settings(),
-        Quarantine(ScriptedProvider(json_reply(card)), "q"),
-        "Europe/Paris",
-        server.fetch,
-        clock=lambda: NOW,
-        memory=memory,
-    )
-    await box.start()
-    await box.sync_once()
-    [owed] = await store.commitments()
-    assert owed.debtor == "owner" and owed.due == "2026-10-22"
-    assert "d'après un mail de Paul" in owed.what and owed.trust is Trust.THIRD_PARTY
-
-    sent: list[Outgoing] = []
-
-    async def send(account: MailAccount, mail: Outgoing, grant: str | None) -> str:
-        sent.append(mail)
-        return "<reply@x>"
-
-    box.settings.accounts[0].smtp_host = "smtp.x"
-    postman = Postman(journal, box, send, memory)
-    [paul] = box.state.cards.values()
-    reply = Outgoing(to=["paul@example.com"], subject="Re: Dîner", body="Avec plaisir.")
-    await postman.send(reply, paul, "g")
-    assert sent[0].in_reply_to == paul.message_id  # threaded
-    assert await store.commitments() == []
-    [done] = await store.commitments(CommitmentStatus.DONE)
-    assert done.evidence == "mail envoyé <reply@x>"
-    await store.close()
-
-
-async def test_ads_and_newsletters_promise_nothing() -> None:
-    from orion.mail.quarantine import Card
-
-    provider = ScriptedProvider(
-        json_reply(
-            {
-                "category": "newsletter",
-                "commitment": {"by": "owner", "what": "Profiter de -50 %"},
-            }
-        )
-    )
-    card: Card = await Quarantine(provider, "q").card(parse_message(10, PLAIN, NOW))
-    assert card.promise is None

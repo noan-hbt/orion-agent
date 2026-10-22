@@ -2390,3 +2390,38 @@ d'Orion (`browser`) fait tout, de bout en bout, sous ses yeux :
 Ce qu'on perd : la séparation entre le modèle qui sait tout de lui et celui qui lit les pages.
 Elle est remplacée par son accord à chaque envoi, avec le texte exact, et par le cloisonnement
 du réseau, qui tiennent quoi que dise une page.
+
+## D114 — Un seul Orion : plus d'intermédiaire entre ses informations et lui
+
+*22/10/2026 · acceptée · révise D26 (en partie), D63, D87 et le secrétaire*
+
+Le propriétaire ne voulait plus que ses informations soient traitées par une autre version
+qu'Orion. Quatre intermédiaires disparaissent :
+
+- **Le web** : il n'y a plus de lecteur à part. `web_read` montre à Orion la page elle-même,
+  partie par partie (ou là où apparaît un mot), avec ses liens et ses images. `web_search`
+  passe par le moteur du fournisseur, lancé avec le modèle d'Orion, et ne rend que les pages
+  trouvées (adresse et titre), jamais un résumé. Le texte des pages n'est pas journalisé.
+- **Le mail** : plus de quarantaine. Chaque mail est journalisé avec son texte (8 000
+  caractères au plus). Chaque nouveau mail qui n'est pas une newsletter arrive à Orion, qui le
+  lit, juge lui-même s'il y a quelque chose pour son propriétaire, et note lui-même une
+  échéance ou un engagement. `mail` read en donne le texte entier.
+- **Les documents** : un PDF ou un fichier Office qui contient du texte est lu par Orion
+  lui-même. Le code en extrait le texte, et `attachment_look` en montre la suite. Les photos,
+  Orion les regardait déjà lui-même (D87). Le modèle qui voit ne sert plus qu'en secours :
+  pour un scan sans texte, un ancien format, ou si le modèle principal ne voit pas les images
+  (`direct = false`).
+- **Les proches** : c'est Orion qui leur répond, avec toute sa mémoire et tous ses outils,
+  dans une conversation à part pour chacun (`contact:…`), comme aux autres Orion (D102). Il ne
+  leur dit que ce que son propriétaire voudrait qu'ils sachent, et lui transmet ce qui compte
+  (`contact_note`).
+
+Ce qui protège désormais des pages, des mails et des messages piégés : ils gardent leur niveau
+de confiance (WEB, tiers), et toute action sur le monde après les avoir lus est demandée au
+propriétaire (D26, D90). Les règles du réseau (adresses autorisées, rien ne part sans son oui)
+tiennent quoi qu'ils disent.
+
+Restent pour l'instant : la mémoire, la nuit, la réflexion, les résumés, la chronique, la
+curiosité, le vérificateur et l'expert (à décider). La transcription des vocaux, la voix et
+la génération d'images sont des outils, pas des esprits. Le modèle de secours ne prend le
+relais que si le principal est en panne.

@@ -9,7 +9,7 @@ Two kinds of calls:
 - **in the foreground**: a turn answering the owner (a message, a call). The owner is waiting,
   so these are never cut; each turn has its own cap (`agent.max_cost_usd_per_turn`).
 - **in the background**: everything Orion does on its own (the night's thinking, curiosity,
-  missions, the chronicle, the web clerk working for them, initiative messages). These stop when
+  missions, the chronicle, the web search working for them, initiative messages). These stop when
   the day's or the month's ceiling is reached, until the next day or month: the call fails
   closed (`ProviderError`), and each background job already treats that as « not now ».
 

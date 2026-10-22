@@ -264,10 +264,35 @@ async def test_a_text_file_is_its_own_words(journal: SqliteJournal, tmp_path: Pa
     assert provider.requests == []  # read as it is, no model in between
     assert seen.description.startswith("nom,montant\nLoyer,850") and "coupé" in seen.description
     (tool,) = photo_tools(photos)
-    await tool.handler(
-        tool.parse(f'{{"id": "{seen.id}", "question": "Le loyer ?"}}'), ToolContext("owner", "c")
+    rest = await tool.handler(
+        tool.parse(f'{{"id": "{seen.id}", "part": 1}}'), ToolContext("owner", "c")
     )
-    assert "Loyer,850" in str(provider.requests[0].messages)
+    assert provider.requests == [] and rest.content.startswith("x")  # Orion reads on itself
+
+
+async def test_orion_reads_a_documents_own_text(journal: SqliteJournal, tmp_path: Path) -> None:
+    """D114: a Word or PDF with text is read by Orion, not by another model; a scan, without
+    text, still goes to the model that sees."""
+    import zipfile
+
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as docx:
+        docx.writestr(
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>Bail de location</w:t></w:r></w:p>"
+            "<w:p><w:r><w:t>Loyer mensuel : 850 &amp; charges 40 euros, payable le 5.</w:t>"
+            "</w:r></w:p></w:body></w:document>",
+        )
+    provider = ScriptedProvider()
+    photos = files_for(journal, provider, tmp_path / "photos", out.getvalue())
+    word = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    (seen,) = await photos.look(
+        [Attachment("https://media.inkbox.test/bail.docx", word, None)], "", "imessage:o"
+    )
+    assert provider.requests == []
+    assert seen.description == (
+        "Bail de location\nLoyer mensuel : 850 & charges 40 euros, payable le 5."
+    )
 
 
 def test_a_file_name_comes_from_its_link_or_its_type() -> None:

@@ -84,8 +84,8 @@ class ModelRequest(BaseModel):
         default=None,
         ge=1,
         le=10,
-        description="Let the provider search the web first, with this many results (quarantine "
-        "calls only: what comes back is web content)",
+        description="Let the provider search the web first, with this many results (the web "
+        "search only: what comes back is web content)",
     )
 
 

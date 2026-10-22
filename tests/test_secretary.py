@@ -1,5 +1,5 @@
-"""The secretary: the owner's contacts write to Orion; it answers with only what it may say,
-passes things on, and the guardian sends only to them, only in reply."""
+"""The secretary: the owner's contacts write to Orion; Orion itself answers (D114), passes
+things on, and the guardian sends only to them, only in reply."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from orion.secretary.settings import Contact, SecretarySettings
 from orion.tools.base import ToolContext
 from tests.fake_guardian import guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, FakeInkbox
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, call_tools, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 19, 20, 10, tzinfo=PARIS)
@@ -56,8 +56,28 @@ class Agenda:
         return [("perso", dinner)] if dinner.end > start and dinner.start < end else []
 
 
-def answer(**fields: object) -> ScriptedProvider:
-    return ScriptedProvider(reply(json.dumps(fields, ensure_ascii=False)))
+def answer(reply_text: str = "ok", tell_owner: str = "", urgent: bool = False) -> ScriptedProvider:
+    """Orion's turn: it passes a word on to the owner if there is one, then answers."""
+    note: dict[str, object] = {"tell_owner": tell_owner, "urgent": urgent}
+    passed = [call_tools(("contact_note", note))] if tell_owner else []
+    return ScriptedProvider(*passed, reply(reply_text))
+
+
+def with_orion(journal: SqliteJournal, secretary: Secretary, provider: ScriptedProvider) -> None:
+    from orion.config import AgentConfig
+    from orion.context.compiler import ContextCompiler
+    from orion.guardian.policy import Guardian
+    from orion.runtime import Orion
+    from orion.tools.base import ToolRegistry
+
+    secretary.orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry(secretary_tools(secretary, None)),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(fallback_models=[]),
+    )
 
 
 def message(text: str, sender: str = MUM, conversation: str = MUM_CHAT, n: int = 1) -> Incoming:
@@ -78,16 +98,8 @@ def secretary_with(
 ) -> tuple[Secretary, list[Any]]:
     sent: list[Any] = []
     agenda: Any = Agenda()
-    secretary = Secretary(
-        journal,
-        provider,
-        SETTINGS,
-        "m",
-        "Noan",
-        "Europe/Paris",
-        agenda,
-        lambda: NOW,
-    )
+    secretary = Secretary(journal, SETTINGS, "Noan", "Europe/Paris", agenda, lambda: NOW)
+    with_orion(journal, secretary, provider)
 
     async def send(channel: str, conversation: str, text: str, cid: str) -> str:
         sent.append((conversation, text))
@@ -99,9 +111,8 @@ def secretary_with(
 
 async def test_a_contact_gets_an_answer_from_what_it_may_know(journal: SqliteJournal) -> None:
     provider = answer(
-        reply="Il a l'air libre jeudi en journée, mais pris le soir. Je lui dis que tu as appelé !",
+        "Il a l'air libre jeudi en journée, mais pris le soir. Je lui dis que tu as appelé !",
         tell_owner="Ta mère voudrait te voir jeudi.",
-        urgent=False,
     )
     secretary, sent = secretary_with(journal, provider)
     exchange = await secretary.answer(
@@ -110,13 +121,13 @@ async def test_a_contact_gets_an_answer_from_what_it_may_know(journal: SqliteJou
     assert exchange is not None
     assert sent == [(MUM_CHAT, exchange.reply)]
 
-    (request,) = provider.requests
-    seen = request.messages[1]["content"]
+    request = provider.requests[0]
+    seen = str(request.messages[-1]["content"])
     assert "jeudi 22/10 : occupé de 19:00 à 22:00" in seen
     assert "Dîner secret" not in seen and "Lilas" not in seen  # busy, never what or where
     assert "sa mère, qui s'inquiète vite" in seen and "Noan est libre jeudi soir" in seen
-    assert "Noan" in request.messages[0]["content"]
-    assert request.session_id == "orion:secretary:+33622222222"
+    assert request.session_id == "orion:contact:+33622222222"  # Orion, in her own thread
+    assert {t.name for t in request.tools} == {"contact_note", "contact_message", "contacts"}
 
     (alert,) = await secretary.alerts(NOW + timedelta(minutes=1))
     assert "Ta mère voudrait te voir jeudi" in alert.notice and alert.importance < 0.8
@@ -124,12 +135,12 @@ async def test_a_contact_gets_an_answer_from_what_it_may_know(journal: SqliteJou
 
 
 async def test_availability_is_shared_only_with_those_allowed(journal: SqliteJournal) -> None:
-    provider = answer(reply="Je lui transmets.", tell_owner="", urgent=False)
+    provider = answer("Je lui transmets.")
     secretary, _ = secretary_with(journal, provider)
     await secretary.answer(
         message("T'es dispo demain ?", sender="+33633333333", conversation="conv-julien")
     )
-    seen = provider.requests[0].messages[1]["content"]
+    seen = str(provider.requests[0].messages[-1]["content"])
     assert "occupé de" not in seen and "ne peux pas dire quand Noan est libre" in seen
     # Nothing to pass on now: it waits for a digest.
     assert await secretary.alerts(NOW + timedelta(minutes=1)) == []
@@ -141,7 +152,9 @@ async def test_availability_is_shared_only_with_those_allowed(journal: SqliteJou
 
 async def test_strangers_are_ignored_and_contacts_capped(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
-        *(reply(json.dumps({"reply": f"Réponse {i}", "urgent": i == 1})) for i in range(3))
+        reply("Réponse 0"),
+        call_tools(("contact_note", {"tell_owner": "Elle a besoin de toi.", "urgent": True})),
+        reply("Réponse 1"),
     )
     secretary, sent = secretary_with(journal, provider)
     assert await secretary.answer(message("Salut", sender="+33699999999")) is None
@@ -150,11 +163,11 @@ async def test_strangers_are_ignored_and_contacts_capped(journal: SqliteJournal)
     assert [t for _, t in sent] == ["Réponse 0", "Réponse 1"]  # two a day
     urgent = await secretary.alerts(NOW + timedelta(minutes=1))
     assert [a.importance for a in urgent] == [0.85]
-    assert len(provider.requests) == 2  # the third was not even read: the cap comes first
+    assert "Message 2" not in str(provider.requests)  # the cap comes first
 
 
 async def test_a_model_failure_still_tells_the_owner(journal: SqliteJournal) -> None:
-    secretary, sent = secretary_with(journal, ScriptedProvider(reply("pas du JSON")))
+    secretary, sent = secretary_with(journal, ScriptedProvider(fail(), fail()))
     exchange = await secretary.answer(message("Appelle-moi, c'est important"))
     assert exchange is not None and sent == []
     assert "important" in exchange.tell_owner
@@ -162,7 +175,7 @@ async def test_a_model_failure_still_tells_the_owner(journal: SqliteJournal) -> 
 
 
 async def test_the_owner_answers_a_contact_through_orion(journal: SqliteJournal) -> None:
-    secretary, sent = secretary_with(journal, answer(reply="Je lui dis.", urgent=False))
+    secretary, sent = secretary_with(journal, answer("Je lui dis."))
     tools = {t.name: t for t in secretary_tools(secretary, None)}
     send = tools["contact_message"]
     ctx = ToolContext("owner", "c")
@@ -242,7 +255,7 @@ async def test_written_alone_the_owner_is_told_and_telegram_needs_no_history(
     journal: SqliteJournal,
 ) -> None:
     angele = Contact(name="Angèle", telegram_id=5151)
-    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    secretary, _sent = secretary_with(journal, answer("ok"))
     secretary.contacts = {a: angele for a in angele.addresses()}
     assert secretary.conversation_with(angele) == "telegram:5151"
     out: list[tuple[str, str, str]] = []
@@ -276,10 +289,9 @@ async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
         enabled=True, contacts=[Contact(name="Angèle", telegram_id=angele, about="sa copine")]
     )
     sent: list[tuple[str, str, str]] = []
-    provider = answer(reply="Il est au boulot, je lui dis.", tell_owner="Angèle t'a cherché.")
-    secretary = Secretary(
-        journal, provider, settings, "m", "Noan", "Europe/Paris", None, lambda: NOW
-    )
+    provider = answer("Il est au boulot, je lui dis.", tell_owner="Angèle t'a cherché.")
+    secretary = Secretary(journal, settings, "Noan", "Europe/Paris", None, lambda: NOW)
+    with_orion(journal, secretary, provider)
 
     async def send(channel: str, conversation: str, text: str, cid: str) -> str:
         sent.append((channel, conversation, text))
@@ -300,7 +312,7 @@ async def test_a_contact_writes_on_telegram_and_a_stranger_is_reported(
     assert exchange is not None and exchange.contact == "Angèle"
     assert sent == [("telegram", f"telegram:{angele}", "Il est au boulot, je lui dis.")]
     assert await secretary.answer(heard[1]) is None  # not his contact: never answered
-    assert "Telegram" in provider.requests[0].messages[0]["content"]
+    assert "par Telegram" in str(provider.requests[0].messages[-1]["content"])
 
     later = datetime.fromtimestamp(1_760_000_000, ZoneInfo("UTC")) + timedelta(minutes=1)
     stranger = [a for a in await secretary.alerts(later) if "stranger" in a.key]
@@ -313,7 +325,7 @@ async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
 ) -> None:
     from orion.core.events import NewEvent, Provenance, Trust
 
-    secretary, _sent = secretary_with(journal, answer(reply="ok", urgent=False))
+    secretary, _sent = secretary_with(journal, answer("ok"))
     payload = {"type": "message", "is_owner": False, "chat_id": 777, "sender": 777,
                "name": "Victor (@v)", "text": "ww", "date": 1_760_000_000,
                "ref": "telegram:777:1"}  # fmt: skip
@@ -332,3 +344,36 @@ async def test_who_wrote_to_the_bot_without_being_let_in_is_listed(
     assert "Le secrétaire est allumé" in listed.content
     assert "Victor (@v) (telegram_id 777)" in listed.content and "« ww »" in listed.content
     assert listed.trust is Trust.THIRD_PARTY  # it quotes others' messages
+
+
+async def test_orion_answers_a_contact_with_all_it_knows(journal: SqliteJournal) -> None:
+    """D114: no reduced context. Orion answers his mother with its memory, as itself."""
+    from orion.config import AgentConfig
+    from orion.context.compiler import ContextCompiler
+    from orion.core.events import Trust
+    from orion.guardian.policy import Guardian
+    from orion.memory.service import MemoryService, Origin
+    from orion.memory.store import MemoryStore
+    from orion.runtime import Orion
+    from orion.tools.base import ToolRegistry
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    owner = Origin(actor="owner:main", source="imessage:owner", trust=Trust.OWNER)
+    await memory.remember("Noan rentre à Dreux pour la Toussaint", owner)
+    provider = answer("Il rentre pour la Toussaint !")
+    secretary, sent = secretary_with(journal, provider)
+    secretary.orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry(secretary_tools(secretary, None)),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(fallback_models=[]),
+        memory=memory,
+    )
+    await secretary.answer(message("Il rentre quand pour la Toussaint ?"))
+    assert "rentre à Dreux pour la Toussaint" in str(provider.requests[0].messages)
+    assert sent == [(MUM_CHAT, "Il rentre pour la Toussaint !")]
+    await store.close()

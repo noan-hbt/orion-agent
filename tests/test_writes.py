@@ -24,7 +24,7 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.client import GuardianUnavailableError
 from orion.guardian.ledger import MAIL_SENT, SENT, WRITTEN
 from orion.guardian.policy import ActionProposal, Approval, Guardian, untrusted_reason
-from orion.mail.quarantine import BULK_CARD
+from orion.mail.card import BULK_CARD
 from orion.mail.service import MailAccount, MailCard
 from orion.mail.smtp import Outgoing, build
 from orion.mail.tools import MailSendInput
