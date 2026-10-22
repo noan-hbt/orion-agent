@@ -34,6 +34,7 @@ from orion.cognition.loop import (
 )
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, render_user_message
+from orion.context.meanwhile import READ_AT_MOST, meanwhile
 from orion.context.summary import sides, summarize, summary_block
 from orion.context.threads import (
     MESSAGE_KIND,
@@ -393,6 +394,14 @@ class Orion:
         )
         window = thread.messages[new_base if new_base is not None else thread.base :]
         blocks = await self._memory_blocks(memory_query, window)
+        if thread_id == OWNER_THREAD and kind == "message.received" and thread.last_seq:
+            elsewhere = meanwhile(
+                await self._journal.read(thread.last_seq, READ_AT_MOST),
+                {thread.last_correlation} if thread.last_correlation else set(),
+                ZoneInfo(self._agent.timezone),
+            )
+            if elsewhere:
+                blocks.insert(0, elsewhere)
         leaving: tuple[str, str] | None = None
         if new_base is not None and not stale:
             summary = await self._summarize_dropped(thread, new_base)

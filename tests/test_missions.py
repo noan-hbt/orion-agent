@@ -160,3 +160,41 @@ async def test_a_mission_with_more_to_see_goes_on_right_away(journal: SqliteJour
         await world.use("mission_now", owner, mission=mission.id)
     refused = await world.use("mission_now", owner, mission=mission.id)
     assert refused.is_error and "Plus de passage immédiat" in refused.content
+
+
+async def test_what_happened_elsewhere_reaches_the_next_owner_message(
+    journal: SqliteJournal,
+) -> None:
+    from orion.core.events import NewEvent, Provenance
+
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    provider.extend(reply("Ok, je lance."))
+    await world.orion.handle_owner_message("owner", "Cherche des colliers", "telegram")
+    await world.use("mission_start", owner, goal="Des colliers dorés", every_hours=6)
+    provider.extend(reply("Deux colliers : Agatha 180 €, YLUME 170 €."))
+    await world.work.once()
+    sent = Provenance(source="orion:outbox", actor="orion:guardian")
+    await journal.append(
+        [
+            NewEvent(
+                kind="outbox.queued",
+                payload={"text": "Agatha", "media": "a.jpg"},
+                provenance=sent,
+                trust=Trust.SYSTEM,
+                correlation_id="elsewhere",
+            )
+        ]
+    )
+
+    provider.extend(reply("Oui : une mission a tourné."))
+    await world.orion.handle_owner_message("owner", "Tu as bossé pendant mon absence ?", "telegram")
+    told = str(provider.requests[-1].messages[-1]["content"])
+    assert "<pendant_ce_temps>" in told
+    assert "Agatha 180 €" in told  # the pass's report
+    assert "je t'ai envoyé un fichier « Agatha »" in told  # what it sent from elsewhere
+
+    provider.extend(reply("Rien depuis."))
+    await world.orion.handle_owner_message("owner", "Et là ?", "telegram")
+    assert "<pendant_ce_temps>" not in str(provider.requests[-1].messages[-1]["content"])

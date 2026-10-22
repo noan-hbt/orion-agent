@@ -2252,3 +2252,15 @@ de suite : depuis la conversation (il le veut maintenant), ou depuis un passage 
 pistes (le suivant part juste après). Huit par mission et par jour au plus, au-delà de son rythme ;
 le plafond de dépense reste celui de ce qu'Orion fait seul. Et la consigne : ne dire « je
 continue » que si c'est vrai.
+
+## D109 — Ce qui s'est passé ailleurs pendant ce temps
+
+Constaté en vrai : « tu as bossé pendant mon absence ? » → « non, rien », alors qu'une mission
+avait tourné et lui avait envoyé une capture. Sa conversation montre ce qui s'y est dit, pas ce
+qu'Orion a fait ailleurs. Désormais, quand il écrit, le journal qui suit le dernier message de
+la conversation est relu, et ce qui s'est passé hors d'elle est joint à son message, daté
+(`<pendant_ce_temps>`) : passages de mission et leurs rapports, messages et fichiers envoyés
+d'ailleurs, réponses du secrétaire à ses contacts, échanges avec les autres Orion, rendez-vous
+calés ou annulés, accords demandés, réflexions de la nuit, envois ratés. Ce sont des faits du
+journal : rien à deviner pour le modèle. Ce que la conversation montre déjà n'y est pas, et
+rien n'est joint quand rien ne s'est passé.
