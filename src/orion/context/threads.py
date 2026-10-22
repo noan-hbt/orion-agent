@@ -48,6 +48,10 @@ class Thread:
     """When the last message was added (the turn's time), if recorded."""
     pruned: set[int] = field(default_factory=set[int])
     """Indexes of tool results shown shortened."""
+    last_seq: int = 0
+    """The journal position of its last message: what happened after it is not in it."""
+    last_correlation: str | None = None
+    """The turn its last message belongs to (what that turn sent is in it)."""
 
     def window(self) -> list[Message]:
         return [
@@ -95,6 +99,8 @@ class ThreadProjection:
                 thread.trusts.append(event.trust)
                 if "at" in event.payload:
                     thread.last_at = datetime.fromisoformat(str(event.payload["at"]))
+                thread.last_seq = event.seq
+                thread.last_correlation = event.correlation_id
             elif event.kind == REBASED_KIND:
                 thread = self._thread(event.payload["thread_id"])
                 thread.base = max(thread.base, int(event.payload["base"]))

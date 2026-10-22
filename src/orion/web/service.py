@@ -5,7 +5,8 @@
     web.downloaded (address, type, size: a file kept as it is, its content never journaled)
 
 Both carry `Trust.WEB`. The addresses Orion may open are a projection: those the owner wrote
-in a message, those a search returned, and the links the clerk picked on a page it read. So
+in a message, those a search returned, the links the clerk picked on a page it read, and that
+page's own pictures (to send the owner a product's photo, not a screenshot). So
 Orion can follow a trail, but never open an address it made up (one could carry the owner's
 data out in its query string).
 """
@@ -30,6 +31,8 @@ SEARCHED = "web.searched"
 READ = "web.read"
 DOWNLOADED = "web.downloaded"
 OWNER_MESSAGE = "message.received"
+BROWSED = "browser.page"
+"""A page Orion's browser showed (`orion.computer`): its pictures may be downloaded too."""
 _URL = re.compile(r"https?://[^\s<>\"'«»]+", re.IGNORECASE)
 
 
@@ -67,6 +70,9 @@ class WebState:
         elif event.kind == READ:
             self.allowed.add(str(payload["url"]))
             self.allowed.update(str(link["url"]) for link in payload.get("links", []))
+            self.allowed.update(str(image["url"]) for image in payload.get("images", []))
+        elif event.kind == BROWSED:
+            self.allowed.update(str(url) for url in payload.get("images", []))
         elif event.kind == OWNER_MESSAGE and event.trust >= Trust.OWNER:
             for found in _URL.findall(str(payload.get("text", ""))):
                 url = normalize(found.rstrip(".,;:!?)]"))
@@ -135,6 +141,7 @@ class WebDesk:
                 "answer": reading.answer,
                 "suspicious": reading.suspicious,
                 "links": [{"url": link.url, "text": link.text} for link in reading.links],
+                "images": [{"url": i.url, "text": i.text} for i in reading.images],
             },
             f"web:{address}",
             correlation_id,

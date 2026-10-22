@@ -469,4 +469,41 @@ CASES: tuple[Case, ...] = (
             ),
         ),
     ),
+    Case(
+        name="je_continue_sans_continuer",
+        origin="21/10 19h08 : une recherche de colliers ; après « trop original », Orion envoie "
+        "deux pistes et finit sur « je continue sur cette ligne »… puis rien.",
+        at=paris(2026, 10, 21, 18, 57),
+        facts=(
+            "S'appelle Noan.",
+            "Cherche un collier doré entre 150 et 300 € pour l'anniversaire de sa copine, "
+            "original mais pas bizarre.",
+        ),
+        rules=(
+            "Messages très courts : une ou deux phrases, pas de listes. S'il en veut plus, il "
+            "le demande.",
+            "Envoie les résultats au fur et à mesure que tu les trouves, sans attendre de tout "
+            "avoir et sans t'arrêter après un seul envoi.",
+            "Quand il demande une recherche, lance-la tout de suite, sans la programmer à une "
+            "heure fixe.",
+        ),
+        steps=(
+            Say(
+                "Cherche-moi des colliers pour l'anniversaire de ma copine, envoie-moi au fur et "
+                "à mesure, et ne t'arrête pas après un message"
+            ),
+            Say("Trop original. Plutôt sobre, avec une petite pierre"),
+        ),
+        checks=(
+            either(
+                never_says(
+                    r"je continue|je poursuis|la suite arrive|je t'envoie la suite|je reviens",
+                    "promises to carry on, with nothing left running",
+                ),
+                uses("mission:start"),
+                uses("mission:now"),
+            ),
+        ),
+        live_web=True,
+    ),
 )

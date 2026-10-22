@@ -131,3 +131,70 @@ async def test_a_mission_called_off_while_it_runs_stops_there(journal: SqliteJou
     assert len(provider.requests) == 2  # it stopped there: no third step, no report
     assert (await world.missions.get(mission.id)).notes == []  # pyright: ignore[reportOptionalMemberAccess]
     assert await world.work.alerts(world.now) == []
+
+
+async def test_a_mission_with_more_to_see_goes_on_right_away(journal: SqliteJournal) -> None:
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    await world.use("mission_start", owner, goal="Des colliers dorés", every_hours=6)
+    [mission] = await world.missions.active()
+    # A pass with more to look at than it had room for asks for another one.
+    provider.extend(call_tools(("mission_now", {})), reply("Trois colliers, la suite arrive."))
+    assert await world.work.once() == [mission.id]
+    assert "juste après" in str(provider.requests[-1].messages[-1]["content"])
+    provider.extend(reply("Deux de plus."))
+    assert await world.work.once() == [mission.id]  # the next pass, without waiting 6 h
+    assert await world.work.once() == []  # then back to its pace
+
+    # He wants it now: from his own conversation, a pass comes at once.
+    world.work._woken.clear()  # pyright: ignore[reportPrivateUsage]
+    told = await world.use("mission_now", owner, mission=mission.id)
+    assert "tout de suite" in told.content
+    assert world.work._woken.is_set()  # pyright: ignore[reportPrivateUsage]
+    provider.extend(reply("SILENCE"))
+    assert await world.work.once() == [mission.id]
+
+    # Never without end: a few a day.
+    for _ in range(6):
+        await world.use("mission_now", owner, mission=mission.id)
+    refused = await world.use("mission_now", owner, mission=mission.id)
+    assert refused.is_error and "Plus de passage immédiat" in refused.content
+
+
+async def test_what_happened_elsewhere_reaches_the_next_owner_message(
+    journal: SqliteJournal,
+) -> None:
+    from orion.core.events import NewEvent, Provenance
+
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    provider.extend(reply("Ok, je lance."))
+    await world.orion.handle_owner_message("owner", "Cherche des colliers", "telegram")
+    await world.use("mission_start", owner, goal="Des colliers dorés", every_hours=6)
+    provider.extend(reply("Deux colliers : Agatha 180 €, YLUME 170 €."))
+    await world.work.once()
+    sent = Provenance(source="orion:outbox", actor="orion:guardian")
+    await journal.append(
+        [
+            NewEvent(
+                kind="outbox.queued",
+                payload={"text": "Agatha", "media": "a.jpg"},
+                provenance=sent,
+                trust=Trust.SYSTEM,
+                correlation_id="elsewhere",
+            )
+        ]
+    )
+
+    provider.extend(reply("Oui : une mission a tourné."))
+    await world.orion.handle_owner_message("owner", "Tu as bossé pendant mon absence ?", "telegram")
+    told = str(provider.requests[-1].messages[-1]["content"])
+    assert "<pendant_ce_temps>" in told
+    assert "Agatha 180 €" in told  # the pass's report
+    assert "je t'ai envoyé un fichier « Agatha »" in told  # what it sent from elsewhere
+
+    provider.extend(reply("Rien depuis."))
+    await world.orion.handle_owner_message("owner", "Et là ?", "telegram")
+    assert "<pendant_ce_temps>" not in str(provider.requests[-1].messages[-1]["content"])

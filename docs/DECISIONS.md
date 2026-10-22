@@ -2231,3 +2231,36 @@ quinzaine d'étapes et lui a envoyé une capture après coup. Désormais :
 - **la boucle d'Orion demande, avant chaque étape, si le travail a été annulé** (`halted`) : une
   mission close pendant son passage s'arrête là, les appels prévus ne partent pas, rien n'est
   dit ni rapporté. Un appel déjà en cours n'est jamais coupé net.
+
+## D107 — Les photos d'une page lue peuvent être envoyées telles quelles
+
+Constaté en vrai : il voulait les photos des colliers trouvés, et Orion a passé trois minutes à
+deviner l'adresse des images, refusées une à une (une adresse inventée peut faire sortir ses
+données dans l'URL), avant de se rabattre sur des captures. Désormais, les images d'une page
+qu'Orion a lue (`web_read`) ou ouverte dans son navigateur sont relevées par le code, sur la page
+elle-même : l'image d'aperçu (`og:image`), puis les photos (sans logos, icônes ni images de
+remplissage ; dans le navigateur, les plus grandes affichées). Elles lui sont montrées avec leur
+adresse, et il peut les télécharger pour les envoyer. Il ne peut toujours pas télécharger une
+adresse inventée.
+
+## D108 — « Je continue » doit être vrai : un passage de mission tout de suite
+
+Constaté en vrai : « fais tout maintenant », et Orion répond « je continue sur les autres
+maintenant »… puis rien, car une fois sa réponse partie il ne travaille plus que dans une
+mission, et celle-ci repassait toutes les 6 h. Désormais `mission` (now) demande un passage tout
+de suite : depuis la conversation (il le veut maintenant), ou depuis un passage qui a encore des
+pistes (le suivant part juste après). Huit par mission et par jour au plus, au-delà de son rythme ;
+le plafond de dépense reste celui de ce qu'Orion fait seul. Et la consigne : ne dire « je
+continue » que si c'est vrai.
+
+## D109 — Ce qui s'est passé ailleurs pendant ce temps
+
+Constaté en vrai : « tu as bossé pendant mon absence ? » → « non, rien », alors qu'une mission
+avait tourné et lui avait envoyé une capture. Sa conversation montre ce qui s'y est dit, pas ce
+qu'Orion a fait ailleurs. Désormais, quand il écrit, le journal qui suit le dernier message de
+la conversation est relu, et ce qui s'est passé hors d'elle est joint à son message, daté
+(`<pendant_ce_temps>`) : passages de mission et leurs rapports, messages et fichiers envoyés
+d'ailleurs, réponses du secrétaire à ses contacts, échanges avec les autres Orion, rendez-vous
+calés ou annulés, accords demandés, réflexions de la nuit, envois ratés. Ce sont des faits du
+journal : rien à deviner pour le modèle. Ce que la conversation montre déjà n'y est pas, et
+rien n'est joint quand rien ne s'est passé.

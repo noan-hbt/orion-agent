@@ -21,6 +21,9 @@ import httpx
 MAX_BYTES = 3_000_000
 MAX_REDIRECTS = 5
 _SKIP = {"script", "style", "noscript", "svg", "template", "head"}
+_IMAGE_META = {"og:image", "og:image:url", "og:image:secure_url", "twitter:image"}
+_NOT_A_PHOTO = ("logo", "icon", "sprite", "pixel", "placeholder", "avatar", "badge", "flag")
+MAX_IMAGES = 12
 _BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
 USER_AGENT = "Mozilla/5.0 (compatible; Orion personal assistant; reads on its owner's behalf)"
 
@@ -41,6 +44,9 @@ class Page:
     title: str = ""
     text: str = ""
     links: list[Link] = field(default_factory=list[Link])
+    images: list[Link] = field(default_factory=list[Link])
+    """The page's own pictures (its preview image first, then its photos), with their alt text:
+    addresses written in the page, not made up, so they may be downloaded as they are."""
 
 
 def normalize(url: str) -> str:
@@ -70,12 +76,18 @@ class _Extractor(HTMLParser):
         self.parts: list[str] = []
         self.title = ""
         self.links: list[Link] = []
+        self.previews: list[Link] = []
+        self.photos: list[Link] = []
         self._skipping = 0
         self._in_title = False
         self._href: str | None = None
         self._anchor: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "meta":
+            self._meta(dict(attrs))
+        if tag == "img":
+            self._img(dict(attrs))
         if tag in _SKIP:
             self._skipping += 1
         if tag == "title":
@@ -86,6 +98,29 @@ class _Extractor(HTMLParser):
             href = dict(attrs).get("href")
             self._href = normalize(urljoin(self.base, href)) if href else None
             self._anchor = []
+
+    def _meta(self, attrs: dict[str, str | None]) -> None:
+        key = (attrs.get("property") or attrs.get("name") or "").lower()
+        content = attrs.get("content")
+        if key in _IMAGE_META and content:
+            self.previews.append(Link(normalize(urljoin(self.base, content)), "aperçu de la page"))
+
+    def _img(self, attrs: dict[str, str | None]) -> None:
+        # Lazy pages put a placeholder in `src` and the photo in `data-src` or `srcset`.
+        sources = [attrs.get(k) or "" for k in ("data-src", "data-lazy-src", "src")]
+        source = next((x for x in sources if x and not x.startswith("data:")), "")
+        srcset = attrs.get("srcset") or attrs.get("data-srcset") or ""
+        if srcset and not source:
+            source = srcset.split(",")[-1].split()[0]  # the largest
+        alt = " ".join((attrs.get("alt") or "").split())[:100]
+        if not source:
+            return
+        url = normalize(urljoin(self.base, source))
+        if url.lower().split("?")[0].endswith((".svg", ".gif", ".ico")):
+            return
+        if any(word in f"{url} {alt}".lower() for word in _NOT_A_PHOTO):
+            return
+        self.photos.append(Link(url, alt))
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _SKIP and self._skipping:
@@ -118,7 +153,17 @@ def extract(url: str, html: str) -> Page:
         if link.url and link.url not in seen and link.url != url:
             seen.add(link.url)
             links.append(link)
-    return Page(url, " ".join(parser.title.split()), "\n".join(x for x in lines if x), links)
+    images: list[Link] = []
+    for image in [*parser.previews, *parser.photos]:
+        if image.url and image.url not in {i.url for i in images}:
+            images.append(image)
+    return Page(
+        url,
+        " ".join(parser.title.split()),
+        "\n".join(x for x in lines if x),
+        links,
+        images[:MAX_IMAGES],
+    )
 
 
 Check = Callable[[str, int], Awaitable[None]]
