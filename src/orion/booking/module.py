@@ -2,19 +2,19 @@
 
 « Trouve-moi un dentiste cette semaine après 18 h. » Orion looks for slots (Doctolib, TheFork,
 SNCF Connect show them without an account), offers up to three, and on the owner's yes books
-the one he picked with `computer_task_send`, on his account with a lent session. This module
-keeps the chain whole:
+the one he picked in its own browser (`browser` send, signed in with `browser` login if it
+needs his account, D113). This module keeps the chain whole:
 
-- `booking` (book) records the slot before the booking is sent; the sending task Orion starts
-  in the same turn is linked to it (same correlation id);
-- when that task ends, code settles the booking, not the model: done, the appointment goes to
-  the calendar (the owner approved the booking, the entry follows from it; when the guardian
-  holds the calendar it adds it only if `calendar_add` is autonomous, otherwise Orion offers to)
-  and reminders are set (the evening before, and before it starts); failed, the booking is
-  marked failed and Orion tells him;
-- cancelling drops the reminders; the site is told with another sending task.
+- `booking` (book) records the slot before the booking is sent;
+- once the site answered, Orion says how it went (`booking` done: the page it saw); code then
+  settles the booking, not the model: done, the appointment goes to the calendar (the owner
+  approved the booking, the entry follows from it; when the guardian holds the calendar it adds
+  it only if `calendar_add` is autonomous, otherwise Orion offers to) and reminders are set
+  (the evening before, and before it starts); failed, the booking is marked failed and Orion
+  tells him;
+- cancelling drops the reminders; the site is told with another `browser` send.
 
-    booking.tracked  booking.confirmed  booking.failed  booking.cancelled
+    booking.tracked  booking.sent  booking.confirmed  booking.failed  booking.cancelled
 """
 
 from __future__ import annotations
@@ -34,7 +34,6 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.delegation.jobs import JOB_FINISHED, JOB_STARTED
 from orion.guardian.client import GuardianUnavailableError
 from orion.initiative.engine import Report
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
@@ -52,7 +51,7 @@ TRACKED = "booking.tracked"
 CONFIRMED = "booking.confirmed"
 FAILED = "booking.failed"
 CANCELLED = "booking.cancelled"
-SENDING_AGENT = "browser-submit"
+SENT = "booking.sent"
 EVENING = time(19, 0)
 DAYS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
 
@@ -75,7 +74,6 @@ class Booking:
     minutes: int
     site: str
     correlation_id: str
-    job_id: str | None = None
     finished: bool = False
     ok: bool = False
     error: str = ""
@@ -101,12 +99,6 @@ class BookingState:
 
     def __init__(self) -> None:
         self.bookings: dict[str, Booking] = {}
-        self._jobs: dict[str, str] = {}
-        """job id → booking id"""
-        self._unlinked: dict[str, str] = {}
-        """correlation id → a sending job started before its booking was recorded"""
-        self._ended: dict[str, tuple[bool, str]] = {}
-        """job id → (ok, error) of a job that ended before its booking was recorded"""
         self._seq = 0
 
     async def checkpoint(self) -> int:
@@ -114,18 +106,7 @@ class BookingState:
 
     async def reset(self) -> None:
         self.bookings.clear()
-        self._jobs.clear()
-        self._unlinked.clear()
-        self._ended.clear()
         self._seq = 0
-
-    def _by_correlation(self, correlation_id: str) -> Booking | None:
-        waiting = [
-            b
-            for b in self.bookings.values()
-            if b.correlation_id == correlation_id and b.job_id is None and b.status == "pending"
-        ]
-        return waiting[-1] if waiting else None
 
     async def apply(self, event: Event) -> None:
         self._seq = event.seq
@@ -142,28 +123,10 @@ class BookingState:
                 site=str(payload.get("site", "")),
                 correlation_id=str(event.correlation_id or ""),
             )
-            job_id = self._unlinked.pop(booking.correlation_id, None)
-            if job_id is not None:
-                booking = replace(booking, job_id=job_id)
-                self._jobs[job_id] = booking.id
-                if job_id in self._ended:
-                    ok, error = self._ended.pop(job_id)
-                    booking = replace(booking, finished=True, ok=ok, error=error)
             self.bookings[booking.id] = booking
-        elif event.kind == JOB_STARTED and payload.get("agent") == SENDING_AGENT:
-            job_id = str(payload["job_id"])
-            booking = self._by_correlation(str(event.correlation_id or ""))
-            if booking is None:
-                self._unlinked[str(event.correlation_id or "")] = job_id
-                return
-            self.bookings[booking.id] = replace(booking, job_id=job_id)
-            self._jobs[job_id] = booking.id
-        elif event.kind == JOB_FINISHED:
-            job_id = str(payload["job_id"])
-            found = self.bookings.get(self._jobs.get(job_id, ""))
-            if found is None and job_id in self._unlinked.values():
-                self._ended[job_id] = (bool(payload["ok"]), str(payload.get("error") or ""))
-            if found is not None:
+        elif event.kind == SENT:
+            found = self.bookings.get(str(payload["booking_id"]))
+            if found is not None and found.status == "pending":
                 self.bookings[found.id] = replace(
                     found,
                     finished=True,
@@ -274,7 +237,6 @@ class Bookings:
             CONFIRMED,
             {
                 "booking_id": booking.id,
-                "job_id": booking.job_id,
                 "calendar": await self._to_calendar(booking),
                 "reminders": reminders,
             },
@@ -312,6 +274,16 @@ class Bookings:
             return f"not added: {exc}"
         return "added"
 
+    async def sent(self, booking: Booking, ok: bool, error: str, origin: Provenance) -> None:
+        """How the site answered, as Orion saw it: settled at once."""
+        await self._append(
+            SENT,
+            {"booking_id": booking.id, "ok": ok, "error": error},
+            origin,
+            booking.correlation_id,
+        )
+        await self.settle()
+
     async def cancel(self, booking: Booking, why: str, origin: Provenance) -> None:
         for timer_id in booking.reminders:
             await self._timers.cancel(timer_id, "booking cancelled", origin)
@@ -337,6 +309,8 @@ class Bookings:
                     payload=payload,
                     provenance=origin,
                     trust=Trust.OWNER if kind in (TRACKED, CANCELLED) else Trust.SYSTEM,
+                    # SENT is what a page showed Orion: Trust.SYSTEM like the job result it
+                    # replaces; the owner approved the sending itself.
                     correlation_id=correlation_id or new_id(),
                 )
             ]
@@ -389,6 +363,14 @@ class BookInput(BaseModel):
     site: str = Field(default="", max_length=80, description="Where it is booked: doctolib.fr…")
 
 
+class SentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    booking: str = Field(description="The booking id (bk_…)")
+    ok: bool = Field(description="The site confirmed it")
+    error: str = Field(default="", max_length=300, description="If not: what the site said")
+
+
 class CancelInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -412,10 +394,22 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
             args.what, args.where, start, args.minutes, args.site, origin(ctx), ctx.correlation_id
         )
         return ToolResult(
-            f"Réservation notée ({booking.id}). Lance maintenant, dans ce même tour, "
-            "`computer_task_send` qui la fait (sur `sites`, avec sa `session` s'il en faut une) : "
-            "quand la tâche aura réussi, le rendez-vous ira dans son agenda avec ses rappels."
+            f"Réservation notée ({booking.id}). Réserve maintenant, dans ce même tour, avec ton "
+            "navigateur (`browser` send, après `browser` login s'il faut son compte), puis dis "
+            f"ce que le site a répondu avec `booking` done ({booking.id}) : réussie, elle ira "
+            "dans son agenda avec ses rappels."
         )
+
+    async def done(args: Any, ctx: ToolContext) -> ToolResult:
+        await bookings.sync()
+        found = bookings.state.bookings.get(args.booking)
+        if found is None or found.status != "pending":
+            return ToolResult(f"No pending booking {args.booking}.", is_error=True)
+        await bookings.sent(found, args.ok, args.error, origin(ctx))
+        settled = bookings.state.bookings[found.id]
+        if settled.status == "failed":
+            return ToolResult("Notée comme échouée. Dis-le-lui, et propose un autre créneau.")
+        return ToolResult(_report(settled, bookings.zone).notice)
 
     async def cancel(args: Any, ctx: ToolContext) -> ToolResult:
         await bookings.sync()
@@ -425,7 +419,8 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
         await bookings.cancel(found, args.why, origin(ctx))
         return ToolResult(
             "Annulée de mon côté (rappels retirés). Le site, lui, ne le sait pas encore : "
-            "annule-la là-bas avec `computer_task_send`, et retire-la de son agenda s'il le faut."
+            "annule-la là-bas avec ton navigateur (`browser` send), et retire-la de son agenda "
+            "s'il le faut."
         )
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
@@ -445,16 +440,24 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
             [
                 Action(
                     "book",
-                    "Record the slot he chose, just before the `computer_task_send` that books "
-                    "it (same turn): when that task succeeds, the appointment goes to his "
-                    "calendar with reminders.",
+                    "Record the slot he chose, just before you book it with `browser` send (same "
+                    "turn).",
                     BookInput,
                     book,
                     Effect.INTERNAL,
                 ),
                 Action(
+                    "done",
+                    "What the site answered to your booking: then it goes to his calendar with "
+                    "reminders, or is marked failed.",
+                    SentInput,
+                    done,
+                    Effect.INTERNAL,
+                    accepts_untrusted_context=True,
+                ),
+                Action(
                     "cancel",
-                    "He cancels: reminders go; tell the site with computer_task_send.",
+                    "He cancels: reminders go; tell the site with `browser` send.",
                     CancelInput,
                     cancel,
                     Effect.INTERNAL,

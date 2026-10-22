@@ -4,16 +4,17 @@ A lent session (D49) expires, and the owner then has to sign in again by hand. S
 also keeps, like KeePass, a login per site (address, username, password, and the 2FA secret
 if the owner wants), and the browser signs in again by itself, on any site:
 
-- the worker of an approved `computer_task_send` drives the login page as it drives any page
-  (cookie banner, « Se connecter », two steps…), and asks for the username, the password or a
-  code to be typed into a field it names: it never sees them, nor do Orion's model and journal
-  (each page it reads has them masked);
-- they are typed only on a page of the login's sites, the password only into a password field;
-- the 2FA secret never leaves the guardian: the worker asks it for the current code, with the
+- Orion drives the login page in its own browser as any page (cookie banner, « Se connecter »,
+  two steps…), and asks for the username, the password or a code to be typed into a field it
+  names (`browser` fill, D113): it never sees them, nor does its journal (each page it reads
+  has them masked);
+- they are typed only on a page of the login's sites, the password only into a password field,
+  and for a few minutes the browser may send only to those sites;
+- the 2FA secret never leaves the guardian: the browser asks it for the current code, with the
   loan's id, while the loan lasts;
-- lent like a session: for one task the owner approved (that brief, naming that login), or
-  done alone within an autonomy whose sites cover every site of the login. Each loan and code
-  is recorded.
+- lent like a session: for a sign-in the owner approved (`browser` login naming that login),
+  or done alone within an autonomy whose sites cover every site of the login. Each loan and
+  code is recorded.
 
 Logins come from the owner's phone (the guardian's own form, D94), from `orion logins add` on
 the server, or by importing a password manager's CSV export (KeePass, KeePassXC, Bitwarden,
@@ -256,6 +257,7 @@ class LoginDesk:
     def install(self) -> None:
         self.service.routes += [
             Route("/v1/logins", self._list, methods=["GET"]),
+            Route("/v1/accounts", self._accounts, methods=["GET"]),
             Route("/v1/logins/{name}/lend", self._lend, methods=["POST"]),
             Route("/v1/logins/{name}/code", self._code, methods=["POST"]),
         ]
@@ -269,6 +271,11 @@ class LoginDesk:
                 for name, sites in sorted(state.logins.items())
             ]
         )
+
+    async def _accounts(self, request: Request) -> Response:
+        logins = json.loads(bytes((await self._list(request)).body))
+        sessions = dict(sorted(self.service.ledger.state.sessions.items()))
+        return JSONResponse({"sessions": sessions, "logins": logins})
 
     async def _lend(self, request: Request) -> Response:
         """The username and password for one task the owner approved, or did alone within
@@ -287,18 +294,18 @@ class LoginDesk:
             # A task that also borrows a session spends the yes there, after this loan.
             reason = await self.service.use_grant(
                 grant,
-                "computer_task_send",
-                lambda p: p.get("login") == name and p.get("brief") == params.get("brief"),
+                "browser",
+                lambda p: p.get("action") == "login" and p.get("login") == name,
                 consume=not params.get("session"),
             )
             if reason is not None:
                 return await self.service.deny(f"login {name}", reason)
             how = grant
         else:
-            bounds = ledger.state.limits.get("computer_task_send") or {}
+            bounds = ledger.state.limits.get("browser") or {}
             covered = all(host_in(s, list(bounds.get("domains") or [])) for s in login.sites)
-            if not covered or not await self.service.autonomous("computer_task_send", params):
-                return await self.service.deny(f"login {name}", "computer_task_send needs approval")
+            if not covered or not await self.service.autonomous("browser", params):
+                return await self.service.deny(f"login {name}", "signing in needs approval")
             how = "alone"
         loan = tokens.token_urlsafe(18)
         self.loans = {k: v for k, v in self.loans.items() if v.until > self.monotonic()}

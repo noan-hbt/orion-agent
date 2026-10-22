@@ -1,14 +1,16 @@
 """Orion's own browser, driven step by step from its loop.
 
-`computer_task` hands a brief to a worker that browses alone; here Orion itself opens a page,
-reads it, clicks, types, and decides what to do next with everything it knows. One live
-browser per conversation, closed after a few idle minutes.
+Orion itself opens a page, reads it, clicks, types, signs in to the owner's accounts and
+sends forms, and decides what to do next with everything it knows: there is no separate web
+agent (D113). One live browser per conversation, closed after a few idle minutes.
 
 Because Orion's context holds the owner's life, three rules keep the pages from carrying it
 out, whatever a page says:
 
-- the network is read-only (`browser.Session`): nothing is ever sent, submitted or bought;
-  that stays with `computer_task_send`, whose brief the owner approves;
+- the network is read-only (`browser.Session`): nothing is sent, submitted or bought, but
+  by `send`, which the owner approves (the page, what is typed, the button), and only to that
+  page's site for that moment; and by `login`, which signs in to his account with a session or
+  a login the guardian lends, the owner approving it (D113);
 - an address is opened only if the owner wrote it, a search returned it, or it is a link on a
   page already opened (`WebState`, extended with the links seen here): never one Orion made up,
   which could hold the owner's data in its query string;
@@ -30,7 +32,8 @@ import unicodedata
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import quote, quote_plus, urlsplit
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +42,9 @@ from orion.computer.browser import BrowserError, Session, Snapshot
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
+from orion.guardian.limits import host_in
+from orion.guardian.logins import site_of
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import normalize
 from orion.web.service import OWNER_MESSAGE, WebState
@@ -104,24 +110,52 @@ class _Live:
     session: Session
     closer: asyncio.Task[None] | None = None
     text: str = ""
+    login: dict[str, Any] | None = None
+    """A login the guardian lent for this browser: username, password, sites, code (D111)."""
+    hidden: set[str] = field(default_factory=set[str])
+    """What Orion must never read: the password, and the codes typed."""
+
+
+MASK = "••••••"
+LOGIN_SECONDS = 300.0
+"""After `login` with a password: the time to sign in, sending only to the login's sites."""
+SEND_SECONDS = 8.0
+
+
+def masked(text: str, hidden: set[str]) -> str:
+    """The text with the login's secrets blanked out: a page may show what was typed, as typed
+    or as it was posted (URL-encoded)."""
+    forms = {f for s in hidden if len(s) >= 4 for f in (s, quote(s, safe=""), quote_plus(s))}
+    for secret in sorted(forms, key=len, reverse=True):
+        text = text.replace(secret, MASK)
+    return text
 
 
 class BrowserDesk:
     def __init__(
-        self, journal: EventStore, sessions: SessionFactory, idle_seconds: float = IDLE_SECONDS
+        self,
+        journal: EventStore,
+        sessions: SessionFactory,
+        idle_seconds: float = IDLE_SECONDS,
+        guardian: GuardianClient | None = None,
     ) -> None:
         self._journal = journal
         self._sessions = sessions
+        self.guardian = guardian
         self._idle = idle_seconds
         self.state = BrowsingState()
         self._runner = ProjectionRunner(journal, [self.state])
         self._live: dict[str, _Live] = {}
         self._lock = asyncio.Lock()
 
-    async def _browser(self, thread: str) -> _Live:
+    async def _browser(self, thread: str, state: dict[str, Any] | None = None) -> _Live:
         live = self._live.get(thread)
+        if live is not None and state is not None:  # a lent session: a browser that holds it
+            await self.close(thread)
+            live = None
         if live is None:
             session = self._sessions()
+            session.storage_state = state
             await session.__aenter__()
             live = self._live[thread] = _Live(session)
         if live.closer is not None:
@@ -199,6 +233,141 @@ class BrowserDesk:
         more = len(text) > start + SHOWN_CHARS
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
+    async def login(self, args: Any, ctx: ToolContext) -> str:
+        """Sign in to the owner's account: his session, or his login (D113). The guardian lends
+        them for this yes (or within an autonomy), as it lends them to no one else."""
+        if not args.session and not args.login:
+            raise Refused("Name a session or a login (`browser` accounts lists them).")
+        if self.guardian is None:
+            raise Refused("Sessions and logins are kept by the guardian, which is not running.")
+        params = {"action": "login", "session": args.session, "login": args.login}
+        lent: dict[str, Any] | None = None
+        sites: list[str] = []
+        try:
+            if args.login:
+                lent = await self.guardian.lend_login(args.login, params, ctx.grant)
+                sites = list(lent["sites"])
+            state = (
+                await self.guardian.lend_session(args.session, params, ctx.grant)
+                if args.session
+                else None
+            )
+        except GuardianUnavailableError as exc:
+            raise Refused(f"The guardian did not lend it: {exc}") from exc
+        if state is not None:
+            sites = sites or list(state.get("domains") or [])
+        start = (
+            args.url if args.url and host_in(urlsplit(str(args.url)).hostname or "", sites) else ""
+        )
+        if lent is not None:
+            start = start or str(lent.get("url") or "")
+        start = start or (f"https://{sites[0]}/" if sites else "")
+        if not start:
+            raise Refused("This account names no site.")
+        async with self._lock:
+            live = await self._browser(ctx.thread_id, state["state"] if state else None)
+            if lent is not None:
+                guardian, name, loan = self.guardian, args.login, str(lent["loan"])
+
+                async def code() -> str:
+                    return await guardian.login_code(name, loan)
+
+                live.login = {**lent, "code": code}
+                live.hidden.add(str(lent["password"]))
+                live.session.open_window(sites, LOGIN_SECONDS)
+        said = await self._act(ctx, lambda s: s.goto(start))
+        how = (
+            f"Identifiant prêt : `browser` fill tape l'identifiant, le mot de passe ou le code "
+            f"(tu ne les vois jamais), puis clique pour te connecter : pendant 5 minutes, ton "
+            f"navigateur peut envoyer à {', '.join(sites)}, nulle part ailleurs.\n\n"
+            if lent is not None
+            else "Ouvert avec sa session.\n\n"
+        )
+        return how + said
+
+    async def fill(self, element: int, what: str, ctx: ToolContext) -> str:
+        live = self._live.get(ctx.thread_id)
+        if live is None or live.login is None:
+            raise Refused("No login is lent to this browser: `browser` login first.")
+        login = live.login
+        if what == "code":
+            if not login.get("totp"):
+                raise Refused(
+                    "No 2FA key is kept for this login: ask the owner for the code the site sent "
+                    "him (SMS, e-mail), and type it with his words."
+                )
+            try:
+                value = str(await login["code"]())
+            except GuardianUnavailableError as exc:
+                raise Refused(f"No code from the guardian: {exc}") from exc
+            live.hidden.add(value)
+        else:
+            value = str(login[what])
+        sites = list(login["sites"])
+        return await self._act(ctx, lambda s: s.fill_secret(element, value, sites, what))
+
+    async def send(self, args: Any, ctx: ToolContext) -> str:
+        """What the owner approved: on this page, type these texts, click this, sending only to
+        the page's site, for a moment."""
+        live = self._live.get(ctx.thread_id)
+        page = live.session.page if live is not None else None
+        if live is None or page is None:
+            raise Refused("No page is open: browser open first.")
+        site = site_of(page.url)
+        if not site or site != site_of(args.page):
+            raise Refused(
+                f"The page shown is now {page.url}, not the one approved: ask again for this one."
+            )
+
+        async def sending(session: Session) -> None:
+            for given in args.fields:
+                await session.type(given.element, given.text, False)
+            session.open_window([site], SEND_SECONDS)
+            try:
+                await session.click(args.element)
+                await session.settle()
+            finally:
+                session.close_window()
+
+        return await self._act(ctx, sending)
+
+    async def accounts(self) -> str:
+        if self.guardian is None:
+            return "Le gardien ne tourne pas : aucun compte."
+        try:
+            kept = await self.guardian.accounts()
+        except GuardianUnavailableError as exc:
+            raise Refused(f"The guardian did not answer: {exc}") from exc
+        lines = [f"- session « {n} » : {', '.join(s)}" for n, s in kept["sessions"].items()]
+        lines += [
+            f"- identifiant « {k['name']} » : {', '.join(k['sites'])}"
+            + (" (avec la double authentification)" if k["totp"] else "")
+            for k in kept["logins"]
+        ]
+        return "\n".join(lines) or "Aucun compte gardé : `browser` connect pour lui en demander."
+
+    async def connect(self, args: Any) -> str:
+        if self.guardian is None:
+            raise Refused("Sessions and logins are kept by the guardian, which is not running.")
+        try:
+            if args.keep == "session":
+                await self.guardian.ask_session(args.name, args.site, args.why)
+            else:
+                await self.guardian.ask_login(args.name, args.site, args.why)
+        except GuardianUnavailableError as exc:
+            raise Refused(f"Not asked: {exc}") from exc
+        if args.keep == "session":
+            return (
+                "Il a reçu un bouton pour se connecter lui-même, depuis son téléphone, dans le "
+                "navigateur du gardien. Quand le gardien dit que c'est gardé : `browser` login "
+                f'avec session "{args.name}".'
+            )
+        return (
+            f"Il a reçu un bouton pour saisir son identifiant « {args.name} » dans le formulaire "
+            "du gardien. Tu ne verras jamais le mot de passe : quand le gardien dit qu'il est "
+            f'gardé, `browser` login avec login "{args.name}".'
+        )
+
     async def screenshot(self, full: bool, ctx: ToolContext) -> bytes:
         async with self._lock:
             live = self._live.get(ctx.thread_id)
@@ -213,6 +382,10 @@ class BrowserDesk:
             live.text = ""
             await action(live.session)
             snapshot = await live.session.snapshot(READ_CHARS)
+            if live.hidden:
+                snapshot.url = masked(snapshot.url, live.hidden)
+                snapshot.text = masked(snapshot.text, live.hidden)
+                snapshot.elements = [masked(e, live.hidden) for e in snapshot.elements]
             live.text = snapshot.text
             blocked = live.session.blocked[blocked_before:]
         await self._record(snapshot, ctx)
@@ -262,8 +435,8 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     if blocked:
         lines += [
             "",
-            "Bloqué (ton navigateur n'envoie rien ; pour envoyer, computer_task_send) : "
-            + "; ".join(blocked[:3]),
+            "Bloqué (ton navigateur n'envoie rien de lui-même ; pour envoyer, `browser` send, "
+            "que le propriétaire approuve) : " + "; ".join(blocked[:3]),
         ]
     return "\n".join(lines)
 
@@ -321,6 +494,59 @@ class ScreenshotInput(BaseModel):
     full: bool = Field(default=False, description="The whole page, not only what is visible")
 
 
+class LoginInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session: str = Field(default="", max_length=60, description="A session the guardian keeps")
+    login: str = Field(
+        default="",
+        max_length=60,
+        description="A login it keeps (to sign in when the session expired, or none)",
+    )
+    url: str = Field(default="", max_length=500, description="A page of that account to open")
+
+
+class FillInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    element: int = Field(ge=1)
+    field: Literal["username", "password", "code"] = Field(
+        description="What to type there: his username, password, or the current 2FA code"
+    )
+
+
+class Typed(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    element: int = Field(ge=1)
+    text: str = Field(max_length=500)
+
+
+class SendInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    page: str = Field(max_length=500, description="The address of the page shown")
+    fields: list[Typed] = Field(
+        default_factory=list[Typed], max_length=20, description="Texts to type first"
+    )
+    element: int = Field(ge=1, description="The button that sends")
+    what: str = Field(max_length=300, description="What it does, for the owner (« réserver… »)")
+
+
+class ConnectInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,40}$", description="e.g. doctolib")
+    site: str = Field(max_length=300, description="The sign-in page's address, or the site")
+    keep: Literal["session", "password"] = Field(
+        default="session",
+        description="session: he signs in himself from his phone, in the guardian's browser "
+        "(SMS codes, captchas work); password: the guardian keeps his password, for you to sign "
+        "in again when a session expires",
+    )
+    why: str = Field(default="", max_length=300)
+
+
 Keep = Callable[[str, bytes, str, ToolContext], Awaitable[str]]
 """(name, data, content type, ctx) → the id of the file kept (`orion.files`)."""
 
@@ -350,16 +576,36 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         closed = await desk.close(ctx.thread_id)
         return ToolResult("Navigateur fermé." if closed else "Aucun navigateur ouvert.")
 
-    def tool(name: str, description: str, model: type[BaseModel], handler: Any) -> Tool:
+    def tool(
+        name: str,
+        description: str,
+        model: type[BaseModel],
+        handler: Any,
+        effect: Effect = Effect.NONE,
+    ) -> Tool:
         return Tool(
             name=name,
             description=description,
             input_model=model,
             handler=handler,
-            effect=Effect.NONE,
-            reversibility=Reversibility.REVERSIBLE,
-            accepts_untrusted_context=True,
+            effect=effect,
+            reversibility=Reversibility.REVERSIBLE
+            if effect is not Effect.EXTERNAL
+            else Reversibility.IRREVERSIBLE,
+            accepts_untrusted_context=effect is not Effect.EXTERNAL,
         )
+
+    async def accounts(_args: Any, _ctx: ToolContext) -> ToolResult:
+        try:
+            return ToolResult(await desk.accounts())
+        except Refused as exc:
+            return ToolResult(str(exc), is_error=True)
+
+    async def connect(args: Any, _ctx: ToolContext) -> ToolResult:
+        try:
+            return ToolResult(await desk.connect(args))
+        except Refused as exc:
+            return ToolResult(str(exc), is_error=True)
 
     return [
         tool(
@@ -405,6 +651,42 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
             run(lambda a, c: desk.read(a.part, a.find, c)),
         ),
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
+        tool(
+            "browser_login",
+            "Sign in to one of the owner's accounts: with his session, or his login (you type "
+            "it with fill without seeing it). He approves.",
+            LoginInput,
+            run(lambda a, c: desk.login(a, c)),
+            Effect.EXTERNAL,
+        ),
+        tool(
+            "browser_fill",
+            "After login with a login: type his username, password or 2FA code into a field.",
+            FillInput,
+            run(lambda a, c: desk.fill(a.element, a.field, c)),
+        ),
+        tool(
+            "browser_send",
+            "Send a form of the page shown (book, order, post): type these texts, then click "
+            "the button. He approves exactly that; it sends only to the page's site.",
+            SendInput,
+            run(lambda a, c: desk.send(a, c)),
+            Effect.EXTERNAL,
+        ),
+        tool(
+            "browser_accounts",
+            "The owner's accounts the guardian keeps (sessions, logins).",
+            NoInput,
+            accounts,
+        ),
+        tool(
+            "browser_connect",
+            "Ask him to sign in to an account from his phone (session) or give his password "
+            "to the guardian's form. Never ask for a password in a message.",
+            ConnectInput,
+            connect,
+            Effect.INTERNAL,
+        ),
         *(
             [
                 tool(

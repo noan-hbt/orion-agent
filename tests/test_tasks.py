@@ -155,4 +155,7 @@ async def test_a_task_only_looks_things_up(journal: SqliteJournal) -> None:
     assert await verdict("file", Effect.INTERNAL, "send") is Verdict.DENY  # nothing to him
     assert await verdict("remind_me", Effect.INTERNAL) is Verdict.DENY
     assert await verdict("peer_message", Effect.EXTERNAL) is Verdict.DENY
+    assert await verdict("browser", Effect.NONE, "open") is Verdict.ALLOW
+    assert await verdict("browser", Effect.EXTERNAL, "send") is Verdict.DENY  # Orion sends
+    assert await verdict("browser", Effect.EXTERNAL, "login") is Verdict.DENY
     assert await verdict("remind_me", Effect.INTERNAL, thread="owner") is Verdict.ALLOW

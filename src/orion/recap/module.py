@@ -53,7 +53,11 @@ RENDER: dict[str, Callable[[dict[str, Any]], str]] = {
         + ", ".join(str(c.get("path")) for c in cast(list[dict[str, Any]], a.get("changes") or []))
     ),
     "call_someone": lambda a: f"appelé {a.get('name')}",
-    "computer_task_send": lambda a: f"fait une démarche en ligne : {_quote(a.get('brief'), 60)}",
+    "browser": lambda a: (
+        f"fait une démarche en ligne : {_quote(a.get('what'), 60)}"
+        if a.get("action") == "send"
+        else "connecté à ton compte en ligne"
+    ),
     "mail_tidy": lambda _a: "rangé ta boîte mail",
     "delegate": lambda a: f"confié une tâche à l'agent de code : {_quote(a.get('title'), 60)}",
 }
@@ -92,6 +96,11 @@ class RecapState:
             return
         if not isinstance(loaded, dict):
             return
+        if tool == "browser" and cast(dict[str, Any], loaded).get("action") not in (
+            "send",
+            "login",
+        ):
+            return  # reading a page is not something done for him
         at = datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
         local = at.astimezone(self.zone)
         self.days.setdefault(local.date(), []).append((local, tool, cast(dict[str, Any], loaded)))

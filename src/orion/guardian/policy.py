@@ -98,7 +98,11 @@ NEVER_ALONE = frozenset({"module_install", "module_remove"})
 """Always put to him, whatever autonomy the config lists: code that runs with his memory."""
 WORKER_THREAD = "task:"
 WORKER_TOOLS = frozenset(
-    {"web_search", "web_read", "browser", "current_time", "task", "file:download", "file:pdf"}
+    {"web_search", "web_read", "current_time", "task", "file:download", "file:pdf"}
+    | {
+        f"browser:{a}"
+        for a in ("open", "click", "type", "select", "scroll", "back", "read", "close")
+    }
 )
 """What a background task may use (D110): it looks things up and reports to Orion, who acts
 and talks to the owner. Never an approval to the owner, a message to him, or an act on the

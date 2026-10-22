@@ -5,15 +5,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from playwright.async_api import Route
 
-from orion.computer.agent import BrowserAgent
 from orion.computer.browser import BrowserError, Session
 from orion.core.journal import SqliteJournal
-from orion.guardian.client import GuardianUnavailableError
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.ledger import LOGIN_CODE, LOGIN_LENT
 from orion.guardian.logins import (
     LoginDesk,
@@ -29,7 +28,6 @@ from orion.guardian.sessions import add_session
 from orion.web.fetch import FetchError
 from tests.fake_guardian import running_guardian
 from tests.fake_inkbox import CONVERSATION
-from tests.fakes import ScriptedProvider, call_tools
 from tests.test_computer import element
 from tests.test_writes import writable_config
 
@@ -79,8 +77,7 @@ def test_a_password_managers_export_is_read() -> None:
 
 async def test_the_guardian_lends_a_login_once_and_keeps_the_2fa_key(tmp_path: Path) -> None:
     config = writable_config(tmp_path)
-    brief = "Télécharger ma dernière attestation sur doctolib."
-    task = {"title": "Attestation", "brief": brief, "sites": ["doctolib.fr"], "login": "doctolib"}
+    lend = {"action": "login", "login": "doctolib", "session": "", "url": ""}
     desk: list[LoginDesk] = []
 
     def install(service: Any) -> None:
@@ -96,14 +93,14 @@ async def test_the_guardian_lends_a_login_once_and_keeps_the_2fa_key(tmp_path: P
         assert listed == [{"name": "doctolib", "sites": ["doctolib.fr"], "totp": True}]
         assert PASSWORD not in json.dumps(listed)
 
-        lend = {"brief": brief, "login": "doctolib", "session": "", "sites": ["doctolib.fr"]}
         with pytest.raises(GuardianUnavailableError, match="needs approval"):
             await g.client.lend_login("doctolib", lend, None)
-        grant, _ = await g.client.request_approval("computer_task_send", task, "", CONVERSATION)
-        assert "identifiant gardé « doctolib »" in g.fake.texts()[-1]
+        grant, _ = await g.client.request_approval("browser", lend, "", CONVERSATION)
+        assert "ton identifiant gardé « doctolib »" in g.fake.texts()[-1]
         g.fake.inbound("oui")
+        await add_login(config, g.service.ledger, make_login("banque", ["banque.fr"], "n", "p"))
         with pytest.raises(GuardianUnavailableError, match="not what the owner approved"):
-            await g.client.lend_login("doctolib", {**lend, "brief": "Supprimer mon compte."}, grant)
+            await g.client.lend_login("banque", {**lend, "login": "banque"}, grant)
         lent = await g.client.lend_login("doctolib", lend, grant)
         assert (lent["username"], lent["password"], lent["totp"]) == ("noan@x.fr", PASSWORD, True)
         assert RFC_SECRET not in json.dumps(lent)  # the 2FA key stays with the guardian
@@ -121,29 +118,16 @@ async def test_the_guardian_lends_a_login_once_and_keeps_the_2fa_key(tmp_path: P
 
 async def test_one_yes_lends_both_the_session_and_the_login(tmp_path: Path) -> None:
     config = writable_config(tmp_path)
-    brief = "Prendre le premier rendez-vous libre chez le Dr Martin."
-    task = {
-        "title": "RDV",
-        "brief": brief,
-        "sites": ["doctolib.fr"],
-        "session": "doctolib",
-        "login": "doctolib",
-    }
+    lend = {"action": "login", "login": "doctolib", "session": "doctolib", "url": ""}
     async with running_guardian(config, prepare=lambda s: LoginDesk(s).install()) as g:
         g.fake.inbound("salut")
         await add_login(config, g.service.ledger, make_login("doctolib", ["doctolib.fr"], "n", "p"))
         state = {"cookies": [{"name": "sid", "value": "c", "domain": ".doctolib.fr"}]}
         await add_session(config, g.service.ledger, "doctolib", state, [])
-        grant, _ = await g.client.request_approval("computer_task_send", task, "", CONVERSATION)
+        grant, _ = await g.client.request_approval("browser", lend, "", CONVERSATION)
         g.fake.inbound("oui")
-        lend = {
-            "brief": brief,
-            "login": "doctolib",
-            "session": "doctolib",
-            "sites": ["doctolib.fr"],
-        }
         assert (await g.client.lend_login("doctolib", lend, grant))["password"] == "p"
-        assert (await g.client.lend_session("doctolib", lend, grant))["cookies"]
+        assert (await g.client.lend_session("doctolib", lend, grant))["state"]["cookies"]
         with pytest.raises(GuardianUnavailableError, match="already used"):
             await g.client.lend_login("doctolib", lend, grant)
 
@@ -212,105 +196,112 @@ async def test_secrets_are_typed_only_on_the_logins_sites_and_fields() -> None:
         assert PASSWORD not in json.dumps((await page.snapshot()).elements)
 
 
-async def test_the_worker_signs_in_without_seeing_the_password(tmp_path: Path) -> None:
-    account = Account()
-    codes: list[str] = []
+class Lender(GuardianClient):
+    """The guardian's side of a sign-in, as the core sees it."""
 
-    async def code() -> str:
-        codes.append("482913")
+    grants: list[str | None]
+
+    async def lend_login(
+        self, name: str, params: dict[str, Any], grant: str | None
+    ) -> dict[str, Any]:
+        assert params == {"action": "login", "session": "", "login": name}
+        self.grants.append(grant)
+        return {
+            "username": "noan@x.fr",
+            "password": PASSWORD,
+            "sites": ["compte.test"],
+            "url": "https://compte.test/",
+            "totp": True,
+            "loan": "l1",
+        }
+
+    async def login_code(self, name: str, loan: str) -> str:
+        assert (name, loan) == ("compte", "l1")
         return "482913"
 
-    login = {
-        "username": "noan@x.fr",
-        "password": PASSWORD,
-        "sites": ["compte.test"],
-        "url": "https://compte.test/",
-        "totp": True,
-        "loan": "l1",
-        "code": code,
-    }
-    provider = ScriptedProvider(
-        call_tools(("fill_login", {"element": 1, "field": "username"})),
-        call_tools(("fill_login", {"element": 2, "field": "password"})),
-        call_tools(("fill_login", {"element": 3, "field": "code"})),
-        call_tools(("click", {"element": 5})),  # « Afficher » : the password shows in clear
-        call_tools(("click", {"element": 4})),
-        call_tools(("finish", {"report": f"Connecté (mot de passe {PASSWORD}).", "done": True})),
-    )
-    agent = BrowserAgent(
-        provider,
-        "fake/worker",
-        lambda ro: browser(account, ro),
-        read_only=False,
-        start_url="https://compte.test/",
-    )
-    outcome = await agent.run("Connecte-toi à mon compte.", tmp_path / "j_1", {"login": login})
-    assert outcome.ok and codes == ["482913"]
-    assert "Tr0ub4dor%263" in account.posted[0] and "otp=482913" in account.posted[0]
-    seen = json.dumps([r.messages for r in provider.requests], ensure_ascii=False)
-    assert "Bienvenue" in seen and "compte.test" in seen
-    assert PASSWORD not in seen and "Tr0ub4dor%263" not in seen and "482913" not in seen
-    assert PASSWORD not in outcome.result and "••••••" in outcome.result
-    assert "fill_login" in {t.name for t in provider.requests[0].tools}
 
-
-async def test_a_read_only_worker_gets_no_login(tmp_path: Path) -> None:
-    provider = ScriptedProvider(call_tools(("finish", {"report": "Rien.", "done": False})))
-    agent = BrowserAgent(
-        provider, "fake/worker", lambda ro: browser(Account(), ro), start_url="https://compte.test/"
-    )
-    login = {"username": "u", "password": PASSWORD, "sites": ["compte.test"], "totp": False}
-    await agent.run("Regarde.", tmp_path / "j_2", {"login": login})
-    assert "fill_login" not in {t.name for t in provider.requests[0].tools}
-
-
-async def test_the_lent_login_reaches_the_worker_but_not_the_journal(
-    journal: SqliteJournal, tmp_path: Path
+async def test_orion_signs_in_himself_without_seeing_the_password(
+    journal: SqliteJournal,
 ) -> None:
-    from orion.computer.module import computer_tools
-    from orion.delegation.claude_code import AgentOutcome
-    from orion.delegation.jobs import JobService
-    from orion.guardian.client import GuardianClient
+    """D113: no web agent. Orion drives the sign-in page; the guardian's login is typed by
+    code, masked on every page he reads, and his browser sends only to the account's site."""
+    from orion.computer.direct import BrowserDesk, browser_tools
     from orion.tools.base import ToolContext
 
-    got: list[dict[str, Any]] = []
+    account = Account()
+    lender = cast(Lender, Lender.over_socket(Path("/nonexistent.sock")))
+    lender.grants = []
+    desk = BrowserDesk(journal, lambda: browser(account, read_only=True), guardian=lender)
+    tools = {t.name: t for t in browser_tools(desk)}
 
-    class Worker:
-        name = "browser-submit"
-        allow_bash = False
+    async def use(name: str, **args: object) -> str:
+        tool = tools[name]
+        ctx = ToolContext("owner", "t1", grant="g1")
+        result = await tool.handler(tool.parse(json.dumps(args)), ctx)
+        return ("ERROR " if result.is_error else "") + result.content
 
-        async def run(
-            self, task: str, workdir: Path, options: dict[str, Any] | None = None
-        ) -> AgentOutcome:
-            got.append(options or {})
-            return AgentOutcome(True, "Attestation téléchargée.")
-
-    class Lender(GuardianClient):
-        async def lend_login(
-            self, name: str, params: dict[str, Any], grant: str | None
-        ) -> dict[str, Any]:
-            assert grant == "g1" and params["login"] == name == "doctolib"
-            return {"username": "n", "password": PASSWORD, "sites": ["doctolib.fr"], "loan": "l9"}
-
-        async def login_code(self, name: str, loan: str) -> str:
-            return f"{name}:{loan}"
-
-    jobs = JobService(journal, Worker(), tmp_path)
-    tools = {
-        t.name: t for t in computer_tools(jobs, jobs, Lender.over_socket(tmp_path / "none.sock"))
-    }
-    send = tools["computer_task_send"]
-    args = send.parse(
-        json.dumps(
-            {"title": "Attestation", "brief": "Télécharger mon attestation", "login": "doctolib"}
-        )
-    )
-    assert not (await send.handler(args, ToolContext("owner", "c", grant="g1"))).is_error
-    await jobs.wait()
-    [options] = got
-    assert options["login"]["password"] == PASSWORD
-    assert await options["login"]["code"]() == "doctolib:l9"
+    try:
+        page = await use("browser_login", login="compte")
+        assert lender.grants == ["g1"] and "Identifiant prêt" in page and "Connexion" in page
+        assert "username" not in page and PASSWORD not in page
+        await use("browser_fill", element=1, field="username")
+        await use("browser_fill", element=2, field="password")
+        await use("browser_fill", element=3, field="code")
+        shown = await use("browser_click", element=5)  # « Afficher » : the password in clear
+        assert PASSWORD not in shown and "••••••" in shown
+        welcome = await use("browser_click", element=4)
+        assert "Bienvenue" in welcome
+        assert "Tr0ub4dor%263" in account.posted[0] and "otp=482913" in account.posted[0]
+        assert PASSWORD not in welcome and "Tr0ub4dor%263" not in welcome
+        assert "482913" not in welcome
+        # Elsewhere, nothing is typed, and nothing is sent.
+        wrong = await use("browser_fill", element=1, field="password")
+        assert wrong.startswith("ERROR")
+    finally:
+        await desk.aclose()
     assert PASSWORD not in str([e.payload for e in await journal.read()])
+    assert "482913" not in str([e.payload for e in await journal.read()])
+
+
+async def test_orion_sends_a_form_only_to_the_pages_site(journal: SqliteJournal) -> None:
+    from orion.computer.direct import BrowserDesk, browser_tools
+    from orion.tools.base import ToolContext
+    from tests.test_browser_direct import owner_says
+
+    account = Account()
+    desk = BrowserDesk(journal, lambda: browser(account, read_only=True))
+    tools = {t.name: t for t in browser_tools(desk)}
+    ctx = ToolContext("owner", "t1", grant="g1")
+
+    async def use(name: str, **args: object) -> str:
+        tool = tools[name]
+        result = await tool.handler(tool.parse(json.dumps(args)), ctx)
+        return ("ERROR " if result.is_error else "") + result.content
+
+    try:
+        await owner_says(journal, "Connecte-toi sur https://compte.test/", "t1")
+        await use("browser_open", url="https://compte.test/")
+        await use("browser_click", element=4)  # not approved: blocked
+        assert account.posted == []
+        await use("browser_open", url="https://compte.test/")
+        moved = await use(
+            "browser_send",
+            page="https://ailleurs.test/",
+            element=4,
+            fields=[{"element": 1, "text": "noan@x.fr"}],
+            what="me connecter",
+        )
+        assert moved.startswith("ERROR") and account.posted == []
+        sent = await use(
+            "browser_send",
+            page="https://compte.test/",
+            element=4,
+            fields=[{"element": 1, "text": "noan@x.fr"}],
+            what="me connecter",
+        )
+        assert "Bienvenue" in sent and account.posted == ["email=noan%40x.fr&pw=&otp="]
+    finally:
+        await desk.aclose()
 
 
 async def test_the_owner_gives_a_login_from_telegram_and_the_core_never_sees_it(
@@ -418,3 +409,35 @@ async def test_an_export_is_imported_from_the_command_line(
     finally:
         sys.stdin = stdin
     assert read_login(config, "ameli") is not None
+
+
+async def test_orion_opens_his_account_with_a_kept_session(journal: SqliteJournal) -> None:
+    from orion.computer.direct import BrowserDesk, browser_tools
+    from orion.tools.base import ToolContext
+
+    class Sessions(GuardianClient):
+        async def lend_session(
+            self, name: str, params: dict[str, Any], grant: str | None
+        ) -> dict[str, Any]:
+            assert (name, params["action"], grant) == ("compte", "login", "g1")
+            cookie = {"name": "sid", "value": "s3ss10n", "domain": "compte.test", "path": "/"}
+            return {"state": {"cookies": [cookie], "origins": []}, "domains": ["compte.test"]}
+
+    account = Account()
+    desk = BrowserDesk(
+        journal,
+        lambda: browser(account, read_only=True),
+        guardian=Sessions.over_socket(Path("/nonexistent.sock")),
+    )
+    login = next(t for t in browser_tools(desk) if t.name == "browser_login")
+    try:
+        page = await login.handler(
+            login.parse(json.dumps({"session": "compte"})), ToolContext("owner", "t1", grant="g1")
+        )
+        assert "Ouvert avec sa session" in page.content and "compte.test" in page.content
+        live = desk._live["owner"]  # pyright: ignore[reportPrivateUsage]
+        assert live.session.page is not None
+        cookies = await live.session.page.context.cookies()
+        assert [c.get("value") for c in cookies] == ["s3ss10n"]
+    finally:
+        await desk.aclose()

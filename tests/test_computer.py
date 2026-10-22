@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 from playwright.async_api import Route
 
-from orion.computer.agent import BrowserAgent
 from orion.computer.browser import BrowserError, Session
 from orion.computer.module import ComputerModule
 from orion.config import OrionConfig
-from orion.core.events import Trust
-from orion.core.journal import SqliteJournal
-from orion.delegation.jobs import JOB_FINISHED, JobService
 from orion.modules.registry import load
 from orion.tools.base import Effect
 from orion.web.fetch import FetchError
-from tests.fakes import ScriptedProvider, call_tools
 
 HOME = """<html><head><title>Annonces</title></head><body>
 <h1>Locations à Lyon</h1>
@@ -95,81 +89,21 @@ async def test_an_approved_task_may_send() -> None:
     assert "POST https://annonces.test/contact" in site.requests
 
 
-async def test_the_worker_browses_and_reports(tmp_path: Path) -> None:
-    site = Site()
-    provider = ScriptedProvider(
-        call_tools(("click", {"element": 1})),
-        call_tools(
-            (
-                "finish",
-                {"report": "T2 Lyon 7e : 650 € CC, 46 m² (https://annonces.test/t2)", "done": True},
-            )
-        ),
-    )
-    agent = BrowserAgent(
-        provider, "fake/worker", lambda ro: session(site, ro), start_url="https://annonces.test/"
-    )
-    outcome = await agent.run("Trouve un T2 à Lyon sous 700 €.", tmp_path / "j_1")
-    assert outcome.ok and "650 €" in outcome.result
-    assert (tmp_path / "j_1" / "report.md").read_text().startswith("T2 Lyon 7e")
-    first, second = provider.requests
-    assert "<brief>" in first.messages[1]["content"] and first.tools
-    assert "Loyer 650 €" in json.dumps(second.messages[-1], ensure_ascii=False)
-    # The worker never sees Orion's tools or memory: only the browser's.
-    assert {t.name for t in first.tools} == {
-        "back",
-        "click",
-        "finish",
-        "goto",
-        "scroll",
-        "select",
-        "type",
-    }
+def test_the_browser_signs_in_and_sends_only_with_his_yes() -> None:
+    """No separate web agent (D113): Orion's own browser reads alone; signing in and sending
+    are the owner's to approve."""
+    from orion.computer.direct import BrowserDesk, browser_tools
+
+    tools = {t.name: t for t in browser_tools(BrowserDesk(None, lambda: session(Site())))}  # type: ignore[arg-type]
+    assert tools["browser_open"].effect is Effect.NONE
+    assert tools["browser_login"].effect is Effect.EXTERNAL
+    assert tools["browser_send"].effect is Effect.EXTERNAL
+    assert not tools["browser_send"].accepts_untrusted_context  # put to him after a page
 
 
-async def test_reports_come_back_as_web_content(tmp_path: Path, journal: SqliteJournal) -> None:
-    site = Site()
-    provider = ScriptedProvider(call_tools(("finish", {"report": "Rien trouvé.", "done": False})))
-    agent = BrowserAgent(
-        provider, "m", lambda ro: session(site, ro), start_url="https://annonces.test/"
-    )
-    jobs = JobService(journal, agent, tmp_path, result_trust=Trust.WEB)
-    await jobs.start(
-        "t",
-        "Cherche.",
-        __import__("orion.core.events").core.events.Provenance(
-            source="thread:owner", actor="orion:core"
-        ),
-        None,
-    )
-    await jobs.wait()
-    [finished] = [e for e in await journal.read() if e.kind == JOB_FINISHED]
-    assert finished.trust is Trust.WEB
-    [report] = await jobs.reports()
-    assert report.trust is Trust.WEB and "Rien trouvé." in report.notice
-
-
-def test_reading_runs_alone_sending_is_approved(tmp_path: Path) -> None:
+def test_the_module_has_no_web_agent(tmp_path: Path) -> None:
     config = OrionConfig.model_validate(
         {"data_dir": tmp_path, "modules": {"computer": {"enabled": True}}}
     )
     [module] = [m for m in load(config) if isinstance(m, ComputerModule)]
-    assert module.doctor()
-    from orion.computer.module import computer_tools
-
-    tools = {t.name: t for t in computer_tools(_jobs(tmp_path), _jobs(tmp_path))}
-    assert tools["computer_task"].effect is Effect.INTERNAL
-    assert tools["computer_task_send"].effect is Effect.EXTERNAL
-
-
-def _jobs(tmp_path: Path) -> JobService:
-    class Nothing:
-        name = "x"
-        allow_bash = False
-
-        async def run(  # pragma: no cover
-            self, task: str, workdir: Path, options: object = None
-        ) -> object:
-            raise AssertionError
-
-    return JobService(None, Nothing(), tmp_path)  # type: ignore[arg-type]
+    assert "no separate web agent" in module.doctor()[0]

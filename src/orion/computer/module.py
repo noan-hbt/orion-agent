@@ -1,99 +1,44 @@
-"""The computer as a module: `[modules.computer]` in orion.toml."""
+"""The computer as a module: `[modules.computer]` in orion.toml.
+
+Orion drives its own browser (`orion.computer.direct`): it reads, signs in to the owner's
+accounts and sends forms itself, the owner approving (D113). There is no separate web agent.
+"""
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from orion.computer.agent import BrowserAgent, SessionFactory
 from orion.computer.browser import Session
 from orion.computer.direct import BrowserDesk, browser_tools
-from orion.core.events import Provenance, Trust
-from orion.delegation.jobs import JobService
-from orion.guardian.client import GuardianClient, GuardianUnavailableError
-from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.core.events import Trust
+from orion.modules.base import Module, ModuleSettings, Plate
 from orion.tools.actions import grouped
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.base import Tool, ToolContext
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
 
+SessionFactory = Callable[[], Session]
+
 
 class ComputerSettings(ModuleSettings):
-    model: str | None = Field(default=None, description="The worker's model; default: agent.model")
-    max_steps: int = Field(default=30, ge=3, le=100)
     executable: str | None = Field(
         default=None, description="A Chromium binary; default: Playwright's own"
     )
-
-
-class TaskInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    title: str = Field(max_length=80, description="A few words naming the task")
-    brief: str = Field(
-        min_length=10,
-        max_length=4000,
-        description="Complete instructions: the worker sees nothing else (no memory, no "
-        "conversation). Say what to find or do, where to start if known, the criteria, and "
-        "what to report. Put in only the personal details the task needs.",
-    )
-
-
-class SendInput(TaskInput):
-    sites: list[str] = Field(
-        default_factory=list[str],
-        max_length=10,
-        description="The sites where it may send (e.g. doctolib.fr): sending anywhere else is "
-        "blocked. Needed to do it alone, within an autonomy the owner granted.",
-    )
-    session: str = Field(
-        default="",
-        max_length=60,
-        description="A logged-in session the owner keeps with the guardian (`orion sessions`), "
-        "to act on their account; lent for this task only",
-    )
-    login: str = Field(
-        default="",
-        max_length=60,
-        description="A login (username, password, 2FA) the guardian keeps for the owner "
-        "(`computer_status` lists them), to sign in when there is no session or it expired. "
-        "The worker types it without seeing it, only on its sites",
-    )
-
-
-class LoginAskInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,40}$", description="e.g. doctolib")
-    site: str = Field(
-        max_length=300,
-        description="The sign-in page's address (session) or the site (password), e.g. "
-        "https://www.doctolib.fr/sessions/new",
-    )
-    keep: Literal["session", "password"] = Field(
-        default="session",
-        description="session: he signs in himself from his phone, in the guardian's browser "
-        "(SMS codes, captchas work); password: the guardian keeps his password to sign in "
-        "again when a session expires",
-    )
-    why: str = Field(default="", max_length=300)
-
-
-class StatusInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model: str | None = Field(default=None, description="Unused since D113 (no web agent)")
+    max_steps: int = Field(default=30, description="Unused since D113 (no web agent)")
 
 
 class ComputerModule(Module):
     name = "computer"
     offer = (
-        "Un navigateur à toi, pour parcourir des sites et remplir un formulaire public qu'il "
-        "approuve : `[modules.computer] enabled = true`. Agir sur un de ses comptes (URSSAF, "
-        "banque, Doctolib…) demande en plus une session de ce site qu'il te prête, par le "
-        "gardien séparé : le navigateur seul n'y suffit pas."
+        "Un navigateur à toi, pour parcourir des sites et envoyer un formulaire qu'il "
+        "approuve : `[modules.computer] enabled = true`. Aller sur un de ses comptes (URSSAF, "
+        "banque, Doctolib…) demande en plus le gardien séparé, qui garde ses sessions."
     )
 
     def offers(self) -> list[str]:
@@ -102,7 +47,7 @@ class ComputerModule(Module):
         lend = (
             "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) : il se connecte depuis son "
             "téléphone dans le navigateur du gardien, ou lui confie son mot de passe "
-            "(`computer_login_ask`)"
+            "(`browser` connect)"
         )
         if not self.config.guardian.enabled:
             lend += " (il faut d'abord le gardien séparé, `[guardian] enabled = true`)"
@@ -114,36 +59,13 @@ class ComputerModule(Module):
     def __init__(self, config: OrionConfig, sessions: SessionFactory | None = None) -> None:
         super().__init__(config)
         self._sessions = sessions
-        self.reading: JobService | None = None
-        self.sending: JobService | None = None
         self.desk: BrowserDesk | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: ComputerSettings = self.settings
-        model = settings.model or self.config.agent.model
         executable = settings.executable or os.environ.get("ORION_CHROMIUM")
-
-        def browser(read_only: bool) -> Session:
-            return Session(read_only, executable=executable)
-
-        sessions = self._sessions or browser
-        workspaces: Path = self.config.data_dir / "computer"
-        self.reading = JobService(
-            plate.journal,
-            BrowserAgent(plate.provider, model, sessions, True, settings.max_steps),
-            workspaces,
-            result_trust=Trust.WEB,
-        )
-        self.sending = JobService(
-            plate.journal,
-            BrowserAgent(plate.provider, model, sessions, False, settings.max_steps),
-            workspaces,
-            result_trust=Trust.WEB,
-        )
-        await self.reading.recover()
-        await self.sending.recover()
-        # Orion's own browser is always read-only: sending stays with an approved brief.
-        self.desk = BrowserDesk(plate.journal, lambda: sessions(True))
+        sessions = self._sessions or (lambda: Session(True, executable=executable))
+        self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian)
         from orion.files.module import FilesModule
 
         files = plate.module(FilesModule)
@@ -156,15 +78,13 @@ class ComputerModule(Module):
                 return (await kept_by.save(name, data, kind, "screenshot", ctx, Trust.WEB)).id
 
             keep = keep_file
-        browsing = browser_tools(self.desk, keep)
         return [
-            *computer_tools(self.reading, self.sending, plate.guardian),
             grouped(
                 "browser",
                 "Your own browser, which you drive yourself, page by page: open a page and see "
-                "it (its text and numbered elements), then act on the page shown. For a site's "
-                "search, listings, schedules. Nothing is ever sent from it.",
-                browsing,
+                "it (its text and numbered elements), then act on the page shown. Nothing leaves "
+                "it but what he approves: signing in to his accounts (login), a form (send).",
+                browser_tools(self.desk, keep),
                 {
                     "browser_open": "open",
                     "browser_click": "click",
@@ -174,183 +94,19 @@ class ComputerModule(Module):
                     "browser_back": "back",
                     "browser_read": "read",
                     "browser_close": "close",
+                    "browser_login": "login",
+                    "browser_fill": "fill",
+                    "browser_send": "send",
+                    "browser_accounts": "accounts",
+                    "browser_connect": "connect",
                     **({"browser_screenshot": "screenshot"} if keep is not None else {}),
                 },
             ),
         ]
-
-    async def serve(self, daemon: Daemon) -> None:
-        for jobs in (self.reading, self.sending):
-            if jobs is not None:
-                daemon.reports.append(jobs)
 
     async def close(self) -> None:
         if self.desk is not None:
             await self.desk.aclose()
 
     def doctor(self) -> list[str]:
-        settings: ComputerSettings = self.settings
-        return [f"browser worker on {settings.model or self.config.agent.model}"]
-
-
-def computer_tools(
-    reading: JobService, sending: JobService, guardian: GuardianClient | None = None
-) -> list[Tool]:
-    async def options(args: Any, ctx: ToolContext) -> dict[str, Any] | str:
-        """What the sending worker gets beside its brief; a string says why it cannot run."""
-        found: dict[str, Any] = {}
-        if getattr(args, "sites", None):
-            found["sites"] = list(args.sites)
-        if getattr(args, "login", ""):
-            if guardian is None:
-                return "Logins are kept by the guardian, which is not running."
-            lent = guardian
-            try:
-                login = await lent.lend_login(
-                    args.login,
-                    {
-                        "brief": args.brief,
-                        "login": args.login,
-                        "session": args.session,
-                        "sites": list(args.sites),
-                    },
-                    ctx.grant,
-                )
-            except GuardianUnavailableError as exc:
-                return f"The guardian did not lend the login: {exc}"
-            name, loan = args.login, str(login["loan"])
-
-            async def code() -> str:
-                return await lent.login_code(name, loan)
-
-            found["login"] = {**login, "code": code}
-        if getattr(args, "session", ""):
-            if guardian is None:
-                return "Logged-in sessions are kept by the guardian, which is not running."
-            try:
-                lend = {"brief": args.brief, "session": args.session, "sites": list(args.sites)}
-                if args.login:
-                    lend["login"] = args.login
-                found["state"] = await guardian.lend_session(args.session, lend, ctx.grant)
-            except GuardianUnavailableError as exc:
-                return f"The guardian did not lend the session: {exc}"
-        return found
-
-    def starter(jobs: JobService, mode: str) -> Any:
-        async def start(args: Any, ctx: ToolContext) -> ToolResult:
-            extra = await options(args, ctx)
-            if isinstance(extra, str):
-                return ToolResult(extra, is_error=True)
-            job_id = await jobs.start(
-                args.title,
-                args.brief,
-                Provenance(
-                    source=f"thread:{ctx.thread_id}",
-                    actor="orion:core",
-                    derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
-                ),
-                ctx.correlation_id,
-                extra or None,
-            )
-            return ToolResult(
-                f"Tâche lancée sur l'ordinateur ({job_id}, {mode}). Le compte rendu arrivera par "
-                "message quand elle sera finie.",
-                data={"job_id": job_id},
-            )
-
-        return start
-
-    async def status(_args: Any, _ctx: ToolContext) -> ToolResult:
-        lines: list[str] = []
-        for jobs in (reading, sending):
-            await jobs.sync()
-            lines += [f"- ({j.id}) {j.title} : en cours" for j in jobs.projection.running()]
-            lines += [
-                f"- ({j.id}) {j.title} : {'terminée' if j.ok else 'échec : ' + (j.error or '?')}"
-                for j in jobs.projection.finished()[-5:]
-            ]
-        if guardian is not None:
-            try:
-                kept = await guardian.logins()
-            except GuardianUnavailableError as exc:
-                lines.append(f"(Identifiants gardés : le gardien ne répond pas : {exc})")
-            else:
-                if kept:
-                    lines.append(
-                        "Identifiants gardés (`login` de computer_task_send) : "
-                        + ", ".join(
-                            f"{k['name']} ({', '.join(k['sites'])}{', 2FA' if k['totp'] else ''})"
-                            for k in kept
-                        )
-                    )
-        return ToolResult("\n".join(lines) if lines else "Aucune tâche sur l'ordinateur.")
-
-    async def login_ask(args: Any, _ctx: ToolContext) -> ToolResult:
-        if guardian is None:
-            return ToolResult(
-                "Logins are kept by the guardian, which is not running.", is_error=True
-            )
-        try:
-            if args.keep == "session":
-                await guardian.ask_session(args.name, args.site, args.why)
-            else:
-                await guardian.ask_login(args.name, args.site, args.why)
-        except GuardianUnavailableError as exc:
-            return ToolResult(f"Not asked: {exc}", is_error=True)
-        if args.keep == "session":
-            return ToolResult(
-                f"Il a reçu un bouton pour se connecter lui-même, depuis son téléphone, dans le "
-                "navigateur du gardien. Quand le gardien dit que c'est gardé, donne `session` "
-                f'"{args.name}" à computer_task_send.'
-            )
-        return ToolResult(
-            f"Il a reçu un bouton pour saisir son identifiant « {args.name} » dans le formulaire "
-            "du gardien. Tu ne verras jamais le mot de passe : quand le gardien dit qu'il est "
-            f'gardé, donne `login` "{args.name}" à computer_task_send.'
-        )
-
-    return [
-        Tool(
-            name="computer_task",
-            description="Hand a long browsing task to a worker in the background (the report "
-            "comes later, by message): only when the owner does not need the answer now. To "
-            "look at a site now, browse it yourself with `browser`. Read-only: it can search, "
-            "read and click, never send anything.",
-            input_model=TaskInput,
-            handler=starter(reading, "lecture seule"),
-            effect=Effect.INTERNAL,
-            reversibility=Reversibility.REVERSIBLE,
-        ),
-        Tool(
-            name="computer_task_send",
-            description="Like computer_task, but the worker may send what the brief says (fill "
-            "and submit a form, book), only on `sites` if given, and on the owner's account "
-            "with `session`. The owner approves the exact brief first, unless they let you do "
-            "it alone on those sites.",
-            input_model=SendInput,
-            handler=starter(sending, "peut envoyer"),
-            effect=Effect.EXTERNAL,
-            reversibility=Reversibility.IRREVERSIBLE,
-        ),
-        Tool(
-            name="computer_login_ask",
-            description="To act on one of the owner's accounts: he signs in from his phone, in "
-            "the guardian's own browser (a session), or gives his password to the guardian's "
-            "form. Never ask for a password in a message.",
-            input_model=LoginAskInput,
-            handler=login_ask,
-            effect=Effect.INTERNAL,
-            reversibility=Reversibility.REVERSIBLE,
-        ),
-        Tool(
-            name="computer_status",
-            description="Tasks given to your computer: running, done or failed; and the "
-            "owner's logins the guardian keeps.",
-            input_model=StatusInput,
-            handler=status,
-            effect=Effect.NONE,
-            reversibility=Reversibility.REVERSIBLE,
-            concurrency_safe=True,
-            accepts_untrusted_context=True,
-        ),
-    ]
+        return ["your own browser (no separate web agent, D113)"]

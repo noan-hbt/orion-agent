@@ -33,6 +33,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Coroutine
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -132,24 +133,21 @@ def _limits(params: dict[str, Any]) -> Limits:
     return Limits.model_validate(raw)
 
 
-def _computer_task_send(params: dict[str, Any]) -> str:
-    sites = (
-        f"\nSites où elle peut envoyer : {', '.join(params['sites'])}"
-        if params.get("sites")
-        else ""
-    )
-    session = (
-        f"\nAvec ta session connectée « {params['session']} »." if params.get("session") else ""
-    )
-    login = (
-        f"\nEn se connectant à ton compte avec ton identifiant gardé « {params['login']} »."
-        if params.get("login")
-        else ""
-    )
-    return (
-        "Avant que je la lance sur mon ordinateur, voici la tâche (elle peut envoyer ce "
-        f"qu'elle dit) :\n{params.get('brief')}{sites}{session}{login}"
-    )
+def _browser(params: dict[str, Any]) -> str:
+    """Orion's own browser (D113): signing in to an account, or sending a page's form."""
+    if params.get("action") == "login":
+        how = [
+            f"ta session « {params['session']} »" if params.get("session") else "",
+            f"ton identifiant gardé « {params['login']} »" if params.get("login") else "",
+        ]
+        return (
+            "Avant que je me connecte à ton compte avec " + " et ".join(h for h in how if h) + "."
+        )
+    page = str(params.get("page") or "")
+    site = urlsplit(page).hostname or page
+    typed = [f"« {f.get('text')} »" for f in cast(list[dict[str, Any]], params.get("fields") or [])]
+    with_text = f"\nEn tapant : {', '.join(typed)}" if typed else ""
+    return f"Avant que je l'envoie sur {site} : {params.get('what')}{with_text}\n(Page : {page})"
 
 
 async def _body(request: Request) -> dict[str, Any]:
@@ -315,7 +313,7 @@ class GuardianService:
             "mail_send": _mail_send,
             "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
-            "computer_task_send": _computer_task_send,
+            "browser": _browser,
             "configure_change": _configure_change,
             "module_install": _module_install,
             "module_remove": _module_remove,
@@ -837,18 +835,18 @@ class GuardianService:
         if grant:
             reason = await self.use_grant(
                 grant,
-                "computer_task_send",
-                lambda p: p.get("session") == name and p.get("brief") == params.get("brief"),
+                "browser",
+                lambda p: p.get("action") == "login" and p.get("session") == name,
                 consume=True,
             )
             if reason is not None:
                 return await self.deny(f"session {name}", reason)
             how = grant
         else:
-            bounds = self.ledger.state.limits.get("computer_task_send") or {}
+            bounds = self.ledger.state.limits.get("browser") or {}
             covered = all(host_in(d, list(bounds.get("domains") or [])) for d in domains)
-            if not covered or not await self.autonomous("computer_task_send", params):
-                return await self.deny(f"session {name}", "computer_task_send needs approval")
+            if not covered or not await self.autonomous("browser", params):
+                return await self.deny(f"session {name}", "signing in needs approval")
             how = "alone"
         state: Any = json.loads(path.read_text(encoding="utf-8"))
         await self.ledger.record(SESSION_LENT, {"name": name, "how": how})
