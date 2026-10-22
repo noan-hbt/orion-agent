@@ -506,4 +506,18 @@ CASES: tuple[Case, ...] = (
         ),
         live_web=True,
     ),
+    Case(
+        name="grosse_recherche_en_tache",
+        origin="21/10 : « fais une grosse recherche, envoie au fur et à mesure » ; Orion cherchait "
+        "dans la conversation et finissait sur « je continue », sans suite (D110).",
+        at=paris(2026, 10, 22, 14, 0),
+        facts=("S'appelle Noan.",),
+        steps=(
+            Say(
+                "Fais une grosse recherche : des colliers dorés sobres avec une petite pierre, "
+                "150 à 300 €, pour ma copine. Envoie-moi ce que tu trouves au fur et à mesure"
+            ),
+        ),
+        checks=(uses("task:start"), avoids("mission:start")),
+    ),
 )

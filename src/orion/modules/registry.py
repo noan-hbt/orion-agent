@@ -51,6 +51,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.shell.module import ShellModule
     from orion.skills.module import SkillsModule
     from orion.style.module import StyleModule
+    from orion.tasks.module import TasksModule
     from orion.thinking.module import ThinkingModule
     from orion.vocal.module import VocalModule
     from orion.voice.module import VoiceModule
@@ -76,6 +77,7 @@ def builtin_modules() -> list[type[Module]]:
         FocusModule,
         ExpertModule,
         MissionsModule,
+        TasksModule,
         LibraryModule,
         PhotosModule,
         PapersModule,
