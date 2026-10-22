@@ -186,6 +186,8 @@ class RemoteLogin:
             await browser.back()
         elif do == "done":
             state = await browser.saved_state()
+            # The page Orion asked him to sign in to is the one it opens again with it (D115).
+            state.setdefault("orion", {})["url"] = remote.url
             await self._close(token)
             try:
                 await add_session(

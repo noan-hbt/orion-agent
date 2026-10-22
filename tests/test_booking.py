@@ -60,7 +60,7 @@ async def test_a_done_booking_lands_in_the_calendar_with_reminders(journal: Sqli
     (tool,) = booking_tools(keeper)
     said = await book(tool, "c1", what="Dentiste, Dr Martin", start="2026-10-22T18:30",
                       minutes=30, where="12 rue Oberkampf", site="doctolib.fr")  # fmt: skip
-    assert "`browser` send" in said and "`booking` done" in said
+    assert "navigateur" in said and "`booking` done" in said
     assert "Rendez-vous réservé" in await done(tool, said, ok=True)
 
     (report,) = await keeper.reports()

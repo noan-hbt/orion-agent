@@ -122,6 +122,7 @@ async def test_the_owner_signs_in_from_his_phone_and_the_guardian_keeps_the_sess
         kept = json.loads((config.guardian.data_dir / "sessions" / "compte.json").read_text())
         assert [c["value"] for c in kept["cookies"]] == ["s3ss10n"]
         assert kept["orion"]["phone"] == {"width": 390, "height": 640}
+        assert kept["orion"]["url"] == "https://www.compte.test/"  # the page Orion chose
         assert "Android" in kept["orion"]["user_agent"]
         assert g.service.ledger.state.sessions["compte"] == ["compte.test"]
         assert "session « compte »" in tg.sent()[-1]["text"]

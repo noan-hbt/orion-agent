@@ -1,1 +1,1 @@
-"""The web: search and read pages, through a quarantine (like mail)."""
+"""The web: search, and pages Orion reads itself (D114)."""

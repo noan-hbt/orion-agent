@@ -16,8 +16,8 @@ from orion.memory.model import Category
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from orion.tools.base import ToolContext
-from orion.web.clerk import Findings, Reading, Result
 from orion.web.fetch import FetchError
+from orion.web.search import Findings, Reading, Result
 from tests.fakes import ScriptedProvider, reply
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -32,28 +32,21 @@ LEAD = {
 
 
 class FakeWeb:
-    def __init__(self, *results: Result, suspicious: bool = False) -> None:
+    def __init__(self, *results: Result) -> None:
         self.results = list(results)
-        self.suspicious = suspicious
         self.searched: list[str] = []
         self.read_urls: list[str] = []
 
     async def search(self, query: str, correlation_id: str | None = None) -> Findings:
         self.searched.append(query)
-        return Findings("synthèse", self.results)
+        return Findings(self.results)
 
-    async def read(self, url: str, question: str, correlation_id: str | None = None) -> Reading:
+    async def read(self, url: str, correlation_id: str | None = None) -> Reading:
         self.read_urls.append(url)
-        return Reading(
-            url,
-            "Le sommeil des ultra-traileurs",
-            "Ils dorment par siestes de 20 min.",
-            [],
-            self.suspicious,
-        )
+        return Reading(url, "Le sommeil des ultra-traileurs", "Ils dorment par siestes de 20 min.")
 
 
-ARTICLE = Result("https://example.org/ultra-sommeil", "Ultra et sommeil", "Une étude de 2025.")
+ARTICLE = Result("https://example.org/ultra-sommeil", "Ultra et sommeil")
 
 
 @pytest.fixture
@@ -127,7 +120,7 @@ async def test_most_weeks_nothing_is_worth_it_and_nothing_is_sent(
     assert "rien trouvé qui vaille" in curiosity.past()
 
 
-async def test_a_suspicious_page_or_a_made_up_page_number_finds_nothing(
+async def test_a_made_up_page_number_finds_nothing(
     journal: SqliteJournal,
 ) -> None:
     provider = ScriptedProvider(
@@ -138,14 +131,6 @@ async def test_a_suspicious_page_or_a_made_up_page_number_finds_nothing(
     curiosity = curious(journal, None, provider, FakeWeb(ARTICLE), now)
     hunt = await curiosity.tick()
     assert hunt is not None and hunt.outcome == "not worth it"
-
-    provider.extend(
-        reply(json.dumps(LEAD, ensure_ascii=False)), reply(json.dumps({"garder": True, "page": 0}))
-    )
-    now[0] = datetime(2026, 10, 31, 7, 0, tzinfo=PARIS)
-    suspicious = curious(journal, None, provider, FakeWeb(ARTICLE, suspicious=True), now)
-    hunt = await suspicious.tick()
-    assert hunt is not None and hunt.outcome == "page suspicious"
 
 
 async def test_the_hunt_waits_for_its_day_and_catches_up_a_missed_week(
@@ -187,24 +172,14 @@ async def test_subjects_he_names_steer_the_lead_and_what_he_refuses_too(
 
 
 class PdfWeb(FakeWeb):
-    async def read(self, url: str, question: str, correlation_id: str | None = None) -> Reading:
+    async def read(self, url: str, correlation_id: str | None = None) -> Reading:
         raise FetchError(f"{url} is not text (application/pdf)")
 
 
-async def test_a_page_that_cannot_be_read_keeps_what_the_search_said(
-    journal: SqliteJournal,
-) -> None:
+async def test_a_page_that_cannot_be_read_brings_nothing(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
         reply(json.dumps(LEAD, ensure_ascii=False)),
         reply(json.dumps({"garder": True, "page": 0})),
-        reply(json.dumps(LEAD, ensure_ascii=False)),
-        reply(json.dumps({"garder": True, "page": 0})),
     )
-    now = [SATURDAY]
-    hunt = await curious(journal, None, provider, PdfWeb(ARTICLE), now).tick()
-    assert hunt is not None and hunt.found is not None
-    assert hunt.found.summary == "Une étude de 2025."
-    bare = Result("https://example.org/etude.pdf", "Étude", "")
-    now[0] = datetime(2026, 10, 31, 7, 0, tzinfo=PARIS)
-    hunt = await curious(journal, None, provider, PdfWeb(bare), now).tick()
-    assert hunt is not None and hunt.outcome == "page unreadable"
+    hunt = await curious(journal, None, provider, PdfWeb(ARTICLE), [SATURDAY]).tick()
+    assert hunt is not None and hunt.outcome == "page unreadable" and hunt.found is None

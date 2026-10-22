@@ -1,12 +1,12 @@
 """The web desk: what Orion may read, and the record of what it read.
 
-    web.searched  (query, the clerk's answer, the pages found)
-    web.read      (address, question, the clerk's answer, links worth following)
+    web.searched  (query, the pages found)
+    web.read      (address, title, the page's links and pictures; its text is not journaled)
     web.downloaded (address, type, size: a file kept as it is, its content never journaled)
 
-Both carry `Trust.WEB`. The addresses Orion may open are a projection: those the owner wrote
-in a message, those a search returned, the links the clerk picked on a page it read, and that
-page's own pictures (to send the owner a product's photo, not a screenshot). So
+All carry `Trust.WEB`. Orion reads pages itself (D114). The addresses it may open are a
+projection: those the owner wrote in a message, those a search returned, the links of a page
+it read, and that page's own pictures (to send the owner a product's photo). So
 Orion can follow a trail, but never open an address it made up (one could carry the owner's
 data out in its query string).
 """
@@ -24,8 +24,8 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import ModuleSettings
-from orion.web.clerk import Findings, Reading, WebClerk
 from orion.web.fetch import Check, Download, FetchError, download, fetch, normalize
+from orion.web.search import Findings, Reading, WebSearch, reading
 
 SEARCHED = "web.searched"
 READ = "web.read"
@@ -33,12 +33,13 @@ DOWNLOADED = "web.downloaded"
 OWNER_MESSAGE = "message.received"
 BROWSED = "browser.page"
 """A page Orion's browser showed (`orion.computer`): its pictures may be downloaded too."""
+KEPT_PAGES = 20
 _URL = re.compile(r"https?://[^\s<>\"'«»]+", re.IGNORECASE)
 
 
 class WebSettings(ModuleSettings):
     model: str | None = Field(
-        default=None, description="The clerk's model (reads the web); defaults to extractor_model"
+        default=None, description="Unused since D114: searching runs on Orion's own model"
     )
     max_results: int = Field(default=6, ge=1, le=10)
 
@@ -84,12 +85,14 @@ class WebDesk:
     def __init__(
         self,
         journal: EventStore,
-        clerk: WebClerk,
+        searcher: WebSearch,
         http: httpx.AsyncClient | None = None,
         check: Check | None = None,
     ) -> None:
         self._journal = journal
-        self._clerk = clerk
+        self._searcher = searcher
+        self._pages: dict[str, Reading] = {}
+        """The last pages read, by address: their next parts are read without fetching again."""
         self._http = http or httpx.AsyncClient(timeout=20.0)
         self._check = check
         self.state = WebState()
@@ -102,16 +105,12 @@ class WebDesk:
         await self._http.aclose()
 
     async def search(self, query: str, correlation_id: str | None = None) -> Findings:
-        findings = await self._clerk.search(query)
+        findings = await self._searcher.search(query)
         await self._record(
             SEARCHED,
             {
                 "query": query[:300],
-                "answer": findings.answer,
-                "suspicious": findings.suspicious,
-                "results": [
-                    {"url": r.url, "title": r.title, "summary": r.summary} for r in findings.results
-                ],
+                "results": [{"url": r.url, "title": r.title} for r in findings.results],
             },
             "web:search",
             correlation_id,
@@ -119,43 +118,40 @@ class WebDesk:
         return findings
 
     async def may_open(self, url: str) -> bool:
-        await self._runner.catch_up()
-        return normalize(url) in self.state.allowed
+        """Any web address (D115): the server's own and the local network stay out (`fetch`)."""
+        return bool(normalize(url))
 
-    async def read(self, url: str, question: str, correlation_id: str | None = None) -> Reading:
+    async def read(self, url: str, correlation_id: str | None = None) -> Reading:
+        """The page itself, for Orion to read; fetched again only when not read lately."""
         address = normalize(url)
         if not await self.may_open(address):
-            raise NotAllowedError(
-                f"{url} was neither given by the owner nor found by a search or on a page "
-                "already read: search first"
-            )
-        page = await fetch(self._http, address, self._check)
-        reading = await self._clerk.read(page, question)
+            raise NotAllowedError(f"{url} is not a web address (http or https)")
+        kept = self._pages.get(address)
+        if kept is not None:
+            return kept
+        page = reading(await fetch(self._http, address, self._check))
         await self._record(
             READ,
             {
                 "url": address,
                 "final_url": page.url,
-                "question": question[:400],
-                "title": reading.title,
-                "answer": reading.answer,
-                "suspicious": reading.suspicious,
-                "links": [{"url": link.url, "text": link.text} for link in reading.links],
-                "images": [{"url": i.url, "text": i.text} for i in reading.images],
+                "title": page.title,
+                "links": [{"url": link.url, "text": link.text} for link in page.links],
+                "images": [{"url": i.url, "text": i.text} for i in page.images],
             },
             f"web:{address}",
             correlation_id,
         )
-        return reading
+        self._pages[address] = page
+        while len(self._pages) > KEPT_PAGES:
+            self._pages.pop(next(iter(self._pages)))
+        return page
 
     async def download(self, url: str, limit: int, correlation_id: str | None = None) -> Download:
         """A file at an address the owner gave or a search found, byte for byte."""
         address = normalize(url)
         if not await self.may_open(address):
-            raise NotAllowedError(
-                f"{url} was neither given by the owner nor found by a search or on a page "
-                "already read: search first"
-            )
+            raise NotAllowedError(f"{url} is not a web address (http or https)")
         got = await download(self._http, address, limit, self._check)
         await self._record(
             DOWNLOADED,
@@ -178,7 +174,7 @@ class WebDesk:
                 NewEvent(
                     kind=kind,
                     payload=payload,
-                    provenance=Provenance(source=source, actor="orion:web-clerk"),
+                    provenance=Provenance(source=source, actor="orion:web"),
                     trust=Trust.WEB,
                     correlation_id=correlation_id,
                 )

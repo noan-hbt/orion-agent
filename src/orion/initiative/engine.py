@@ -119,7 +119,12 @@ class AlertSource(Protocol):
 @dataclass(frozen=True)
 class DigestLine:
     text: str
+    """For Orion, who writes the point: it may hold a note to itself."""
     trust: Trust = Trust.SYSTEM
+    plain: str = ""
+    """What the owner may read as it is, if Orion's own wording fails; empty: nothing. Seen
+    for real: the evening recap's note to Orion (« ouvre le point du soir par là ») went out
+    as the message."""
 
 
 class DigestSource(Protocol):
@@ -345,8 +350,10 @@ def _read_while_writing(messages: Sequence[Message]) -> str:
 
 
 def _point(lines: str, extra: list[str]) -> str:
-    body = "\n".join(part for part in (lines, *extra) if part)
-    return f"Pour la suite :\n{body}" if body else ""
+    """The point as the owner reads it when Orion's own wording failed: what is left to do,
+    then what the sources wrote for him (`DigestLine.plain`)."""
+    parts = [*extra, f"Pour la suite :\n{lines}" if lines else ""]
+    return "\n\n".join(part for part in parts if part)
 
 
 class InitiativeEngine:
@@ -551,7 +558,7 @@ class InitiativeEngine:
                 key=key,
                 notice=f"Points à signaler dans ce résumé :\n{body}" if body else "",
                 why=f"c'est le point de {slot:%H:%M}",
-                fallback=_point(readable([line for _, line in lines]), [e.text for e in extra]),
+                fallback=_point(readable([line for _, line in lines]), [e.plain for e in extra]),
                 trust=min(
                     [
                         *(c.trust for c in commitments if c.id in {i for i, _ in lines}),
@@ -630,9 +637,11 @@ class InitiativeEngine:
         if candidate.timer is not None and candidate.timer.by_call and await self._ring(candidate):
             return True
         text, how = await self._compose(candidate, now)
-        if text is None:
+        if not text:  # silence, or a failure with nothing the owner could read as it is
             for item in (candidate, *together):
-                await self._record(SUPPRESSED, item, now, reason="model chose silence")
+                await self._record(
+                    SUPPRESSED, item, now, reason="model chose silence" if text is None else how
+                )
             return False
         correlation_id = new_id()
         await self._notifier.notify(text, correlation_id)

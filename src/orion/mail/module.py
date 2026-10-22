@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from orion.mail.quarantine import Quarantine
 from orion.mail.service import Fetch, Mailbox, MailSettings
 from orion.mail.smtp import Postman, Send
 from orion.mail.tidy import local_draft, local_tidy
@@ -19,8 +18,8 @@ if TYPE_CHECKING:
 class MailModule(Module):
     name = "mail"
     offer = (
-        "Lire ses mails (Gmail, iCloud) en quarantaine, lui signaler l'important et répondre "
-        "avec son accord : un mot de passe d'application dans `[modules.mail]`."
+        "Lire ses mails (Gmail, iCloud), lui signaler l'important et répondre avec son "
+        "accord : un mot de passe d'application dans `[modules.mail]`."
     )
     instructions = "mail.md"
     settings_model = MailSettings
@@ -35,14 +34,11 @@ class MailModule(Module):
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: MailSettings = self.settings
-        model = settings.quarantine_model or self.config.agent.extractor_model
         self.mailbox = Mailbox(
             plate.journal,
             settings,
-            Quarantine(plate.provider, model),
             self.config.agent.timezone,
             self._fetch or (plate.guardian.mail if plate.guardian else None),
-            memory=plate.memory,
         )
         await self.mailbox.start()
         postman = Postman(

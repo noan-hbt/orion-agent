@@ -4,19 +4,11 @@ Orion itself opens a page, reads it, clicks, types, signs in to the owner's acco
 sends forms, and decides what to do next with everything it knows: there is no separate web
 agent (D113). One live browser per conversation, closed after a few idle minutes.
 
-Because Orion's context holds the owner's life, three rules keep the pages from carrying it
-out, whatever a page says:
-
-- the network is read-only (`browser.Session`): nothing is sent, submitted or bought, but
-  by `send`, which the owner approves (the page, what is typed, the button), and only to that
-  page's site for that moment; and by `login`, which signs in to his account with a session or
-  a login the guardian lends, the owner approving it (D113);
-- an address is opened only if the owner wrote it, a search returned it, or it is a link on a
-  page already opened (`WebState`, extended with the links seen here): never one Orion made up,
-  which could hold the owner's data in its query string;
-- typing is limited to words the owner wrote in the message being answered: a search box
-  submitted by GET is a way out too, so a page cannot get Orion to type an address or a phone
-  number, even one the owner gave earlier.
+It browses like a person (D115): any address, any text typed, forms sent, on the owner's
+accounts with the sessions and logins the guardian keeps, lent when Orion asks. The protections
+there were stopping it more than they helped. What remains costs it nothing: the server's own
+addresses (the guardian, the local network) are never reached (`browser.Session`), and a lent
+password or 2FA code is masked on every page Orion reads.
 
 Every page shown is journaled with `Trust.WEB` and a `web:<address>` source, so what it led to
 can be traced and contained (`memory.provenance`).
@@ -28,12 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-import unicodedata
-from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import quote, quote_plus
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -43,11 +33,9 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
-from orion.guardian.limits import host_in
-from orion.guardian.logins import site_of
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import normalize
-from orion.web.service import OWNER_MESSAGE, WebState
+from orion.web.service import WebState
 
 log = structlog.get_logger(__name__)
 
@@ -56,46 +44,23 @@ IDLE_SECONDS = 600.0
 SHOWN_CHARS = 4000
 """Page text shown after each action; `browser` read gives the rest, part by part."""
 READ_CHARS = 60_000
-TURNS_KEPT = 50
-_WORD = re.compile(r"\w+", re.UNICODE)
 _HREF = re.compile(r" -> (https?://\S+)$")
-
-
-def _words(text: str) -> set[str]:
-    plain = unicodedata.normalize("NFKD", text.casefold())
-    plain = "".join(c for c in plain if not unicodedata.combining(c))
-    return set(_WORD.findall(plain))
 
 
 @dataclass
 class BrowsingState(WebState):
-    """`WebState` plus the links seen in the browser and what the owner wrote, per turn."""
+    """`WebState` plus the pages the browser showed and their links."""
 
     name: str = "browser"
-    said: OrderedDict[str, str] = field(default_factory=OrderedDict[str, str])
-    """correlation id → the owner's words in that turn (with what they added during it)."""
-
-    async def reset(self) -> None:
-        await super().reset()
-        self.said.clear()
 
     async def apply(self, event: Event) -> None:
         await super().apply(event)
         if event.redacted:
             return
-        payload: dict[str, Any] = event.payload
         if event.kind == PAGE:
+            payload: dict[str, Any] = event.payload
             self.allowed.add(str(payload["url"]))
             self.allowed.update(str(link) for link in payload.get("links", []))
-        elif event.kind == OWNER_MESSAGE and event.trust >= Trust.OWNER and event.correlation_id:
-            turn = event.correlation_id
-            self.said[turn] = self.said.get(turn, "") + "\n" + str(payload.get("text", ""))
-            self.said.move_to_end(turn)
-            while len(self.said) > TURNS_KEPT:
-                self.said.popitem(last=False)
-
-    def owner_words(self, turn: str) -> set[str]:
-        return _words(self.said.get(turn, ""))
 
 
 class Refused(ValueError):
@@ -117,9 +82,6 @@ class _Live:
 
 
 MASK = "••••••"
-LOGIN_SECONDS = 300.0
-"""After `login` with a password: the time to sign in, sending only to the login's sites."""
-SEND_SECONDS = 8.0
 
 
 def masked(text: str, hidden: set[str]) -> str:
@@ -184,27 +146,15 @@ class BrowserDesk:
     # -- actions ------------------------------------------------------------------------------
 
     async def open(self, url: str, ctx: ToolContext) -> str:
-        await self._runner.catch_up()
         address = normalize(url)
-        if not address or address not in self.state.allowed:
-            raise Refused(
-                "This address was not given by the owner, found by a search or linked from a "
-                "page you opened. Search for it, or ask the owner for the link."
-            )
+        if not address:
+            raise Refused(f"{url} is not a web address (http or https).")
         return await self._act(ctx, lambda s: s.goto(address))
 
     async def click(self, element: int, ctx: ToolContext) -> str:
         return await self._act(ctx, lambda s: s.click(element))
 
     async def type(self, element: int, text: str, enter: bool, ctx: ToolContext) -> str:
-        await self._runner.catch_up()
-        stray = sorted(_words(text) - self.state.owner_words(ctx.correlation_id))
-        if stray:
-            raise Refused(
-                "You may only type words the owner wrote in the message you are answering (a "
-                f"page could make you send their data). Not in it: {', '.join(stray[:8])}. "
-                "Use their own words, or ask them."
-            )
         return await self._act(ctx, lambda s: s.type(element, text, enter))
 
     async def select(self, element: int, option: str, ctx: ToolContext) -> str:
@@ -234,8 +184,8 @@ class BrowserDesk:
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
     async def login(self, args: Any, ctx: ToolContext) -> str:
-        """Sign in to the owner's account: his session, or his login (D113). The guardian lends
-        them for this yes (or within an autonomy), as it lends them to no one else."""
+        """Open the owner's account: his session, or his login (D113), lent by the guardian when
+        Orion asks (D115). It opens `url`, or the page kept with the account."""
         if not args.session and not args.login:
             raise Refused("Name a session or a login (`browser` accounts lists them).")
         if self.guardian is None:
@@ -256,11 +206,11 @@ class BrowserDesk:
             raise Refused(f"The guardian did not lend it: {exc}") from exc
         if state is not None:
             sites = sites or list(state.get("domains") or [])
-        start = (
-            args.url if args.url and host_in(urlsplit(str(args.url)).hostname or "", sites) else ""
-        )
+        start = normalize(str(args.url)) if args.url else ""
         if lent is not None:
             start = start or str(lent.get("url") or "")
+        if state is not None:  # the page kept with the session, the one Orion chose (D115)
+            start = start or str(dict(state["state"].get("orion") or {}).get("url") or "")
         start = start or (f"https://{sites[0]}/" if sites else "")
         if not start:
             raise Refused("This account names no site.")
@@ -274,12 +224,10 @@ class BrowserDesk:
 
                 live.login = {**lent, "code": code}
                 live.hidden.add(str(lent["password"]))
-                live.session.open_window(sites, LOGIN_SECONDS)
         said = await self._act(ctx, lambda s: s.goto(start))
         how = (
-            f"Identifiant prêt : `browser` fill tape l'identifiant, le mot de passe ou le code "
-            f"(tu ne les vois jamais), puis clique pour te connecter : pendant 5 minutes, ton "
-            f"navigateur peut envoyer à {', '.join(sites)}, nulle part ailleurs.\n\n"
+            "Identifiant prêt : `browser` fill tape l'identifiant, le mot de passe ou le code "
+            "(tu ne les vois jamais), puis clique pour te connecter.\n\n"
             if lent is not None
             else "Ouvert avec sa session.\n\n"
         )
@@ -305,31 +253,6 @@ class BrowserDesk:
             value = str(login[what])
         sites = list(login["sites"])
         return await self._act(ctx, lambda s: s.fill_secret(element, value, sites, what))
-
-    async def send(self, args: Any, ctx: ToolContext) -> str:
-        """What the owner approved: on this page, type these texts, click this, sending only to
-        the page's site, for a moment."""
-        live = self._live.get(ctx.thread_id)
-        page = live.session.page if live is not None else None
-        if live is None or page is None:
-            raise Refused("No page is open: browser open first.")
-        site = site_of(page.url)
-        if not site or site != site_of(args.page):
-            raise Refused(
-                f"The page shown is now {page.url}, not the one approved: ask again for this one."
-            )
-
-        async def sending(session: Session) -> None:
-            for given in args.fields:
-                await session.type(given.element, given.text, False)
-            session.open_window([site], SEND_SECONDS)
-            try:
-                await session.click(args.element)
-                await session.settle()
-            finally:
-                session.close_window()
-
-        return await self._act(ctx, sending)
 
     async def accounts(self) -> str:
         if self.guardian is None:
@@ -435,8 +358,8 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     if blocked:
         lines += [
             "",
-            "Bloqué (ton navigateur n'envoie rien de lui-même ; pour envoyer, `browser` send, "
-            "que le propriétaire approuve) : " + "; ".join(blocked[:3]),
+            "Bloqué (une adresse du serveur lui-même ou de son réseau, jamais atteinte) : "
+            + "; ".join(blocked[:3]),
         ]
     return "\n".join(lines)
 
@@ -515,29 +438,15 @@ class FillInput(BaseModel):
     )
 
 
-class Typed(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    element: int = Field(ge=1)
-    text: str = Field(max_length=500)
-
-
-class SendInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    page: str = Field(max_length=500, description="The address of the page shown")
-    fields: list[Typed] = Field(
-        default_factory=list[Typed], max_length=20, description="Texts to type first"
-    )
-    element: int = Field(ge=1, description="The button that sends")
-    what: str = Field(max_length=300, description="What it does, for the owner (« réserver… »)")
-
-
 class ConnectInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,40}$", description="e.g. doctolib")
-    site: str = Field(max_length=300, description="The sign-in page's address, or the site")
+    site: str = Field(
+        max_length=300,
+        description="The full address of the page to keep with the account: where he signs "
+        "in, or the page you will come back to (his timetable…), not just the domain",
+    )
     keep: Literal["session", "password"] = Field(
         default="session",
         description="session: he signs in himself from his phone, in the guardian's browser "
@@ -653,25 +562,17 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
         tool(
             "browser_login",
-            "Sign in to one of the owner's accounts: with his session, or his login (you type "
-            "it with fill without seeing it). He approves.",
+            "Open one of the owner's accounts: with his session, or his login (you type it "
+            "with fill without seeing it).",
             LoginInput,
             run(lambda a, c: desk.login(a, c)),
-            Effect.EXTERNAL,
+            Effect.INTERNAL,
         ),
         tool(
             "browser_fill",
             "After login with a login: type his username, password or 2FA code into a field.",
             FillInput,
             run(lambda a, c: desk.fill(a.element, a.field, c)),
-        ),
-        tool(
-            "browser_send",
-            "Send a form of the page shown (book, order, post): type these texts, then click "
-            "the button. He approves exactly that; it sends only to the page's site.",
-            SendInput,
-            run(lambda a, c: desk.send(a, c)),
-            Effect.EXTERNAL,
         ),
         tool(
             "browser_accounts",

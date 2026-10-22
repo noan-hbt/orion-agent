@@ -12,9 +12,8 @@ if the owner wants), and the browser signs in again by itself, on any site:
   and for a few minutes the browser may send only to those sites;
 - the 2FA secret never leaves the guardian: the browser asks it for the current code, with the
   loan's id, while the loan lasts;
-- lent like a session: for a sign-in the owner approved (`browser` login naming that login),
-  or done alone within an autonomy whose sites cover every site of the login. Each loan and
-  code is recorded.
+- lent like a session, when Orion's browser asks for it (D115). Each loan and code is
+  recorded.
 
 Logins come from the owner's phone (the guardian's own form, D94), from `orion logins add` on
 the server, or by importing a password manager's CSV export (KeePass, KeePassXC, Bitwarden,
@@ -47,10 +46,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from orion.channels.inkbox import GRANT_HEADER
 from orion.channels.telegram import TelegramError, check_init_data
 from orion.guardian.ledger import LOGIN_ADDED, LOGIN_CODE, LOGIN_LENT, LOGIN_REMOVED, Ledger
-from orion.guardian.limits import host_in
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -278,35 +275,14 @@ class LoginDesk:
         return JSONResponse({"sessions": sessions, "logins": logins})
 
     async def _lend(self, request: Request) -> Response:
-        """The username and password for one task the owner approved, or did alone within
-        limits that cover every site of the login. Lent once per approval."""
+        """The username and password for Orion's browser, when it asks (D115)."""
         name = str(request.path_params["name"])
-        params = await _body(request)
         ledger = self.service.ledger
         await ledger.catch_up()
         login = read_login(self.service.config, name)
         if name not in ledger.state.logins or login is None:
             return JSONResponse({"error": f"guardian: no login {name!r}"}, 404)
-        grant = request.headers.get(GRANT_HEADER)
-        if grant:
-            if grant in ledger.state.logins_lent_for:
-                return await self.service.deny(f"login {name}", "that approval was already used")
-            # A task that also borrows a session spends the yes there, after this loan.
-            reason = await self.service.use_grant(
-                grant,
-                "browser",
-                lambda p: p.get("action") == "login" and p.get("login") == name,
-                consume=not params.get("session"),
-            )
-            if reason is not None:
-                return await self.service.deny(f"login {name}", reason)
-            how = grant
-        else:
-            bounds = ledger.state.limits.get("browser") or {}
-            covered = all(host_in(s, list(bounds.get("domains") or [])) for s in login.sites)
-            if not covered or not await self.service.autonomous("browser", params):
-                return await self.service.deny(f"login {name}", "signing in needs approval")
-            how = "alone"
+        how = "asked"  # lent when Orion asks (D115); each loan is recorded
         loan = tokens.token_urlsafe(18)
         self.loans = {k: v for k, v in self.loans.items() if v.until > self.monotonic()}
         self.loans[loan] = Loan(name, self.monotonic() + LEND_SECONDS)
