@@ -289,3 +289,41 @@ def test_what_he_reads_at_night_counts_for_the_evening_not_the_next_day() -> Non
     assert settings.attention_day(datetime(2026, 10, 21, 1, 30, tzinfo=paris)) == date(2026, 10, 20)
     assert settings.attention_day(datetime(2026, 10, 21, 8, 30, tzinfo=paris)) == date(2026, 10, 21)
     assert settings.attention_day(datetime(2026, 10, 21, 23, 0, tzinfo=paris)) == date(2026, 10, 21)
+
+
+async def test_a_failed_point_never_sends_oriens_notes_to_itself(world: World) -> None:
+    """Seen for real: the evening point's draft failed, and « Pour la suite : Récap du jour
+    (ouvre le point du soir par là…) — ce que j'ai fait pour lui » went out as it was."""
+    from orion.initiative.engine import DigestLine
+
+    class Notes:
+        def __init__(self, plain: str) -> None:
+            self.plain = plain
+
+        async def digest(
+            self, now: datetime, since: datetime, first_slot: bool, last_slot: bool
+        ) -> list[DigestLine]:
+            return [DigestLine("Note pour toi : ouvre le point par là.", plain=self.plain)]
+
+    def engine(plain: str) -> InitiativeEngine:
+        return InitiativeEngine(
+            world.orion,
+            world.journal,
+            world.timers,
+            world.inbox,
+            InitiativeSettings(digests=(time(19, 0),)),
+            memory=world.memory.store,
+            clock=world.clock,
+            digests=[Notes(plain)],
+        )
+
+    world.clock.now = at(20, 19, 1)
+    world.provider.extend(fail(), fail())
+    assert await engine("").tick() == []
+    assert world.inbox.messages == []  # nothing he could read as it is: nothing sent
+    world.clock.now = at(21, 19, 1)
+    world.provider.extend(fail(), fail())
+    assert await engine("Aujourd'hui, j'ai :\n- écrit à Angèle").tick() != []
+    [sent] = world.inbox.messages
+    assert sent == "Aujourd'hui, j'ai :\n- écrit à Angèle"
+    assert "Note pour toi" not in sent
