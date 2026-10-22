@@ -141,9 +141,14 @@ def _computer_task_send(params: dict[str, Any]) -> str:
     session = (
         f"\nAvec ta session connectée « {params['session']} »." if params.get("session") else ""
     )
+    login = (
+        f"\nEn se connectant à ton compte avec ton identifiant gardé « {params['login']} »."
+        if params.get("login")
+        else ""
+    )
     return (
         "Avant que je la lance sur mon ordinateur, voici la tâche (elle peut envoyer ce "
-        f"qu'elle dit) :\n{params.get('brief')}{sites}{session}"
+        f"qu'elle dit) :\n{params.get('brief')}{sites}{session}{login}"
     )
 
 

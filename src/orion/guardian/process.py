@@ -25,6 +25,8 @@ from orion.core.journal import SqliteJournal
 from orion.federation.crypto import Identity
 from orion.guardian.federation import FederationEdge, admin_token
 from orion.guardian.ledger import Ledger
+from orion.guardian.logins import LoginDesk, LoginForm
+from orion.guardian.remote import RemoteLogin
 from orion.guardian.service import GuardianError, GuardianService
 from orion.guardian.telegram import TelegramGate
 from orion.guardian.vault import Vault, load_vault
@@ -134,8 +136,14 @@ async def run(config: OrionConfig) -> None:
         service.restart = lambda: reexec(GUARDIAN_RESTART_AFTER)
         edge = federation_edge(service) if config.federation.enabled else None
         gate = telegram_gate(service) if config.channels.telegram.enabled else None
+        LoginDesk(service).install()
+        remote: RemoteLogin | None = None
         if gate is not None and config.guardian.secrets_url:
-            Vault(service, gate, from_vault).install()
+            vault = Vault(service, gate, from_vault)
+            LoginForm(service, gate, vault.base).install(vault)
+            remote = RemoteLogin(service, gate, vault.base)
+            remote.install(vault)
+            vault.install()
         try:
             await service.start()
             async with asyncio.TaskGroup() as group:
@@ -145,6 +153,8 @@ async def run(config: OrionConfig) -> None:
                     log.info("guardian.public_listener", name=name, host=host, port=port)
                     group.create_task(_server(app, host=host, port=port).serve())
         finally:
+            if remote is not None:
+                await remote.aclose()
             if edge is not None:
                 await edge.aclose()
             if gate is not None:

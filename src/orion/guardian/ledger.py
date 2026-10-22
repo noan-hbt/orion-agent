@@ -10,6 +10,7 @@ from the ledger on every start, like the core's.
     guardian.calendar.written  guardian.mail.sent
     guardian.autonomy.granted  guardian.autonomy.revoked  guardian.autonomous
     guardian.session.added  guardian.session.removed  guardian.session.lent
+    guardian.login.added  guardian.login.removed  guardian.login.lent  guardian.login.code
     guardian.telegram.answer
     federation.invite.created  federation.invite.used  federation.peer.added
     federation.peer.revoked  federation.received  federation.sent
@@ -40,6 +41,10 @@ AUTONOMOUS = "guardian.autonomous"
 SESSION_ADDED = "guardian.session.added"
 SESSION_REMOVED = "guardian.session.removed"
 SESSION_LENT = "guardian.session.lent"
+LOGIN_ADDED = "guardian.login.added"
+LOGIN_REMOVED = "guardian.login.removed"
+LOGIN_LENT = "guardian.login.lent"
+LOGIN_CODE = "guardian.login.code"
 TELEGRAM_ANSWER = "guardian.telegram.answer"
 CONFIG_CHANGED = "guardian.config.changed"
 INVITE_CREATED = "federation.invite.created"
@@ -106,6 +111,12 @@ class GuardianState:
     """action → the limits its autonomy was granted with (`guardian.limits`)."""
     sessions: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
     """Logged-in site sessions the guardian keeps: name → the sites they are for."""
+    logins: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    """The owner's logins the guardian keeps (D111): name → the sites they are for."""
+    logins_totp: set[str] = field(default_factory=set[str])
+    """The logins whose 2FA secret it keeps too."""
+    logins_lent_for: set[str] = field(default_factory=set[str])
+    """The approvals a login was already lent for."""
     telegram_answers: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
     """The owner's answers to the guardian's Telegram questions, as they passed (D89)."""
     telegram_updates: set[int] = field(default_factory=set[int])
@@ -126,6 +137,9 @@ class GuardianState:
         self.autonomous_days.clear()
         self.limits.clear()
         self.sessions.clear()
+        self.logins.clear()
+        self.logins_totp.clear()
+        self.logins_lent_for.clear()
         self.telegram_answers.clear()
         self.telegram_updates.clear()
         self._seq = 0
@@ -146,6 +160,18 @@ class GuardianState:
             self.sessions[str(payload["name"])] = [str(d) for d in payload["domains"]]
         elif kind == SESSION_REMOVED:
             self.sessions.pop(str(payload["name"]), None)
+        elif kind == LOGIN_ADDED:
+            name = str(payload["name"])
+            self.logins[name] = [str(d) for d in payload["domains"]]
+            if payload.get("totp"):
+                self.logins_totp.add(name)
+            else:
+                self.logins_totp.discard(name)
+        elif kind == LOGIN_REMOVED:
+            self.logins.pop(str(payload["name"]), None)
+            self.logins_totp.discard(str(payload["name"]))
+        elif kind == LOGIN_LENT:
+            self.logins_lent_for.add(str(payload["how"]))
         elif kind == TELEGRAM_ANSWER:
             self.telegram_updates.add(int(payload["update_id"]))
             self.telegram_answers.append(dict(payload))

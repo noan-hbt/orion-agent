@@ -2285,3 +2285,76 @@ Il voulait que ces travaux tournent à part, et que l'aide échange avec Orion p
 
 Budget du prompt relevé (38,5 k et 41 k) après avoir allégé les missions : c'est une capacité
 de plus, voulue.
+
+## D111 — Un coffre d'identifiants, comme KeePass
+
+*22/10/2026 · acceptée · complète D49 et D94*
+
+Une session prêtée (D49) expire, et il fallait alors se reconnecter à la main, sur un
+ordinateur avec un écran. Le propriétaire voulait qu'Orion se connecte lui-même, sur n'importe
+quel site. Le gardien garde donc aussi, comme KeePass, un identifiant par site : l'adresse,
+l'identifiant, le mot de passe et, s'il le veut, la clé de double authentification
+(`orion.guardian.logins`).
+
+- **N'importe quel site** : l'agent d'une tâche approuvée (`computer_task_send`, avec `login`)
+  conduit la page de connexion comme toute autre page (bandeau de cookies, « Se connecter »,
+  deux étapes…). Il demande à `fill_login` de taper l'identifiant, le mot de passe ou un code
+  dans le champ qu'il désigne. Pas de recette par site.
+- **Le modèle ne voit jamais un secret** :
+  - c'est le code qui tape, pas le modèle ;
+  - chaque page lue par l'agent a le mot de passe et les codes masqués, tels quels ou encodés
+    dans une adresse ; son compte rendu aussi ;
+  - le journal ne les contient pas.
+  Une page piégée ne peut donc pas lui faire recopier le mot de passe ailleurs.
+- **Seulement au bon endroit** : rien n'est tapé hors des sites de l'identifiant, et le mot de
+  passe ne va que dans un champ mot de passe.
+- **La clé 2FA ne quitte jamais le gardien** : l'agent lui demande le code du moment, avec
+  l'identifiant du prêt, tant que la tâche dure (une heure au plus).
+- **Prêté comme une session** : pour une tâche dont le propriétaire a approuvé la consigne et
+  qui nomme cet identifiant, une seule fois ; ou faite seule, dans une autonomie dont les sites
+  couvrent tous ceux de l'identifiant. Un même oui prête la session et l'identifiant. Chaque
+  prêt et chaque code sont notés dans le registre du gardien.
+- **Comment il les reçoit** :
+  - depuis son téléphone : Orion demande (`computer_login_ask`) et le gardien lui envoie son
+    propre formulaire (D94) ;
+  - sur le serveur : `orion logins add` (le mot de passe est saisi, jamais en argument) ;
+  - en important l'export CSV de son gestionnaire (KeePass, KeePassXC, Bitwarden, Chrome,
+    Firefox, 1Password) : `orion logins import`.
+
+Ce qui reste hors de portée : un code envoyé par SMS ou par mail, un captcha, une validation
+dans l'application du site. L'agent s'arrête et le dit. Les secrets sont dans des fichiers 0600
+du gardien, non chiffrés : une clé posée sur la même machine ne protégerait de rien. Garder la
+clé 2FA d'un site met les deux facteurs sur le serveur : le propriétaire le choisit site par
+site.
+
+    guardian.login.added  guardian.login.removed  guardian.login.lent  guardian.login.code
+
+## D112 — Se connecter depuis Telegram, sans deuxième installation
+
+*22/10/2026 · acceptée · complète D49 et D111*
+
+Prêter une session (D49) demandait `orion login` sur un ordinateur avec un écran, donc un
+deuxième Orion installé quelque part. Le propriétaire n'a que son téléphone sous la main, et
+c'était un frein. Désormais, Orion demande (`computer_login_ask`, par défaut une session), et
+le gardien envoie sur Telegram un bouton qui ouvre **sa propre Mini App** (`/secrets/browse/`,
+`orion.guardian.remote`) :
+
+- l'image d'un navigateur que le gardien fait tourner sur le serveur, qui se présente comme
+  celui d'un téléphone. Il touche l'image pour cliquer, tape le texte en dessous, puis « J'ai
+  fini » ;
+- il se connecte comme sur son téléphone : code reçu par SMS, captcha et validation dans
+  l'application compris, ce que l'agent ne sait pas faire (D111) ;
+- le gardien garde la session (cookies, et le téléphone qui l'a faite : un site lie souvent sa
+  session au navigateur), comme `orion sessions add`. Rien de ce qu'il tape n'est noté ;
+- le cœur n'est jamais devant : tout passe par l'écoute publique du gardien. Chaque action est
+  vérifiée sur les données de lancement signées par Telegram (le propriétaire, ce bot), l'image
+  n'est servie qu'une fois la page ouverte par lui, et le navigateur se ferme quand il a fini,
+  qu'il abandonne, ou après 10 minutes sans rien toucher. Comme celui du cœur, il n'atteint
+  jamais une adresse privée.
+
+`orion login` reste possible sur un ordinateur. Le gardien a maintenant besoin du navigateur
+(`PLAYWRIGHT_BROWSERS_PATH` dans `orion-guardian.service`).
+
+Au passage, la page qui ouvre la console depuis Telegram restait sur « Un instant… » dès que
+quelque chose échouait (le script de Telegram absent, le serveur muet, une erreur). Elle dit
+maintenant pourquoi.

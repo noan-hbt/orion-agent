@@ -74,7 +74,7 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
   - Pour une copie hors du serveur, avec rclone vers OVH Object Storage par exemple :
     `rclone sync /srv/orion/backups ovh:orion-backups` dans un timer à toi.
   - Le journal contient ta vie : chiffre le bucket.
-- **Mise à jour** : automatique (D94). Toutes les 15 minutes, `orion-update.timer` regarde
+- **Mise à jour** : automatique (D94). Toutes les 2 minutes, `orion-update.timer` regarde
   si la branche suivie a du nouveau. Si oui, il installe, vérifie la config, redémarre et
   surveille les deux processus 75 s. Si quelque chose casse, il revient à la version d'avant,
   écarte ce commit et te prévient sur Telegram ; il te prévient aussi quand ça s'est bien passé.
@@ -91,17 +91,42 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
 Pour qu'Orion agisse sur un site où tu as un compte (prendre un rendez-vous sur Doctolib,
 suivre une commande), le gardien garde ta session, comme il garde tes mots de passe :
 
-1. Sur ton ordinateur (il faut un écran) : `orion login doctolib https://www.doctolib.fr/sessions/new`.
-   Une fenêtre s'ouvre ; connecte-toi, puis appuie sur Entrée dans le terminal. La session est
-   écrite dans `doctolib.session.json`.
-2. Copie le fichier sur le serveur, puis : `sudo deploy/orion-admin sessions add doctolib
-   doctolib.session.json`, et efface le fichier copié.
+1. **Depuis ton téléphone (D112)** : dis à Orion « connecte-toi à mon Doctolib ». Il t'envoie
+   sur Telegram un bouton « Me connecter », qui ouvre le navigateur du gardien, sur le
+   serveur. Touche l'image pour cliquer, tape le texte en dessous, connecte-toi comme
+   d'habitude (code par SMS compris), puis « J'ai fini ». Le gardien garde la session, jamais
+   ce que tu as tapé.
+2. Ou, sur un ordinateur avec un écran et Orion installé :
+   `orion login doctolib https://www.doctolib.fr/sessions/new`, puis copie le fichier sur le
+   serveur et `sudo deploy/orion-admin sessions add doctolib doctolib.session.json`.
 3. Orion ne l'utilise que pour une tâche que tu approuves (`computer_task_send` avec cette
    session et ce texte exact), ou seule si tu lui as laissé ce genre de tâche sur ces sites.
    Chaque prêt est noté dans le registre du gardien.
 
 `orion-admin sessions list` montre les sessions gardées, `sessions remove <nom>` en retire une.
-Une session expire comme dans ton navigateur : refais l'étape 1 quand le site te déconnecte.
+Une session expire comme dans ton navigateur : reconnecte-toi depuis Telegram, ou laisse le
+gardien garder ton identifiant (ci-dessous) pour qu'Orion se reconnecte seul.
+
+### Tes identifiants, comme KeePass (D111)
+
+Une session expire. Pour qu'Orion se reconnecte seul, le gardien peut aussi garder ton
+identifiant d'un site : l'identifiant, le mot de passe et, si tu veux, la clé de double
+authentification. L'agent de la tâche approuvée remplit la page de connexion, mais c'est le
+gardien qui fournit les valeurs, seulement sur ce site : ni le modèle ni le journal ne voient
+ton mot de passe.
+
+- **Depuis ton téléphone** : dis à Orion « garde mon identifiant Doctolib ». Il t'envoie le
+  formulaire du gardien sur Telegram.
+- **Sur le serveur** : `sudo /srv/orion/app/deploy/orion-admin logins add doctolib --site
+  doctolib.fr --user moi@mail.fr --totp`. Le mot de passe et la clé 2FA sont demandés, jamais
+  tapés dans la commande.
+- **Depuis ton gestionnaire** : exporte-le en CSV (KeePass, KeePassXC, Bitwarden, Chrome,
+  Firefox, 1Password), copie-le sur le serveur, puis
+  `sudo /srv/orion/app/deploy/orion-admin logins import - < export.csv`, et efface le fichier :
+  il contient tes mots de passe en clair.
+
+`logins list` montre les identifiants gardés, `logins remove <nom>` en retire un. Un code reçu
+par SMS ou par mail, un captcha : l'agent s'arrête et te le dit.
 
 Pour qu'Orion envoie des mails ou des formulaires seul, ajoute `"mail_send"` ou
 `"computer_task_send"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites

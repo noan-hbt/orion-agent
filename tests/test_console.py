@@ -256,3 +256,53 @@ async def test_the_dashboard_tells_attention_silences_actions_and_cost(
     alone = page.split("sans te demander")[1]
     assert "contact_message" in alone and "recall" not in alone
     assert "0.25 $ sur 7 jours" in page and "90 %" in page and "thinking 0.25 $" in page
+
+
+async def test_the_console_launch_page_says_why_it_cannot_open(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """Seen for real: the Mini App stayed on « Un instant… ». Whatever fails, it says so."""
+    from playwright.async_api import Route, async_playwright
+
+    console = Console(
+        Gate(journal, session_key(tmp_path)),
+        journal,
+        None,  # pyright: ignore[reportArgumentType]  # the launch page reads no memory
+        None,
+        None,  # pyright: ignore[reportArgumentType]
+        "Europe/Paris",
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=console_app(console)), base_url=BASE
+    ) as http:
+        page_html = (await http.get("/console/telegram")).text
+
+    async def launch(telegram_script: str | None, answer: int) -> str:
+        async def serve(route: Route) -> None:
+            url = route.request.url
+            if "telegram-web-app.js" in url:
+                if telegram_script is None:
+                    await route.abort()
+                else:
+                    await route.fulfill(body=telegram_script, content_type="text/javascript")
+            elif route.request.method == "POST":
+                await route.fulfill(status=answer, body="")
+            else:
+                await route.fulfill(body=page_html, content_type="text/html; charset=utf-8")
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch()
+            page = await browser.new_page()
+            await page.route("**/*", serve)
+            await page.goto("https://orion.test/console/telegram")
+            await page.wait_for_function(
+                "!document.getElementById('m').textContent.startsWith('Un')"
+            )
+            said = await page.inner_text("#m")
+            await browser.close()
+        return said
+
+    assert "bouton « Console »" in await launch(None, 200)  # Telegram's script did not load
+    stub = "window.Telegram={WebApp:{initData:'owner',ready(){}}};"
+    assert "refusé (502)" in await launch(stub, 502)
+    assert "Seul le propriétaire" in await launch(stub, 403)

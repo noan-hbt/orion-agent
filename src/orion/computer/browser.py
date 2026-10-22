@@ -53,7 +53,8 @@ _SNAPSHOT = """(textChars) => {
     el.setAttribute('data-orion-id', String(n));
     const tag = el.tagName.toLowerCase();
     const kind = el.type && tag !== 'a' ? `(${el.type})` : '';
-    const label = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') ||
+    const value = el.type === 'password' ? '' : el.value;
+    const label = (el.innerText || value || el.placeholder || el.getAttribute('aria-label') ||
                    el.title || el.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
     const href = tag === 'a' && el.href ? ` -> ${el.href}` : '';
     out.push(`[${n}] ${tag}${kind} ${label}${href}`);
@@ -122,6 +123,10 @@ class Session:
         """When sending is allowed: only to these sites (and their subdomains); empty: any."""
         self.storage_state: dict[str, Any] | None = None
         """A logged-in session (cookies), lent by the guardian for this one task."""
+        self.phone: dict[str, int] | None = None
+        """A phone's screen (width, height): the browser poses as a phone's, with touch. A
+        session signed in from the owner's phone (D112) keeps it under `orion`, and is used
+        the same way, as sites tie a session to the browser that made it."""
         self.blocked: list[str] = []
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -134,16 +139,65 @@ class Session:
         self._browser = await self._pw.chromium.launch(
             headless=True, executable_path=self._executable
         )
+        state = dict(self.storage_state) if self.storage_state is not None else None
+        profile: dict[str, Any] = dict(state.pop("orion", None) or {}) if state else {}
+        phone: dict[str, Any] | None = self.phone or profile.get("phone")
         self._context = await self._browser.new_context(
             accept_downloads=False,
             locale="fr-FR",
             timezone_id="Europe/Paris",
-            storage_state=cast(Any, self.storage_state),
+            storage_state=cast(Any, state),
+            viewport=(
+                {"width": int(phone["width"]), "height": int(phone["height"])} if phone else None
+            ),
+            device_scale_factor=2 if phone else None,
+            is_mobile=bool(phone),
+            has_touch=bool(phone),
+            user_agent=(str(profile.get("user_agent") or self.phone_agent()) if phone else None),
         )
         await self._context.route("**/*", self._guard)
         self.page = await self._context.new_page()
         self.page.set_default_timeout(15_000)
         return self
+
+    def phone_agent(self) -> str:
+        version = self._browser.version if self._browser is not None else "130.0.0.0"
+        return (
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
+            f"Chrome/{version} Mobile Safari/537.36"
+        )
+
+    async def saved_state(self) -> dict[str, Any]:
+        """The session as it is now (cookies, local storage), to keep and use again; with the
+        phone it was made on, if any."""
+        if self._context is None or self.page is None:  # pragma: no cover - inside `with` only
+            raise BrowserError("the browser is not open")
+        state = cast(dict[str, Any], await self._context.storage_state())
+        if self.phone:
+            agent = await self.page.evaluate("navigator.userAgent")
+            state["orion"] = {"phone": self.phone, "user_agent": str(agent)}
+        return state
+
+    async def tap(self, x: float, y: float) -> None:
+        page = self._page()
+        await self._do(lambda: page.touchscreen.tap(x, y) if self.phone else page.mouse.click(x, y))
+
+    async def keys(self, text: str = "", key: str = "") -> None:
+        """Type into whatever has the focus, or press one key."""
+        keyboard = self._page().keyboard
+        await self._do(lambda: keyboard.press(key) if key else keyboard.type(text, delay=20))
+
+    async def settle(self) -> None:
+        """After a tap or a key that may start a navigation (a form sent): let it land."""
+        page = self._page()
+        await page.wait_for_timeout(400)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Error:
+            log.info("computer.slow_page", url=page.url)
+
+    async def wheel(self, dy: int) -> None:
+        await self._do(lambda: self._page().mouse.wheel(0, dy))
 
     async def __aexit__(self, *_exc: object) -> None:
         if self._context is not None:
@@ -257,6 +311,33 @@ class Session:
                 await element.press("Enter")
 
         await self._do(typing)
+
+    async def fill_secret(self, number: int, value: str, sites: list[str], kind: str) -> None:
+        """Type a lent login's username, password or 2FA code (`kind`) into a field, only on
+        a page of the login's sites, and the password only into a password field (D111)."""
+        host = urlsplit(self._page().url).hostname or ""
+        if not host_in(host, sites):
+            raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
+        element = self._element(number)
+        try:
+            tag, field_type = cast(
+                list[str],
+                await element.evaluate(
+                    "e => [e.tagName.toLowerCase(), (e.getAttribute('type') || '').toLowerCase()]",
+                    timeout=8_000,
+                ),
+            )
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        if tag != "input":
+            raise BrowserError("not an input field")
+        if (kind == "password") != (field_type == "password") and kind != "code":
+            raise BrowserError(
+                "the password goes into a password field only, the username never into one"
+            )
+        if field_type not in ("", "text", "email", "tel", "number", "password"):
+            raise BrowserError(f"not a field to type into ({field_type})")
+        await self._do(lambda: element.fill(value, timeout=8_000))
 
     async def select(self, number: int, value: str) -> None:
         await self._do(lambda: self._element(number).select_option(label=value, timeout=8_000))

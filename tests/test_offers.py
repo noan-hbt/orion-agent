@@ -14,7 +14,7 @@ def test_a_module_that_is_off_offers_itself() -> None:
     listed = offers(_config())
     assert any("[modules.mail]" in o for o in listed)
     assert any("[modules.web] enabled = true" in o for o in listed)
-    assert not any("orion login" in o for o in listed)  # the browser itself is off
+    assert not any("computer_login_ask" in o for o in listed)  # the browser itself is off
 
     (browser,) = [o for o in listed if o.startswith("Un navigateur à toi")]
     assert "session" in browser and "gardien" in browser  # its accounts need more than this
@@ -25,7 +25,8 @@ def test_a_module_that_is_off_offers_itself() -> None:
 
 def test_a_module_that_is_on_names_what_it_still_lacks() -> None:
     lent = offers(_config(modules={"computer": {"enabled": True}}))
-    (sessions,) = [o for o in lent if "orion login" in o]
+    (sessions,) = [o for o in lent if "computer_login_ask" in o]
+    assert "téléphone" in sessions  # no second install of Orion on a computer (D112)
     assert "[guardian] enabled = true" in sessions  # sessions are lent through the guardian
 
     calendar = {"enabled": True, "accounts": [{"name": "perso", "url": {"env": "ICS"}}]}

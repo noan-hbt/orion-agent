@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import quote, quote_plus
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -47,6 +48,13 @@ in your report: the person will decide."""
 SUBMIT = """The person approved this brief, including sending what it says to send. Send
 nothing else, and stop before any payment unless the brief explicitly says to pay."""
 
+LOGIN = """You may sign in to the person's account on {sites}{url}. You never see their
+username, password or codes: `fill_login` types the one you name into a field of the page
+shown, only on those sites. Sign in nowhere else. If the site asks for something
+`fill_login` cannot give (a code sent by SMS or e-mail, a captcha, a confirmation in an app),
+stop and say so in your report."""
+MASK = "••••••"
+
 
 class _Goto(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -80,6 +88,14 @@ class _Nothing(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _Fill(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    element: int = Field(ge=1)
+    field: Literal["username", "password", "code"] = Field(
+        description="What to type: the username, the password, or the current 2FA code"
+    )
+
+
 class _Finish(BaseModel):
     model_config = ConfigDict(extra="forbid")
     report: str = Field(max_length=6000)
@@ -97,9 +113,13 @@ _ACTIONS: dict[str, tuple[type[BaseModel], str]] = {
 }
 
 
-def _specs() -> list[ToolSpec]:
+_FILL = (_Fill, "Type the person's username, password or 2FA code into a numbered field.")
+
+
+def _specs(login: bool = False) -> list[ToolSpec]:
+    actions = {**_ACTIONS, "fill_login": _FILL} if login else _ACTIONS
     specs: list[ToolSpec] = []
-    for name, (model, description) in sorted(_ACTIONS.items()):
+    for name, (model, description) in sorted(actions.items()):
         schema = model.model_json_schema()
         schema.pop("title", None)
         specs.append(ToolSpec(name=name, description=description, parameters=schema))
@@ -134,9 +154,19 @@ class BrowserAgent:
     async def run(
         self, task: str, workdir: Path, options: dict[str, Any] | None = None
     ) -> AgentOutcome:
-        """`options`: `sites` (sending only there) and `state` (a lent logged-in session)."""
+        """`options`: `sites` (sending only there), `state` (a lent logged-in session) and
+        `login` (a lent login, D111)."""
         cost = 0.0
         system = PROMPT.format(mode=READ_ONLY if self.read_only else SUBMIT)
+        login: dict[str, Any] | None = (options or {}).get("login")
+        hidden: set[str] = set()
+        """What the worker must never read: the password, and the codes it was given."""
+        if login is not None and not self.read_only:
+            hidden.add(str(login["password"]))
+            url = f" (sign-in page: {login['url']})" if login.get("url") else ""
+            system += "\n\n" + LOGIN.format(sites=", ".join(login["sites"]), url=url)
+        else:
+            login = None
         messages: list[Message] = [
             {"role": "system", "content": system},
             {"role": "user", "content": f"<brief>\n{task}\n</brief>"},
@@ -147,14 +177,15 @@ class BrowserAgent:
             session.storage_state = options.get("state")
         async with session as browser:
             await browser.goto(self._start)
-            messages.append({"role": "user", "content": (await browser.snapshot()).render()})
+            first = (await browser.snapshot()).render()
+            messages.append({"role": "user", "content": _masked(first, hidden)})
             for _ in range(self._max_steps):
                 try:
                     response = await self._provider.complete(
                         ModelRequest(
                             model=self._model,
                             messages=messages,
-                            tools=_specs(),
+                            tools=_specs(login is not None),
                             session_id=f"orion:browser:{workdir.name}",
                         )
                     )
@@ -167,8 +198,10 @@ class BrowserAgent:
                     continue
                 call, *extra = response.tool_calls
                 if call.name == "finish":
-                    return self._finished(call.arguments, cost, workdir, browser.blocked)
-                outcome = await self._act(browser, call.name, call.arguments)
+                    return self._finished(call.arguments, cost, workdir, browser.blocked, hidden)
+                outcome = _masked(
+                    await self._act(browser, call.name, call.arguments, login, hidden), hidden
+                )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": outcome})
                 for skipped in extra:
                     messages.append(
@@ -181,8 +214,15 @@ class BrowserAgent:
                 _shrink(messages)
         return AgentOutcome(False, "", cost, error=f"not finished in {self._max_steps} steps")
 
-    async def _act(self, browser: Session, name: str, raw: str) -> str:
-        entry = _ACTIONS.get(name)
+    async def _act(
+        self,
+        browser: Session,
+        name: str,
+        raw: str,
+        login: dict[str, Any] | None = None,
+        hidden: set[str] | None = None,
+    ) -> str:
+        entry = _FILL if name == "fill_login" and login is not None else _ACTIONS.get(name)
         if entry is None:
             return f"Unknown action {name!r}."
         try:
@@ -197,6 +237,8 @@ class BrowserAgent:
                 await browser.click(args.element)
             elif name == "type":
                 await browser.type(args.element, args.text, args.enter)
+            elif name == "fill_login" and login is not None:
+                await self._fill(browser, args, login, hidden if hidden is not None else set())
             elif name == "select":
                 await browser.select(args.element, args.option)
             elif name == "scroll":
@@ -213,18 +255,53 @@ class BrowserAgent:
         except BrowserError as exc:
             return note + f"The page cannot be read: {exc}"
 
-    def _finished(self, raw: str, cost: float, workdir: Path, blocked: list[str]) -> AgentOutcome:
+    async def _fill(
+        self, browser: Session, args: Any, login: dict[str, Any], hidden: set[str]
+    ) -> None:
+        if args.field == "code":
+            if not login.get("totp"):
+                raise BrowserError(
+                    "no 2FA key is kept for this login: if the site sent a code by SMS or "
+                    "e-mail, stop and say so in your report"
+                )
+            try:
+                value = str(await login["code"]())
+            except Exception as exc:
+                log.warning("computer.login_code_failed", error=str(exc))
+                raise BrowserError(f"no code from the guardian: {exc}") from exc
+            hidden.add(value)
+        else:
+            value = str(login[args.field])
+        await browser.fill_secret(args.element, value, list(login["sites"]), args.field)
+
+    def _finished(
+        self,
+        raw: str,
+        cost: float,
+        workdir: Path,
+        blocked: list[str],
+        hidden: set[str] | None = None,
+    ) -> AgentOutcome:
         try:
             args = _Finish.model_validate(json.loads(raw or "{}"))
         except (json.JSONDecodeError, ValidationError):
             return AgentOutcome(False, "", cost, error="unreadable final report")
-        report = args.report.strip()[:REPORT_CHARS]
+        report = _masked(args.report.strip(), hidden or set())[:REPORT_CHARS]
         if blocked:
             report += f"\n(Le navigateur a bloqué {len(blocked)} envoi(s).)"
         workdir.mkdir(parents=True, exist_ok=True)
         (workdir / "report.md").write_text(report + "\n", encoding="utf-8")
         log.info("computer.finished", done=args.done, cost=round(cost, 4))
         return AgentOutcome(args.done, report, cost, files=["report.md"])
+
+
+def _masked(text: str, hidden: set[str]) -> str:
+    """The text with the login's secrets blanked out: a page may show what was typed, as typed
+    or as it was posted (URL-encoded)."""
+    forms = {f for s in hidden if len(s) >= 4 for f in (s, quote(s, safe=""), quote_plus(s))}
+    for secret in sorted(forms, key=len, reverse=True):
+        text = text.replace(secret, MASK)
+    return text
 
 
 def _shrink(messages: list[Message]) -> None:

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Orion updates itself (D94): run by orion-update.timer, as root, every 15 minutes.
+# Orion updates itself (D94): run by orion-update.timer, as root, every 2 minutes; a check
+# with nothing new is one git fetch.
 #
 # When the branch the server follows has new commits: checkout, install, check the config with
 # the new code, restart both processes, and watch them for a while. If anything fails, it goes
