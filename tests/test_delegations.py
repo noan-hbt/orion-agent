@@ -88,31 +88,23 @@ async def test_the_guardian_mails_alone_only_within_the_limits(tmp_path: Path) -
         assert sent == [to_agency]
 
 
-async def test_a_session_is_lent_once_for_the_approved_sign_in(tmp_path: Path) -> None:
+async def test_a_session_is_lent_when_orion_asks(tmp_path: Path) -> None:
+    """D115: the guardian lends a session to Orion's browser when it asks; each loan is
+    recorded."""
     config = writable_config(tmp_path)
-    config.guardian.autonomable = ["browser"]
     login = {"action": "login", "session": "doctolib", "login": "", "url": ""}
     async with running_guardian(config) as g:
-        g.fake.inbound("salut")
         with pytest.raises(SessionError, match="lowercase"):
             await add_session(config, g.service.ledger, "Doctolib!", STATE, [])
         assert await add_session(config, g.service.ledger, "doctolib", STATE, []) == ["doctolib.fr"]
         assert (config.guardian.data_dir / "sessions" / "doctolib.json").stat().st_mode & 0o077 == 0
-
-        with pytest.raises(GuardianUnavailableError, match="needs approval"):
-            await g.client.lend_session("doctolib", login, None)
-        grant, _ = await g.client.request_approval("browser", login, "", CONVERSATION)
-        assert "ta session « doctolib »" in g.fake.texts()[-1]
-        g.fake.inbound("oui")
-        other = {**login, "session": "banque"}
         with pytest.raises(GuardianUnavailableError, match="no session"):
-            await g.client.lend_session("banque", other, grant)
-        lent = await g.client.lend_session("doctolib", login, grant)
+            await g.client.lend_session("banque", {**login, "session": "banque"}, None)
+        lent = await g.client.lend_session("doctolib", login, None)
         assert lent["state"]["cookies"][0]["value"] == "s3cret"
         assert lent["domains"] == ["doctolib.fr"]
-        with pytest.raises(GuardianUnavailableError, match="already used"):
-            await g.client.lend_session("doctolib", login, grant)
-        assert [e.kind for e in await g.journal.read()].count(SESSION_LENT) == 1
+        await g.client.lend_session("doctolib", login, None)
+        assert [e.kind for e in await g.journal.read()].count(SESSION_LENT) == 2
 
 
 def test_a_session_knows_its_sites() -> None:

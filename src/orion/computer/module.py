@@ -64,7 +64,8 @@ class ComputerModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: ComputerSettings = self.settings
         executable = settings.executable or os.environ.get("ORION_CHROMIUM")
-        sessions = self._sessions or (lambda: Session(True, executable=executable))
+        # It browses like a person (D115): it may send; the server's own addresses stay out.
+        sessions = self._sessions or (lambda: Session(False, executable=executable))
         self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian)
         from orion.files.module import FilesModule
 
@@ -82,8 +83,8 @@ class ComputerModule(Module):
             grouped(
                 "browser",
                 "Your own browser, which you drive yourself, page by page: open a page and see "
-                "it (its text and numbered elements), then act on the page shown. Nothing leaves "
-                "it but what he approves: signing in to his accounts (login), a form (send).",
+                "it (its text and numbered elements), then act on the page shown: click, type, "
+                "send forms, open his accounts (login).",
                 browser_tools(self.desk, keep),
                 {
                     "browser_open": "open",
@@ -96,7 +97,6 @@ class ComputerModule(Module):
                     "browser_close": "close",
                     "browser_login": "login",
                     "browser_fill": "fill",
-                    "browser_send": "send",
                     "browser_accounts": "accounts",
                     "browser_connect": "connect",
                     **({"browser_screenshot": "screenshot"} if keep is not None else {}),

@@ -196,11 +196,6 @@ async def test_any_file_on_the_web_is_kept_and_sent_as_it_is(
     sent: list[tuple[Path, str]] = []
     tool = tool_for(store, sent, web=lambda: desk)
     try:
-        made_up = await run(tool, action="download", url="https://x.example/dl/config.xml")
-        assert made_up.is_error and "search first" in made_up.content
-        await owner_says(
-            journal, "Télécharge https://x.example/dl/config.xml et https://x.example/big.zip", "c"
-        )
         file_id = made_id(await run(tool, action="download", url="https://x.example/dl/config.xml"))
         await run(tool, action="send", file=file_id, caption="La config")
         too_big = await run(tool, action="download", url="https://x.example/big.zip")

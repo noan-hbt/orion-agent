@@ -24,10 +24,8 @@ from orion.guardian.logins import (
     totp,
     totp_secret,
 )
-from orion.guardian.sessions import add_session
 from orion.web.fetch import FetchError
 from tests.fake_guardian import running_guardian
-from tests.fake_inkbox import CONVERSATION
 from tests.test_computer import element
 from tests.test_writes import writable_config
 
@@ -93,19 +91,11 @@ async def test_the_guardian_lends_a_login_once_and_keeps_the_2fa_key(tmp_path: P
         assert listed == [{"name": "doctolib", "sites": ["doctolib.fr"], "totp": True}]
         assert PASSWORD not in json.dumps(listed)
 
-        with pytest.raises(GuardianUnavailableError, match="needs approval"):
-            await g.client.lend_login("doctolib", lend, None)
-        grant, _ = await g.client.request_approval("browser", lend, "", CONVERSATION)
-        assert "ton identifiant gardé « doctolib »" in g.fake.texts()[-1]
-        g.fake.inbound("oui")
-        await add_login(config, g.service.ledger, make_login("banque", ["banque.fr"], "n", "p"))
-        with pytest.raises(GuardianUnavailableError, match="not what the owner approved"):
-            await g.client.lend_login("banque", {**lend, "login": "banque"}, grant)
-        lent = await g.client.lend_login("doctolib", lend, grant)
+        with pytest.raises(GuardianUnavailableError, match="no login"):
+            await g.client.lend_login("banque", {**lend, "login": "banque"}, None)
+        lent = await g.client.lend_login("doctolib", lend, None)  # when Orion asks (D115)
         assert (lent["username"], lent["password"], lent["totp"]) == ("noan@x.fr", PASSWORD, True)
         assert RFC_SECRET not in json.dumps(lent)  # the 2FA key stays with the guardian
-        with pytest.raises(GuardianUnavailableError, match="already used"):
-            await g.client.lend_login("doctolib", lend, grant)
 
         desk[0].clock = lambda: 59.0
         assert await g.client.login_code("doctolib", str(lent["loan"])) == "287082"
@@ -114,22 +104,6 @@ async def test_the_guardian_lends_a_login_once_and_keeps_the_2fa_key(tmp_path: P
         kinds = [e.kind for e in await g.journal.read()]
         assert kinds.count(LOGIN_LENT) == 1 and kinds.count(LOGIN_CODE) == 1
         assert PASSWORD not in str([e.payload for e in await g.journal.read()])
-
-
-async def test_one_yes_lends_both_the_session_and_the_login(tmp_path: Path) -> None:
-    config = writable_config(tmp_path)
-    lend = {"action": "login", "login": "doctolib", "session": "doctolib", "url": ""}
-    async with running_guardian(config, prepare=lambda s: LoginDesk(s).install()) as g:
-        g.fake.inbound("salut")
-        await add_login(config, g.service.ledger, make_login("doctolib", ["doctolib.fr"], "n", "p"))
-        state = {"cookies": [{"name": "sid", "value": "c", "domain": ".doctolib.fr"}]}
-        await add_session(config, g.service.ledger, "doctolib", state, [])
-        grant, _ = await g.client.request_approval("browser", lend, "", CONVERSATION)
-        g.fake.inbound("oui")
-        assert (await g.client.lend_login("doctolib", lend, grant))["password"] == "p"
-        assert (await g.client.lend_session("doctolib", lend, grant))["state"]["cookies"]
-        with pytest.raises(GuardianUnavailableError, match="already used"):
-            await g.client.lend_login("doctolib", lend, grant)
 
 
 SIGN_IN = """<html><head><title>Connexion</title></head><body>
@@ -224,14 +198,14 @@ async def test_orion_signs_in_himself_without_seeing_the_password(
     journal: SqliteJournal,
 ) -> None:
     """D113: no web agent. Orion drives the sign-in page; the guardian's login is typed by
-    code, masked on every page he reads, and his browser sends only to the account's site."""
+    code, and masked on every page he reads."""
     from orion.computer.direct import BrowserDesk, browser_tools
     from orion.tools.base import ToolContext
 
     account = Account()
     lender = cast(Lender, Lender.over_socket(Path("/nonexistent.sock")))
     lender.grants = []
-    desk = BrowserDesk(journal, lambda: browser(account, read_only=True), guardian=lender)
+    desk = BrowserDesk(journal, lambda: browser(account), guardian=lender)
     tools = {t.name: t for t in browser_tools(desk)}
 
     async def use(name: str, **args: object) -> str:
@@ -254,54 +228,13 @@ async def test_orion_signs_in_himself_without_seeing_the_password(
         assert "Tr0ub4dor%263" in account.posted[0] and "otp=482913" in account.posted[0]
         assert PASSWORD not in welcome and "Tr0ub4dor%263" not in welcome
         assert "482913" not in welcome
-        # Elsewhere, nothing is typed, and nothing is sent.
+        # The password goes into a password field of the account's site, nowhere else.
         wrong = await use("browser_fill", element=1, field="password")
         assert wrong.startswith("ERROR")
     finally:
         await desk.aclose()
     assert PASSWORD not in str([e.payload for e in await journal.read()])
     assert "482913" not in str([e.payload for e in await journal.read()])
-
-
-async def test_orion_sends_a_form_only_to_the_pages_site(journal: SqliteJournal) -> None:
-    from orion.computer.direct import BrowserDesk, browser_tools
-    from orion.tools.base import ToolContext
-    from tests.test_browser_direct import owner_says
-
-    account = Account()
-    desk = BrowserDesk(journal, lambda: browser(account, read_only=True))
-    tools = {t.name: t for t in browser_tools(desk)}
-    ctx = ToolContext("owner", "t1", grant="g1")
-
-    async def use(name: str, **args: object) -> str:
-        tool = tools[name]
-        result = await tool.handler(tool.parse(json.dumps(args)), ctx)
-        return ("ERROR " if result.is_error else "") + result.content
-
-    try:
-        await owner_says(journal, "Connecte-toi sur https://compte.test/", "t1")
-        await use("browser_open", url="https://compte.test/")
-        await use("browser_click", element=4)  # not approved: blocked
-        assert account.posted == []
-        await use("browser_open", url="https://compte.test/")
-        moved = await use(
-            "browser_send",
-            page="https://ailleurs.test/",
-            element=4,
-            fields=[{"element": 1, "text": "noan@x.fr"}],
-            what="me connecter",
-        )
-        assert moved.startswith("ERROR") and account.posted == []
-        sent = await use(
-            "browser_send",
-            page="https://compte.test/",
-            element=4,
-            fields=[{"element": 1, "text": "noan@x.fr"}],
-            what="me connecter",
-        )
-        assert "Bienvenue" in sent and account.posted == ["email=noan%40x.fr&pw=&otp="]
-    finally:
-        await desk.aclose()
 
 
 async def test_the_owner_gives_a_login_from_telegram_and_the_core_never_sees_it(
@@ -421,7 +354,9 @@ async def test_orion_opens_his_account_with_a_kept_session(journal: SqliteJourna
         ) -> dict[str, Any]:
             assert (name, params["action"], grant) == ("compte", "login", "g1")
             cookie = {"name": "sid", "value": "s3ss10n", "domain": "compte.test", "path": "/"}
-            return {"state": {"cookies": [cookie], "origins": []}, "domains": ["compte.test"]}
+            page = {"url": "https://compte.test/hp/etudiant/emploi-du-temps"}
+            state = {"cookies": [cookie], "origins": [], "orion": page}
+            return {"state": state, "domains": ["compte.test"]}
 
     account = Account()
     desk = BrowserDesk(
@@ -434,7 +369,8 @@ async def test_orion_opens_his_account_with_a_kept_session(journal: SqliteJourna
         page = await login.handler(
             login.parse(json.dumps({"session": "compte"})), ToolContext("owner", "t1", grant="g1")
         )
-        assert "Ouvert avec sa session" in page.content and "compte.test" in page.content
+        assert "Ouvert avec sa session" in page.content
+        assert "URL : https://compte.test/hp/etudiant/emploi-du-temps" in page.content  # kept
         live = desk._live["owner"]  # pyright: ignore[reportPrivateUsage]
         assert live.session.page is not None
         cookies = await live.session.page.context.cookies()

@@ -69,7 +69,7 @@ from orion.guardian.ledger import (
     Ledger,
     PendingApproval,
 )
-from orion.guardian.limits import Limits, host_in, missing, within
+from orion.guardian.limits import Limits, missing, within
 from orion.guardian.wire import ApprovalRequest, batch_to_json, mail_request
 from orion.mail.service import Fetch as MailFetch
 from orion.mail.service import MailAccount, MailSettings, imap_fetch
@@ -822,32 +822,15 @@ class GuardianService:
     # -- logged-in sessions ---------------------------------------------------------------------
 
     async def _lend_session(self, request: Request) -> Response:
-        """A site session (cookies) for one task the owner approved, or did alone within
-        limits that cover every site of the session. Lent once per approval."""
+        """A site session (cookies) for Orion's browser, when it asks (D115): each loan is
+        recorded, the owner is not asked."""
         name = str(request.path_params["name"])
-        params = await _body(request)
         await self.ledger.catch_up()
         domains = self.ledger.state.sessions.get(name)
         path = self.config.guardian.data_dir / "sessions" / f"{name}.json"
         if domains is None or not path.is_file():
             return refused(f"no session {name!r}", 404)
-        grant = request.headers.get(GRANT_HEADER)
-        if grant:
-            reason = await self.use_grant(
-                grant,
-                "browser",
-                lambda p: p.get("action") == "login" and p.get("session") == name,
-                consume=True,
-            )
-            if reason is not None:
-                return await self.deny(f"session {name}", reason)
-            how = grant
-        else:
-            bounds = self.ledger.state.limits.get("browser") or {}
-            covered = all(host_in(d, list(bounds.get("domains") or [])) for d in domains)
-            if not covered or not await self.autonomous("browser", params):
-                return await self.deny(f"session {name}", "signing in needs approval")
-            how = "alone"
+        how = "asked"
         state: Any = json.loads(path.read_text(encoding="utf-8"))
         await self.ledger.record(SESSION_LENT, {"name": name, "how": how})
         log.info("guardian.session_lent", name=name, how=how)

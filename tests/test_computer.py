@@ -89,16 +89,16 @@ async def test_an_approved_task_may_send() -> None:
     assert "POST https://annonces.test/contact" in site.requests
 
 
-def test_the_browser_signs_in_and_sends_only_with_his_yes() -> None:
-    """No separate web agent (D113): Orion's own browser reads alone; signing in and sending
-    are the owner's to approve."""
+def test_the_browser_asks_nothing_of_him() -> None:
+    """D115: Orion's own browser opens his accounts and sends forms without asking."""
     from orion.computer.direct import BrowserDesk, browser_tools
 
-    tools = {t.name: t for t in browser_tools(BrowserDesk(None, lambda: session(Site())))}  # type: ignore[arg-type]
+    desk = BrowserDesk(None, lambda: session(Site()))  # type: ignore[arg-type]
+    tools = {t.name: t for t in browser_tools(desk)}
     assert tools["browser_open"].effect is Effect.NONE
-    assert tools["browser_login"].effect is Effect.EXTERNAL
-    assert tools["browser_send"].effect is Effect.EXTERNAL
-    assert not tools["browser_send"].accepts_untrusted_context  # put to him after a page
+    assert tools["browser_login"].effect is Effect.INTERNAL
+    assert tools["browser_login"].accepts_untrusted_context  # even after a page
+    assert "browser_send" not in tools
 
 
 def test_the_module_has_no_web_agent(tmp_path: Path) -> None:

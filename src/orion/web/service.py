@@ -118,17 +118,14 @@ class WebDesk:
         return findings
 
     async def may_open(self, url: str) -> bool:
-        await self._runner.catch_up()
-        return normalize(url) in self.state.allowed
+        """Any web address (D115): the server's own and the local network stay out (`fetch`)."""
+        return bool(normalize(url))
 
     async def read(self, url: str, correlation_id: str | None = None) -> Reading:
         """The page itself, for Orion to read; fetched again only when not read lately."""
         address = normalize(url)
         if not await self.may_open(address):
-            raise NotAllowedError(
-                f"{url} was neither given by the owner nor found by a search or on a page "
-                "already read: search first"
-            )
+            raise NotAllowedError(f"{url} is not a web address (http or https)")
         kept = self._pages.get(address)
         if kept is not None:
             return kept
@@ -154,10 +151,7 @@ class WebDesk:
         """A file at an address the owner gave or a search found, byte for byte."""
         address = normalize(url)
         if not await self.may_open(address):
-            raise NotAllowedError(
-                f"{url} was neither given by the owner nor found by a search or on a page "
-                "already read: search first"
-            )
+            raise NotAllowedError(f"{url} is not a web address (http or https)")
         got = await download(self._http, address, limit, self._check)
         await self._record(
             DOWNLOADED,

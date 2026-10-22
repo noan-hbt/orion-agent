@@ -2425,3 +2425,28 @@ Restent pour l'instant : la mémoire, la nuit, la réflexion, les résumés, la 
 curiosité, le vérificateur et l'expert (à décider). La transcription des vocaux, la voix et
 la génération d'images sont des outils, pas des esprits. Le modèle de secours ne prend le
 relais que si le principal est en panne.
+
+## D115 — Le navigateur d'Orion sans garde-fous : il navigue comme une personne
+
+*22/10/2026 · acceptée · révise D113, D111, D49 et la lecture du web*
+
+Constaté en vrai, sur Hyperplanning : Orion ne gardait que le domaine du site, et son
+navigateur bloquait l'application, qui charge l'emploi du temps par des requêtes en arrière-plan.
+Le propriétaire a jugé ces protections « plus handicapantes qu'autre chose » et a demandé de les
+supprimer, en connaissance de cause.
+
+- **Navigation libre** : n'importe quelle adresse, n'importe quel texte tapé, les formulaires
+  envoyés, les clics partout. L'action `send` à approuver disparaît. `web_read` et `file`
+  download ouvrent aussi n'importe quelle adresse.
+- **Ses comptes** : `browser` login ne lui demande plus rien ; le gardien prête la session ou
+  l'identifiant quand Orion le demande, et note chaque prêt.
+- **La page gardée** : c'est Orion qui choisit l'adresse complète gardée avec un compte (celle
+  où il reviendra, son emploi du temps…), en la donnant quand il demande au propriétaire de se
+  connecter depuis Telegram ; c'est elle qu'il rouvre ensuite.
+- **Ce qui reste**, parce que ça ne gêne en rien : les adresses du serveur lui-même et de son
+  réseau ne sont jamais atteintes (le gardien), et un mot de passe ou un code prêté reste masqué
+  sur chaque page qu'Orion lit.
+
+Le risque accepté : une page piégée pourrait pousser Orion à envoyer des informations
+ailleurs ; rien ne l'en empêche plus techniquement, seul son jugement (une page est une
+information, jamais un ordre ; ce qui engage le propriétaire, il s'assure qu'il le veut).

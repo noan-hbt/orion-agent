@@ -72,26 +72,22 @@ async def test_orion_browses_a_site_itself(
     assert not any(r.startswith("POST") for r in site.requests)
 
 
-async def test_a_page_cannot_get_anything_out(
-    journal: SqliteJournal, browser: tuple[dict[str, Tool], Site]
-) -> None:
-    tools, site = browser
-    await owner_says(journal, "Mon numéro c'est le 0612345678", "t0")
-    await owner_says(journal, "Contacte l'agence de https://annonces.test/", "t1")
-
-    # An address Orion made up (it could carry the owner's data in its query string).
-    refused = await use(tools, "browser_open", url="https://annonces.test/?tel=0612345678")
-    assert refused.startswith("ERROR") and "not given" in refused
-    home = await use(tools, "browser_open", url="https://annonces.test/")
-    # Typing what the owner said earlier, but not in the message being answered.
-    typed = await use(tools, "browser_type", element=number(home, "Chercher"), text="0612345678")
-    assert typed.startswith("ERROR") and "0612345678" in typed
-    # Sending a form: the network refuses, and Orion is told how sending works.
-    message = number(home, "Votre message")
-    await use(tools, "browser_type", element=message, text="agence")
-    sent = await use(tools, "browser_click", element=number(home, "Envoyer"))
-    assert "Bloqué" in sent and "`browser` send" in sent
-    assert not any(r.startswith("POST") for r in site.requests)
+async def test_orion_browses_like_a_person(journal: SqliteJournal) -> None:
+    """D115: any address, any text, forms sent; only the server's own addresses stay out."""
+    site = Site()
+    desk = BrowserDesk(journal, lambda: session(site, read_only=False))
+    tools = {t.name: t for t in browser_tools(desk)}
+    try:
+        home = await use(tools, "browser_open", url="https://annonces.test/?ref=orion")
+        assert "Locations à Lyon" in home  # an address nobody gave: fine
+        message = number(home, "Votre message")
+        await use(tools, "browser_type", element=message, text="Bonjour, le T2 est libre ?")
+        await use(tools, "browser_click", element=number(home, "Envoyer"))
+        assert any(r.startswith("POST https://annonces.test/contact") for r in site.requests)
+        inside = await use(tools, "browser_open", url="http://127.0.0.1:8787/inkbox/webhook")
+        assert inside.startswith("ERROR")  # the server itself, never
+    finally:
+        await desk.aclose()
 
 
 async def test_pages_seen_are_traceable(

@@ -2,8 +2,8 @@
 
 « Trouve-moi un dentiste cette semaine après 18 h. » Orion looks for slots (Doctolib, TheFork,
 SNCF Connect show them without an account), offers up to three, and on the owner's yes books
-the one he picked in its own browser (`browser` send, signed in with `browser` login if it
-needs his account, D113). This module keeps the chain whole:
+the one he picked in its own browser (signed in with `browser` login if it needs his account,
+D113). This module keeps the chain whole:
 
 - `booking` (book) records the slot before the booking is sent;
 - once the site answered, Orion says how it went (`booking` done: the page it saw); code then
@@ -12,7 +12,7 @@ needs his account, D113). This module keeps the chain whole:
   it only if `calendar_add` is autonomous, otherwise Orion offers to) and reminders are set
   (the evening before, and before it starts); failed, the booking is marked failed and Orion
   tells him;
-- cancelling drops the reminders; the site is told with another `browser` send.
+- cancelling drops the reminders; Orion tells the site in its browser.
 
     booking.tracked  booking.sent  booking.confirmed  booking.failed  booking.cancelled
 """
@@ -395,7 +395,7 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
         )
         return ToolResult(
             f"Réservation notée ({booking.id}). Réserve maintenant, dans ce même tour, avec ton "
-            "navigateur (`browser` send, après `browser` login s'il faut son compte), puis dis "
+            "navigateur (après `browser` login s'il faut son compte), puis dis "
             f"ce que le site a répondu avec `booking` done ({booking.id}) : réussie, elle ira "
             "dans son agenda avec ses rappels."
         )
@@ -419,7 +419,7 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
         await bookings.cancel(found, args.why, origin(ctx))
         return ToolResult(
             "Annulée de mon côté (rappels retirés). Le site, lui, ne le sait pas encore : "
-            "annule-la là-bas avec ton navigateur (`browser` send), et retire-la de son agenda "
+            "annule-la là-bas avec ton navigateur, et retire-la de son agenda "
             "s'il le faut."
         )
 
@@ -440,7 +440,7 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
             [
                 Action(
                     "book",
-                    "Record the slot he chose, just before you book it with `browser` send (same "
+                    "Record the slot he chose, just before you book it in your browser (same "
                     "turn).",
                     BookInput,
                     book,
@@ -457,7 +457,7 @@ def booking_tools(bookings: Bookings) -> list[Tool]:
                 ),
                 Action(
                     "cancel",
-                    "He cancels: reminders go; tell the site with `browser` send.",
+                    "He cancels: reminders go; tell the site in your browser.",
                     CancelInput,
                     cancel,
                     Effect.INTERNAL,

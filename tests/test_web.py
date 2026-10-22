@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from orion.config import OrionConfig
-from orion.core.events import NewEvent, Provenance, Trust
+from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.modules.registry import load
 from orion.providers.base import Citation, ModelRequest, ModelResponse, Usage
@@ -104,28 +104,15 @@ async def test_search_returns_only_the_pages_found_never_a_summary() -> None:
     assert sent.web_search == 6 and sent.tools == [] and sent.model == "fake/orion"
 
 
-async def test_orion_opens_only_addresses_it_was_given(journal: SqliteJournal) -> None:
+async def test_orion_reads_any_address(journal: SqliteJournal) -> None:
+    """D115: any web address, given or not; never a file, nor the server's own (fetch)."""
     client = site({"https://annonces.fr/annonce/1": html(PAGE)})
     desk = WebDesk(journal, WebSearch(ScriptedProvider(), "m"), client, allow_all)
     await desk.start()
-    with pytest.raises(NotAllowedError):
-        await desk.read("https://annonces.fr/annonce/1")
-
-    await journal.append(
-        [
-            NewEvent(
-                kind="message.received",
-                payload={"text": "regarde https://annonces.fr/annonce/1, ça a l'air bien"},
-                provenance=Provenance(source="imessage:owner", actor="owner:main"),
-                trust=Trust.OWNER,
-            )
-        ]
-    )
     reading = await desk.read("https://annonces.fr/annonce/1#photos")
     assert "Loyer 650 € charges comprises." in reading.text  # the page itself
-    assert await desk.may_open("https://annonces.fr/annonce/2")  # its links
-    assert await desk.may_open("https://autre.fr/x")
-    assert not await desk.may_open("https://autre.fr/y")  # never one made up
+    with pytest.raises(NotAllowedError):
+        await desk.read("file:///etc/passwd")
     [event] = [e for e in await journal.read() if e.kind == READ]
     assert event.trust is Trust.WEB and "650" not in json.dumps(event.payload)  # text not kept
     await desk.aclose()
@@ -149,54 +136,9 @@ async def test_the_pictures_of_a_page_read_may_be_downloaded(journal: SqliteJour
     client = site({"https://ylume.fr/rayonnante": html(SHOP)})
     desk = WebDesk(journal, WebSearch(ScriptedProvider(), "m"), client, allow_all)
     await desk.start()
-    await journal.append(
-        [
-            NewEvent(
-                kind="message.received",
-                payload={"text": "https://ylume.fr/rayonnante"},
-                provenance=Provenance(source="telegram:owner", actor="owner:main"),
-                trust=Trust.OWNER,
-            )
-        ]
-    )
-    assert not await desk.may_open("https://cdn.shop.fr/rayonnante-1.jpg?v=3")
     reading = await desk.read("https://ylume.fr/rayonnante")
     assert len(reading.images) == 3
-    assert await desk.may_open("https://cdn.shop.fr/rayonnante-1.jpg?v=3")  # now it may fetch it
-    assert not await desk.may_open("https://cdn.shop.fr/rayonnante-9.jpg")  # never one made up
-    # The same for a page its browser showed.
-    await journal.append(
-        [
-            NewEvent(
-                kind="browser.page",
-                payload={
-                    "url": "https://agatha.fr/c",
-                    "links": [],
-                    "images": ["https://i.ag/h.jpg"],
-                },
-                provenance=Provenance(source="web:https://ag.fr/c", actor="orion:browser"),
-                trust=Trust.WEB,
-            )
-        ]
-    )
-    assert await desk.may_open("https://i.ag/h.jpg")
-    await desk.aclose()
-
-
-async def test_a_stranger_cannot_widen_what_orion_opens(journal: SqliteJournal) -> None:
-    await journal.append(
-        [
-            NewEvent(
-                kind="message.received",
-                payload={"text": "https://evil.example/?q="},
-                provenance=Provenance(source="mail:x", actor="third:x"),
-                trust=Trust.THIRD_PARTY,
-            )
-        ]
-    )
-    desk = WebDesk(journal, WebSearch(ScriptedProvider(), "m"), site({}), allow_all)
-    await desk.start()
-    assert not await desk.may_open("https://evil.example/?q=")
+    assert await desk.may_open("https://cdn.shop.fr/rayonnante-1.jpg?v=3")
     await desk.aclose()
 
 
