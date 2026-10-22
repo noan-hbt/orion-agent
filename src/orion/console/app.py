@@ -160,13 +160,24 @@ def console_app(console: Console) -> Starlette:
 
     async def from_telegram(_request: Request) -> Response:
         """The Mini App: Telegram's script hands over the signed launch data, posted back."""
+        # Every way it can fail is said on the page: a script that stops shows nothing.
         script = (
-            "const d=window.Telegram&&Telegram.WebApp?Telegram.WebApp.initData:'';"
-            "if(Telegram.WebApp)Telegram.WebApp.ready();"
-            f"fetch('{PREFIX}/telegram',{{method:'POST',body:d,credentials:'same-origin'}})"
-            f".then(r=>{{if(r.ok)location.replace('{PREFIX}/');else "
-            "document.getElementById('m').textContent="
-            "'Seul le propriétaire peut ouvrir la console.';}});"
+            "const m=document.getElementById('m');"
+            "const say=(t)=>{m.textContent=t;};"
+            "try{"
+            "const w=window.Telegram&&Telegram.WebApp;"
+            "if(!w||!w.initData){say('Ouvre la console avec le bouton « Console » de ta "
+            "conversation Telegram avec moi.');}"
+            "else{w.ready();"
+            "const late=setTimeout(()=>say('Le serveur ne répond pas. Réessaie dans un "
+            "instant.'),15000);"
+            f"fetch('{PREFIX}/telegram',{{method:'POST',body:w.initData,credentials:'same-origin'}})"
+            ".then(r=>{clearTimeout(late);"
+            f"if(r.ok)location.replace('{PREFIX}/');"
+            "else if(r.status===403)say('Seul le propriétaire peut ouvrir la console.');"
+            "else say('Le serveur a refusé ('+r.status+'). Réessaie dans un instant.');})"
+            ".catch(e=>{clearTimeout(late);say('Pas de connexion au serveur : '+e);});}"
+            "}catch(e){say('Erreur : '+e);}"
         )
         html = (
             '<!doctype html><html lang="fr"><head><meta charset="utf-8">'

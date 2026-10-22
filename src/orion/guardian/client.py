@@ -229,6 +229,10 @@ class GuardianClient:
         """The current 2FA code of a login lent for a task under way."""
         return str((await self.post(f"/v1/logins/{name}/code", {"loan": loan}))["code"])
 
+    async def ask_session(self, name: str, url: str, why: str) -> None:
+        """The owner gets the guardian's browser on Telegram, to sign in himself (D112)."""
+        await self.post("/v1/sessions/ask", {"name": name, "url": url, "why": why})
+
     async def ask_login(self, name: str, site: str, why: str) -> None:
         """The owner gets the guardian's form on Telegram to give a login."""
         await self.post("/v1/logins/ask", {"name": name, "site": site, "why": why})

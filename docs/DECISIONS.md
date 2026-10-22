@@ -2328,3 +2328,33 @@ clé 2FA d'un site met les deux facteurs sur le serveur : le propriétaire le ch
 site.
 
     guardian.login.added  guardian.login.removed  guardian.login.lent  guardian.login.code
+
+## D112 — Se connecter depuis Telegram, sans deuxième installation
+
+*22/10/2026 · acceptée · complète D49 et D111*
+
+Prêter une session (D49) demandait `orion login` sur un ordinateur avec un écran, donc un
+deuxième Orion installé quelque part. Le propriétaire n'a que son téléphone sous la main, et
+c'était un frein. Désormais, Orion demande (`computer_login_ask`, par défaut une session), et
+le gardien envoie sur Telegram un bouton qui ouvre **sa propre Mini App** (`/secrets/browse/`,
+`orion.guardian.remote`) :
+
+- l'image d'un navigateur que le gardien fait tourner sur le serveur, qui se présente comme
+  celui d'un téléphone. Il touche l'image pour cliquer, tape le texte en dessous, puis « J'ai
+  fini » ;
+- il se connecte comme sur son téléphone : code reçu par SMS, captcha et validation dans
+  l'application compris, ce que l'agent ne sait pas faire (D111) ;
+- le gardien garde la session (cookies, et le téléphone qui l'a faite : un site lie souvent sa
+  session au navigateur), comme `orion sessions add`. Rien de ce qu'il tape n'est noté ;
+- le cœur n'est jamais devant : tout passe par l'écoute publique du gardien. Chaque action est
+  vérifiée sur les données de lancement signées par Telegram (le propriétaire, ce bot), l'image
+  n'est servie qu'une fois la page ouverte par lui, et le navigateur se ferme quand il a fini,
+  qu'il abandonne, ou après 10 minutes sans rien toucher. Comme celui du cœur, il n'atteint
+  jamais une adresse privée.
+
+`orion login` reste possible sur un ordinateur. Le gardien a maintenant besoin du navigateur
+(`PLAYWRIGHT_BROWSERS_PATH` dans `orion-guardian.service`).
+
+Au passage, la page qui ouvre la console depuis Telegram restait sur « Un instant… » dès que
+quelque chose échouait (le script de Telegram absent, le serveur muet, une erreur). Elle dit
+maintenant pourquoi.

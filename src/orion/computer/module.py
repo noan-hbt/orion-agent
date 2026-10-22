@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,7 +69,17 @@ class LoginAskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,40}$", description="e.g. doctolib")
-    site: str = Field(max_length=200, description="Its site or address, e.g. doctolib.fr")
+    site: str = Field(
+        max_length=300,
+        description="The sign-in page's address (session) or the site (password), e.g. "
+        "https://www.doctolib.fr/sessions/new",
+    )
+    keep: Literal["session", "password"] = Field(
+        default="session",
+        description="session: he signs in himself from his phone, in the guardian's browser "
+        "(SMS codes, captchas work); password: the guardian keeps his password to sign in "
+        "again when a session expires",
+    )
     why: str = Field(default="", max_length=300)
 
 
@@ -90,12 +100,8 @@ class ComputerModule(Module):
         if not self.enabled:
             return super().offers()
         lend = (
-            "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) avec une session qu'il te "
-            "prête, pour un site où tu ne l'as pas déjà : une fois, sur un ordinateur avec un "
-            "écran (Windows, Linux ou Mac, pas le téléphone), `orion login <nom> <adresse de la "
-            "page de connexion>` ; il s'y connecte à la main, puis `orion sessions add <nom> "
-            "<fichier>` sur le serveur. Ne lui suppose aucune machine : demande-lui ce qu'il a. "
-            "Ou, sans ordinateur et sans expiration : son identifiant, gardé par le gardien "
+            "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) : il se connecte depuis son "
+            "téléphone dans le navigateur du gardien, ou lui confie son mot de passe "
             "(`computer_login_ask`)"
         )
         if not self.config.guardian.enabled:
@@ -285,9 +291,18 @@ def computer_tools(
                 "Logins are kept by the guardian, which is not running.", is_error=True
             )
         try:
-            await guardian.ask_login(args.name, args.site, args.why)
+            if args.keep == "session":
+                await guardian.ask_session(args.name, args.site, args.why)
+            else:
+                await guardian.ask_login(args.name, args.site, args.why)
         except GuardianUnavailableError as exc:
             return ToolResult(f"Not asked: {exc}", is_error=True)
+        if args.keep == "session":
+            return ToolResult(
+                f"Il a reçu un bouton pour se connecter lui-même, depuis son téléphone, dans le "
+                "navigateur du gardien. Quand le gardien dit que c'est gardé, donne `session` "
+                f'"{args.name}" à computer_task_send.'
+            )
         return ToolResult(
             f"Il a reçu un bouton pour saisir son identifiant « {args.name} » dans le formulaire "
             "du gardien. Tu ne verras jamais le mot de passe : quand le gardien dit qu'il est "
@@ -319,9 +334,9 @@ def computer_tools(
         ),
         Tool(
             name="computer_login_ask",
-            description="Ask the owner for a site login (username, password, 2FA key) through "
-            "the guardian's own form on his phone, for computer_task_send to sign in by itself "
-            "when a session expires. Never ask for a password in a message.",
+            description="To act on one of the owner's accounts: he signs in from his phone, in "
+            "the guardian's own browser (a session), or gives his password to the guardian's "
+            "form. Never ask for a password in a message.",
             input_model=LoginAskInput,
             handler=login_ask,
             effect=Effect.INTERNAL,
