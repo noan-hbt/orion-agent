@@ -51,6 +51,7 @@ else
 fi
 cd "$ROOT/app"
 export UV_PYTHON_INSTALL_DIR="$ROOT/python"
+install -d -m 0755 "$ROOT/python"  # stays empty when the system Python is recent enough
 uv sync --frozen --no-dev -q
 # Orion's own browser ([modules.computer]): Chromium and the libraries it needs.
 PLAYWRIGHT_BROWSERS_PATH="$ROOT/browsers" .venv/bin/playwright install --with-deps chromium >/dev/null
