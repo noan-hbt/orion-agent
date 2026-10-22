@@ -74,7 +74,7 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
   - Pour une copie hors du serveur, avec rclone vers OVH Object Storage par exemple :
     `rclone sync /srv/orion/backups ovh:orion-backups` dans un timer à toi.
   - Le journal contient ta vie : chiffre le bucket.
-- **Mise à jour** : automatique (D94). Toutes les 15 minutes, `orion-update.timer` regarde
+- **Mise à jour** : automatique (D94). Toutes les 2 minutes, `orion-update.timer` regarde
   si la branche suivie a du nouveau. Si oui, il installe, vérifie la config, redémarre et
   surveille les deux processus 75 s. Si quelque chose casse, il revient à la version d'avant,
   écarte ce commit et te prévient sur Telegram ; il te prévient aussi quand ça s'est bien passé.
