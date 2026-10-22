@@ -271,8 +271,7 @@ class LoginDesk:
 
     async def _accounts(self, request: Request) -> Response:
         logins = json.loads(bytes((await self._list(request)).body))
-        sessions = dict(sorted(self.service.ledger.state.sessions.items()))
-        return JSONResponse({"sessions": sessions, "logins": logins})
+        return JSONResponse({"logins": logins})
 
     async def _lend(self, request: Request) -> Response:
         """The username and password for Orion's browser, when it asks (D115)."""

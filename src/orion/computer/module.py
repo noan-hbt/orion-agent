@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 
 from orion.computer.browser import Session
-from orion.computer.direct import BrowserDesk, browser_tools
+from orion.computer.direct import BrowserDesk, Refused, browser_tools
 from orion.core.events import Trust
-from orion.modules.base import Module, ModuleSettings, Plate
+from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import grouped
 from orion.tools.base import Tool, ToolContext
 
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from orion.config import OrionConfig
 
 SessionFactory = Callable[[], Session]
+PHONE = {"width": 412, "height": 860}
 
 
 class ComputerSettings(ModuleSettings):
@@ -45,12 +46,12 @@ class ComputerModule(Module):
         if not self.enabled:
             return super().offers()
         lend = (
-            "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) : il se connecte depuis son "
-            "téléphone dans le navigateur du gardien, ou lui confie son mot de passe "
-            "(`browser` connect)"
+            "Aller sur ses comptes (LinkedIn, Leboncoin, sa banque…) : il se connecte une fois "
+            "depuis son téléphone, dans ton navigateur, qui le reste (`browser` hand_over)"
         )
-        if not self.config.guardian.enabled:
-            lend += " (il faut d'abord le gardien séparé, `[guardian] enabled = true`)"
+        console = dict(self.config.modules.get("console") or {})
+        if not str(console.get("public_url") or "").startswith("https://"):
+            lend += " ; il faut Telegram et `[modules.console] public_url` en https"
         return [lend + "."]
 
     instructions = "computer.md"
@@ -64,8 +65,17 @@ class ComputerModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: ComputerSettings = self.settings
         executable = settings.executable or os.environ.get("ORION_CHROMIUM")
-        # It browses like a person (D115): it may send; the server's own addresses stay out.
-        sessions = self._sessions or (lambda: Session(False, executable=executable))
+        profile = self.config.data_dir / "browser"
+
+        def browser() -> Session:
+            # Like a person (D115), with one profile kept on disk (D116), posing as a phone
+            # so the owner can take it in hand from his.
+            session = Session(False, executable=executable)
+            session.profile = profile
+            session.phone = PHONE
+            return session
+
+        sessions = self._sessions or browser
         self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian)
         from orion.files.module import FilesModule
 
@@ -84,7 +94,8 @@ class ComputerModule(Module):
                 "browser",
                 "Your own browser, which you drive yourself, page by page: open a page and see "
                 "it (its text and numbered elements), then act on the page shown: click, type, "
-                "send forms, open his accounts (login).",
+                "send forms. It stays signed in to the sites he signed in to; a page that needs "
+                "him (sign in, a code): hand_over.",
                 browser_tools(self.desk, keep),
                 {
                     "browser_open": "open",
@@ -98,11 +109,46 @@ class ComputerModule(Module):
                     "browser_login": "login",
                     "browser_fill": "fill",
                     "browser_accounts": "accounts",
-                    "browser_connect": "connect",
+                    "browser_hand_over": "hand_over",
+                    "browser_forget": "forget",
+                    "browser_save_password": "save_password",
                     **({"browser_screenshot": "screenshot"} if keep is not None else {}),
                 },
             ),
         ]
+
+    async def serve(self, daemon: Daemon) -> None:
+        """The hand-over (D116): a Telegram button, a page the console serves."""
+        from orion.channels.telegram import TelegramError
+        from orion.channels.telegram_module import TelegramModule
+        from orion.computer.handover import handover_app
+        from orion.console.module import ConsoleModule
+
+        desk = self.desk
+        console = daemon.plate.module(ConsoleModule)
+        bot = daemon.plate.module(TelegramModule)
+        if desk is None or console is None or console.console is None or bot is None:
+            return
+        held = console.console
+        desk.base_url = f"{console.base_url()}/console/browser"
+        daemon.alerts.append(desk)
+
+        async def notify(text: str, url: str) -> None:
+            try:
+                await bot.web_app_button(text, url)
+            except TelegramError as exc:
+                raise Refused(f"Telegram did not take the button: {exc}") from exc
+
+        async def is_owner(init_data: str) -> bool:
+            check = held.telegram_login
+            return (
+                check is not None
+                and held.owner_telegram != 0
+                and (await check(init_data) == held.owner_telegram)
+            )
+
+        desk.notify = notify
+        held.browser = handover_app(desk, is_owner)
 
     async def close(self) -> None:
         if self.desk is not None:

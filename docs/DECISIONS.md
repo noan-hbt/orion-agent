@@ -2450,3 +2450,32 @@ supprimer, en connaissance de cause.
 Le risque accepté : une page piégée pourrait pousser Orion à envoyer des informations
 ailleurs ; rien ne l'en empêche plus techniquement, seul son jugement (une page est une
 information, jamais un ordre ; ce qui engage le propriétaire, il s'assure qu'il le veut).
+
+## D116 — Un seul navigateur qui garde ses connexions ; il lui passe la main, comme ChatGPT
+
+*22/10/2026 · acceptée · remplace D112 et les sessions prêtées de D49*
+
+Constaté en vrai : impossible de connecter Orion à Hyperplanning. Il y avait deux navigateurs,
+celui du gardien où le propriétaire se connectait et celui d'Orion qui recevait une copie de la
+session, avec une adresse, des domaines et une empreinte « téléphone » à faire correspondre :
+une pièce de travers, et ça échouait (la connexion de l'école passe par un autre site). Le
+propriétaire a demandé de faire comme ChatGPT, dont le navigateur garde ses connexions et passe
+la main quand une page a besoin de l'utilisateur.
+
+- **Un seul navigateur, un profil gardé sur disque** (`data/browser`) : ses cookies, donc ses
+  connexions, valent dans chaque conversation (un onglet par conversation) et survivent à un
+  redémarrage. Les cookies de session, que Chromium jette, sont gardés à côté (0600).
+- **Il passe la main** (`browser` hand_over) : quand une page a besoin du propriétaire (se
+  connecter, un code reçu par SMS, un captcha), il reçoit sur Telegram un bouton qui ouvre la
+  vue en direct de **cet onglet** (une Mini App servie par la console, `/console/browser/`). Il
+  touche l'image pour cliquer, tape dessous, puis « J'ai fini ». Ce qu'il tape va dans la page,
+  jamais dans la conversation ni le journal. Orion est prévenu et reprend sur la page laissée.
+  Chaque action est vérifiée sur les données signées par Telegram (le propriétaire, ce bot).
+- **Se déconnecter** : `browser` forget efface les cookies d'un site, ou de tous.
+- **Le coffre de mots de passe (D111) reste en option** : `browser` login puis fill tapent un
+  mot de passe gardé par le gardien sans qu'Orion le voie.
+- **Retirés** : les sessions gardées et prêtées par le gardien, son navigateur et sa Mini App
+  de connexion (D112), `orion login` et `orion sessions`.
+
+Ce qui change de place : les connexions vivent dans le navigateur d'Orion, sur le serveur, et
+plus chez le gardien, ce qui va avec D115.

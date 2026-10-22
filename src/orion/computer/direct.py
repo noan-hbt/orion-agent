@@ -20,12 +20,16 @@ from __future__ import annotations
 
 import asyncio
 import re
+import secrets as tokens
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from urllib.parse import quote, quote_plus
 
 import structlog
+from playwright.async_api import Page
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.computer.browser import BrowserError, Session, Snapshot
@@ -33,6 +37,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
+from orion.initiative.engine import Alert
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import normalize
 from orion.web.service import WebState
@@ -72,7 +77,9 @@ SessionFactory = Callable[[], Session]
 
 @dataclass
 class _Live:
-    session: Session
+    """A conversation's tab in Orion's browser."""
+
+    page: Page
     closer: asyncio.Task[None] | None = None
     text: str = ""
     login: dict[str, Any] | None = None
@@ -82,6 +89,14 @@ class _Live:
 
 
 MASK = "••••••"
+HANDOVER_SECONDS = 30 * 60.0
+
+
+@dataclass
+class HandOver:
+    thread: str
+    why: str
+    until: float
 
 
 def masked(text: str, hidden: set[str]) -> str:
@@ -108,40 +123,83 @@ class BrowserDesk:
         self.state = BrowsingState()
         self._runner = ProjectionRunner(journal, [self.state])
         self._live: dict[str, _Live] = {}
+        """Conversation → its tab. One browser, one profile on disk (D116): its cookies, so its
+        sign-ins, are the same in every tab and stay after a restart."""
+        self._session: Session | None = None
         self._lock = asyncio.Lock()
+        self.held: set[str] = set()
+        """Tabs the owner has in hand (a hand-over): never closed for being idle."""
+        self.handovers: dict[str, HandOver] = {}
+        """One-time token → the tab the owner was handed (D116)."""
+        self.finished: list[tuple[str, HandOver, str, datetime]] = []
+        """Hand-overs he finished: (token, which, the page he left, when), for Orion to resume."""
+        self.notify: Callable[[str, str], Awaitable[None]] | None = None
+        """(text, address) → the owner gets a Telegram button opening that address."""
+        self.base_url = ""
+        """Where the hand-over page is served (the console's public address)."""
 
-    async def _browser(self, thread: str, state: dict[str, Any] | None = None) -> _Live:
-        live = self._live.get(thread)
-        if live is not None and state is not None:  # a lent session: a browser that holds it
-            await self.close(thread)
-            live = None
-        if live is None:
+    @property
+    def session(self) -> Session:
+        if self._session is None:  # pragma: no cover - only after `_tab`
+            raise Refused("No page is open: browser open first.")
+        return self._session
+
+    async def _tab(self, thread: str) -> _Live:
+        """The conversation's tab, the browser opened first if need be; the session then acts
+        on it. Called under the lock."""
+        if self._session is None:
             session = self._sessions()
-            session.storage_state = state
             await session.__aenter__()
-            live = self._live[thread] = _Live(session)
+            self._session = session
+            first: Page | None = session.page
+        else:
+            first = None
+        live = self._live.get(thread)
+        if live is None:
+            page = first or await self._session.new_page()
+            live = self._live[thread] = _Live(page)
+        self._session.page = live.page
+        self._arm(thread, live)
+        return live
+
+    def _arm(self, thread: str, live: _Live) -> None:
         if live.closer is not None:
             live.closer.cancel()
         live.closer = asyncio.create_task(self._close_later(thread))
-        return live
 
     async def _close_later(self, thread: str) -> None:
         await asyncio.sleep(self._idle)
-        await self.close(thread)
+        if thread not in self.held:
+            await self.close(thread)
+
+    def tab(self, thread: str) -> _Live | None:
+        return self._live.get(thread)
 
     async def close(self, thread: str) -> bool:
         live = self._live.pop(thread, None)
+        self.held.discard(thread)
         if live is None:
             return False
         if live.closer is not None and live.closer is not asyncio.current_task():
             live.closer.cancel()
-        await live.session.__aexit__(None, None, None)
+        await live.page.close()
         log.info("browser.closed", thread=thread)
+        if not self._live and self._session is not None:  # the last tab: the browser goes
+            session, self._session = self._session, None
+            await session.__aexit__(None, None, None)
         return True
 
     async def aclose(self) -> None:
         for thread in list(self._live):
             await self.close(thread)
+
+    async def on_tab(self, thread: str, action: Callable[[Session], Awaitable[Any]]) -> Any:
+        """Something done on a conversation's tab from outside a turn (the owner's hand-over)."""
+        async with self._lock:
+            if thread not in self._live:
+                raise Refused("That tab is closed.")
+            await self._tab(thread)
+            return await action(self.session)
 
     # -- actions ------------------------------------------------------------------------------
 
@@ -168,8 +226,14 @@ class BrowserDesk:
 
     async def read(self, part: int, find: str, ctx: ToolContext) -> str:
         live = self._live.get(ctx.thread_id)
-        if live is None or not live.text:
+        if live is None:
             raise Refused("No page is open: browser open first.")
+        if not live.text:  # he had the tab in hand: the page as he left it
+
+            async def look(_session: Session) -> None:
+                return None
+
+            await self._act(ctx, look)
         text = live.text
         if find:
             spots = [m.start() for m in re.finditer(re.escape(find), text, re.IGNORECASE)][:5]
@@ -184,54 +248,33 @@ class BrowserDesk:
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
     async def login(self, args: Any, ctx: ToolContext) -> str:
-        """Open the owner's account: his session, or his login (D113), lent by the guardian when
-        Orion asks (D115). It opens `url`, or the page kept with the account."""
-        if not args.session and not args.login:
-            raise Refused("Name a session or a login (`browser` accounts lists them).")
+        """A login from the guardian's vault (D111), for a sign-in form: `fill` types it, Orion
+        never sees it. Opens `url`, or the login's own page."""
         if self.guardian is None:
-            raise Refused("Sessions and logins are kept by the guardian, which is not running.")
-        params = {"action": "login", "session": args.session, "login": args.login}
-        lent: dict[str, Any] | None = None
-        sites: list[str] = []
+            raise Refused("The vault is kept by the guardian, which is not running.")
         try:
-            if args.login:
-                lent = await self.guardian.lend_login(args.login, params, ctx.grant)
-                sites = list(lent["sites"])
-            state = (
-                await self.guardian.lend_session(args.session, params, ctx.grant)
-                if args.session
-                else None
+            lent = await self.guardian.lend_login(
+                args.login, {"action": "login", "login": args.login}, ctx.grant
             )
         except GuardianUnavailableError as exc:
             raise Refused(f"The guardian did not lend it: {exc}") from exc
-        if state is not None:
-            sites = sites or list(state.get("domains") or [])
+        sites = list(lent["sites"])
         start = normalize(str(args.url)) if args.url else ""
-        if lent is not None:
-            start = start or str(lent.get("url") or "")
-        if state is not None:  # the page kept with the session, the one Orion chose (D115)
-            start = start or str(dict(state["state"].get("orion") or {}).get("url") or "")
-        start = start or (f"https://{sites[0]}/" if sites else "")
-        if not start:
-            raise Refused("This account names no site.")
+        start = start or str(lent.get("url") or "") or (f"https://{sites[0]}/" if sites else "")
         async with self._lock:
-            live = await self._browser(ctx.thread_id, state["state"] if state else None)
-            if lent is not None:
-                guardian, name, loan = self.guardian, args.login, str(lent["loan"])
+            live = await self._tab(ctx.thread_id)
+            guardian, name, loan = self.guardian, args.login, str(lent["loan"])
 
-                async def code() -> str:
-                    return await guardian.login_code(name, loan)
+            async def code() -> str:
+                return await guardian.login_code(name, loan)
 
-                live.login = {**lent, "code": code}
-                live.hidden.add(str(lent["password"]))
-        said = await self._act(ctx, lambda s: s.goto(start))
-        how = (
+            live.login = {**lent, "code": code}
+            live.hidden.add(str(lent["password"]))
+        said = await self._act(ctx, lambda s: s.goto(start)) if start else ""
+        return (
             "Identifiant prêt : `browser` fill tape l'identifiant, le mot de passe ou le code "
-            "(tu ne les vois jamais), puis clique pour te connecter.\n\n"
-            if lent is not None
-            else "Ouvert avec sa session.\n\n"
+            "(tu ne les vois jamais), puis clique pour te connecter.\n\n" + said
         )
-        return how + said
 
     async def fill(self, element: int, what: str, ctx: ToolContext) -> str:
         live = self._live.get(ctx.thread_id)
@@ -254,63 +297,134 @@ class BrowserDesk:
         sites = list(login["sites"])
         return await self._act(ctx, lambda s: s.fill_secret(element, value, sites, what))
 
+    async def hand_over(self, why: str, ctx: ToolContext) -> str:
+        """The owner takes the tab in hand, from Telegram (D116): he signs in, types a code,
+        solves a captcha; Orion picks up where he left it when he says he is done."""
+        if ctx.thread_id not in self._live:
+            raise Refused("Open the page first (browser open): he gets this very tab.")
+        if self.notify is None or not self.base_url:
+            raise Refused(
+                "Handing over needs Telegram and the console's public address "
+                "([modules.console] public_url)."
+            )
+        token = tokens.token_urlsafe(24)
+        now = time.monotonic()
+        self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
+        self.handovers[token] = HandOver(ctx.thread_id, why, now + HANDOVER_SECONDS)
+        self.held.add(ctx.thread_id)
+        await self.notify(
+            f"{why}\nTouche le bouton : c'est mon navigateur, sur la page où j'en suis. Fais ce "
+            "qu'il faut (te connecter, un code…), puis « J'ai fini » : je reprends. Ce que tu "
+            "tapes va dans la page, pas dans notre conversation.",
+            f"{self.base_url}/?t={token}",
+        )
+        log.info("browser.handed_over", thread=ctx.thread_id)
+        return (
+            "Il a reçu un bouton qui lui ouvre cet onglet de ton navigateur. Dis-lui en une "
+            "phrase ce qu'il doit y faire, puis attends : quand il aura fini, tu le sauras et tu "
+            "reprendras sur la page où il l'aura laissée. Ne touche pas à cet onglet d'ici là."
+        )
+
+    def handover(self, token: str) -> HandOver | None:
+        found = self.handovers.get(token)
+        return found if found is not None and found.until > time.monotonic() else None
+
+    async def give_back(self, token: str, done: bool) -> str:
+        """He is done (or gave up): the tab is Orion's again."""
+        found = self.handovers.pop(token, None)
+        if found is None:
+            return ""
+        self.held.discard(found.thread)
+        live = self._live.get(found.thread)
+        url = live.page.url if live is not None else ""
+        if live is not None:
+            live.text = ""  # what Orion last read is not the page any more
+            self._arm(found.thread, live)
+        if done:
+            self.finished.append((token, found, url, datetime.now(UTC)))
+            if self._session is not None:
+                await self._session.keep_cookies()  # signed in: kept at once
+        return url
+
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """A finished hand-over, for Orion to resume where the owner left the page."""
+        self.finished = [f for f in self.finished if now - f[3] < timedelta(hours=1)]
+        return [
+            Alert(
+                key=f"handover:{token}",
+                notice=f"Il a fini dans ton navigateur ({found.why}) : la page est maintenant "
+                f"{url}. Reprends ce que tu faisais pour lui, avec `browser` (read pour la "
+                "voir).",
+                why="il a fini ce que tu lui avais passé",
+                fallback="",
+                expires_at=at + timedelta(hours=1),
+                importance=0.9,
+                spoken_to=True,
+            )
+            for token, found, url, at in self.finished
+        ]
+
     async def accounts(self) -> str:
         if self.guardian is None:
-            return "Le gardien ne tourne pas : aucun compte."
+            return "Le gardien ne tourne pas : pas de coffre."
         try:
             kept = await self.guardian.accounts()
         except GuardianUnavailableError as exc:
             raise Refused(f"The guardian did not answer: {exc}") from exc
-        lines = [f"- session « {n} » : {', '.join(s)}" for n, s in kept["sessions"].items()]
-        lines += [
-            f"- identifiant « {k['name']} » : {', '.join(k['sites'])}"
+        lines = [
+            f"- « {k['name']} » : {', '.join(k['sites'])}"
             + (" (avec la double authentification)" if k["totp"] else "")
             for k in kept["logins"]
         ]
-        return "\n".join(lines) or "Aucun compte gardé : `browser` connect pour lui en demander."
+        if not lines:
+            return (
+                "Aucun mot de passe dans le coffre (les sites où ton navigateur est connecté le "
+                "restent)."
+            )
+        return "Mots de passe gardés (`browser` login) :\n" + "\n".join(lines)
 
-    async def connect(self, args: Any) -> str:
+    async def save_password(self, args: Any) -> str:
         if self.guardian is None:
-            raise Refused("Sessions and logins are kept by the guardian, which is not running.")
+            raise Refused("The vault is kept by the guardian, which is not running.")
         try:
-            if args.keep == "session":
-                await self.guardian.ask_session(args.name, args.site, args.why)
-            else:
-                await self.guardian.ask_login(args.name, args.site, args.why)
+            await self.guardian.ask_login(args.name, args.site, args.why)
         except GuardianUnavailableError as exc:
             raise Refused(f"Not asked: {exc}") from exc
-        if args.keep == "session":
-            return (
-                "Il a reçu un bouton pour se connecter lui-même, depuis son téléphone, dans le "
-                "navigateur du gardien. Quand le gardien dit que c'est gardé : `browser` login "
-                f'avec session "{args.name}".'
-            )
         return (
             f"Il a reçu un bouton pour saisir son identifiant « {args.name} » dans le formulaire "
             "du gardien. Tu ne verras jamais le mot de passe : quand le gardien dit qu'il est "
             f'gardé, `browser` login avec login "{args.name}".'
         )
 
+    async def forget(self, site: str, ctx: ToolContext) -> str:
+        """Signed out of a site (its cookies go), or of every site."""
+        async with self._lock:
+            await self._tab(ctx.thread_id)
+            await self.session.forget(site)
+            await self.session.keep_cookies()
+        return f"Déconnecté de {site}." if site else "Déconnecté de tous les sites."
+
     async def screenshot(self, full: bool, ctx: ToolContext) -> bytes:
         async with self._lock:
-            live = self._live.get(ctx.thread_id)
-            if live is None:
+            if ctx.thread_id not in self._live:
                 raise Refused("No page is open: browser open first.")
-            return await live.session.screenshot(full)
+            await self._tab(ctx.thread_id)
+            return await self.session.screenshot(full)
 
     async def _act(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
         async with self._lock:
-            live = await self._browser(ctx.thread_id)
-            blocked_before = len(live.session.blocked)
+            live = await self._tab(ctx.thread_id)
+            session = self.session
+            blocked_before = len(session.blocked)
             live.text = ""
-            await action(live.session)
-            snapshot = await live.session.snapshot(READ_CHARS)
+            await action(session)
+            snapshot = await session.snapshot(READ_CHARS)
             if live.hidden:
                 snapshot.url = masked(snapshot.url, live.hidden)
                 snapshot.text = masked(snapshot.text, live.hidden)
                 snapshot.elements = [masked(e, live.hidden) for e in snapshot.elements]
             live.text = snapshot.text
-            blocked = live.session.blocked[blocked_before:]
+            blocked = session.blocked[blocked_before:]
         await self._record(snapshot, ctx)
         return _render(snapshot, blocked)
 
@@ -420,13 +534,8 @@ class ScreenshotInput(BaseModel):
 class LoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    session: str = Field(default="", max_length=60, description="A session the guardian keeps")
-    login: str = Field(
-        default="",
-        max_length=60,
-        description="A login it keeps (to sign in when the session expired, or none)",
-    )
-    url: str = Field(default="", max_length=500, description="A page of that account to open")
+    login: str = Field(max_length=60, description="A login in the guardian's vault (accounts)")
+    url: str = Field(default="", max_length=500, description="The sign-in page to open")
 
 
 class FillInput(BaseModel):
@@ -438,22 +547,26 @@ class FillInput(BaseModel):
     )
 
 
-class ConnectInput(BaseModel):
+class PasswordInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,40}$", description="e.g. doctolib")
-    site: str = Field(
-        max_length=300,
-        description="The full address of the page to keep with the account: where he signs "
-        "in, or the page you will come back to (his timetable…), not just the domain",
-    )
-    keep: Literal["session", "password"] = Field(
-        default="session",
-        description="session: he signs in himself from his phone, in the guardian's browser "
-        "(SMS codes, captchas work); password: the guardian keeps his password, for you to sign "
-        "in again when a session expires",
-    )
+    site: str = Field(max_length=300, description="The sign-in page's full address")
     why: str = Field(default="", max_length=300)
+
+
+class HandOverInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    why: str = Field(max_length=200, description="For him, e.g. « Connecte-toi à Hyperplanning »")
+
+
+class ForgetInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    site: str = Field(
+        default="", max_length=200, description="e.g. index-education.net; empty: all"
+    )
 
 
 Keep = Callable[[str, bytes, str, ToolContext], Awaitable[str]]
@@ -510,9 +623,15 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         except Refused as exc:
             return ToolResult(str(exc), is_error=True)
 
-    async def connect(args: Any, _ctx: ToolContext) -> ToolResult:
+    async def save_password(args: Any, _ctx: ToolContext) -> ToolResult:
         try:
-            return ToolResult(await desk.connect(args))
+            return ToolResult(await desk.save_password(args))
+        except Refused as exc:
+            return ToolResult(str(exc), is_error=True)
+
+    async def hand_over(args: Any, ctx: ToolContext) -> ToolResult:
+        try:
+            return ToolResult(await desk.hand_over(args.why, ctx))
         except Refused as exc:
             return ToolResult(str(exc), is_error=True)
 
@@ -562,8 +681,8 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
         tool(
             "browser_login",
-            "Open one of the owner's accounts: with his session, or his login (you type it "
-            "with fill without seeing it).",
+            "A password from the guardian's vault, for a sign-in form: then fill types it "
+            "without you seeing it.",
             LoginInput,
             run(lambda a, c: desk.login(a, c)),
             Effect.INTERNAL,
@@ -581,11 +700,26 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
             accounts,
         ),
         tool(
-            "browser_connect",
-            "Ask him to sign in to an account from his phone (session) or give his password "
-            "to the guardian's form. Never ask for a password in a message.",
-            ConnectInput,
-            connect,
+            "browser_hand_over",
+            "A page needs him (sign in, a code, a captcha): he gets this tab on his phone, does "
+            "it, says he is done, and you resume. Your browser stays signed in afterwards.",
+            HandOverInput,
+            hand_over,
+            Effect.INTERNAL,
+        ),
+        tool(
+            "browser_forget",
+            "Sign out of a site (its cookies go), or of all.",
+            ForgetInput,
+            run(lambda a, c: desk.forget(a.site, c)),
+            Effect.INTERNAL,
+        ),
+        tool(
+            "browser_save_password",
+            "Ask him to put a password in the guardian's vault (its form on his phone), for "
+            "`login` to fill a sign-in form later. Never ask for a password in a message.",
+            PasswordInput,
+            save_password,
             Effect.INTERNAL,
         ),
         *(

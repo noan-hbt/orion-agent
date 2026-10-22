@@ -64,7 +64,6 @@ from orion.guardian.ledger import (
     DENIED,
     MAIL_SENT,
     OWNER_CONVERSATION,
-    SESSION_LENT,
     WRITTEN,
     Ledger,
     PendingApproval,
@@ -360,7 +359,6 @@ class GuardianService:
                 Route("/v1/autonomy", self._autonomy, methods=["GET"]),
                 Route("/v1/autonomy/grant", self._autonomy_grant, methods=["POST"]),
                 Route("/v1/autonomy/revoke", self._autonomy_revoke, methods=["POST"]),
-                Route("/v1/sessions/{name}/lend", self._lend_session, methods=["POST"]),
                 Route("/v1/inkbox-webhook/verify", self._verify_webhook, methods=["POST"]),
                 Route("/v1/calendar/{account}", self._calendar, methods=["GET"]),
                 Route("/v1/calendar/{account}/events", self._calendar_add, methods=["POST"]),
@@ -818,23 +816,6 @@ class GuardianService:
         if self.restart is not None:
             asyncio.get_running_loop().create_task(self.restart())
         return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
-
-    # -- logged-in sessions ---------------------------------------------------------------------
-
-    async def _lend_session(self, request: Request) -> Response:
-        """A site session (cookies) for Orion's browser, when it asks (D115): each loan is
-        recorded, the owner is not asked."""
-        name = str(request.path_params["name"])
-        await self.ledger.catch_up()
-        domains = self.ledger.state.sessions.get(name)
-        path = self.config.guardian.data_dir / "sessions" / f"{name}.json"
-        if domains is None or not path.is_file():
-            return refused(f"no session {name!r}", 404)
-        how = "asked"
-        state: Any = json.loads(path.read_text(encoding="utf-8"))
-        await self.ledger.record(SESSION_LENT, {"name": name, "how": how})
-        log.info("guardian.session_lent", name=name, how=how)
-        return JSONResponse({"state": state, "domains": domains})
 
     async def _autonomy_revoke(self, request: Request) -> Response:
         """Taking autonomy back never needs asking."""

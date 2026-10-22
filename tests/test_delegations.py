@@ -1,5 +1,4 @@
-"""Acting in the world: autonomies bounded by the owner's limits, and logged-in sessions the
-guardian lends for one approved task."""
+"""Acting in the world: autonomies bounded by the owner's limits."""
 
 from __future__ import annotations
 
@@ -11,9 +10,7 @@ from orion.config import SecretRef
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy
 from orion.guardian.client import GuardianUnavailableError
-from orion.guardian.ledger import SESSION_LENT
 from orion.guardian.limits import Limits, within
-from orion.guardian.sessions import SessionError, add_session, cookie_domains
 from orion.mail.service import MailAccount
 from orion.mail.smtp import Outgoing
 from tests.fake_guardian import running_guardian
@@ -86,29 +83,6 @@ async def test_the_guardian_mails_alone_only_within_the_limits(tmp_path: Path) -
         with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
             await g.client.mail_send(account, stranger, None)
         assert sent == [to_agency]
-
-
-async def test_a_session_is_lent_when_orion_asks(tmp_path: Path) -> None:
-    """D115: the guardian lends a session to Orion's browser when it asks; each loan is
-    recorded."""
-    config = writable_config(tmp_path)
-    login = {"action": "login", "session": "doctolib", "login": "", "url": ""}
-    async with running_guardian(config) as g:
-        with pytest.raises(SessionError, match="lowercase"):
-            await add_session(config, g.service.ledger, "Doctolib!", STATE, [])
-        assert await add_session(config, g.service.ledger, "doctolib", STATE, []) == ["doctolib.fr"]
-        assert (config.guardian.data_dir / "sessions" / "doctolib.json").stat().st_mode & 0o077 == 0
-        with pytest.raises(GuardianUnavailableError, match="no session"):
-            await g.client.lend_session("banque", {**login, "session": "banque"}, None)
-        lent = await g.client.lend_session("doctolib", login, None)
-        assert lent["state"]["cookies"][0]["value"] == "s3cret"
-        assert lent["domains"] == ["doctolib.fr"]
-        await g.client.lend_session("doctolib", login, None)
-        assert [e.kind for e in await g.journal.read()].count(SESSION_LENT) == 2
-
-
-def test_a_session_knows_its_sites() -> None:
-    assert cookie_domains(STATE) == ["doctolib.fr"]
 
 
 async def test_a_sending_task_sends_only_on_its_sites() -> None:
