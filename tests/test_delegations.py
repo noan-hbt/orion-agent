@@ -32,9 +32,10 @@ def test_limits_are_checked_on_every_recipient_and_site() -> None:
     assert not within("mail_send", None, {"to": ["paul@x.fr"]})  # never mail alone unbounded
     assert within("calendar_add", None, {})
     sites = Limits(domains=["doctolib.fr"])
-    assert within("computer_task_send", sites, {"sites": ["www.doctolib.fr"]})
-    assert not within("computer_task_send", sites, {"sites": ["doctolib.fr.evil.com"]})
-    assert not within("computer_task_send", sites, {"sites": []})
+    send = {"action": "send", "page": "https://www.doctolib.fr/rdv"}
+    assert within("browser", sites, send)
+    assert not within("browser", sites, {**send, "page": "https://doctolib.fr.evil.com/"})
+    assert not within("browser", sites, {"action": "send", "page": ""})
 
 
 async def test_a_bounded_autonomy_in_the_core(journal: SqliteJournal) -> None:
@@ -87,11 +88,10 @@ async def test_the_guardian_mails_alone_only_within_the_limits(tmp_path: Path) -
         assert sent == [to_agency]
 
 
-async def test_a_session_is_lent_once_for_the_approved_task(tmp_path: Path) -> None:
+async def test_a_session_is_lent_once_for_the_approved_sign_in(tmp_path: Path) -> None:
     config = writable_config(tmp_path)
-    config.guardian.autonomable = ["computer_task_send"]
-    brief = "Prendre le premier rendez-vous libre chez le Dr Martin, mardi matin."
-    task = {"title": "RDV", "brief": brief, "sites": ["doctolib.fr"], "session": "doctolib"}
+    config.guardian.autonomable = ["browser"]
+    login = {"action": "login", "session": "doctolib", "login": "", "url": ""}
     async with running_guardian(config) as g:
         g.fake.inbound("salut")
         with pytest.raises(SessionError, match="lowercase"):
@@ -99,20 +99,19 @@ async def test_a_session_is_lent_once_for_the_approved_task(tmp_path: Path) -> N
         assert await add_session(config, g.service.ledger, "doctolib", STATE, []) == ["doctolib.fr"]
         assert (config.guardian.data_dir / "sessions" / "doctolib.json").stat().st_mode & 0o077 == 0
 
-        lend = {"brief": brief, "session": "doctolib", "sites": ["doctolib.fr"]}
         with pytest.raises(GuardianUnavailableError, match="needs approval"):
-            await g.client.lend_session("doctolib", lend, None)
-        grant, _ = await g.client.request_approval("computer_task_send", task, "", CONVERSATION)
-        question = g.fake.texts()[-1]
-        assert brief in question and "session connectée « doctolib »" in question
+            await g.client.lend_session("doctolib", login, None)
+        grant, _ = await g.client.request_approval("browser", login, "", CONVERSATION)
+        assert "ta session « doctolib »" in g.fake.texts()[-1]
         g.fake.inbound("oui")
-        other = {**lend, "brief": "Annuler tous mes rendez-vous."}
-        with pytest.raises(GuardianUnavailableError, match="not what the owner approved"):
-            await g.client.lend_session("doctolib", other, grant)
-        state = await g.client.lend_session("doctolib", lend, grant)
-        assert state["cookies"][0]["value"] == "s3cret"
+        other = {**login, "session": "banque"}
+        with pytest.raises(GuardianUnavailableError, match="no session"):
+            await g.client.lend_session("banque", other, grant)
+        lent = await g.client.lend_session("doctolib", login, grant)
+        assert lent["state"]["cookies"][0]["value"] == "s3cret"
+        assert lent["domains"] == ["doctolib.fr"]
         with pytest.raises(GuardianUnavailableError, match="already used"):
-            await g.client.lend_session("doctolib", lend, grant)
+            await g.client.lend_session("doctolib", login, grant)
         assert [e.kind for e in await g.journal.read()].count(SESSION_LENT) == 1
 
 
@@ -132,57 +131,3 @@ async def test_a_sending_task_sends_only_on_its_sites() -> None:
             await browser.type(await element(browser, "Votre message"), "Bonjour", enter=False)
             await browser.click(await element(browser, "Envoyer"))
         assert any(r.startswith("POST") for r in site.requests) is posted
-
-
-async def test_the_lent_session_reaches_the_worker_but_not_the_journal(
-    journal: SqliteJournal, tmp_path: Path
-) -> None:
-    import json
-    from typing import Any
-
-    from orion.computer.module import computer_tools
-    from orion.delegation.claude_code import AgentOutcome
-    from orion.delegation.jobs import JobService
-    from orion.guardian.client import GuardianClient
-    from orion.tools.base import ToolContext
-
-    got: list[dict[str, Any] | None] = []
-
-    class Worker:
-        name = "browser-submit"
-        allow_bash = False
-
-        async def run(
-            self, task: str, workdir: Path, options: dict[str, Any] | None = None
-        ) -> AgentOutcome:
-            got.append(options)
-            return AgentOutcome(True, "Rendez-vous pris mardi 9h.")
-
-    class Lender(GuardianClient):
-        async def lend_session(
-            self, name: str, params: dict[str, Any], grant: str | None
-        ) -> dict[str, Any]:
-            assert grant == "g1" and params["session"] == name
-            return STATE
-
-    jobs = JobService(journal, Worker(), tmp_path)
-    reading = JobService(journal, Worker(), tmp_path)
-    tools = {
-        t.name: t for t in computer_tools(reading, jobs, Lender.over_socket(tmp_path / "none.sock"))
-    }
-    send = tools["computer_task_send"]
-    args = send.parse(
-        json.dumps(
-            {
-                "title": "RDV",
-                "brief": "Prendre rendez-vous mardi",
-                "sites": ["doctolib.fr"],
-                "session": "doctolib",
-            }
-        )
-    )
-    result = await send.handler(args, ToolContext("owner", "c", grant="g1"))
-    assert not result.is_error
-    await jobs.wait()
-    assert got == [{"sites": ["doctolib.fr"], "state": STATE}]
-    assert "s3cret" not in str([e.payload for e in await journal.read()])

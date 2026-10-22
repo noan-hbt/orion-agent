@@ -159,7 +159,7 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(
             uses("web_search", "web_read", "browser:open"),
-            avoids("computer_task"),
+            avoids("browser:send"),
             says(r"\d[\d  ]*\s?€", "no rent figure in the answer"),
         ),
         live_web=True,
@@ -259,7 +259,7 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Trouve-moi un dentiste dans le 11e cette semaine après 18h"),),
         checks=(
             either(uses("browser:open"), uses("web_search")),
-            avoids("booking:book", "computer_task_send"),
+            avoids("booking:book", "browser:send"),
         ),
         live_web=True,
         modules=("computer",),

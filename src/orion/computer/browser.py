@@ -13,6 +13,7 @@ Downloads are refused and nothing persists between jobs (no cookies, no history)
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -127,6 +128,8 @@ class Session:
         """A phone's screen (width, height): the browser poses as a phone's, with touch. A
         session signed in from the owner's phone (D112) keeps it under `orion`, and is used
         the same way, as sites tie a session to the browser that made it."""
+        self.window: tuple[float, tuple[str, ...]] = (0.0, ())
+        """(until, sites): a read-only browser may send to these sites until then (D113)."""
         self.blocked: list[str] = []
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -213,6 +216,8 @@ class Session:
             await route.continue_()
             return
         sending = request.method not in ("GET", "HEAD")
+        if sending and self.read_only and self.sending_to(parts.hostname or ""):
+            sending = False  # an approved send or sign-in, to its site, for its moment (D113)
         if (
             sending
             and not self.read_only
@@ -245,6 +250,18 @@ class Session:
             await handler(route)
             return
         await route.continue_()
+
+    def open_window(self, sites: list[str], seconds: float) -> None:
+        """Let this read-only browser send to `sites` for a moment: an approved send, or a
+        sign-in (D113). Everywhere else, and afterwards, sending stays blocked."""
+        self.window = (time.monotonic() + seconds, tuple(sites))
+
+    def close_window(self) -> None:
+        self.window = (0.0, ())
+
+    def sending_to(self, host: str) -> bool:
+        until, sites = self.window
+        return time.monotonic() < until and host_in(host, list(sites))
 
     def _page(self) -> Page:
         if self.page is None:  # pragma: no cover - used only inside `async with`

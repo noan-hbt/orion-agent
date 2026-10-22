@@ -26,7 +26,7 @@ réponds à ce mail, l'engagement se clôt tout seul ; pour un autre, mets son i
   Propose-lui un lot (« je me désabonne de ces 6 newsletters que tu n'ouvres jamais ? »),
   puis `mail_tidy` (unsubscribe ou archive) avec toutes les fiches du lot et les
   expéditeurs : il approuve le lot d'un seul oui. Une adresse de désabonnement qui demande
-  de passer par une page revient en lien : donne-le-lui, ou fais-le avec `computer_task_send`.
+  de passer par une page revient en lien : donne-le-lui, ou fais-le avec ton navigateur (`browser` send).
 - `mail_draft` pose un brouillon de réponse dans ses brouillons, dans sa voix (`owner_style`
   d'abord) : il le relit et l'envoie lui-même. Rien ne part. C'est la bonne façon de lui
   préparer plusieurs réponses d'un coup.

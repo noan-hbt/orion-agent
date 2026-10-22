@@ -99,9 +99,9 @@ suivre une commande), le gardien garde ta session, comme il garde tes mots de pa
 2. Ou, sur un ordinateur avec un écran et Orion installé :
    `orion login doctolib https://www.doctolib.fr/sessions/new`, puis copie le fichier sur le
    serveur et `sudo deploy/orion-admin sessions add doctolib doctolib.session.json`.
-3. Orion ne l'utilise que pour une tâche que tu approuves (`computer_task_send` avec cette
-   session et ce texte exact), ou seule si tu lui as laissé ce genre de tâche sur ces sites.
-   Chaque prêt est noté dans le registre du gardien.
+3. Orion s'en sert lui-même, dans son navigateur, quand tu approuves la connexion (ou seul si
+   tu lui as laissé ce genre de chose sur ces sites). Chaque envoi d'un formulaire te demande
+   aussi ton accord. Chaque prêt est noté dans le registre du gardien.
 
 `orion-admin sessions list` montre les sessions gardées, `sessions remove <nom>` en retire une.
 Une session expire comme dans ton navigateur : reconnecte-toi depuis Telegram, ou laisse le
@@ -126,10 +126,11 @@ ton mot de passe.
   il contient tes mots de passe en clair.
 
 `logins list` montre les identifiants gardés, `logins remove <nom>` en retire un. Un code reçu
-par SMS ou par mail, un captcha : l'agent s'arrête et te le dit.
+par SMS ou par mail : Orion te le demande. Un captcha : il te propose de te connecter depuis
+Telegram.
 
 Pour qu'Orion envoie des mails ou des formulaires seul, ajoute `"mail_send"` ou
-`"computer_task_send"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites
+`"browser"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites
 que tu lui donnes en accordant l'autonomie (à quels destinataires, sur quels sites).
 
 ## Rappels de lieu (iPhone)

@@ -1,7 +1,7 @@
 """Signing in from the owner's phone: a browser on the server, driven from Telegram (D112).
 
 A session (D49) used to be made with `orion login` on a computer with a screen, so a second
-install of Orion. Now Orion asks (`computer_login_ask`), and the guardian sends the owner a
+install of Orion. Now Orion asks (`browser` connect), and the guardian sends the owner a
 Telegram button that opens its own Mini App: the picture of a browser the guardian runs, posing
 as a phone. He taps, types, signs in as he would on his phone, SMS code and captcha included,
 then « J'ai fini »: the guardian keeps the session (cookies) under the name Orion gave, as

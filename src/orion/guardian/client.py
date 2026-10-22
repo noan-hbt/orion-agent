@@ -203,16 +203,20 @@ class GuardianClient:
     async def lend_session(
         self, name: str, params: dict[str, Any], grant: str | None
     ) -> dict[str, Any]:
-        """A logged-in site session for one approved task (cookies: never stored by the
-        core). Returns the browser storage state."""
+        """A logged-in site session for what the owner approved (cookies: never stored by the
+        core): `state` (the browser storage state) and `domains`."""
         data = await self.post(
             f"/v1/sessions/{name}/lend", params, headers={GRANT_HEADER: grant} if grant else None
         )
-        return dict(data["state"])
+        return {"state": dict(data["state"]), "domains": list(data.get("domains") or [])}
 
     async def logins(self) -> list[dict[str, Any]]:
         """The owner's logins the guardian keeps (D111): names and sites, never a secret."""
         return list(await self.get("/v1/logins"))
+
+    async def accounts(self) -> dict[str, Any]:
+        """The sessions and logins the guardian keeps: `sessions` (name → sites), `logins`."""
+        return dict(await self.get("/v1/accounts"))
 
     async def lend_login(
         self, name: str, params: dict[str, Any], grant: str | None

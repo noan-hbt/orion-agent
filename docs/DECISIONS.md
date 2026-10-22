@@ -2358,3 +2358,35 @@ le gardien envoie sur Telegram un bouton qui ouvre **sa propre Mini App** (`/sec
 Au passage, la page qui ouvre la console depuis Telegram restait sur « Un instant… » dès que
 quelque chose échouait (le script de Telegram absent, le serveur muet, une erreur). Elle dit
 maintenant pourquoi.
+
+## D113 — Plus d'agent web : Orion fait lui-même, dans son navigateur
+
+*22/10/2026 · acceptée · révise D49, D73, D111 et D112*
+
+Constaté en vrai : pour tester sa connexion à Hyperplanning, Orion a confié une tâche à
+l'agent web au lieu de le faire. Le propriétaire n'en voulait plus : « je veux qu'il fasse
+lui-même ». L'agent web (`computer_task`, `computer_task_send`) disparaît. Le navigateur
+d'Orion (`browser`) fait tout, de bout en bout, sous ses yeux :
+
+- **Lire** reste libre : les règles du navigateur tiennent (adresses autorisées, `type`
+  limité aux mots du message, rien ne part).
+- **Se connecter à un compte** (`browser` login) : avec sa session ou son identifiant gardé.
+  Le gardien les prête sur son oui (ou dans une autonomie dont les sites couvrent ceux du
+  compte), comme avant. Avec un identifiant, `browser` fill tape l'identifiant, le mot de
+  passe ou le code 2FA sans qu'Orion les voie (masqués sur chaque page lue et dans le
+  journal), et pendant 5 minutes le navigateur peut envoyer aux sites du compte, et à eux
+  seuls, le temps de se connecter.
+- **Envoyer** (`browser` send) : réserver, commander, remplir un formulaire. Le propriétaire
+  approuve exactement : la page, les textes tapés, ce que ça fait. L'envoi ne part que vers le
+  site de cette page, le temps du clic.
+- **Ce qui protège** : les pages qu'Orion lit rendent son contexte non fiable, donc chaque
+  connexion ou envoi après une page lue lui est demandé (D26), jamais fait seul. Une tâche de
+  fond (D110) ne fait que lire : ni connexion ni envoi.
+- **Les réservations** (D73) : Orion réserve lui-même, puis dit ce que le site a répondu
+  (`booking` done). Le code range alors le rendez-vous dans l'agenda avec ses rappels.
+- `browser` accounts liste les sessions et identifiants gardés, `browser` connect lui demande
+  de se connecter depuis son téléphone (D112) ou de confier son mot de passe (D111).
+
+Ce qu'on perd : la séparation entre le modèle qui sait tout de lui et celui qui lit les pages.
+Elle est remplacée par son accord à chaque envoi, avec le texte exact, et par le cloisonnement
+du réseau, qui tiennent quoi que dise une page.

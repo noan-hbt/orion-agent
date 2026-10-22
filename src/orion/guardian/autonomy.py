@@ -48,7 +48,7 @@ LABELS = {
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
     "mail_tidy": "archiver tes mails et te désabonner des newsletters",
-    "computer_task_send": "envoyer des formulaires sur des sites",
+    "browser": "envoyer des formulaires et me connecter à tes comptes sur des sites",
     "configure_change": "changer tes propres réglages",
     "contact_message": "écrire à tes proches",
 }
@@ -121,7 +121,7 @@ class GrantInput(BaseModel):
     )
     domains: list[str] = Field(
         default_factory=list[str],
-        description="computer_task_send: only sending on these sites (required)",
+        description="browser: only sending and signing in on these sites (required)",
     )
 
 

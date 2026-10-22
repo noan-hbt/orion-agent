@@ -136,7 +136,7 @@ core_silence_alert_seconds = 300 # the guardian texts you when the core has been
 heartbeat_seconds = 60           # the core tells the guardian it is alive
 autonomable = ["calendar_add", "configure_change", "contact_message"]   # actions you may let Orion do alone,
                                  # once earned (configure_change: its own settings, D72); add
-                                 # "mail_send" and "computer_task_send" to allow them within
+                                 # "mail_send" and "browser" to allow them within
                                  # limits you state (recipients, sites)
 offer_autonomy_after = 5         # approvals in a row before Orion offers (at most monthly)
 max_autonomous_per_day = 10      # the guardian stops autonomous actions beyond this

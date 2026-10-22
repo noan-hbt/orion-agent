@@ -90,7 +90,7 @@ async def test_a_page_cannot_get_anything_out(
     message = number(home, "Votre message")
     await use(tools, "browser_type", element=message, text="agence")
     sent = await use(tools, "browser_click", element=number(home, "Envoyer"))
-    assert "Bloqué" in sent and "computer_task_send" in sent
+    assert "Bloqué" in sent and "`browser` send" in sent
     assert not any(r.startswith("POST") for r in site.requests)
 
 

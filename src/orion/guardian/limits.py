@@ -15,6 +15,7 @@ site's session), and the core checks them too, before even asking.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,7 +23,7 @@ from orion.configure.paths import owners
 
 REQUIRED = {
     "mail_send": "recipients",
-    "computer_task_send": "domains",
+    "browser": "domains",
     "contact_message": "recipients",
 }
 """Actions that can only be granted with this limit set."""
@@ -91,8 +92,15 @@ def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
         if not recipients or not all(_recipient_in(r, limits.recipients) for r in recipients):
             return False
     if limits.domains:
-        sites = _strings(params.get("sites"))
-        if not sites or not all(host_in(s, limits.domains) for s in sites):
+        if action == "browser":
+            # Sending a page's form: that page's site. Signing in: the guardian checks the
+            # account's own sites when it lends it.
+            if params.get("action") == "login":
+                return True
+            sites = [urlsplit(str(params.get("page") or "")).hostname or ""]
+        else:
+            sites = _strings(params.get("sites"))
+        if not all(sites) or not sites or not all(host_in(s, limits.domains) for s in sites):
             return False
     return True
 
