@@ -471,6 +471,61 @@ async def _sessions(config: OrionConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
+    """The owner's logins the guardian keeps (D111). Passwords are typed, never in arguments."""
+    from getpass import getpass
+
+    from orion.guardian.ledger import Ledger
+    from orion.guardian.logins import LoginError, add_login, make_login, read_export, remove_login
+
+    clock = HybridClock(f"{config.instance}-guardian")
+    async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
+        ledger = Ledger(journal)
+        await ledger.catch_up()
+        try:
+            if args.logins_command == "add":
+                password = getpass("Mot de passe : ")
+                code = (
+                    getpass("Clé de double authentification (Entrée si aucune) : ")
+                    if args.totp
+                    else ""
+                )
+                login = make_login(
+                    args.name, args.site or [], args.user, password, code, args.url or ""
+                )
+                await add_login(config, ledger, login)
+                print(f"Identifiant « {login.name} » gardé pour : {', '.join(login.sites)}.")
+            elif args.logins_command == "import":
+                if str(args.file) == "-":  # through sudo: the guardian cannot read his home
+                    text = await asyncio.to_thread(sys.stdin.read)
+                else:
+                    text = await asyncio.to_thread(args.file.read_text, "utf-8")
+                found, skipped = read_export(text)
+                for login in found:
+                    await add_login(config, ledger, login)
+                    print(f"- {login.name} : {', '.join(login.sites)}")
+                for why in skipped:
+                    print(f"  laissé de côté : {why}")
+                print(
+                    f"{len(found)} identifiant(s) gardé(s). Efface maintenant ton export : il "
+                    "contient tes mots de passe en clair."
+                )
+            elif args.logins_command == "remove":
+                gone = await remove_login(config, ledger, args.name)
+                print("Identifiant retiré." if gone else "Pas d'identifiant de ce nom.")
+            else:
+                kept = ledger.state.logins
+                for name, sites in sorted(kept.items()):
+                    totp = ", 2FA" if name in ledger.state.logins_totp else ""
+                    print(f"- {name} : {', '.join(sites)}{totp}")
+                if not kept:
+                    print("Aucun identifiant gardé.")
+        except (LoginError, OSError) as exc:
+            print(f"Impossible : {exc}")
+            return 2
+    return 0
+
+
 def _library_import(config: OrionConfig, folder: Path) -> int:
     """Add a folder of notes to the library (embeddings are computed at the first search)."""
     from orion.library.module import notes_in
@@ -909,6 +964,20 @@ def main(argv: list[str] | None = None) -> int:
     sessions_remove = sessions_sub.add_parser("remove", help="Forget a session")
     sessions_remove.add_argument("name")
     sessions_sub.add_parser("list", help="The sessions kept, and their sites")
+    logins = sub.add_parser("logins", help="Site logins the guardian keeps, like KeePass (D111)")
+    logins_sub = logins.add_subparsers(dest="logins_command", required=True)
+    logins_add = logins_sub.add_parser("add", help="Keep a login (the password is asked)")
+    logins_add.add_argument("name")
+    logins_add.add_argument("--site", nargs="*", help="Its sites (default: the address's)")
+    logins_add.add_argument("--user", default="", help="The username or e-mail")
+    logins_add.add_argument("--url", help="The sign-in page")
+    logins_add.add_argument("--totp", action="store_true", help="Also ask for the 2FA key")
+    logins_import = logins_sub.add_parser(
+        "import", help="Import a CSV export (KeePass, Bitwarden, Chrome, Firefox, 1Password)"
+    )
+    logins_import.add_argument("file", type=Path, help="The CSV file, or - to read it on stdin")
+    logins_sub.add_parser("remove", help="Forget a login").add_argument("name")
+    logins_sub.add_parser("list", help="The logins kept, and their sites")
     places = sub.add_parser("places", help="Reminders by place, from the owner's iPhone")
     places_sub = places.add_subparsers(dest="places_command", required=True)
     places_sub.add_parser("token", help="A new token for the phone's Shortcuts automations")
@@ -966,6 +1035,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_login(args.name, args.url, args.out))
     if args.command == "sessions":
         return asyncio.run(_sessions(config, args))
+    if args.command == "logins":
+        return asyncio.run(_logins(config, args))
     if args.command == "modules":
         return _modules(config, args)
     if args.command == "places":

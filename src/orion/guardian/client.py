@@ -210,6 +210,29 @@ class GuardianClient:
         )
         return dict(data["state"])
 
+    async def logins(self) -> list[dict[str, Any]]:
+        """The owner's logins the guardian keeps (D111): names and sites, never a secret."""
+        return list(await self.get("/v1/logins"))
+
+    async def lend_login(
+        self, name: str, params: dict[str, Any], grant: str | None
+    ) -> dict[str, Any]:
+        """A login for one approved task: username, password, its sites and the loan's id
+        (for 2FA codes). Held in memory for the task only."""
+        return dict(
+            await self.post(
+                f"/v1/logins/{name}/lend", params, headers={GRANT_HEADER: grant} if grant else None
+            )
+        )
+
+    async def login_code(self, name: str, loan: str) -> str:
+        """The current 2FA code of a login lent for a task under way."""
+        return str((await self.post(f"/v1/logins/{name}/code", {"loan": loan}))["code"])
+
+    async def ask_login(self, name: str, site: str, why: str) -> None:
+        """The owner gets the guardian's form on Telegram to give a login."""
+        await self.post("/v1/logins/ask", {"name": name, "site": site, "why": why})
+
     # -- federation (D29) ----------------------------------------------------------------------
 
     async def peers(self) -> list[dict[str, Any]]:

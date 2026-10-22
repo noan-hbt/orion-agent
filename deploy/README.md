@@ -103,6 +103,27 @@ suivre une commande), le gardien garde ta session, comme il garde tes mots de pa
 `orion-admin sessions list` montre les sessions gardées, `sessions remove <nom>` en retire une.
 Une session expire comme dans ton navigateur : refais l'étape 1 quand le site te déconnecte.
 
+### Tes identifiants, comme KeePass (D111)
+
+Une session expire. Pour qu'Orion se reconnecte seul, le gardien peut aussi garder ton
+identifiant d'un site : l'identifiant, le mot de passe et, si tu veux, la clé de double
+authentification. L'agent de la tâche approuvée remplit la page de connexion, mais c'est le
+gardien qui fournit les valeurs, seulement sur ce site : ni le modèle ni le journal ne voient
+ton mot de passe.
+
+- **Depuis ton téléphone** : dis à Orion « garde mon identifiant Doctolib ». Il t'envoie le
+  formulaire du gardien sur Telegram.
+- **Sur le serveur** : `sudo /srv/orion/app/deploy/orion-admin logins add doctolib --site
+  doctolib.fr --user moi@mail.fr --totp`. Le mot de passe et la clé 2FA sont demandés, jamais
+  tapés dans la commande.
+- **Depuis ton gestionnaire** : exporte-le en CSV (KeePass, KeePassXC, Bitwarden, Chrome,
+  Firefox, 1Password), copie-le sur le serveur, puis
+  `sudo /srv/orion/app/deploy/orion-admin logins import - < export.csv`, et efface le fichier :
+  il contient tes mots de passe en clair.
+
+`logins list` montre les identifiants gardés, `logins remove <nom>` en retire un. Un code reçu
+par SMS ou par mail, un captcha : l'agent s'arrête et te le dit.
+
 Pour qu'Orion envoie des mails ou des formulaires seul, ajoute `"mail_send"` ou
 `"computer_task_send"` à `[guardian] autonomable` : il ne pourra le faire que dans les limites
 que tu lui donnes en accordant l'autonomie (à quels destinataires, sur quels sites).

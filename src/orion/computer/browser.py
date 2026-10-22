@@ -53,7 +53,8 @@ _SNAPSHOT = """(textChars) => {
     el.setAttribute('data-orion-id', String(n));
     const tag = el.tagName.toLowerCase();
     const kind = el.type && tag !== 'a' ? `(${el.type})` : '';
-    const label = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') ||
+    const value = el.type === 'password' ? '' : el.value;
+    const label = (el.innerText || value || el.placeholder || el.getAttribute('aria-label') ||
                    el.title || el.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
     const href = tag === 'a' && el.href ? ` -> ${el.href}` : '';
     out.push(`[${n}] ${tag}${kind} ${label}${href}`);
@@ -257,6 +258,33 @@ class Session:
                 await element.press("Enter")
 
         await self._do(typing)
+
+    async def fill_secret(self, number: int, value: str, sites: list[str], kind: str) -> None:
+        """Type a lent login's username, password or 2FA code (`kind`) into a field, only on
+        a page of the login's sites, and the password only into a password field (D111)."""
+        host = urlsplit(self._page().url).hostname or ""
+        if not host_in(host, sites):
+            raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
+        element = self._element(number)
+        try:
+            tag, field_type = cast(
+                list[str],
+                await element.evaluate(
+                    "e => [e.tagName.toLowerCase(), (e.getAttribute('type') || '').toLowerCase()]",
+                    timeout=8_000,
+                ),
+            )
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        if tag != "input":
+            raise BrowserError("not an input field")
+        if (kind == "password") != (field_type == "password") and kind != "code":
+            raise BrowserError(
+                "the password goes into a password field only, the username never into one"
+            )
+        if field_type not in ("", "text", "email", "tel", "number", "password"):
+            raise BrowserError(f"not a field to type into ({field_type})")
+        await self._do(lambda: element.fill(value, timeout=8_000))
 
     async def select(self, number: int, value: str) -> None:
         await self._do(lambda: self._element(number).select_option(label=value, timeout=8_000))

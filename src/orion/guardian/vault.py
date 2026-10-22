@@ -89,6 +89,8 @@ class Vault:
         self.asked: dict[str, Asked] = {}
         """One-time token → what the owner is asked; kept in memory: a restart ends them."""
         self.now = time.time
+        self.public_routes: list[Route] = []
+        """More pages on the same listener (the logins' form), added before `install`."""
 
     def install(self) -> None:
         self.service.routes.append(Route("/v1/secrets/ask", self._ask, methods=["POST"]))
@@ -99,6 +101,7 @@ class Vault:
             routes=[
                 Route("/secrets/", self._page, methods=["GET"]),
                 Route("/secrets/set", self._set, methods=["POST"]),
+                *self.public_routes,
             ]
         )
 
@@ -145,13 +148,13 @@ class Vault:
     async def _page(self, request: Request) -> Response:
         asked = self.asked.get(request.query_params.get("t", ""))
         if asked is None or asked.until <= self.now():
-            return HTMLResponse(_PAGE.format(body=_EXPIRED), status_code=410)
+            return HTMLResponse(PAGE.format(body=EXPIRED), status_code=410)
         form = _FORM.format(
             name=html.escape(asked.name),
             why=html.escape(asked.why),
             token=html.escape(request.query_params["t"], quote=True),
         )
-        return HTMLResponse(_PAGE.format(body=form))
+        return HTMLResponse(PAGE.format(body=form))
 
     async def _set(self, request: Request) -> Response:
         from orion.setup import write_env
@@ -185,7 +188,7 @@ class Vault:
         return JSONResponse({"set": asked.name})
 
 
-_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Orion — secret</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -199,7 +202,7 @@ background:var(--tg-theme-button-color,#2a7ae2);color:var(--tg-theme-button-text
 .note{{opacity:.7;font-size:14px}}
 </style></head><body>{body}</body></html>"""
 
-_EXPIRED = "<p>Ce lien a expiré. Redemande-le à Orion.</p>"
+EXPIRED = "<p>Ce lien a expiré. Redemande-le à Orion.</p>"
 
 _FORM = """<h3>{name}</h3><p class="note">{why}</p>
 <form id="f"><input id="v" type="password" autocomplete="off" required

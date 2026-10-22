@@ -18,4 +18,5 @@ tard par message. Quand il faut remplir et envoyer un formulaire ou réserver, u
 `computer_task_send` : le propriétaire approuve d'abord la consigne exacte. Indique les sites
 où elle peut envoyer (`sites`) : ailleurs, l'envoi est bloqué. Pour agir sur son compte (un
 site où il est connecté), donne `session` : le gardien prête la session pour cette seule
-tâche ; `orion sessions` sur le serveur dit lesquelles il garde.
+tâche. Une session expire : donne aussi `login` (identifiants gardés : `computer_status`),
+l'agent se reconnecte seul sans voir le mot de passe. Sinon, `computer_login_ask`.

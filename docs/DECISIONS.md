@@ -2285,3 +2285,46 @@ Il voulait que ces travaux tournent à part, et que l'aide échange avec Orion p
 
 Budget du prompt relevé (38,5 k et 41 k) après avoir allégé les missions : c'est une capacité
 de plus, voulue.
+
+## D111 — Un coffre d'identifiants, comme KeePass
+
+*22/10/2026 · acceptée · complète D49 et D94*
+
+Une session prêtée (D49) expire, et il fallait alors se reconnecter à la main, sur un
+ordinateur avec un écran. Le propriétaire voulait qu'Orion se connecte lui-même, sur n'importe
+quel site. Le gardien garde donc aussi, comme KeePass, un identifiant par site : l'adresse,
+l'identifiant, le mot de passe et, s'il le veut, la clé de double authentification
+(`orion.guardian.logins`).
+
+- **N'importe quel site** : l'agent d'une tâche approuvée (`computer_task_send`, avec `login`)
+  conduit la page de connexion comme toute autre page (bandeau de cookies, « Se connecter »,
+  deux étapes…). Il demande à `fill_login` de taper l'identifiant, le mot de passe ou un code
+  dans le champ qu'il désigne. Pas de recette par site.
+- **Le modèle ne voit jamais un secret** :
+  - c'est le code qui tape, pas le modèle ;
+  - chaque page lue par l'agent a le mot de passe et les codes masqués, tels quels ou encodés
+    dans une adresse ; son compte rendu aussi ;
+  - le journal ne les contient pas.
+  Une page piégée ne peut donc pas lui faire recopier le mot de passe ailleurs.
+- **Seulement au bon endroit** : rien n'est tapé hors des sites de l'identifiant, et le mot de
+  passe ne va que dans un champ mot de passe.
+- **La clé 2FA ne quitte jamais le gardien** : l'agent lui demande le code du moment, avec
+  l'identifiant du prêt, tant que la tâche dure (une heure au plus).
+- **Prêté comme une session** : pour une tâche dont le propriétaire a approuvé la consigne et
+  qui nomme cet identifiant, une seule fois ; ou faite seule, dans une autonomie dont les sites
+  couvrent tous ceux de l'identifiant. Un même oui prête la session et l'identifiant. Chaque
+  prêt et chaque code sont notés dans le registre du gardien.
+- **Comment il les reçoit** :
+  - depuis son téléphone : Orion demande (`computer_login_ask`) et le gardien lui envoie son
+    propre formulaire (D94) ;
+  - sur le serveur : `orion logins add` (le mot de passe est saisi, jamais en argument) ;
+  - en important l'export CSV de son gestionnaire (KeePass, KeePassXC, Bitwarden, Chrome,
+    Firefox, 1Password) : `orion logins import`.
+
+Ce qui reste hors de portée : un code envoyé par SMS ou par mail, un captcha, une validation
+dans l'application du site. L'agent s'arrête et le dit. Les secrets sont dans des fichiers 0600
+du gardien, non chiffrés : une clé posée sur la même machine ne protégerait de rien. Garder la
+clé 2FA d'un site met les deux facteurs sur le serveur : le propriétaire le choisit site par
+site.
+
+    guardian.login.added  guardian.login.removed  guardian.login.lent  guardian.login.code
