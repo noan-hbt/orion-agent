@@ -2264,3 +2264,24 @@ d'ailleurs, réponses du secrétaire à ses contacts, échanges avec les autres 
 calés ou annulés, accords demandés, réflexions de la nuit, envois ratés. Ce sont des faits du
 journal : rien à deviner pour le modèle. Ce que la conversation montre déjà n'y est pas, et
 rien n'est joint quand rien ne s'est passé.
+
+## D110 — Les tâches de fond : un aide qui ne parle qu'à Orion
+
+Constaté en vrai : sur une grosse recherche, Orion cherchait dans sa réponse, gonflait la
+conversation (45 000 jetons relus à chaque étape) et finissait sur « je continue », sans suite.
+Il voulait que ces travaux tournent à part, et que l'aide échange avec Orion plutôt qu'avec lui.
+
+- `task` (start) confie le travail à un aide : Orion lui-même, dans son propre fil
+  (`task:<id>`), avec une consigne complète. Il travaille seul, passage après passage, jusqu'à
+  `task` (done) ou la fin de son budget (dollars, minutes, 20 passages au plus).
+- **Il n'écrit qu'à Orion.** Ce qu'il dit arrive à Orion dans la conversation du propriétaire
+  (une alerte passée telle quelle, hors du budget d'attention) : Orion choisit ce qui lui
+  parvient, transmet ses fichiers, lui pose une question s'il le faut, ou ne dit rien. Orion
+  lui répond ou lui transmet les nouveaux souhaits avec `task` (say), l'arrête avec (stop).
+  L'aide peut attendre la réponse d'Orion (`task` wait).
+- **Le gardien le cantonne à la recherche** : web, navigateur, téléchargement de fichiers, PDF.
+  Jamais un message, un accord ni un acte vers le propriétaire ou le monde depuis une tâche :
+  il le demande à Orion.
+
+Budget du prompt relevé (38,5 k et 41 k) après avoir allégé les missions : c'est une capacité
+de plus, voulue.

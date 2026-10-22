@@ -96,6 +96,13 @@ NEVER_FROM_UNTRUSTED = frozenset({"autonomy_grant", "module_install", "module_re
 alone, or adding code to it (D105), is decided in a clean conversation."""
 NEVER_ALONE = frozenset({"module_install", "module_remove"})
 """Always put to him, whatever autonomy the config lists: code that runs with his memory."""
+WORKER_THREAD = "task:"
+WORKER_TOOLS = frozenset(
+    {"web_search", "web_read", "browser", "current_time", "task", "file:download", "file:pdf"}
+)
+"""What a background task may use (D110): it looks things up and reports to Orion, who acts
+and talks to the owner. Never an approval to the owner, a message to him, or an act on the
+world from a task: it asks Orion instead."""
 
 
 def untrusted_reason(trust: Trust) -> str:
@@ -159,6 +166,14 @@ class Guardian:
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
         effect = tool.effect_for(proposal.arguments)
+        if proposal.thread_id.startswith(WORKER_THREAD):
+            action = getattr(proposal.arguments, "action", "")
+            if tool.name not in WORKER_TOOLS and f"{tool.name}:{action}" not in WORKER_TOOLS:
+                return Decision(
+                    Verdict.DENY,
+                    f"{tool.name} is not for a background task: you look things up and report to "
+                    "Orion; ask him in your message, he acts and talks to the owner",
+                )
         if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
             proposal.arguments
         ):

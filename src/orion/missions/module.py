@@ -108,28 +108,28 @@ class MissionWork:
 class StartInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    goal: str = Field(min_length=5, max_length=300, description="What to achieve, in a sentence")
+    goal: str = Field(min_length=5, max_length=300, description="In a sentence")
     criteria: str = Field(
         default="",
         max_length=1000,
-        description="What counts: budget, place, dates, must-haves, deal-breakers",
+        description="Budget, place, dates, must-haves, deal-breakers",
     )
-    every_hours: int = Field(default=24, ge=1, le=24 * 14, description="How often to work on it")
+    every_hours: int = Field(default=24, ge=1, le=24 * 14, description="Pace")
 
 
 class UpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mission: str = Field(description="The mission id (m_…)")
-    criteria: str = Field(default="", max_length=1000, description="The new criteria, in full")
+    mission: str = Field(description="m_…")
+    criteria: str = Field(default="", max_length=1000, description="In full")
     every_hours: int = Field(default=0, ge=0, le=24 * 14)
 
 
 class NoteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mission: str = Field(default="", description="The mission id; default: this mission")
-    note: str = Field(min_length=3, max_length=500, description="What you learnt, for next time")
+    mission: str = Field(default="", description="Default: this mission")
+    note: str = Field(min_length=3, max_length=500, description="For next time")
 
 
 class Item(BaseModel):
@@ -138,13 +138,13 @@ class Item(BaseModel):
     key: str = Field(
         min_length=3, max_length=500, description="Its address (URL) or reference, in full"
     )
-    label: str = Field(default="", max_length=200, description="A few words: price, place…")
+    label: str = Field(default="", max_length=200, description="Price, place…")
 
 
 class SeenInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mission: str = Field(default="", description="The mission id; default: this mission")
+    mission: str = Field(default="", description="Default: this mission")
     items: list[Item] = Field(min_length=1, max_length=50)
 
 
@@ -152,21 +152,21 @@ class RejectInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mission: str
-    key: str = Field(description="The item's address or reference, as seen")
-    why: str = Field(default="", max_length=300, description="The owner's reason, in their words")
+    key: str = Field(description="As seen")
+    why: str = Field(default="", max_length=300, description="His words")
 
 
 class CloseInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mission: str
-    outcome: str = Field(max_length=300, description="Done, found, given up…, and why")
+    outcome: str = Field(max_length=300, description="And why")
 
 
 class NowInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mission: str = Field(default="", description="The mission id; default: this mission")
+    mission: str = Field(default="", description="Default: this mission")
 
 
 class ListInput(BaseModel):
@@ -296,52 +296,48 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
     return [
         tool(
             "mission_start",
-            "Start a mission: a goal you keep working on alone over days (find a flat, watch a "
-            "price, look for a slot), instead of answering once. You work on it now, then "
-            "every `every_hours`, and write to the owner only when there is something new.",
+            "A goal you come back to alone over days (a flat, a price, a slot): now, then every "
+            "`every_hours`; you write to him only when there is news.",
             StartInput,
             start,
         ),
         tool(
             "mission_update",
-            "Change a mission's criteria or pace, when the owner says so.",
+            "New criteria or pace, when he says so.",
             UpdateInput,
             update,
         ),
         tool(
             "mission_note",
-            "During a mission: note what you learnt (a site that works, a dead end) for next time.",
+            "What you learnt (a site that works, a dead end), for next time.",
             NoteInput,
             note,
             accepts_untrusted_context=True,
         ),
         tool(
             "mission_seen",
-            "During a mission: record the items you found (each with its address); it tells you "
-            "which are new, so you never report the same one twice.",
+            "Record the items found; it says which are new.",
             SeenInput,
             seen,
             accepts_untrusted_context=True,
         ),
         tool(
             "mission_reject",
-            "The owner turns down an item of a mission: record it with their reason, so the "
-            "next runs leave it and its like out.",
+            "He turns an item down: record it with his reason.",
             RejectInput,
             reject,
             accepts_untrusted_context=True,
         ),
         tool(
             "mission_close",
-            "End a mission (done, found, no longer wanted).",
+            "End a mission.",
             CloseInput,
             close,
             accepts_untrusted_context=True,
         ),
         tool(
             "mission_now",
-            "Another pass right away: he wants it now, or this pass has more to see. The only "
-            "way to keep working once you have answered.",
+            "Another pass right away: he wants it now, or this pass has more to see.",
             NowInput,
             now,
             accepts_untrusted_context=True,
