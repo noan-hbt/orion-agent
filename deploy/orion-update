@@ -13,6 +13,7 @@ APP="$ROOT/app"
 BAD="$ROOT/update.bad"
 WATCH="${ORION_UPDATE_WATCH:-75}"
 export UV_PYTHON_INSTALL_DIR="$ROOT/python"
+install -d -m 0755 "$ROOT/python"  # stays empty when the system Python is recent enough
 ADMIN="$APP/deploy/orion-admin"
 
 cd "$APP"
