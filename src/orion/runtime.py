@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from orion.cognition.finish import offer_check
 from orion.cognition.loop import (
     Budget,
     Finished,
@@ -237,10 +238,14 @@ class Orion:
         trust: Trust = Trust.SYSTEM,
         now: datetime | None = None,
         halted: Halted | None = None,
+        model: str | None = None,
+        max_cost_usd: float | None = None,
     ) -> TurnResult:
         """Orion speaks first: a notice from the initiative engine becomes a turn in the owner's
         thread, so the owner's answer has the context. The reply may be `SILENCE` (nothing worth
-        sending), which callers must not deliver. `halted` stops work called off meanwhile."""
+        sending), which callers must not deliver. `halted` stops work called off meanwhile.
+        `model` and `max_cost_usd` replace the agent's for this turn (Orion's night, D117): a
+        thread that always passes the same model keeps its prompt cache."""
         body = f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
         return await self._turn(
             thread_id,
@@ -254,6 +259,8 @@ class Orion:
             memory_query=notice,
             owner_text="",
             halted=halted,
+            model=model,
+            max_cost_usd=max_cost_usd,
         )
 
     async def handle_contact(
@@ -352,6 +359,8 @@ class Orion:
         waiting: Waiting | None = None,
         asking: str = "",
         halted: Halted | None = None,
+        model: str | None = None,
+        max_cost_usd: float | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -370,6 +379,8 @@ class Orion:
                 waiting,
                 asking,
                 halted,
+                model=model,
+                max_cost_usd=max_cost_usd,
             )
 
     async def _turn_locked(
@@ -389,6 +400,9 @@ class Orion:
         waiting: Waiting | None = None,
         asking: str = "",
         halted: Halted | None = None,
+        *,
+        model: str | None = None,
+        max_cost_usd: float | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -476,7 +490,7 @@ class Orion:
         if self.inline is not None:
             messages = [self.inline(m) for m in messages]
         settings = LoopSettings(
-            model=self._agent.model,
+            model=model or self._agent.model,
             session_id=f"orion:{thread_id}",
             thread_id=thread_id,
             correlation_id=correlation_id,
@@ -484,10 +498,13 @@ class Orion:
             timezone=self._agent.timezone,
             asking=asking,
             halted=halted,
+            finish_check=offer_check
+            if thread_id == OWNER_THREAD and kind == "message.received"
+            else None,
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
-                max_cost_usd=self._agent.max_cost_usd_per_turn,
+                max_cost_usd=max_cost_usd or self._agent.max_cost_usd_per_turn,
             ),
         )
 

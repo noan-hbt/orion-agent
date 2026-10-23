@@ -6,15 +6,18 @@ from datetime import date, timedelta
 
 from evals.harness import (
     Case,
+    Night,
     Notice,
     Say,
     asks,
     at_most,
     avoids,
+    before,
     called_with,
     either,
     judged,
     never_says,
+    no_offer_at_the_end,
     no_reminder,
     no_reminder_on,
     paris,
@@ -22,6 +25,7 @@ from evals.harness import (
     reminder_within,
     says,
     uses,
+    works_at_night,
 )
 from orion.core.events import Trust
 
@@ -323,12 +327,17 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         name="envoie_moi_ce_xml",
-        origin="Un fichier du web, tel quel : il doit être téléchargé, pas lu puis recopié.",
+        origin="Un fichier du web, tel quel : il doit être téléchargé, pas lu puis recopié. "
+        "Lire la page après un envoi raté (pas de canal en éval) est un repli, pas ce défaut.",
         at=paris(2026, 10, 20, 20, 0),
         steps=(
             Say("Télécharge le fichier https://www.w3schools.com/xml/note.xml et envoie-le moi"),
         ),
-        checks=(uses("file:download", "file:send"), avoids("web_read")),
+        checks=(
+            uses("file:download"),
+            uses("file:send"),
+            before("file:send", "web_read"),
+        ),
         live_web=True,
     ),
     Case(
@@ -526,6 +535,58 @@ CASES: tuple[Case, ...] = (
             ),
         ),
         checks=(uses("task:start"), avoids("mission:start")),
+    ),
+    Case(
+        name="la_nuit_reprend_ce_qui_reste",
+        origin="22-23/10 : la nuit, Orion n'a rien fait, alors que la journée laissait des "
+        "choses en plan (« il aurait pu être curieux, chercher, continuer ce qui n'était pas "
+        "fini ») (D117).",
+        at=paris(2026, 10, 22, 22, 40),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Faut que je trouve une assurance habitation pour l'appart avant de signer le "
+                "bail lundi. On compare ça demain, là je vais dormir"
+            ),
+            Night(at=paris(2026, 10, 23, 5, 0)),
+        ),
+        checks=(
+            works_at_night("task:start", "web_search", "web_read", "mission"),
+            judged(
+                "Ce message du matin apporte-t-il du concret trouvé pendant la nuit sur "
+                "l'assurance habitation (des offres, des prix, des critères ou des liens), et pas "
+                "seulement la promesse d'y regarder ?"
+            ),
+        ),
+        live_web=True,
+    ),
+    Case(
+        name="va_au_bout_au_lieu_de_proposer",
+        origin="Orion finissait sur « je peux te chercher ça si tu veux ? » quand la recherche "
+        "était à lui de faire (D118).",
+        at=paris(2026, 10, 23, 18, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Il me faut un cadeau pour l'anniversaire de ma mère samedi, elle adore le "
+                "jardinage, 50 € max"
+            ),
+        ),
+        checks=(
+            uses("web_search", "web_read", "task:start"),
+            no_offer_at_the_end(),
+        ),
+        live_web=True,
+    ),
+    Case(
+        name="se_lance_seul_sur_un_but",
+        origin="Un but de plusieurs jours dit en passant, sans rien demander : Orion s'en "
+        "occupe de lui-même (D118).",
+        at=paris(2026, 10, 23, 19, 0),
+        facts=OWNER,
+        steps=(Say("Toujours rien de bien pour l'appart à Dreux, c'est galère"),),
+        checks=(uses("mission:start", "task:start"), no_offer_at_the_end()),
+        live_web=True,
     ),
     Case(
         name="une_appli_qui_se_construit",

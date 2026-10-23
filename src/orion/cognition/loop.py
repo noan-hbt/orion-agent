@@ -51,6 +51,9 @@ class StopReason(StrEnum):
 Halted = Callable[[], Awaitable[bool]]
 """Whether the work was called off meanwhile."""
 
+FinishCheck = Callable[[str], str | None]
+"""The final reply → a note for the model when it should not stop there yet, else None."""
+
 
 @dataclass(frozen=True)
 class Budget:
@@ -78,6 +81,9 @@ class LoopSettings:
     halted: Halted | None = None
     """Whether the work was called off meanwhile (a mission closed while it runs): checked
     before each step, and the calls not run yet are dropped."""
+    finish_check: FinishCheck | None = None
+    """Asked once per run about the final reply before it goes: a note sends the model back
+    to work for one more step (`orion.cognition.finish`)."""
 
 
 WRAP_UP = (
@@ -184,6 +190,7 @@ async def run_agent(
     tool_seconds = 0.0
     model = settings.model
     max_cost = budget.max_cost_usd
+    checked = False
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -256,6 +263,21 @@ async def run_agent(
             reason = (
                 StopReason.TRUNCATED if response.finish_reason == "length" else StopReason.COMPLETED
             )
+            note = (
+                settings.finish_check(response.text)
+                if settings.finish_check is not None
+                and not checked
+                and reason is StopReason.COMPLETED
+                and _step < budget.max_steps - 1
+                else None
+            )
+            checked = True
+            if note is not None and usage.cost_usd < max_cost:
+                log.info("loop.not_done_yet", thread=settings.thread_id)
+                nudge: Message = {"role": "user", "content": note}
+                messages.append(nudge)
+                yield MessageEmitted(nudge, Trust.SYSTEM)
+                continue
             yield finished(reason, response.text)
             return
 

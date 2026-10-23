@@ -496,7 +496,7 @@ rendus pour l'initiative. Chaque module déclare ce qu'il permettrait s'il étai
 | Canaux | `imessage`, `telegram`, `voice`, `vocal` (vocaux dans les deux sens), `photos` (tout fichier reçu) | D18, D40, D50, D63, D71, D88 |
 | Sources | `calendar`, `mail` (lecture seule stricte, quarantaine, rangement explicite), `web` | D25, D31, D75 |
 | Mains | `computer` (navigateur), `booking` (rendez-vous de bout en bout), `files`, `hands`, `delegation`, `expert` (modèle plus fort) | D33, D41, D46, D60, D61, D73 |
-| Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (il continue de penser), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77 |
+| Second cerveau | `library`, `papers` (coffre des papiers), `missions`, `thinking` (sa nuit : il travaille pendant que tu dors), `curiosity` (sa curiosité à lui), `chronicle`, `intentions`, `relations`, `departure` (la veille d'un départ), `places` | D47, D48, D51–D53, D56–D58, D67, D74, D76, D77, D117 |
 | Le connaître | `adaptation` (le manuel), `onboarding`, `advice` (ses conseils assumés), `style` (écrire en son nom), `focus` | D21, D34, D65, D68, D70 |
 | Les autres | `federation`, `secretary` | D29, D54 |
 | Administration | `configure` (réglages par message), `console`, `night` (rangement de la mémoire), `doubt` (la mémoire qui doute) | D27, D39, D72, D83 |

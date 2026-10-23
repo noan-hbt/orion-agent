@@ -5,36 +5,39 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
+
+import pytest
+from pydantic import BaseModel, ConfigDict
 
 from orion.config import STRONG_MODEL, AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
-from orion.guardian.policy import Guardian
+from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval, Guardian, Verdict
 from orion.runtime import OWNER_THREAD, Orion, Photo
 from orion.thinking.module import (
-    FOLLOWUP,
-    THOUGHT,
+    NOTE,
     Thinking,
     ThinkingSettings,
     thinking_tools,
 )
-from orion.tools.base import ToolContext, ToolRegistry
-from tests.fakes import ScriptedProvider, reply
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
+from tests.fakes import ScriptedProvider, call_tools, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 EVENING = datetime(2026, 10, 20, 21, 0, tzinfo=PARIS)
 NIGHT = datetime(2026, 10, 21, 5, 10, tzinfo=PARIS)
 
 
-def thinking_for(journal: SqliteJournal, provider: ScriptedProvider, now: datetime) -> Thinking:
-    return Thinking(
-        journal, provider, None, ThinkingSettings(max_thoughts=1), "Europe/Paris", lambda: now
-    )
+def thinking_for(journal: SqliteJournal, now: datetime, orion: Orion | None = None) -> Thinking:
+    thinking = Thinking(journal, ThinkingSettings(points=2), "Europe/Paris", lambda: now)
+    thinking.orion = orion
+    return thinking
 
 
-async def a_day(journal: SqliteJournal) -> Orion:
+async def a_day(journal: SqliteJournal, tools: list[Tool] | None = None) -> Orion:
     provider = ScriptedProvider(
         reply("Les deux se valent sur le salaire. Tu penches pour laquelle ?"),
         reply("Bonne chance jeudi !"),
@@ -43,7 +46,7 @@ async def a_day(journal: SqliteJournal) -> Orion:
     orion = Orion(
         journal=journal,
         provider=provider,
-        registry=ToolRegistry([]),
+        registry=ToolRegistry(tools or []),
         guardian=Guardian(),
         compiler=ContextCompiler("C"),
         agent=AgentConfig(),
@@ -65,69 +68,79 @@ async def a_day(journal: SqliteJournal) -> Orion:
     return orion
 
 
-def night_answer(**answer: object) -> ScriptedProvider:
-    return ScriptedProvider(reply(json.dumps(answer, ensure_ascii=False)))
+def scripted(orion: Orion) -> ScriptedProvider:
+    provider = orion._provider  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(provider, ScriptedProvider)
+    return provider
 
 
-async def test_the_night_rereads_the_trusted_day_and_keeps_only_new_thoughts(
+async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
     journal: SqliteJournal,
 ) -> None:
-    await a_day(journal)
-    provider = night_answer(
-        thoughts=[
-            {
-                "question": "Lyon ou Nantes",
-                "new": True,
-                "thought": "Tu n'as pas compté le trajet : Nantes t'en coûte deux heures.",
-            },
-            {"question": "Lyon ou Nantes, encore", "new": True, "thought": "Un deuxième angle."},
-            {"question": "Le loyer", "new": False, "thought": "Rien de neuf."},
-        ],
-        follow_ups=[
-            {
-                "about": "son entretien",
-                "at": "2026-10-22 15:00",
-                "question": "Alors, cet entretien ?",
-            },
-            {"about": "hier", "at": "2026-10-19 15:00", "question": "Passé"},
-        ],
+    thinking = thinking_for(journal, NIGHT)
+    orion = await a_day(journal, thinking_tools(thinking))
+    thinking.orion = orion
+    provider = scripted(orion)
+    provider.extend(
+        call_tools(
+            (
+                "follow_up",
+                {
+                    "about": "son entretien",
+                    "at": "2026-10-22 15:00",
+                    "question": "Alors, cet entretien ?",
+                },
+            )
+        ),
+        reply("Cette nuit j'ai comparé Lyon et Nantes : le trajet te coûte deux heures à Nantes."),
     )
-    thinking = thinking_for(journal, provider, NIGHT)
     report = await thinking.tick()
-    assert report is not None and report.thoughts == ["Lyon ou Nantes"]  # one a night, new only
-    assert report.follow_ups == ["son entretien"]  # never in the past
+    assert report is not None and "le trajet" in report.note
 
-    (request,) = provider.requests
-    seen = request.messages[1]["content"]
-    assert request.model == STRONG_MODEL
+    night = provider.requests[-2]
+    assert night.model == STRONG_MODEL  # a strong mind at night, Orion's own tools
+    assert night.session_id == f"orion:{NIGHT_THREAD}"
+    seen = str(night.messages[-1]["content"])
     assert "[mardi 2026-10-20 21:00] Lui : J'hésite entre l'offre de Lyon" in seen
     assert "Bonne chance jeudi" in seen
-    assert "choisir Nantes" not in seen  # what a photo said stays out of the night's thinking
+    assert "tâche de fond" in seen and "SILENCE" in seen
+    assert "choisir Nantes" not in seen  # what a photo said stays out of the night
+    assert [t.name for t in night.tools or []] == [
+        "follow_up",
+        "follow_up_cancel",
+        "follow_ups",
+        "think_later",
+    ]
+    (follow_up,) = thinking.state.follow_ups.values()  # planned by Orion himself, with his tool
+    assert follow_up.about == "son entretien"
     assert await thinking.tick() is None  # once a night
 
     morning = datetime(2026, 10, 21, 8, 0, tzinfo=PARIS)
     (alert,) = await thinking.alerts(morning)
     assert alert.key.startswith("thought:") and "le trajet" in alert.notice
+    assert "Cette nuit" in alert.notice and alert.why == "ta nuit"
     assert alert.trust == Trust.SYSTEM
-    thursday = datetime(2026, 10, 22, 15, 5, tzinfo=PARIS)
-    keys = [a.key for a in await thinking.alerts(thursday)]
-    assert any(k.startswith("followup:") for k in keys)
     later = [a.key for a in await thinking.alerts(morning + timedelta(days=3))]
-    assert not any(k.startswith("thought:") for k in later)  # a thought goes stale
+    assert not any(k.startswith("thought:") for k in later)  # a note goes stale
 
 
-async def test_the_next_night_reads_only_what_is_new(journal: SqliteJournal) -> None:
-    await a_day(journal)
-    provider = night_answer(thoughts=[], follow_ups=[])
-    thinking = thinking_for(journal, provider, NIGHT)
-    await thinking.tick()
+async def test_a_quiet_night_sends_nothing_and_the_next_reads_only_what_is_new(
+    journal: SqliteJournal,
+) -> None:
+    orion = await a_day(journal)
+    thinking = thinking_for(journal, NIGHT, orion)
+    scripted(orion).extend(reply("SILENCE"))
+    report = await thinking.tick()
+    assert report is not None and report.note == ""
+    assert await thinking.alerts(NIGHT + timedelta(hours=3)) == []
+    asked = len(scripted(orion).requests)
     thinking.clock = lambda: NIGHT + timedelta(days=1)
     assert await thinking.tick() is not None
-    assert len(provider.requests) == 1  # nothing new: no model asked
+    assert len(scripted(orion).requests) == asked  # nothing new: Orion not woken
 
 
 async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal) -> None:
-    thinking = thinking_for(journal, ScriptedProvider(), EVENING)
+    thinking = thinking_for(journal, EVENING)
     tools = {t.name: t for t in thinking_tools(thinking)}
     ctx = ToolContext(OWNER_THREAD, "c")
     promised = tools["think_later"]
@@ -136,27 +149,69 @@ async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal)
         ctx,
     )
     assert "cette nuit" in result.content
-    (promise,) = thinking.state.promised.values()
+    assert thinking.state.promised
 
-    provider = thinking._provider = night_answer(  # pyright: ignore[reportPrivateUsage]
-        thoughts=[
-            {"question": "Lyon", "promised": promise.id, "new": False, "thought": "Je maintiens."},
-            {"question": "Autre", "new": True, "thought": "Une idée neuve."},
-            {"question": "Encore", "new": True, "thought": "Une de trop."},
-        ],
-        follow_ups=[],
-    )
+    orion = await a_day(journal)
+    thinking.orion = orion
+    scripted(orion).extend(reply("Pour Lyon, je maintiens : le loyer compense le trajet."))
     thinking.clock = lambda: NIGHT
     report = await thinking.tick()
-    assert report is not None and report.thoughts == ["Lyon", "Autre"]  # the promise is extra
-    assert not thinking.state.promised
-    alerts = await thinking.alerts(NIGHT + timedelta(hours=3))
-    assert "Tu avais promis" in next(a.notice for a in alerts if "maintiens" in a.notice)
-    assert "faut-il accepter lyon" in str(provider.requests[0].messages).lower()
+    assert report is not None and "je maintiens" in report.note
+    assert "faut-il accepter lyon" in str(scripted(orion).requests[-1].messages).lower()
+    assert not thinking.state.promised  # answered: not taken up again
+    (alert,) = await thinking.alerts(NIGHT + timedelta(hours=3))
+    assert alert.importance > 0.5
+
+
+async def test_a_night_cut_short_by_the_model_leaves_no_note(journal: SqliteJournal) -> None:
+    thinking = thinking_for(journal, NIGHT)
+    thinking.orion = await a_day(journal, thinking_tools(thinking))
+    scripted(thinking.orion).extend(
+        call_tools(("follow_ups", {}), text="Je regarde ce qui"), fail("plafond atteint")
+    )
+    report = await thinking.tick()
+    assert report is not None and report.note == ""
+    assert await thinking.alerts(NIGHT + timedelta(hours=3)) == []
+
+
+async def test_a_night_without_orion_fails_closed(journal: SqliteJournal) -> None:
+    await a_day(journal)
+    with pytest.raises(RuntimeError):
+        await thinking_for(journal, NIGHT).tick()
+
+
+async def test_the_night_never_acts_on_the_world_nor_asks_him(journal: SqliteJournal) -> None:
+    class Asked:
+        asked = 0
+
+        async def approve(self, proposal: ActionProposal) -> Approval:
+            del proposal
+            self.asked += 1
+            return Approval(True)
+
+    approver = Asked()
+    guardian = Guardian(approver=approver, approvals="prudent")
+
+    async def verdict(
+        name: str, effect: Effect, action: str = "", trust: Trust = Trust.SYSTEM
+    ) -> Verdict:
+        proposal = ActionProposal(_tool(name, effect), _Args(action=action), trust, NIGHT_THREAD)
+        return (await guardian.decide(proposal)).verdict
+
+    assert await verdict("web_search", Effect.NONE) is Verdict.ALLOW
+    assert await verdict("browser", Effect.NONE, "open") is Verdict.ALLOW
+    assert await verdict("task", Effect.INTERNAL, "start") is Verdict.ALLOW
+    assert await verdict("follow_up", Effect.INTERNAL, "plan") is Verdict.ALLOW
+    assert await verdict("mail", Effect.EXTERNAL, "send") is Verdict.DENY
+    assert await verdict("browser", Effect.EXTERNAL, "send") is Verdict.DENY
+    assert await verdict("file", Effect.INTERNAL, "send") is Verdict.DENY  # it would wake him
+    assert await verdict("initiative_settings", Effect.INTERNAL) is Verdict.DENY
+    assert await verdict("remember", Effect.INTERNAL, trust=Trust.WEB) is Verdict.DENY
+    assert approver.asked == 0  # never put to him at night
 
 
 async def test_following_up_is_planned_checked_and_cancelled(journal: SqliteJournal) -> None:
-    thinking = thinking_for(journal, ScriptedProvider(), EVENING)
+    thinking = thinking_for(journal, EVENING)
     tools = {t.name: t for t in thinking_tools(thinking)}
     ctx = ToolContext(OWNER_THREAD, "c", context_trust=Trust.OWNER)
     plan = tools["follow_up"]
@@ -187,18 +242,31 @@ async def test_following_up_is_planned_checked_and_cancelled(journal: SqliteJour
 
 
 async def test_what_the_night_writes_is_journaled_with_its_source(journal: SqliteJournal) -> None:
-    await a_day(journal)
-    thinking = thinking_for(
-        journal,
-        night_answer(
-            thoughts=[{"question": "Q", "new": True, "thought": "T"}],
-            follow_ups=[{"about": "a", "at": "2026-10-22 15:00", "question": "Alors ?"}],
-        ),
-        NIGHT,
-    )
-    await thinking.tick()
+    orion = await a_day(journal)
+    scripted(orion).extend(reply("Une idée pour ton déménagement."))
+    await thinking_for(journal, NIGHT, orion).tick()
     events = {e.kind: e for e in await journal.read(0, 10_000)}
-    for kind in (THOUGHT, FOLLOWUP):
-        assert events[kind].provenance == Provenance(
-            source="orion:thinking", actor="orion:thinking"
-        )
+    assert events[NOTE].provenance == Provenance(
+        source=f"thread:{NIGHT_THREAD}", actor="orion:thinking"
+    )
+    assert events["initiative.triggered"].payload["thread_id"] == NIGHT_THREAD
+
+
+class _Args(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = ""
+
+
+def _tool(name: str, effect: Effect) -> Tool:
+    async def run(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("ok")
+
+    return Tool(
+        name=name,
+        description="x",
+        input_model=_Args,
+        handler=run,
+        effect=effect,
+        reversibility=Reversibility.REVERSIBLE,
+    )
