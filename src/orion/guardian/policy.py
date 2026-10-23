@@ -107,6 +107,16 @@ WORKER_TOOLS = frozenset(
 """What a background task may use (D110): it looks things up and reports to Orion, who acts
 and talks to the owner. Never an approval to the owner, a message to him, or an act on the
 world from a task: it asks Orion instead."""
+NIGHT_THREAD = "night"
+"""Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
+tasks and notes what he will say in the morning. Nothing that acts on the world, and nothing
+put to the owner: what needs his yes is proposed when he wakes up."""
+NIGHT_NEVER = frozenset({"file:send", "initiative_settings"})
+"""Internal, yet not for the night: a file reaches him at once, and his settings are his."""
+NIGHT_REFUSAL = (
+    "{tool} is not for the night: the owner sleeps. Nothing leaves, nothing reaches him and "
+    "nothing is put to him now; propose it to him in your morning note instead"
+)
 
 
 def untrusted_reason(trust: Trust) -> str:
@@ -178,6 +188,12 @@ class Guardian:
                     f"{tool.name} is not for a background task: you look things up and report to "
                     "Orion; ask him in your message, he acts and talks to the owner",
                 )
+        if proposal.thread_id == NIGHT_THREAD and (
+            effect is Effect.EXTERNAL
+            or tool.name in NIGHT_NEVER
+            or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
+        ):
+            return Decision(Verdict.DENY, NIGHT_REFUSAL.format(tool=tool.name))
         if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
             proposal.arguments
         ):
@@ -209,6 +225,12 @@ class Guardian:
                 return Decision(
                     Verdict.ALLOW,
                     f"{effect.value} effect in an untrusted context ({self._approvals} mode)",
+                )
+            if proposal.thread_id == NIGHT_THREAD:
+                return Decision(
+                    Verdict.DENY,
+                    f"{tool.name} after reading outside content would be put to the owner, and "
+                    "he sleeps: note it for the morning instead",
                 )
             approval = await self._approver.approve(replace(proposal, ask_reason=reason))
             if approval:

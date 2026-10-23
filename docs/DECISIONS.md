@@ -2479,3 +2479,32 @@ la main quand une page a besoin de l'utilisateur.
 
 Ce qui change de place : les connexions vivent dans le navigateur d'Orion, sur le serveur, et
 plus chez le gardien, ce qui va avec D115.
+
+## D117 — La nuit d'Orion : il travaille pendant que le propriétaire dort
+
+*23/10/2026 · acceptée · révise D51 (la lecture de nuit), complète D110 et D114*
+
+Constaté en vrai : une nuit sans rien, alors que la journée laissait des choses en plan. Le
+propriétaire voulait qu'Orion soit curieux, voie ce qui manque, cherche et continue ce qui
+n'était pas fini. La lecture de nuit de D51 ne le pouvait pas : un modèle à part, sans outils,
+qui rendait au plus deux pensées en JSON.
+
+- **Orion lui-même, avec ses outils** : à l'heure de la nuit (`[modules.thinking] at`, 5 h),
+  Orion relit la journée dans son propre fil (`night`, qui garde la mémoire des nuits
+  précédentes). Il regarde ce qui tourne déjà (tâches, missions), reprend ce qui est resté en
+  plan, cherche et lit lui-même ce qui tient en quelques recherches, confie le long à une
+  tâche de fond, avance une mission, prévoit les nouvelles à prendre, suit une piste à lui.
+  Une question promise (`think_later`) reçoit toujours une réponse.
+- **Un modèle fort, un budget** : la nuit garde son modèle (`model`, par défaut
+  `strong_model`) et un plafond par nuit (`budget_usd`, 2 $). Le plafond de dépense (D79) la
+  compte comme du travail de fond. `max_thoughts` et `answer_tokens` disparaissent ; `points`
+  dit combien de choses tient la note du matin (3).
+- **Rien ne part la nuit** : le gardien refuse dans le fil `night` toute action sur le monde,
+  l'envoi d'un fichier (il le recevrait tout de suite) et les réglages de l'initiative, et il
+  ne demande jamais d'accord au propriétaire. Ce qui demande son oui, Orion le lui propose au
+  réveil. Lire le web et le navigateur reste permis.
+- **La note du matin** : ce qu'Orion dit à la fin de sa nuit (ou `SILENCE`) passe par le
+  moteur d'initiative après les heures calmes (budget, arbitre, vérificateur), avec la
+  confiance de ce que la nuit a lu. Ce que ses tâches de fond trouvent lui parvient à part.
+
+Éval `la_nuit_reprend_ce_qui_reste` : une recherche laissée pour le lendemain, reprise la nuit.
