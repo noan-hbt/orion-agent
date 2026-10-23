@@ -2569,3 +2569,30 @@ La consigne du navigateur ajoute : un formulaire déjà rempli (« se souvenir d
 clique lui-même sur se connecter avant de lui passer la main. Éval `une_appli_qui_se_construit`
 sur la démo PRONOTE (2/2 en 20 s ; avant, 1/2 en 70 s). `mon_linkedin` et `urssaf_a_ma_place`
 suivent D116 (plus de session prêtée ni d'`orion login`).
+
+## D120 — Le coffre sans le gardien, et « garder cet identifiant ? »
+
+*23/10/2026 · acceptée · complète D111*
+
+Le propriétaire voulait qu'Orion se serve d'un coffre comme KeePass : taper ses mots de passe
+sans les voir. Le coffre de D111 le faisait déjà, mais seulement quand le gardien tourne à
+part (D28), ce qui n'était pas son cas : Orion répondait « le gardien ne tourne pas ».
+
+- **Orion garde le coffre lui-même** quand le gardien ne tourne pas à part
+  (`orion.computer.vault`). Ce sont les mêmes fichiers (`guardian/logins/*.json`, 0600) et le
+  même registre : `orion logins add` et `orion logins import` (l'export CSV de KeePass,
+  Bitwarden, Chrome…) le remplissent dans les deux cas. Quand le gardien tourne, c'est lui qui
+  prête, comme avant.
+- **Ce qui ne change pas** : le modèle ne voit jamais un mot de passe. Le code le tape, sur les
+  sites de l'identifiant seulement et dans un champ mot de passe seulement ; il est masqué sur
+  chaque page qu'Orion lit ; aucun journal ne le garde.
+- **Ce que ça coûte** : le mot de passe est lu par le processus d'Orion, et non plus prêté par
+  un autre. Une faille dans le code d'Orion pourrait l'atteindre ; le modèle, toujours pas.
+  Le propriétaire l'a choisi pour se passer du gardien.
+- **« Garder cet identifiant ? »** : quand le propriétaire se connecte lui-même dans une
+  passation (D116), ce qu'il tape dans un champ mot de passe est gardé en mémoire (et masqué
+  pour Orion). S'il finit et que la connexion est passée (plus de champ mot de passe sur la
+  page), un bouton Telegram lui propose de le garder ; rien n'est gardé sans son oui.
+- **Depuis son téléphone** : `browser` save_password lui envoie un formulaire (servi par la
+  console, vérifié par Telegram) pour donner un identifiant ; il va dans le coffre.
+- Orion regarde son coffre avant de passer la main pour une connexion.

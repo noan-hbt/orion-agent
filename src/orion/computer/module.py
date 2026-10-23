@@ -14,6 +14,7 @@ from pydantic import Field
 
 from orion.computer.browser import Session
 from orion.computer.direct import BrowserDesk, Refused, browser_tools
+from orion.computer.vault import LocalVault
 from orion.core.events import Trust
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import grouped
@@ -38,8 +39,8 @@ class ComputerModule(Module):
     name = "computer"
     offer = (
         "Un navigateur à toi, pour parcourir des sites et envoyer un formulaire qu'il "
-        "approuve : `[modules.computer] enabled = true`. Aller sur un de ses comptes (URSSAF, "
-        "banque, Doctolib…) demande en plus le gardien séparé, qui garde ses sessions."
+        "approuve : `[modules.computer] enabled = true`. Il se connecte à ses comptes (URSSAF, "
+        "banque, Doctolib…) avec les identifiants de son coffre, sans jamais les voir."
     )
 
     def offers(self) -> list[str]:
@@ -76,7 +77,9 @@ class ComputerModule(Module):
             return session
 
         sessions = self._sessions or browser
-        self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian)
+        # The guardian keeps the logins when it runs apart (D111); else Orion does (D120).
+        vault = LocalVault(self.config) if plate.guardian is None else None
+        self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian, vault=vault)
         from orion.files.module import FilesModule
 
         files = plate.module(FilesModule)

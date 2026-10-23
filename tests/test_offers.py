@@ -17,7 +17,7 @@ def test_a_module_that_is_off_offers_itself() -> None:
     assert not any("`browser` connect" in o for o in listed)  # the browser itself is off
 
     (browser,) = [o for o in listed if o.startswith("Un navigateur à toi")]
-    assert "session" in browser and "gardien" in browser  # its accounts need more than this
+    assert "coffre" in browser and "sans jamais les voir" in browser  # his accounts, D120
 
     on = offers(_config(modules={"web": {"enabled": True}}))
     assert not any("[modules.web]" in o for o in on)
