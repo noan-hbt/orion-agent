@@ -33,6 +33,7 @@ from playwright.async_api import Page
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.computer.browser import BrowserError, Session, Snapshot
+from orion.computer.vault import LocalVault, LoginKeeper, VaultError
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -83,12 +84,13 @@ class _Live:
     closer: asyncio.Task[None] | None = None
     text: str = ""
     login: dict[str, Any] | None = None
-    """A login the guardian lent for this browser: username, password, sites, code (D111)."""
+    """A login the vault lent for this browser: username, password, sites, code (D111, D120)."""
     hidden: set[str] = field(default_factory=set[str])
     """What Orion must never read: the password, and the codes typed."""
 
 
 MASK = "••••••"
+NO_VAULT = "No vault: the browser module has none (`orion logins add` fills it on the server)."
 HANDOVER_SECONDS = 30 * 60.0
 
 
@@ -97,6 +99,25 @@ class HandOver:
     thread: str
     why: str
     until: float
+    typed: dict[str, str] = field(default_factory=dict[str, str])
+    """What he typed into a sign-in form (site, username, password), to offer to keep it in
+    the vault once he is done (D120). In memory only, never journaled."""
+
+
+@dataclass
+class KeepOffer:
+    """A login to keep in the vault, from his phone: the one he just typed in a hand-over, or
+    an empty form Orion asked him to fill (D120)."""
+
+    site: str
+    why: str
+    until: float
+    username: str = ""
+    password: str = ""
+    url: str = ""
+
+
+KEEP_SECONDS = 15 * 60.0
 
 
 def masked(text: str, hidden: set[str]) -> str:
@@ -115,10 +136,18 @@ class BrowserDesk:
         sessions: SessionFactory,
         idle_seconds: float = IDLE_SECONDS,
         guardian: GuardianClient | None = None,
+        vault: LocalVault | None = None,
     ) -> None:
         self._journal = journal
         self._sessions = sessions
         self.guardian = guardian
+        self.keeper = vault
+        """Orion's own vault, when the guardian does not run apart (D120)."""
+        self.vault: LoginKeeper | None = guardian if guardian is not None else vault
+        self.offers: dict[str, KeepOffer] = {}
+        """One-time token → a login he may keep, from his phone (D120)."""
+        self.kept: list[tuple[str, str, datetime]] = []
+        """Logins he kept from his phone (name, site, when), for Orion to use them."""
         self._idle = idle_seconds
         self.state = BrowsingState()
         self._runner = ProjectionRunner(journal, [self.state])
@@ -251,25 +280,26 @@ class BrowserDesk:
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
     async def login(self, args: Any, ctx: ToolContext) -> str:
-        """A login from the guardian's vault (D111), for a sign-in form: `fill` types it, Orion
+        """A login from the vault (D111, D120), for a sign-in form: `fill` types it, Orion
         never sees it. Opens `url`, or the login's own page."""
-        if self.guardian is None:
-            raise Refused("The vault is kept by the guardian, which is not running.")
+        vault = self.vault
+        if vault is None:
+            raise Refused(NO_VAULT)
         try:
-            lent = await self.guardian.lend_login(
+            lent = await vault.lend_login(
                 args.login, {"action": "login", "login": args.login}, ctx.grant
             )
-        except GuardianUnavailableError as exc:
-            raise Refused(f"The guardian did not lend it: {exc}") from exc
+        except (GuardianUnavailableError, VaultError) as exc:
+            raise Refused(f"The vault did not lend it: {exc}") from exc
         sites = list(lent["sites"])
         start = normalize(str(args.url)) if args.url else ""
         start = start or str(lent.get("url") or "") or (f"https://{sites[0]}/" if sites else "")
         async with self._lock:
             live = await self._tab(ctx.thread_id)
-            guardian, name, loan = self.guardian, args.login, str(lent["loan"])
+            name, loan = args.login, str(lent["loan"])
 
             async def code() -> str:
-                return await guardian.login_code(name, loan)
+                return await vault.login_code(name, loan)
 
             live.login = {**lent, "code": code}
             live.hidden.add(str(lent["password"]))
@@ -292,8 +322,8 @@ class BrowserDesk:
                 )
             try:
                 value = str(await login["code"]())
-            except GuardianUnavailableError as exc:
-                raise Refused(f"No code from the guardian: {exc}") from exc
+            except (GuardianUnavailableError, VaultError) as exc:
+                raise Refused(f"No code from the vault: {exc}") from exc
             live.hidden.add(value)
         else:
             value = str(login[what])
@@ -347,11 +377,42 @@ class BrowserDesk:
             self.finished.append((token, found, url, datetime.now(UTC)))
             if self._session is not None:
                 await self._session.keep_cookies()  # signed in: kept at once
+            await self._offer_typed(found, live)
         return url
+
+    async def _offer_typed(self, found: HandOver, live: _Live | None) -> None:
+        """He signed in by hand: offer to keep that login, like a browser does. Only once the
+        sign-in went through (no password field left on the page)."""
+        typed = found.typed
+        if self.keeper is None or not typed.get("password") or live is None:
+            return
+        try:
+            async with self._lock:
+                await self._tab(found.thread)
+                still = await self.session.shows_password_field()
+        except BrowserError as exc:
+            log.info("browser.keep_not_offered", error=str(exc))
+            return
+        if still:
+            return
+        try:
+            await self._offer(
+                KeepOffer(
+                    typed.get("site", ""),
+                    "",
+                    time.monotonic() + KEEP_SECONDS,
+                    typed.get("username", ""),
+                    typed["password"],
+                    typed.get("url", ""),
+                )
+            )
+        except Refused as exc:
+            log.info("browser.keep_not_offered", error=str(exc))
 
     async def alerts(self, now: datetime) -> list[Alert]:
         """A finished hand-over, for Orion to resume where the owner left the page."""
         self.finished = [f for f in self.finished if now - f[3] < timedelta(hours=1)]
+        self.kept = [k for k in self.kept if now - k[2] < timedelta(hours=1)]
         return [
             Alert(
                 key=f"handover:{token}",
@@ -365,15 +426,29 @@ class BrowserDesk:
                 spoken_to=True,
             )
             for token, found, url, at in self.finished
+        ] + [
+            Alert(
+                key=f"kept:{name}:{at.isoformat()}",
+                notice=f"Il a gardé son identifiant de {site} dans ton coffre, sous le nom "
+                f"« {name} » : `browser` login avec ce nom, puis fill, et tu te connectes sans "
+                "jamais voir le mot de passe. Dis-le-lui en une phrase si c'est utile, sinon "
+                "SILENCE.",
+                why="il a gardé un identifiant",
+                fallback="",
+                expires_at=at + timedelta(hours=1),
+                importance=0.6,
+                spoken_to=True,
+            )
+            for name, site, at in self.kept
         ]
 
     async def accounts(self) -> str:
-        if self.guardian is None:
-            return "Le gardien ne tourne pas : pas de coffre."
+        if self.vault is None:
+            return "Pas de coffre."
         try:
-            kept = await self.guardian.accounts()
-        except GuardianUnavailableError as exc:
-            raise Refused(f"The guardian did not answer: {exc}") from exc
+            kept = await self.vault.accounts()
+        except (GuardianUnavailableError, VaultError) as exc:
+            raise Refused(f"The vault did not answer: {exc}") from exc
         lines = [
             f"- « {k['name']} » : {', '.join(k['sites'])}"
             + (" (avec la double authentification)" if k["totp"] else "")
@@ -387,8 +462,15 @@ class BrowserDesk:
         return "Mots de passe gardés (`browser` login) :\n" + "\n".join(lines)
 
     async def save_password(self, args: Any) -> str:
+        if self.keeper is not None:
+            await self._offer(KeepOffer(args.site, args.why, time.monotonic() + KEEP_SECONDS))
+            return (
+                f"Il a reçu un bouton pour saisir son identifiant de {args.site} dans ton coffre. "
+                "Tu ne verras jamais le mot de passe : quand on te dira qu'il est gardé, "
+                "`browser` login avec le nom donné."
+            )
         if self.guardian is None:
-            raise Refused("The vault is kept by the guardian, which is not running.")
+            raise Refused(NO_VAULT)
         try:
             await self.guardian.ask_login(args.name, args.site, args.why)
         except GuardianUnavailableError as exc:
@@ -398,6 +480,69 @@ class BrowserDesk:
             "du gardien. Tu ne verras jamais le mot de passe : quand le gardien dit qu'il est "
             f'gardé, `browser` login avec login "{args.name}".'
         )
+
+    # -- keeping a login from his phone (D120) -------------------------------------------------
+
+    async def _offer(self, offer: KeepOffer) -> None:
+        if self.notify is None or not self.base_url:
+            raise Refused(
+                "Keeping a login from his phone needs Telegram and the console's public address "
+                "([modules.console] public_url); on the server: `orion logins add`."
+            )
+        token = tokens.token_urlsafe(24)
+        now = time.monotonic()
+        self.offers = {t: o for t, o in self.offers.items() if o.until > now}
+        self.offers[token] = offer
+        what = (
+            f"Garder ton identifiant {offer.site} ({offer.username}) dans mon coffre ?"
+            if offer.password
+            else f"{offer.why}\nSaisis ton identifiant {offer.site} : il va dans mon coffre."
+        )
+        await self.notify(
+            f"{what} Je ne verrai jamais le mot de passe : je le taperai pour toi.",
+            f"{self.base_url}/keep?t={token}",
+        )
+
+    def offer(self, token: str) -> KeepOffer | None:
+        found = self.offers.get(token)
+        return found if found is not None and found.until > time.monotonic() else None
+
+    async def keep(self, token: str, username: str = "", password: str = "") -> str:
+        """He said yes (or filled the form): the login goes into the vault. Its name."""
+        found = self.offers.pop(token, None)
+        if found is None or found.until <= time.monotonic() or self.keeper is None:
+            raise Refused("C'est terminé, ou le lien a expiré.")
+        try:
+            login = await self.keeper.keep(
+                found.site,
+                found.username or username,
+                found.password or password,
+                found.url,
+            )
+        except VaultError as exc:
+            self.offers[token] = found  # he may correct the form
+            raise Refused(str(exc)) from exc
+        self.kept.append((login.name, ", ".join(login.sites), datetime.now(UTC)))
+        log.info("browser.login_kept", name=login.name)
+        return login.name
+
+    def note_typed(self, token: str, typed: dict[str, str] | None) -> None:
+        """What he just typed in a hand-over, when it went into a sign-in form."""
+        found = self.handovers.get(token)
+        if found is None or not typed:
+            return
+        if typed.get("type") == "password" and typed.get("value"):
+            live = self._live.get(found.thread)
+            if live is not None:  # what he typed is masked on every page Orion reads, too
+                live.hidden.add(typed["value"])
+            found.typed.update(
+                password=typed["value"],
+                username=typed.get("username", "") or found.typed.get("username", ""),
+                site=typed.get("host", ""),
+                url=typed.get("url", ""),
+            )
+        elif typed.get("value"):
+            found.typed["username"] = typed["value"]
 
     async def forget(self, site: str, ctx: ToolContext) -> str:
         """Signed out of a site (its cookies go), or of every site."""
@@ -545,7 +690,7 @@ class ScreenshotInput(BaseModel):
 class LoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    login: str = Field(max_length=60, description="A login in the guardian's vault (accounts)")
+    login: str = Field(max_length=60, description="A login in your vault (accounts)")
     url: str = Field(default="", max_length=500, description="The sign-in page to open")
 
 
@@ -692,7 +837,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
         tool(
             "browser_login",
-            "A password from the guardian's vault, for a sign-in form: then fill types it "
+            "A password from your vault, for a sign-in form: then fill types it "
             "without you seeing it.",
             LoginInput,
             run(lambda a, c: desk.login(a, c)),
@@ -706,7 +851,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         ),
         tool(
             "browser_accounts",
-            "The owner's accounts the guardian keeps (sessions, logins).",
+            "The logins in your vault, by site.",
             NoInput,
             accounts,
         ),
@@ -727,7 +872,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
         ),
         tool(
             "browser_save_password",
-            "Ask him to put a password in the guardian's vault (its form on his phone), for "
+            "Ask him to put a password in your vault (a form on his phone), for "
             "`login` to fill a sign-in form later. Never ask for a password in a message.",
             PasswordInput,
             save_password,

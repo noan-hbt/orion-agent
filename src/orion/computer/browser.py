@@ -99,6 +99,26 @@ _SIGNATURE = """() => {
 }"""
 """What changes while a page is still building itself: compared twice, a short while apart."""
 
+_FOCUSED = """() => {
+  if (!document.hasFocus()) return null;
+  const e = document.activeElement;
+  if (!e || e.tagName !== 'INPUT') return null;
+  const type = (e.type || 'text').toLowerCase();
+  let username = '';
+  if (type === 'password') {
+    const scope = e.form || document;
+    const named = [...scope.querySelectorAll('input')].find(i =>
+      ['text', 'email', 'tel'].includes((i.type || 'text').toLowerCase()) && i.value);
+    username = named ? named.value : '';
+  }
+  return {type, value: e.value, username, host: location.hostname, url: location.href};
+}"""
+"""The field he is typing into in a hand-over (D120): a password, and the username beside it."""
+_PASSWORD_SHOWN = """() => [...document.querySelectorAll('input[type=password]')].some(i => {
+  const r = i.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && getComputedStyle(i).visibility !== 'hidden';
+})"""
+
 STEADY_SECONDS = 8.0
 """How long a page may take to finish building itself after an action (a sign-in, an app)."""
 STEADY_STEP_MS = 250
@@ -327,6 +347,30 @@ class Session:
             await page.wait_for_load_state("domcontentloaded", timeout=10_000)
         except Error:
             log.info("computer.slow_page", url=page.url)
+
+    async def focused_field(self) -> dict[str, str] | None:
+        """The input that has the focus, in whichever frame: its type and value, and for a
+        password the username filled beside it. For the owner's hand-over only (D120)."""
+        page = self._page()
+        for frame in [page.main_frame, *[f for f in page.frames if f is not page.main_frame]]:
+            try:
+                found = await frame.evaluate(_FOCUSED)
+            except Error:
+                continue
+            if found:
+                return {str(k): str(v) for k, v in cast(dict[str, Any], found).items()}
+        return None
+
+    async def shows_password_field(self) -> bool:
+        """Whether a password field is still on show (a sign-in not gone through)."""
+        page = self._page()
+        for frame in page.frames:
+            try:
+                if await frame.evaluate(_PASSWORD_SHOWN):
+                    return True
+            except Error:
+                continue
+        return False
 
     async def wheel(self, dy: int) -> None:
         await self._do(lambda: self._page().mouse.wheel(0, dy))

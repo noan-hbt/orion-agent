@@ -61,6 +61,8 @@ def handover_app(desk: BrowserDesk, is_owner: OwnerCheck) -> Starlette:
             return JSONResponse({"done": said})
         try:
             size = await desk.on_tab(found.thread, lambda s: _do(s, do, body))
+            if do == "type":  # into a sign-in form: offered to keep once he is done (D120)
+                desk.note_typed(token, await desk.on_tab(found.thread, _focused))
         except (BrowserError, Refused) as exc:
             return JSONResponse({"error": f"Pas pu : {exc}"}, 409)
         tab = desk.tab(found.thread)
@@ -76,13 +78,54 @@ def handover_app(desk: BrowserDesk, is_owner: OwnerCheck) -> Starlette:
             return Response(str(exc), status_code=409)
         return Response(picture, media_type="image/png", headers={"cache-control": "no-store"})
 
+    async def keep_page(request: Request) -> Response:
+        token = request.query_params.get("t", "")
+        found = desk.offer(token)
+        if found is None:
+            return HTMLResponse(_PAGE.format(body=_EXPIRED), status_code=410)
+        fields = (
+            f"<p>Identifiant : <b>{_escape(found.username) or '(aucun)'}</b><br>Mot de passe : "
+            "celui que tu viens de taper.</p>"
+            if found.password
+            else '<input id="u" autocomplete="off" placeholder="Identifiant ou e-mail">'
+            '<input id="p" type="password" autocomplete="off" placeholder="Mot de passe">'
+        )
+        body = _KEEP.format(site=_escape(found.site), fields=fields, token=_escape(token))
+        return HTMLResponse(_PAGE.format(body=body), headers={"cache-control": "no-store"})
+
+    async def keep(request: Request) -> Response:
+        try:
+            body = cast(dict[str, Any], json.loads(await request.body() or b"{}"))
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "malformed"}, 400)
+        if not await is_owner(str(body.get("init", ""))):
+            log.warning("browser.keep_refused")
+            return JSONResponse({"error": "Ouvre-le depuis Telegram."}, 403)
+        token = str(body.get("token", ""))
+        if not body.get("yes"):
+            desk.offers.pop(token, None)
+            return JSONResponse({"done": "D'accord, je ne le garde pas."})
+        try:
+            name = await desk.keep(
+                token, str(body.get("username", ""))[:200], str(body.get("password", ""))[:500]
+            )
+        except Refused as exc:
+            return JSONResponse({"error": f"Pas pu : {exc}"}, 409)
+        return JSONResponse({"done": f"Gardé dans mon coffre, sous « {name} »."})
+
     return Starlette(
         routes=[
             Route("/", page, methods=["GET"]),
             Route("/act", act, methods=["POST"]),
             Route("/shot", shot, methods=["GET"]),
+            Route("/keep", keep_page, methods=["GET"]),
+            Route("/keep", keep, methods=["POST"]),
         ]
     )
+
+
+async def _focused(session: Session) -> dict[str, str] | None:
+    return await session.focused_field()
 
 
 async def _do(session: Session, do: str, body: dict[str, Any]) -> dict[str, int]:
@@ -190,4 +233,30 @@ document.getElementById("done").onclick = () => act({{do: "done"}});
 document.getElementById("no").onclick = () => act({{do: "cancel"}});
 act({{do: "start"}});
 setInterval(() => {{ if (!busy && !document.hidden) shot(); }}, 2500);
+</script>"""
+
+_KEEP = """<h3>Garder ton identifiant {site}</h3>
+<p class="note">Il va dans le coffre d'Orion, sur ton serveur. Orion ne le voit jamais : son
+code le tape dans la page de connexion, sur ce site seulement.</p>
+{fields}
+<div style="display:flex;gap:6px;margin:8px 0">
+<button id="yes" style="flex:1">Garder</button><button id="no" style="flex:1">Non merci</button>
+</div>
+<p id="r" class="note"></p>
+<style>input{{display:block;width:100%;box-sizing:border-box;margin:6px 0}}</style>
+<script>
+const tg = window.Telegram && Telegram.WebApp; if (tg) {{ tg.ready(); tg.expand(); }}
+const r = document.getElementById("r");
+const value = (id) => {{ const e = document.getElementById(id); return e ? e.value : ""; }};
+async function send(yes) {{
+  const body = {{init: tg ? tg.initData : "", token: "{token}", yes,
+                username: value("u"), password: value("p")}};
+  const res = await fetch("keep", {{method: "POST",
+    headers: {{"content-type": "application/json"}}, body: JSON.stringify(body)}});
+  const data = await res.json();
+  r.textContent = data.done || data.error || "";
+  if (data.done) setTimeout(() => tg && tg.close(), 1500);
+}}
+document.getElementById("yes").onclick = () => send(true);
+document.getElementById("no").onclick = () => send(false);
 </script>"""
