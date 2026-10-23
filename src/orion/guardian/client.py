@@ -223,6 +223,11 @@ class GuardianClient:
         """The current 2FA code of a login lent for a task under way."""
         return str((await self.post(f"/v1/logins/{name}/code", {"loan": loan}))["code"])
 
+    async def keep(self, site: str, username: str, password: str, url: str = "") -> dict[str, Any]:
+        """A login the owner gave in the console, kept by the guardian (D120). Its name, sites."""
+        body = {"site": site, "username": username, "password": password, "url": url}
+        return dict(await self.post("/v1/logins/keep", body))
+
     async def ask_login(self, name: str, site: str, why: str) -> None:
         """The owner gets the guardian's form on Telegram to give a login."""
         await self.post("/v1/logins/ask", {"name": name, "site": site, "why": why})
