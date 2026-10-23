@@ -16,6 +16,7 @@ from evals.harness import (
     either,
     judged,
     never_says,
+    no_offer_at_the_end,
     no_reminder,
     no_reminder_on,
     paris,
@@ -544,6 +545,34 @@ CASES: tuple[Case, ...] = (
                 "seulement la promesse d'y regarder ?"
             ),
         ),
+        live_web=True,
+    ),
+    Case(
+        name="va_au_bout_au_lieu_de_proposer",
+        origin="Orion finissait sur « je peux te chercher ça si tu veux ? » quand la recherche "
+        "était à lui de faire (D118).",
+        at=paris(2026, 10, 23, 18, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Il me faut un cadeau pour l'anniversaire de ma mère samedi, elle adore le "
+                "jardinage, 50 € max"
+            ),
+        ),
+        checks=(
+            uses("web_search", "web_read", "task:start"),
+            no_offer_at_the_end(),
+        ),
+        live_web=True,
+    ),
+    Case(
+        name="se_lance_seul_sur_un_but",
+        origin="Un but de plusieurs jours dit en passant, sans rien demander : Orion s'en "
+        "occupe de lui-même (D118).",
+        at=paris(2026, 10, 23, 19, 0),
+        facts=OWNER,
+        steps=(Say("Toujours rien de bien pour l'appart à Dreux, c'est galère"),),
+        checks=(uses("mission:start", "task:start"), no_offer_at_the_end()),
         live_web=True,
     ),
 )

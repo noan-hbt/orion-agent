@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 import time_machine
 
 from orion.app import build_app
+from orion.cognition.finish import ends_on_offer
 from orion.config import OrionConfig
 from orion.core.events import Trust
 from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval
@@ -239,6 +240,15 @@ def called_with(tool: str, *fragments: str) -> Check:
         if any(all(f in call for f in fragments) for call in calls):
             return None
         return f"no {tool} call with {', '.join(fragments)} (calls: {calls})"
+
+    return check
+
+
+def no_offer_at_the_end() -> Check:
+    """The reply does not stop on an offer to do what Orion could do itself (D118)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return "ends on an offer instead of doing it" if ends_on_offer(o.last) else None
 
     return check
 

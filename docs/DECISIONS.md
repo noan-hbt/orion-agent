@@ -2508,3 +2508,31 @@ qui rendait au plus deux pensées en JSON.
   confiance de ce que la nuit a lu. Ce que ses tâches de fond trouvent lui parvient à part.
 
 Éval `la_nuit_reprend_ce_qui_reste` : une recherche laissée pour le lendemain, reprise la nuit.
+
+## D118 — Il va au bout, et se lance seul
+
+*23/10/2026 · acceptée*
+
+Le propriétaire trouvait Orion pas assez autonome. Constaté sur un but dit en passant (« toujours
+rien de bien pour l'appart ») : Orion proposait une mission et finissait sur « tu me dis si je
+lance ? », trois fois sur trois. Ce que recommandent les guides d'agents (persistance jusqu'à la
+fin de la demande, relire la demande avant de répondre, ne pas laisser le modèle seul juge de
+s'il a fini) :
+
+- **La constitution** : il va au bout avant de rendre la main ; devant une incertitude, il
+  cherche ou prend l'hypothèse la plus raisonnable et la dit en une phrase. Une question
+  seulement si se tromper coûterait cher ou ne se rattraperait pas, ou pour un choix qui
+  n'appartient qu'à lui. Il ne finit pas sur une offre qu'il peut tenir sans risque ; ce qui
+  demande un accord, il le fait quand même et l'outil le demande. Avant de répondre, il relit
+  la demande, puis pense à la suite (le court, le faire ; le long, une tâche ; plusieurs jours,
+  une mission ; une échéance, un rappel).
+- **Un contrôle dans le code** (`orion.cognition.finish`) : quand la réponse à un message du
+  propriétaire finit sur une offre (« tu veux que je… », « je peux te chercher… ? »), elle ne
+  part pas encore ; une note lui demande de le faire d'abord, ou de réécrire la réponse telle
+  quelle si c'est un vrai choix. Une fois par tour, journalisé (le cache tient). Pas pour les
+  messages d'initiative, où une réponse en un mot est voulue.
+- **Tâches et missions de lui-même** : il en lance une quand il voit un besoin que le
+  propriétaire n'a pas formulé, et le lui dit ; le propriétaire la ferme d'un mot.
+
+Budget du message système relevé (39,2 k). Évals `se_lance_seul_sur_un_but` (0/3 avant, 2/2
+après) et `va_au_bout_au_lieu_de_proposer` (garde-fou : passait déjà).
