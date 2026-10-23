@@ -86,6 +86,52 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
 - **Restaurer** : arrête les deux services, copie `journal.sqlite3` d'une sauvegarde dans
   `/srv/orion/data/`, supprime `memory.sqlite3` (reconstruit au démarrage), redémarre.
 
+## Repartir de zéro, désinstaller
+
+**Remise à zéro** : Orion oublie tout ce qu'il a vécu et appris, mais reste installé et
+configuré.
+
+```bash
+sudo /srv/orion/app/deploy/reset.sh
+```
+
+- **Ce qui part** (`/srv/orion/data`) : le journal, donc toutes les conversations et tout ce
+  qu'il a fait, sa mémoire, les personnes, les rappels, les missions, les tâches, la
+  bibliothèque, les fichiers, les photos, et son navigateur avec les sites où il était
+  connecté.
+- **Ce qui reste** : le code, `orion.toml` (ses réglages, les canaux, qui peut lui écrire), les
+  secrets, les modules installés, les connexions aux forfaits (ChatGPT, Claude Code) et la clé
+  de la console.
+- **Les options** :
+  - `--guardian` efface aussi le registre du gardien (accords, autonomies accordées) et les
+    identifiants du coffre ;
+  - `--backups` efface aussi les sauvegardes de la nuit : sans cette option, le passé y
+    reste ;
+  - `--no-archive` ne garde aucune copie ;
+  - `--yes` ne pose pas la question.
+
+Avant d'effacer, le script garde une copie de ce qu'il retire dans
+`/root/orion-reset-<date>.tar.gz` (lisible par root seulement). Pour revenir en arrière :
+arrête les deux services, `sudo tar -C / -xzf` cette archive, puis redémarre-les.
+
+**Désinstaller** : retire tout ce que `install.sh` a posé, c'est-à-dire les services et
+timers, le code, Python et le navigateur, les données, les secrets, les utilisateurs
+`orion-core` et `orion-guardian`, et le site d'Orion dans Caddy (Caddy retrouve sa page par
+défaut).
+
+```bash
+sudo /srv/orion/app/deploy/uninstall.sh            # garde une archive dans /root
+sudo /srv/orion/app/deploy/uninstall.sh --purge    # rien n'est gardé
+```
+
+Sans `--purge`, le journal, le registre et les identifiants du gardien, la configuration et
+les secrets vont d'abord dans `/root/orion-<date>.tar.gz`. Garde cette archive en lieu sûr, ou
+efface-la : elle contient ta vie avec Orion et tes mots de passe. Pour réinstaller avec :
+`install.sh`, puis `sudo tar -C / -xzf` l'archive, puis redémarre les deux services.
+
+Restent en place : Caddy, uv, ffmpeg, sqlite3 (d'autres choses peuvent s'en servir) et les
+règles du pare-feu (SSH, 80 et 443 ouverts).
+
 ## Agir sur tes comptes
 
 Comme le navigateur de ChatGPT (D116) : Orion a un seul navigateur, qui garde ses connexions
