@@ -29,11 +29,12 @@ import time_machine
 from orion.app import build_app
 from orion.config import OrionConfig
 from orion.core.events import Trust
-from orion.guardian.policy import ActionProposal, Approval
+from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval
 from orion.memory.service import Origin
 from orion.modules.registry import load
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.runtime import OWNER_THREAD
+from orion.thinking.module import ThinkingModule
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -62,7 +63,14 @@ class Notice:
     at: datetime | None = None
 
 
-Step = Say | Notice
+@dataclass(frozen=True)
+class Night:
+    """The owner sleeps: Orion's night runs (D117). Its reply is the note for the morning."""
+
+    at: datetime | None = None
+
+
+Step = Say | Notice | Night
 
 
 @dataclass
@@ -70,6 +78,8 @@ class Observation:
     replies: list[str] = field(default_factory=list[str])
     tools: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     """(tool, arguments) in call order."""
+    night_tools: list[str] = field(default_factory=list[str])
+    """What Orion used during his night (`tool` or `tool:action`)."""
     reminders: list[datetime] = field(default_factory=list[datetime])
     asked: list[str] = field(default_factory=list[str])
     """Tools that wanted the owner's approval (refused)."""
@@ -233,6 +243,17 @@ def called_with(tool: str, *fragments: str) -> Check:
     return check
 
 
+def works_at_night(*tools: str) -> Check:
+    """At night, Orion used at least one of `tools` (`tool` or `tool:action`)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        if any(t in o.night_tools or t.partition(":")[0] in o.night_tools for t in tools):
+            return None
+        return f"did none of {', '.join(tools)} at night (did: {', '.join(o.night_tools)})"
+
+    return check
+
+
 def avoids(*tools: str) -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         used = [t for t in tools if o.used(t)]
@@ -329,6 +350,15 @@ async def run_case(
                         turn = await app.orion.handle_owner_message(
                             OWNER_THREAD, step.text, "imessage", sent_at=sent
                         )
+                    elif isinstance(step, Night):
+                        thinking = next(
+                            m.thinking for m in app.modules if isinstance(m, ThinkingModule)
+                        )
+                        assert thinking is not None
+                        thinking.orion = app.orion
+                        report = await thinking.night(datetime.now(PARIS))
+                        observation.replies.append(report.note or "SILENCE")
+                        continue
                     else:
                         turn = await app.orion.handle_initiative(
                             OWNER_THREAD, step.text, step.why, step.trust
@@ -341,6 +371,15 @@ async def run_case(
                     payload: dict[str, Any] = event.payload
                     if event.kind == "tool.executed":
                         observation.tools.append((str(payload["tool"]), str(payload["arguments"])))
+                        if payload.get("thread_id") == NIGHT_THREAD:
+                            action = _action(str(payload["arguments"]))
+                            tool = str(payload["tool"])
+                            observation.night_tools.append(f"{tool}:{action}" if action else tool)
+                    elif (
+                        event.kind == "model.usage"
+                        and event.payload.get("thread_id") == NIGHT_THREAD
+                    ):
+                        observation.cost += float(payload.get("cost_usd", 0.0))
                     elif event.kind == "timer.scheduled":
                         observation.reminders.append(
                             datetime.fromisoformat(str(payload["due_at"])).astimezone(PARIS)

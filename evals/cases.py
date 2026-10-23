@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from evals.harness import (
     Case,
+    Night,
     Notice,
     Say,
     asks,
@@ -22,6 +23,7 @@ from evals.harness import (
     reminder_within,
     says,
     uses,
+    works_at_night,
 )
 from orion.core.events import Trust
 
@@ -519,5 +521,29 @@ CASES: tuple[Case, ...] = (
             ),
         ),
         checks=(uses("task:start"), avoids("mission:start")),
+    ),
+    Case(
+        name="la_nuit_reprend_ce_qui_reste",
+        origin="22-23/10 : la nuit, Orion n'a rien fait, alors que la journée laissait des "
+        "choses en plan (« il aurait pu être curieux, chercher, continuer ce qui n'était pas "
+        "fini ») (D117).",
+        at=paris(2026, 10, 22, 22, 40),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Faut que je trouve une assurance habitation pour l'appart avant de signer le "
+                "bail lundi. On compare ça demain, là je vais dormir"
+            ),
+            Night(at=paris(2026, 10, 23, 5, 0)),
+        ),
+        checks=(
+            works_at_night("task:start", "web_search", "web_read", "mission"),
+            judged(
+                "Ce message du matin apporte-t-il du concret trouvé pendant la nuit sur "
+                "l'assurance habitation (des offres, des prix, des critères ou des liens), et pas "
+                "seulement la promesse d'y regarder ?"
+            ),
+        ),
+        live_web=True,
     ),
 )
