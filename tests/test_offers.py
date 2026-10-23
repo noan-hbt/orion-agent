@@ -25,9 +25,9 @@ def test_a_module_that_is_off_offers_itself() -> None:
 
 def test_a_module_that_is_on_names_what_it_still_lacks() -> None:
     lent = offers(_config(modules={"computer": {"enabled": True}}))
-    (sessions,) = [o for o in lent if "`browser` connect" in o]
-    assert "téléphone" in sessions  # no second install of Orion on a computer (D112)
-    assert "[guardian] enabled = true" in sessions  # sessions are lent through the guardian
+    (accounts,) = [o for o in lent if "`browser` hand_over" in o]
+    assert "téléphone" in accounts  # he signs in from his phone, in Orion's browser (D116)
+    assert "public_url" in accounts  # the hand-over page is the console's
 
     calendar = {"enabled": True, "accounts": [{"name": "perso", "url": {"env": "ICS"}}]}
     read_only = offers(_config(modules={"calendar": calendar}))

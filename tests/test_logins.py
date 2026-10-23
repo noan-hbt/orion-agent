@@ -178,7 +178,7 @@ class Lender(GuardianClient):
     async def lend_login(
         self, name: str, params: dict[str, Any], grant: str | None
     ) -> dict[str, Any]:
-        assert params == {"action": "login", "session": "", "login": name}
+        assert params == {"action": "login", "login": name}
         self.grants.append(grant)
         return {
             "username": "noan@x.fr",
@@ -342,38 +342,3 @@ async def test_an_export_is_imported_from_the_command_line(
     finally:
         sys.stdin = stdin
     assert read_login(config, "ameli") is not None
-
-
-async def test_orion_opens_his_account_with_a_kept_session(journal: SqliteJournal) -> None:
-    from orion.computer.direct import BrowserDesk, browser_tools
-    from orion.tools.base import ToolContext
-
-    class Sessions(GuardianClient):
-        async def lend_session(
-            self, name: str, params: dict[str, Any], grant: str | None
-        ) -> dict[str, Any]:
-            assert (name, params["action"], grant) == ("compte", "login", "g1")
-            cookie = {"name": "sid", "value": "s3ss10n", "domain": "compte.test", "path": "/"}
-            page = {"url": "https://compte.test/hp/etudiant/emploi-du-temps"}
-            state = {"cookies": [cookie], "origins": [], "orion": page}
-            return {"state": state, "domains": ["compte.test"]}
-
-    account = Account()
-    desk = BrowserDesk(
-        journal,
-        lambda: browser(account, read_only=True),
-        guardian=Sessions.over_socket(Path("/nonexistent.sock")),
-    )
-    login = next(t for t in browser_tools(desk) if t.name == "browser_login")
-    try:
-        page = await login.handler(
-            login.parse(json.dumps({"session": "compte"})), ToolContext("owner", "t1", grant="g1")
-        )
-        assert "Ouvert avec sa session" in page.content
-        assert "URL : https://compte.test/hp/etudiant/emploi-du-temps" in page.content  # kept
-        live = desk._live["owner"]  # pyright: ignore[reportPrivateUsage]
-        assert live.session.page is not None
-        cookies = await live.session.page.context.cookies()
-        assert [c.get("value") for c in cookies] == ["s3ss10n"]
-    finally:
-        await desk.aclose()

@@ -86,34 +86,23 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
 - **Restaurer** : arrête les deux services, copie `journal.sqlite3` d'une sauvegarde dans
   `/srv/orion/data/`, supprime `memory.sqlite3` (reconstruit au démarrage), redémarre.
 
-## Agir sur tes comptes (sessions connectées)
+## Agir sur tes comptes
 
-Pour qu'Orion agisse sur un site où tu as un compte (prendre un rendez-vous sur Doctolib,
-suivre une commande), le gardien garde ta session, comme il garde tes mots de passe :
+Comme le navigateur de ChatGPT (D116) : Orion a un seul navigateur, qui garde ses connexions
+(sur le serveur, même après un redémarrage). Quand une page a besoin de toi (te connecter, un
+code reçu par SMS, un captcha), il t'envoie sur Telegram un bouton qui ouvre **son** navigateur,
+sur la page où il en est. Touche l'image pour cliquer, tape le texte dessous, puis « J'ai
+fini » : il reprend, connecté. Ce que tu tapes va dans la page, pas dans la conversation.
 
-1. **Depuis ton téléphone (D112)** : dis à Orion « connecte-toi à mon Doctolib ». Il t'envoie
-   sur Telegram un bouton « Me connecter », qui ouvre le navigateur du gardien, sur le
-   serveur. Touche l'image pour cliquer, tape le texte en dessous, connecte-toi comme
-   d'habitude (code par SMS compris), puis « J'ai fini ». Le gardien garde la session, jamais
-   ce que tu as tapé.
-2. Ou, sur un ordinateur avec un écran et Orion installé :
-   `orion login doctolib https://www.doctolib.fr/sessions/new`, puis copie le fichier sur le
-   serveur et `sudo deploy/orion-admin sessions add doctolib doctolib.session.json`.
-3. Orion s'en sert lui-même, dans son navigateur, quand tu approuves la connexion (ou seul si
-   tu lui as laissé ce genre de chose sur ces sites). Chaque envoi d'un formulaire te demande
-   aussi ton accord. Chaque prêt est noté dans le registre du gardien.
+Il faut Telegram et la console accessible en https (`[modules.console] public_url`, posé par
+l'installation). Pour qu'il oublie un site : « déconnecte-toi de Leboncoin ».
 
-`orion-admin sessions list` montre les sessions gardées, `sessions remove <nom>` en retire une.
-Une session expire comme dans ton navigateur : reconnecte-toi depuis Telegram, ou laisse le
-gardien garder ton identifiant (ci-dessous) pour qu'Orion se reconnecte seul.
+### Tes mots de passe, comme KeePass (D111), en option
 
-### Tes identifiants, comme KeePass (D111)
-
-Une session expire. Pour qu'Orion se reconnecte seul, le gardien peut aussi garder ton
+Pour qu'Orion se reconnecte seul quand un site le déconnecte, le gardien peut aussi garder ton
 identifiant d'un site : l'identifiant, le mot de passe et, si tu veux, la clé de double
-authentification. L'agent de la tâche approuvée remplit la page de connexion, mais c'est le
-gardien qui fournit les valeurs, seulement sur ce site : ni le modèle ni le journal ne voient
-ton mot de passe.
+authentification. Orion remplit la page de connexion, mais c'est le gardien qui fournit les
+valeurs, seulement sur ce site : ni le modèle ni le journal ne voient ton mot de passe.
 
 - **Depuis ton téléphone** : dis à Orion « garde mon identifiant Doctolib ». Il t'envoie le
   formulaire du gardien sur Telegram.

@@ -13,8 +13,10 @@ Downloads are refused and nothing persists between jobs (no cookies, no history)
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -38,6 +40,7 @@ log = structlog.get_logger(__name__)
 TEXT_CHARS = 10_000
 MAX_ELEMENTS = 150
 MAX_IMAGES = 8
+KEPT_COOKIES = "cookies.json"
 HostCheck = Callable[[str, int], Awaitable[None]]
 
 _SNAPSHOT = """(textChars) => {
@@ -127,6 +130,9 @@ class Session:
         """A phone's screen (width, height): the browser poses as a phone's, with touch. A
         session signed in from the owner's phone (D112) keeps it under `orion`, and is used
         the same way, as sites tie a session to the browser that made it."""
+        self.profile: Path | None = None
+        """A profile kept on disk (D116): Orion's own browser keeps its cookies, so a site it
+        was signed in to stays signed in, from one conversation to the next and over restarts."""
         self.blocked: list[str] = []
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
@@ -136,6 +142,32 @@ class Session:
 
     async def __aenter__(self) -> Session:
         self._pw = await async_playwright().start()
+        if self.profile is not None:
+            phone = self.phone
+            self.profile.mkdir(parents=True, exist_ok=True)
+            self._context = await self._pw.chromium.launch_persistent_context(
+                str(self.profile),
+                headless=True,
+                executable_path=self._executable,
+                accept_downloads=False,
+                locale="fr-FR",
+                timezone_id="Europe/Paris",
+                viewport={"width": phone["width"], "height": phone["height"]} if phone else None,
+                device_scale_factor=2 if phone else None,
+                is_mobile=bool(phone),
+                has_touch=bool(phone),
+                user_agent=self.phone_agent() if phone else None,
+            )
+            await self._context.route("**/*", self._guard)
+            kept = self.profile / KEPT_COOKIES
+            if kept.is_file():  # session cookies: Chromium drops them, the sign-in is in them
+                cookies = json.loads(kept.read_text(encoding="utf-8"))
+                await self._context.add_cookies(cookies)
+            self.page = (
+                self._context.pages[0] if self._context.pages else await self._context.new_page()
+            )
+            self.page.set_default_timeout(15_000)
+            return self
         self._browser = await self._pw.chromium.launch(
             headless=True, executable_path=self._executable
         )
@@ -166,6 +198,38 @@ class Session:
             "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
             f"Chrome/{version} Mobile Safari/537.36"
         )
+
+    async def keep_cookies(self) -> None:
+        """Every cookie, session ones included, written beside the profile (0600): a site
+        signed in to stays signed in after the browser closes or the server restarts."""
+        if self.profile is None or self._context is None:
+            return
+        cookies = await self._context.cookies()
+        path = self.profile / KEPT_COOKIES
+        path.write_text(json.dumps(cookies), encoding="utf-8")
+        path.chmod(0o600)
+
+    async def new_page(self) -> Page:
+        """Another tab of this browser (one per conversation), sharing its cookies."""
+        if self._context is None:  # pragma: no cover - inside `with` only
+            raise BrowserError("the browser is not open")
+        page = await self._context.new_page()
+        page.set_default_timeout(15_000)
+        return page
+
+    async def forget(self, site: str = "") -> None:
+        """Signed out: the cookies of a site (and its subdomains), or of every site."""
+        if self._context is None:  # pragma: no cover - inside `with` only
+            raise BrowserError("the browser is not open")
+        if not site:
+            await self._context.clear_cookies()
+            return
+        for cookie in await self._context.cookies():
+            domain = str(cookie.get("domain", "")).lstrip(".")
+            if host_in(domain, [site]):
+                await self._context.clear_cookies(
+                    name=cookie.get("name"), domain=cookie.get("domain")
+                )
 
     async def saved_state(self) -> dict[str, Any]:
         """The session as it is now (cookies, local storage), to keep and use again; with the
@@ -201,6 +265,7 @@ class Session:
 
     async def __aexit__(self, *_exc: object) -> None:
         if self._context is not None:
+            await self.keep_cookies()
             await self._context.close()
         if self._browser is not None:
             await self._browser.close()

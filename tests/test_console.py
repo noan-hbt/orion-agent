@@ -306,3 +306,30 @@ async def test_the_console_launch_page_says_why_it_cannot_open(
     stub = "window.Telegram={WebApp:{initData:'owner',ready(){}}};"
     assert "refusé (502)" in await launch(stub, 502)
     assert "Seul le propriétaire" in await launch(stub, 403)
+
+
+async def test_the_console_serves_orions_browser_when_handed_over(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """D116: the hand-over page lives under /console/browser/, once the browser is there."""
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+
+    console = Console(
+        Gate(journal, session_key(tmp_path)),
+        journal,
+        None,  # pyright: ignore[reportArgumentType]
+        None,
+        None,  # pyright: ignore[reportArgumentType]
+        "Europe/Paris",
+    )
+    app = console_app(console)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=BASE) as http:
+        assert (await http.get("/console/browser/?t=x")).status_code == 404
+
+        async def page(_request: object) -> PlainTextResponse:
+            return PlainTextResponse("le navigateur")
+
+        console.browser = Starlette(routes=[Route("/", page)])
+        assert (await http.get("/console/browser/?t=x")).text == "le navigateur"

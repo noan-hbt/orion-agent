@@ -117,6 +117,14 @@ class TelegramModule(Module):
         except TelegramError:
             log.warning("telegram.console_button_failed", exc_info=True)
 
+    async def web_app_button(self, text: str, url: str) -> None:
+        """A message to the owner with a button opening a Mini App (Orion's browser, D116)."""
+        owner = self.config.channels.telegram.owner_id
+        if self._client is None or not owner:
+            raise TelegramError("Telegram is not connected to the owner")
+        markup = {"inline_keyboard": [[{"text": "Ouvrir", "web_app": {"url": url}}]]}
+        await self._client.call("sendMessage", chat_id=owner, text=text, reply_markup=markup)
+
     async def close(self) -> None:
         if self._client is not None:
             await self._client.aclose()

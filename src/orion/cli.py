@@ -379,36 +379,6 @@ async def _contain(config: OrionConfig, source: str, apply: bool, reason: str) -
     return 0
 
 
-async def _login(name: str, url: str, out: Path | None) -> int:
-    """On a machine with a screen: sign in by hand, keep the session for the guardian."""
-    import json
-
-    from playwright.async_api import async_playwright
-
-    target = out or Path(f"{name}.session.json")
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
-        context = await browser.new_context(locale="fr-FR")
-        page = await context.new_page()
-        await page.goto(url)
-        await asyncio.to_thread(
-            input, "Connecte-toi dans la fenêtre, puis reviens ici et appuie sur Entrée… "
-        )
-        state = await context.storage_state()
-        await browser.close()
-    await asyncio.to_thread(_write_private, target, json.dumps(state))
-    print(
-        f"Session écrite dans {target}. Copie-la sur le serveur, puis, sous l'utilisateur du "
-        f"gardien : orion sessions add {name} {target.name} ; efface ensuite ce fichier."
-    )
-    return 0
-
-
-def _write_private(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o600)
-
-
 def _modules(config: OrionConfig, args: argparse.Namespace) -> int:
     """On the server, as the core's user (`orion-admin --core modules …`): the files only.
     Turning a module on or off stays a config change, by message or in orion.toml (D105)."""
@@ -440,34 +410,6 @@ def _modules(config: OrionConfig, args: argparse.Namespace) -> int:
     except InstallError as exc:
         print(exc)
         return 1
-    return 0
-
-
-async def _sessions(config: OrionConfig, args: argparse.Namespace) -> int:
-    from orion.guardian.ledger import Ledger
-    from orion.guardian.sessions import SessionError, add_session, read_state, remove_session
-
-    clock = HybridClock(f"{config.instance}-guardian")
-    async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
-        ledger = Ledger(journal)
-        await ledger.catch_up()
-        try:
-            if args.sessions_command == "add":
-                state = await asyncio.to_thread(read_state, args.file)
-                sites = await add_session(config, ledger, args.name, state, args.domains or [])
-                print(f"Session « {args.name} » gardée pour : {', '.join(sites)}.")
-            elif args.sessions_command == "remove":
-                gone = await remove_session(config, ledger, args.name)
-                print("Session retirée." if gone else "Pas de session de ce nom.")
-            else:
-                found = ledger.state.sessions
-                for name, sites in sorted(found.items()):
-                    print(f"- {name} : {', '.join(sites)}")
-                if not found:
-                    print("Aucune session gardée.")
-        except SessionError as exc:
-            print(f"Impossible : {exc}")
-            return 2
     return 0
 
 
@@ -944,26 +886,11 @@ def main(argv: list[str] | None = None) -> int:
     contain.add_argument("source", help="e.g. 'mail:perso:<id@x>' or 'web:https://…'")
     contain.add_argument("--apply", action="store_true")
     contain.add_argument("--reason", default="source suspecte")
-    login = sub.add_parser("login", help="On a machine with a screen: sign in to a site for Orion")
-    login.add_argument("name", help="A short name for the session, e.g. 'doctolib'")
-    login.add_argument("url", help="The site's sign-in page")
-    login.add_argument("--out", type=Path, help="Where to write it (default: <name>.session.json)")
     modules = sub.add_parser("modules", help="Install or remove modules from the catalog (D105)")
     modules_sub = modules.add_subparsers(dest="modules_command", required=True)
     modules_sub.add_parser("list", help="Installed modules, and the catalog")
     for verb in ("install", "remove"):
         modules_sub.add_parser(verb).add_argument("name")
-    sessions = sub.add_parser("sessions", help="Logged-in sessions the guardian keeps")
-    sessions_sub = sessions.add_subparsers(dest="sessions_command", required=True)
-    sessions_add = sessions_sub.add_parser("add", help="Keep a session made with `orion login`")
-    sessions_add.add_argument("name")
-    sessions_add.add_argument("file", type=Path)
-    sessions_add.add_argument(
-        "--domains", nargs="*", help="The sites it is for (default: the cookies' domains)"
-    )
-    sessions_remove = sessions_sub.add_parser("remove", help="Forget a session")
-    sessions_remove.add_argument("name")
-    sessions_sub.add_parser("list", help="The sessions kept, and their sites")
     logins = sub.add_parser("logins", help="Site logins the guardian keeps, like KeePass (D111)")
     logins_sub = logins.add_subparsers(dest="logins_command", required=True)
     logins_add = logins_sub.add_parser("add", help="Keep a login (the password is asked)")
@@ -1031,10 +958,6 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_console_link(config))
     if args.command == "contain":
         return asyncio.run(_contain(config, args.source, args.apply, args.reason))
-    if args.command == "login":
-        return asyncio.run(_login(args.name, args.url, args.out))
-    if args.command == "sessions":
-        return asyncio.run(_sessions(config, args))
     if args.command == "logins":
         return asyncio.run(_logins(config, args))
     if args.command == "modules":

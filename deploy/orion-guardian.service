@@ -8,8 +8,6 @@ User=orion-guardian
 Group=orion
 WorkingDirectory=/srv/orion
 EnvironmentFile=/etc/orion/guardian.env
-# The browser the owner signs in with from Telegram (D112).
-Environment=PLAYWRIGHT_BROWSERS_PATH=/srv/orion/browsers
 ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml guardian
 Restart=always
 RestartSec=5

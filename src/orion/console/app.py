@@ -18,7 +18,8 @@ from zoneinfo import ZoneInfo
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from orion.console.auth import COOKIE, SESSION_DAYS, Gate
 from orion.console.dashboard import dashboard
@@ -86,6 +87,8 @@ class Console:
     owner_telegram: int = 0
     initiative: InitiativeSettings | None = None
     """The engine's settings from the config file, for the dashboard's attention (D101)."""
+    browser: ASGIApp | None = None
+    """Orion's browser handed to the owner (D116), served under `/console/browser/`."""
 
 
 def _page(title: str, body: str) -> HTMLResponse:
@@ -423,11 +426,20 @@ def console_app(console: Console) -> Starlette:
     def post(path: str, handler: Callable[[Request], Awaitable[Response]]) -> Route:
         return Route(f"{PREFIX}{path}", guarded(handler), methods=["POST"])
 
+    async def handed(scope: Scope, receive: Receive, send: Send) -> None:
+        """The hand-over page (D116), when the computer module put it there."""
+        app = console.browser
+        if app is None:
+            await Response("not here", status_code=404)(scope, receive, send)
+            return
+        await app(scope, receive, send)
+
     return Starlette(
         routes=[
             Route(f"{PREFIX}/login", login, methods=["GET"]),
             Route(f"{PREFIX}/telegram", from_telegram, methods=["GET"]),
             Route(f"{PREFIX}/telegram", telegram_login, methods=["POST"]),
+            Mount(f"{PREFIX}/browser", app=handed),
             get("/", home),
             get("/memory", memory),
             post("/facts/{id}/forget", forget_fact),

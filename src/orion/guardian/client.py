@@ -200,16 +200,6 @@ class GuardianClient:
             await self.post("/v1/config", body, headers={GRANT_HEADER: grant} if grant else None)
         )
 
-    async def lend_session(
-        self, name: str, params: dict[str, Any], grant: str | None
-    ) -> dict[str, Any]:
-        """A logged-in site session for what the owner approved (cookies: never stored by the
-        core): `state` (the browser storage state) and `domains`."""
-        data = await self.post(
-            f"/v1/sessions/{name}/lend", params, headers={GRANT_HEADER: grant} if grant else None
-        )
-        return {"state": dict(data["state"]), "domains": list(data.get("domains") or [])}
-
     async def logins(self) -> list[dict[str, Any]]:
         """The owner's logins the guardian keeps (D111): names and sites, never a secret."""
         return list(await self.get("/v1/logins"))
@@ -232,10 +222,6 @@ class GuardianClient:
     async def login_code(self, name: str, loan: str) -> str:
         """The current 2FA code of a login lent for a task under way."""
         return str((await self.post(f"/v1/logins/{name}/code", {"loan": loan}))["code"])
-
-    async def ask_session(self, name: str, url: str, why: str) -> None:
-        """The owner gets the guardian's browser on Telegram, to sign in himself (D112)."""
-        await self.post("/v1/sessions/ask", {"name": name, "url": url, "why": why})
 
     async def ask_login(self, name: str, site: str, why: str) -> None:
         """The owner gets the guardian's form on Telegram to give a login."""
