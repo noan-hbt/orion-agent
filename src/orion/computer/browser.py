@@ -14,6 +14,8 @@ Downloads are refused and nothing persists between jobs (no cookies, no history)
 from __future__ import annotations
 
 import json
+import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +27,8 @@ from playwright.async_api import (
     Browser,
     BrowserContext,
     Error,
+    Frame,
+    Locator,
     Page,
     Playwright,
     Route,
@@ -43,15 +47,16 @@ MAX_IMAGES = 8
 KEPT_COOKIES = "cookies.json"
 HostCheck = Callable[[str, int], Awaitable[None]]
 
-_SNAPSHOT = """(textChars) => {
+_SNAPSHOT = """({textChars, start}) => {
   document.querySelectorAll('[data-orion-id]').forEach(e => e.removeAttribute('data-orion-id'));
   const sel = 'a[href], button, input:not([type=hidden]), select, textarea, ' +
               '[role=button], [role=link], [role=checkbox], [role=tab], [onclick]';
   const out = [];
-  let n = 0;
+  let n = start;
   for (const el of document.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
+    if (getComputedStyle(el).visibility === 'hidden') continue;
     n += 1;
     el.setAttribute('data-orion-id', String(n));
     const tag = el.tagName.toLowerCase();
@@ -61,7 +66,7 @@ _SNAPSHOT = """(textChars) => {
                    el.title || el.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
     const href = tag === 'a' && el.href ? ` -> ${el.href}` : '';
     out.push(`[${n}] ${tag}${kind} ${label}${href}`);
-    if (n >= MAX_ELEMENTS) break;
+    if (n - start >= MAX_ELEMENTS) break;
   }
   const pictures = [];
   const meta = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
@@ -87,6 +92,38 @@ _SNAPSHOT = """(textChars) => {
 }""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS)).replace("MAX_IMAGES", str(MAX_IMAGES))
 
 
+_SIGNATURE = """() => {
+  const text = document.body ? document.body.innerText : '';
+  return [location.href, text.length, text.slice(0, 300),
+          document.querySelectorAll('a, button, input, select, textarea').length];
+}"""
+"""What changes while a page is still building itself: compared twice, a short while apart."""
+
+STEADY_SECONDS = 8.0
+"""How long a page may take to finish building itself after an action (a sign-in, an app)."""
+STEADY_STEP_MS = 250
+QUIET_SECONDS = 0.5
+"""A page is not steady while a request started or ended this recently (a sign-in being sent,
+an app fetching what it will show)."""
+STALE_REQUEST_SECONDS = 4.0
+"""A request open longer than this is a page's long poll, not something it waits for."""
+_LOADING = re.compile(
+    r"veuillez patienter|patientez|chargement|loading|please wait|un instant|redirection",
+    re.IGNORECASE,
+)
+"""What a page says while it is not ready (« Veuillez patienter », Hyperplanning, PRONOTE)."""
+GONE = (
+    "L'élément [{n}] n'existe plus : la page a changé depuis que tu l'as lue. Relis-la "
+    "(browser read) et prends le nouveau numéro."
+)
+
+
+def _loading(texts: list[str]) -> bool:
+    """Nothing to read yet, or only a « please wait »."""
+    shown = " ".join(t.strip() for t in texts).strip()
+    return not shown or (len(shown) < 300 and _LOADING.search(shown) is not None)
+
+
 @dataclass
 class Snapshot:
     url: str
@@ -95,6 +132,9 @@ class Snapshot:
     elements: list[str] = field(default_factory=list[str])
     images: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     """The page's large pictures (address, alt text), biggest first: what a product looks like."""
+    steady: bool = True
+    """False when the page was still changing (or still saying « veuillez patienter ») after
+    `STEADY_SECONDS`: what is read may not last."""
 
     def render(self) -> str:
         return (
@@ -134,6 +174,11 @@ class Session:
         """A profile kept on disk (D116): Orion's own browser keeps its cookies, so a site it
         was signed in to stays signed in, from one conversation to the next and over restarts."""
         self.blocked: list[str] = []
+        self._open_requests: dict[PwRequest, float] = {}
+        self._last_traffic = 0.0
+        self._numbered: list[tuple[int, int, Frame]] = []
+        """The last snapshot's elements, by frame: (first, last, frame). A sign-in form is
+        often in a frame of its own (a school's, a payment's)."""
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -159,6 +204,7 @@ class Session:
                 user_agent=self.phone_agent() if phone else None,
             )
             await self._context.route("**/*", self._guard)
+            self._listen(self._context)
             kept = self.profile / KEPT_COOKIES
             if kept.is_file():  # session cookies: Chromium drops them, the sign-in is in them
                 cookies = json.loads(kept.read_text(encoding="utf-8"))
@@ -188,9 +234,31 @@ class Session:
             user_agent=(str(profile.get("user_agent") or self.phone_agent()) if phone else None),
         )
         await self._context.route("**/*", self._guard)
+        self._listen(self._context)
         self.page = await self._context.new_page()
         self.page.set_default_timeout(15_000)
         return self
+
+    def _listen(self, context: BrowserContext) -> None:
+        """Keep count of the requests under way: a page waiting for one is not ready."""
+
+        def started(request: PwRequest) -> None:
+            self._open_requests[request] = self._last_traffic = time.monotonic()
+
+        def ended(request: PwRequest) -> None:
+            self._open_requests.pop(request, None)
+            self._last_traffic = time.monotonic()
+
+        context.on("request", started)
+        context.on("requestfinished", ended)
+        context.on("requestfailed", ended)
+
+    def _busy(self) -> bool:
+        """A request under way (not a long poll), or traffic a moment ago."""
+        now = time.monotonic()
+        if now - self._last_traffic < QUIET_SECONDS:
+            return True
+        return any(now - at < STALE_REQUEST_SECONDS for at in self._open_requests.values())
 
     def phone_agent(self) -> str:
         version = self._browser.version if self._browser is not None else "130.0.0.0"
@@ -324,27 +392,97 @@ class Session:
         return await self._page().screenshot(type="png")
 
     async def snapshot(self, text_chars: int = TEXT_CHARS) -> Snapshot:
+        """The page as it is once it stops changing, its frames included: an app that builds
+        itself after loading (Hyperplanning, PRONOTE) first shows « veuillez patienter », or
+        nothing at all."""
         page = self._page()
+        steady = await self._steady()
         for attempt in range(3):
             try:
                 await page.wait_for_load_state("domcontentloaded")
-                data = cast(dict[str, Any], await page.evaluate(_SNAPSHOT, text_chars))
-                break
+                return await self._read(text_chars, steady)
             except Error as exc:
                 # A page still navigating (a redirect, a blocked submit) replaces the document
                 # under the script: read the new one.
                 if "context was destroyed" not in exc.message or attempt == 2:
                     raise BrowserError(f"the page cannot be read: {exc.message}") from exc
                 await page.wait_for_timeout(300)
-        else:  # pragma: no cover - the loop either breaks or raises
-            raise BrowserError("the page cannot be read")
+        raise BrowserError("the page cannot be read")  # pragma: no cover - returns or raises
+
+    async def _read(self, text_chars: int, steady: bool) -> Snapshot:
+        page = self._page()
+        data = cast(
+            dict[str, Any], await page.evaluate(_SNAPSHOT, {"textChars": text_chars, "start": 0})
+        )
+        elements = [str(e) for e in data["elements"]]
+        text = " ".join(str(data["text"]).split(" "))
+        numbered = [(1, len(elements), page.main_frame)]
+        for frame in await self._frames():
+            try:
+                inner = cast(
+                    dict[str, Any],
+                    await frame.evaluate(
+                        _SNAPSHOT, {"textChars": text_chars, "start": len(elements)}
+                    ),
+                )
+            except Error as exc:  # a frame gone meanwhile: the rest of the page still reads
+                log.info("computer.frame_unreadable", url=frame.url, error=exc.message[:120])
+                continue
+            found = [str(e) for e in inner["elements"]]
+            if not found and not str(inner["text"]).strip():
+                continue
+            where = urlsplit(frame.url).hostname or frame.url
+            numbered.append((len(elements) + 1, len(elements) + len(found), frame))
+            text += f"\n\n[Dans un cadre de {where}]\n" + " ".join(str(inner["text"]).split(" "))
+            elements += [f"— dans le cadre de {where} —", *found] if found else []
+        self._numbered = numbered
         return Snapshot(
             str(data["url"]),
             str(data["title"]),
-            " ".join(str(data["text"]).split(" ")),
-            [str(e) for e in data["elements"]],
+            text[:text_chars],
+            elements,
             [(str(i["url"]), str(i["text"])) for i in data.get("images", [])],
+            steady,
         )
+
+    async def _frames(self) -> list[Frame]:
+        """The page's frames that show something (not hidden, not blank)."""
+        page = self._page()
+        shown: list[Frame] = []
+        for frame in page.frames:
+            if frame is page.main_frame or frame.url in ("", "about:blank"):
+                continue
+            try:
+                box = await (await frame.frame_element()).bounding_box()
+            except Error:
+                continue
+            if box is not None and box["width"] > 1 and box["height"] > 1:
+                shown.append(frame)
+        return shown
+
+    async def _steady(self) -> bool:
+        """Wait until the page stops changing and has more to say than « veuillez patienter »;
+        False when it still had not after `STEADY_SECONDS`."""
+        page = self._page()
+        deadline = time.monotonic() + STEADY_SECONDS
+        last: list[object] | None = None
+        while True:
+            now: list[object] | None
+            try:
+                now = [await page.evaluate(_SIGNATURE)]
+                for frame in await self._frames():
+                    now.append(await frame.evaluate(_SIGNATURE))
+            except Error:  # navigating: the document is being replaced
+                now = None
+            if now is not None and now == last and not self._busy():
+                texts = [str(cast(list[object], sign)[2]) for sign in now]
+                if not _loading(texts):
+                    return True
+            if time.monotonic() >= deadline:
+                log.info("computer.page_not_steady", url=page.url)
+                return False
+            last = now
+            await page.wait_for_timeout(STEADY_STEP_MS)
 
     async def _do(self, action: Callable[[], Awaitable[object]]) -> None:
         try:
@@ -357,8 +495,26 @@ class Session:
         except Error:
             log.info("computer.slow_page", url=page.url)
 
-    def _element(self, number: int) -> Any:
-        return self._page().locator(f'[data-orion-id="{number}"]').first
+    def _frame_of(self, number: int) -> Frame:
+        return next(
+            (f for first, last, f in self._numbered if first <= number <= last),
+            self._page().main_frame,
+        )
+
+    def _element(self, number: int) -> Locator:
+        return self._frame_of(number).locator(f'[data-orion-id="{number}"]').first
+
+    async def _present(self, number: int) -> Locator:
+        """The element numbered on the last page read, if it is still there: an app redraws
+        itself, and the numbers go with the old drawing."""
+        element = self._element(number)
+        try:
+            count = await element.count()
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        if count == 0:
+            raise BrowserError(GONE.format(n=number))
+        return element
 
     async def goto(self, url: str) -> None:
         if urlsplit(url).scheme not in ("http", "https"):
@@ -366,11 +522,13 @@ class Session:
         await self._do(lambda: self._page().goto(url))
 
     async def click(self, number: int) -> None:
-        await self._do(lambda: self._element(number).click(timeout=8_000))
+        element = await self._present(number)
+        await self._do(lambda: element.click(timeout=8_000))
 
     async def type(self, number: int, text: str, enter: bool) -> None:
+        element = await self._present(number)
+
         async def typing() -> None:
-            element = self._element(number)
             await element.fill(text, timeout=8_000)
             if enter:
                 await element.press("Enter")
@@ -380,10 +538,10 @@ class Session:
     async def fill_secret(self, number: int, value: str, sites: list[str], kind: str) -> None:
         """Type a lent login's username, password or 2FA code (`kind`) into a field, only on
         a page of the login's sites, and the password only into a password field (D111)."""
-        host = urlsplit(self._page().url).hostname or ""
+        host = urlsplit(self._frame_of(number).url).hostname or ""  # the field's own frame
         if not host_in(host, sites):
             raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
-        element = self._element(number)
+        element = await self._present(number)
         try:
             tag, field_type = cast(
                 list[str],
@@ -405,7 +563,8 @@ class Session:
         await self._do(lambda: element.fill(value, timeout=8_000))
 
     async def select(self, number: int, value: str) -> None:
-        await self._do(lambda: self._element(number).select_option(label=value, timeout=8_000))
+        element = await self._present(number)
+        await self._do(lambda: element.select_option(label=value, timeout=8_000))
 
     async def scroll(self, down: bool) -> None:
         await self._do(lambda: self._page().mouse.wheel(0, 900 if down else -900))

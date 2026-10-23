@@ -2479,3 +2479,32 @@ la main quand une page a besoin de l'utilisateur.
 
 Ce qui change de place : les connexions vivent dans le navigateur d'Orion, sur le serveur, et
 plus chez le gardien, ce qui va avec D115.
+
+## D119 — Le navigateur lit la page telle qu'elle est
+
+*23/10/2026 · acceptée · complète D113 et D116*
+
+Constaté en vrai sur Hyperplanning : Orion disait être bloqué sur « Veuillez patienter » pendant
+que ses captures montraient le formulaire de connexion, et le répétait après chaque clic.
+Reproduit sur la démo de PRONOTE (même éditeur) : à l'ouverture, Orion lisait une page vide.
+Quatre défauts :
+
+- **Lue trop tôt** : la page était lue dès son HTML chargé, avant que l'appli ne se construise,
+  et après un clic qui n'ouvre pas de page (une connexion envoyée en arrière-plan) avant même
+  sa réponse. Désormais, après chaque action, le navigateur attend que la page ne change plus,
+  qu'aucune requête ne soit en cours depuis un instant et qu'elle dise autre chose que
+  « veuillez patienter » ou « chargement » (8 s au plus). Sinon, Orion le lit avec la page :
+  qu'il la relise avant de dire qu'elle bloque.
+- **Relue de mémoire** : `browser` read rendait le texte gardé de la dernière action, pas la
+  page. Il la relit maintenant à chaque fois (toute la page quand elle tient en une partie).
+- **Les cadres** : le texte et les éléments ne venaient que du document principal. Ceux des
+  cadres visibles (un formulaire de connexion d'école, de paiement) sont lus et numérotés à la
+  suite, et `fill` vérifie le site du cadre du champ.
+- **Un élément redessiné** : une appli qui se redessine efface les numéros ; le clic attendait
+  8 s puis échouait sans dire pourquoi. Il dit maintenant que la page a changé et qu'il faut la
+  relire.
+
+La consigne du navigateur ajoute : un formulaire déjà rempli (« se souvenir de moi »), Orion
+clique lui-même sur se connecter avant de lui passer la main. Éval `une_appli_qui_se_construit`
+sur la démo PRONOTE (2/2 en 20 s ; avant, 1/2 en 70 s). `mon_linkedin` et `urssaf_a_ma_place`
+suivent D116 (plus de session prêtée ni d'`orion login`).
