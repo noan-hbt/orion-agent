@@ -15,7 +15,6 @@ A flaw in Orion's code could reach it; the model still could not.
 
 from __future__ import annotations
 
-import re
 import secrets as tokens
 import time
 from collections.abc import AsyncGenerator, Callable
@@ -28,13 +27,10 @@ from orion.guardian.ledger import LOGIN_CODE, LOGIN_LENT, Ledger
 from orion.guardian.logins import (
     LEND_SECONDS,
     Loan,
-    Login,
     LoginError,
-    add_login,
+    keep_login,
     logins_dir,
-    make_login,
     read_login,
-    site_of,
     totp,
 )
 
@@ -56,6 +52,10 @@ class LoginKeeper(Protocol):
     ) -> dict[str, Any]: ...
 
     async def login_code(self, name: str, loan: str) -> str: ...
+
+    async def keep(
+        self, site: str, username: str, password: str, url: str = ""
+    ) -> dict[str, Any]: ...
 
 
 class LocalVault:
@@ -125,23 +125,11 @@ class LocalVault:
             await ledger.record(LOGIN_CODE, {"name": name})
         return totp(login.totp, self._clock())
 
-    async def keep(self, site: str, username: str, password: str, url: str = "") -> Login:
-        """A login the owner gave (his form, or the one he typed in a hand-over), kept under a
-        name of its own: the site's (`doctolib`), or `doctolib-2` if that one is taken by
-        another account."""
-        found = site_of(site or url)
-        if not found:
-            raise VaultError("no site for this login")
-        base = re.sub(r"[^a-z0-9]+", "-", found.split(".")[0]).strip("-")[:30] or "login"
-        name, n = base, 2
-        while (existing := read_login(self.config, name)) is not None:
-            if existing.username == username.strip() and found in existing.sites:
-                break  # the same account: its password is updated
-            name, n = f"{base}-{n}", n + 1
+    async def keep(self, site: str, username: str, password: str, url: str = "") -> dict[str, Any]:
+        """A login the owner gave, kept in the vault (`keep_login`). Its name and sites."""
         try:
-            login = make_login(name, [found], username, password, "", url)
+            async with self._ledger() as ledger:
+                login = await keep_login(self.config, ledger, site, username, password, url)
         except LoginError as exc:
             raise VaultError(str(exc)) from exc
-        async with self._ledger() as ledger:
-            await add_login(self.config, ledger, login)
-        return login
+        return {"name": login.name, "sites": login.sites}

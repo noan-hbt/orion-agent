@@ -17,11 +17,15 @@ from orion.computer.vault import LocalVault, VaultError
 from orion.config import OrionConfig
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.ledger import LOGIN_ADDED, LOGIN_LENT
-from orion.guardian.logins import logins_dir, totp
+from orion.guardian.logins import LoginDesk, logins_dir, read_login, totp
+from orion.guardian.service import GuardianService
 from orion.tools.base import ToolContext
+from tests.fake_guardian import running_guardian
 from tests.test_handover import PASSWORD, SIGN_IN, School, desk_for
 from tests.test_logins import Account, browser
+from tests.test_writes import writable_config
 
 
 class WrongPassword(School):
@@ -46,12 +50,12 @@ async def test_orion_keeps_the_vault_itself(tmp_path: Path) -> None:
     config = config_for(tmp_path)
     vault = LocalVault(config, clock=lambda: 59.0)
     kept = await vault.keep("https://www.doctolib.fr/sessions/new", "noan@x.fr", PASSWORD)
-    assert kept.name == "doctolib" and kept.sites == ["doctolib.fr"]
+    assert kept == {"name": "doctolib", "sites": ["doctolib.fr"]}
     path = logins_dir(config) / "doctolib.json"
     assert path.stat().st_mode & 0o777 == 0o600
     # The same account again: its password is updated; another account: a name of its own.
-    assert (await vault.keep("doctolib.fr", "noan@x.fr", "n0uveau")).name == "doctolib"
-    assert (await vault.keep("doctolib.fr", "maman@x.fr", "autre")).name == "doctolib-2"
+    assert (await vault.keep("doctolib.fr", "noan@x.fr", "n0uveau"))["name"] == "doctolib"
+    assert (await vault.keep("doctolib.fr", "maman@x.fr", "autre"))["name"] == "doctolib-2"
     accounts = await vault.accounts()
     assert [k["name"] for k in accounts["logins"]] == ["doctolib", "doctolib-2"]
 
@@ -118,13 +122,51 @@ async def test_orion_signs_in_from_his_own_vault_without_seeing_the_password(
     assert PASSWORD not in str([e.payload for e in await journal.read()])
 
 
+def install_logins(service: GuardianService) -> None:
+    LoginDesk(service).install()
+
+
 async def test_he_signs_in_by_hand_and_is_offered_to_keep_it(
     journal: SqliteJournal, tmp_path: Path
 ) -> None:
     config = config_for(tmp_path)
+    await signs_in_and_keeps(journal, tmp_path, config, vault=LocalVault(config))
+
+
+async def test_with_the_guardian_apart_it_keeps_the_login_there(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    config = writable_config(tmp_path)
+    async with running_guardian(config, prepare=install_logins) as g:
+        await signs_in_and_keeps(journal, tmp_path, config, guardian=g.client)
+        assert LOGIN_ADDED in [e.kind for e in await g.journal.read()]
+
+
+async def test_the_guardian_keeps_a_login_under_a_name_of_its_own(tmp_path: Path) -> None:
+    config = writable_config(tmp_path)
+    async with running_guardian(config, prepare=install_logins) as g:
+        kept = await g.client.keep("doctolib.fr", "noan@x.fr", PASSWORD)
+        assert kept == {"name": "doctolib", "sites": ["doctolib.fr"]}
+        assert (await g.client.keep("doctolib.fr", "noan@x.fr", "n0uveau"))["name"] == "doctolib"
+        assert (await g.client.keep("doctolib.fr", "maman@x.fr", "autre"))["name"] == "doctolib-2"
+        with pytest.raises(GuardianUnavailableError, match="no site"):
+            await g.client.keep("", "noan@x.fr", PASSWORD)
+        assert [e.kind for e in await g.journal.read()].count(LOGIN_ADDED) == 3
+    login = read_login(config, "doctolib")
+    assert login is not None and login.password == "n0uveau"
+    assert PASSWORD not in str(await LocalVault(config).accounts())
+
+
+async def signs_in_and_keeps(
+    journal: SqliteJournal,
+    tmp_path: Path,
+    config: OrionConfig,
+    guardian: GuardianClient | None = None,
+    vault: LocalVault | None = None,
+) -> None:
+    """He signs in by hand in Orion's browser, then says yes to keep that login."""
     school = School()
-    desk = desk_for(journal, school, tmp_path / "profile")
-    desk.keeper = desk.vault = LocalVault(config)
+    desk = desk_for(journal, school, tmp_path / "profile", guardian=guardian, vault=vault)
     buttons: list[tuple[str, str]] = []
 
     async def notify(text: str, url: str) -> None:
@@ -180,8 +222,7 @@ async def test_he_signs_in_by_hand_and_is_offered_to_keep_it(
 
 async def test_a_sign_in_that_failed_is_not_offered(journal: SqliteJournal, tmp_path: Path) -> None:
     school = WrongPassword()
-    desk = desk_for(journal, school, tmp_path / "profile")
-    desk.keeper = desk.vault = LocalVault(config_for(tmp_path))
+    desk = desk_for(journal, school, tmp_path / "profile", vault=LocalVault(config_for(tmp_path)))
     buttons: list[tuple[str, str]] = []
 
     async def notify(text: str, url: str) -> None:

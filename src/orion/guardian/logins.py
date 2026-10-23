@@ -163,6 +163,26 @@ async def add_login(config: OrionConfig, ledger: Ledger, login: Login) -> None:
     )
 
 
+async def keep_login(
+    config: OrionConfig, ledger: Ledger, site: str, username: str, password: str, url: str = ""
+) -> Login:
+    """A login the owner gave (his form, or what he typed in a hand-over), kept under a name of
+    its own: the site's (`doctolib`), or `doctolib-2` if that one is taken by another account.
+    The same account again has its password updated."""
+    found = site_of(site or url)
+    if not found:
+        raise LoginError("no site for this login")
+    base = re.sub(r"[^a-z0-9]+", "-", found.split(".")[0]).strip("-")[:30] or "login"
+    name, n = base, 2
+    while (existing := read_login(config, name)) is not None:
+        if existing.username == username.strip() and found in existing.sites:
+            break  # the same account: its password is updated
+        name, n = f"{base}-{n}", n + 1
+    login = make_login(name, [found], username, password, "", url)
+    await add_login(config, ledger, login)
+    return login
+
+
 async def remove_login(config: OrionConfig, ledger: Ledger, name: str) -> bool:
     path = logins_dir(config) / f"{name}.json"
     existed = path.exists()
@@ -257,6 +277,7 @@ class LoginDesk:
             Route("/v1/accounts", self._accounts, methods=["GET"]),
             Route("/v1/logins/{name}/lend", self._lend, methods=["POST"]),
             Route("/v1/logins/{name}/code", self._code, methods=["POST"]),
+            Route("/v1/logins/keep", self._keep, methods=["POST"]),
         ]
 
     async def _list(self, _request: Request) -> Response:
@@ -297,6 +318,25 @@ class LoginDesk:
                 "loan": loan,
             }
         )
+
+    async def _keep(self, request: Request) -> Response:
+        """A login the owner gave in the console (his form, or what he typed in a hand-over),
+        kept here: the core passes it on only after he said yes (D120)."""
+        body = await _body(request)
+        await self.service.ledger.catch_up()
+        try:
+            login = await keep_login(
+                self.service.config,
+                self.service.ledger,
+                str(body.get("site", "")),
+                str(body.get("username", "")),
+                str(body.get("password", "")),
+                str(body.get("url", "")),
+            )
+        except LoginError as exc:
+            return JSONResponse({"error": str(exc)}, 400)
+        log.info("guardian.login_kept", name=login.name)
+        return JSONResponse({"name": login.name, "sites": login.sites})
 
     async def _code(self, request: Request) -> Response:
         """The 2FA code of a login lent for a task under way: the secret stays here."""

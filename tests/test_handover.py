@@ -12,7 +12,9 @@ from playwright.async_api import Route
 from orion.computer.browser import Session
 from orion.computer.direct import BrowserDesk, browser_tools
 from orion.computer.handover import handover_app
+from orion.computer.vault import LocalVault
 from orion.core.journal import SqliteJournal
+from orion.guardian.client import GuardianClient
 from orion.tools.base import ToolContext
 from orion.web.fetch import FetchError
 
@@ -51,14 +53,20 @@ async def only_the_school(host: str, _port: int) -> None:
         raise FetchError(f"{host} is not a public address")
 
 
-def desk_for(journal: SqliteJournal, school: School, profile: Path) -> BrowserDesk:
+def desk_for(
+    journal: SqliteJournal,
+    school: School,
+    profile: Path,
+    guardian: GuardianClient | None = None,
+    vault: LocalVault | None = None,
+) -> BrowserDesk:
     def browser() -> Session:
         session = Session(False, only_the_school, {"ecole.test": school.handle})
         session.profile = profile
         session.phone = {"width": 412, "height": 860}
         return session
 
-    return BrowserDesk(journal, browser)
+    return BrowserDesk(journal, browser, guardian=guardian, vault=vault)
 
 
 async def test_he_signs_in_in_orions_browser_and_it_stays_signed_in(

@@ -2592,7 +2592,9 @@ part (D28), ce qui n'était pas son cas : Orion répondait « le gardien ne tour
 - **« Garder cet identifiant ? »** : quand le propriétaire se connecte lui-même dans une
   passation (D116), ce qu'il tape dans un champ mot de passe est gardé en mémoire (et masqué
   pour Orion). S'il finit et que la connexion est passée (plus de champ mot de passe sur la
-  page), un bouton Telegram lui propose de le garder ; rien n'est gardé sans son oui.
+  page), un bouton Telegram lui propose de le garder ; rien n'est gardé sans son oui. Quand le
+  gardien tourne à part, c'est lui qui le garde (`/v1/logins/keep`) : le cœur lui passe
+  l'identifiant après le oui, et le nomme comme le coffre local (`keep_login`).
 - **Depuis son téléphone** : `browser` save_password lui envoie un formulaire (servi par la
   console, vérifié par Telegram) pour donner un identifiant ; il va dans le coffre.
 - Orion regarde son coffre avant de passer la main pour une connexion.

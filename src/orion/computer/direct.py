@@ -141,9 +141,8 @@ class BrowserDesk:
         self._journal = journal
         self._sessions = sessions
         self.guardian = guardian
-        self.keeper = vault
-        """Orion's own vault, when the guardian does not run apart (D120)."""
         self.vault: LoginKeeper | None = guardian if guardian is not None else vault
+        """The logins: the guardian's when it runs apart (D111), else Orion's own (D120)."""
         self.offers: dict[str, KeepOffer] = {}
         """One-time token → a login he may keep, from his phone (D120)."""
         self.kept: list[tuple[str, str, datetime]] = []
@@ -384,7 +383,7 @@ class BrowserDesk:
         """He signed in by hand: offer to keep that login, like a browser does. Only once the
         sign-in went through (no password field left on the page)."""
         typed = found.typed
-        if self.keeper is None or not typed.get("password") or live is None:
+        if self.vault is None or not typed.get("password") or live is None:
             return
         try:
             async with self._lock:
@@ -462,7 +461,8 @@ class BrowserDesk:
         return "Mots de passe gardés (`browser` login) :\n" + "\n".join(lines)
 
     async def save_password(self, args: Any) -> str:
-        if self.keeper is not None:
+        # With the guardian apart, its own form on Telegram takes it: the core never sees it.
+        if self.guardian is None and self.vault is not None:
             await self._offer(KeepOffer(args.site, args.why, time.monotonic() + KEEP_SECONDS))
             return (
                 f"Il a reçu un bouton pour saisir son identifiant de {args.site} dans ton coffre. "
@@ -510,21 +510,21 @@ class BrowserDesk:
     async def keep(self, token: str, username: str = "", password: str = "") -> str:
         """He said yes (or filled the form): the login goes into the vault. Its name."""
         found = self.offers.pop(token, None)
-        if found is None or found.until <= time.monotonic() or self.keeper is None:
+        if found is None or found.until <= time.monotonic() or self.vault is None:
             raise Refused("C'est terminé, ou le lien a expiré.")
         try:
-            login = await self.keeper.keep(
+            kept = await self.vault.keep(
                 found.site,
                 found.username or username,
                 found.password or password,
                 found.url,
             )
-        except VaultError as exc:
+        except (GuardianUnavailableError, VaultError) as exc:
             self.offers[token] = found  # he may correct the form
             raise Refused(str(exc)) from exc
-        self.kept.append((login.name, ", ".join(login.sites), datetime.now(UTC)))
-        log.info("browser.login_kept", name=login.name)
-        return login.name
+        self.kept.append((kept["name"], ", ".join(kept["sites"]), datetime.now(UTC)))
+        log.info("browser.login_kept", name=kept["name"])
+        return str(kept["name"])
 
     def note_typed(self, token: str, typed: dict[str, str] | None) -> None:
         """What he just typed in a hand-over, when it went into a sign-in form."""
