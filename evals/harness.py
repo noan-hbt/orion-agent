@@ -264,6 +264,26 @@ def works_at_night(*tools: str) -> Check:
     return check
 
 
+def before(first: str, then: str) -> Check:
+    """`then`, if used at all, only after `first` was (`tool` or `tool:action`)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        def at(tool: str) -> int:
+            name, _, action = tool.partition(":")
+            for i, (used, arguments) in enumerate(o.tools):
+                if used == name and (not action or _action(arguments) == action):
+                    return i
+            return -1
+
+        later = at(then)
+        if later == -1:
+            return None
+        start = at(first)
+        return None if 0 <= start < later else f"used {then} before {first}"
+
+    return check
+
+
 def avoids(*tools: str) -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         used = [t for t in tools if o.used(t)]

@@ -2524,8 +2524,10 @@ s'il a fini) :
   seulement si se tromper coûterait cher ou ne se rattraperait pas, ou pour un choix qui
   n'appartient qu'à lui. Il ne finit pas sur une offre qu'il peut tenir sans risque ; ce qui
   demande un accord, il le fait quand même et l'outil le demande. Avant de répondre, il relit
-  la demande, puis pense à la suite (le court, le faire ; le long, une tâche ; plusieurs jours,
-  une mission ; une échéance, un rappel).
+  la demande ; si une suite s'impose, il s'en occupe avec ses outils (le court, le faire ; le
+  long, une tâche ; plusieurs jours, une mission ; une échéance, un rappel), et sa réponse n'en
+  dit qu'une phrase. Une première version (« pense à la suite ») rallongeait les réponses de
+  conseils et de questions : la contradiction de `veille_de_partiel` s'y noyait.
 - **Un contrôle dans le code** (`orion.cognition.finish`) : quand la réponse à un message du
   propriétaire finit sur une offre (« tu veux que je… », « je peux te chercher… ? »), elle ne
   part pas encore ; une note lui demande de le faire d'abord, ou de réécrire la réponse telle
@@ -2534,5 +2536,7 @@ s'il a fini) :
 - **Tâches et missions de lui-même** : il en lance une quand il voit un besoin que le
   propriétaire n'a pas formulé, et le lui dit ; le propriétaire la ferme d'un mot.
 
-Budget du message système relevé (39,2 k). Évals `se_lance_seul_sur_un_but` (0/3 avant, 2/2
-après) et `va_au_bout_au_lieu_de_proposer` (garde-fou : passait déjà).
+Budget du message système relevé (39,2 k). Évals `se_lance_seul_sur_un_but` (0/3 avant, 3/3
+après) et `va_au_bout_au_lieu_de_proposer` (garde-fou : passait déjà). `envoie_moi_ce_xml`
+vérifie désormais que la page n'est lue qu'après le téléchargement et l'envoi : lire après un
+envoi raté est un repli, pas le défaut visé.

@@ -12,6 +12,7 @@ from evals.harness import (
     asks,
     at_most,
     avoids,
+    before,
     called_with,
     either,
     judged,
@@ -327,12 +328,17 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         name="envoie_moi_ce_xml",
-        origin="Un fichier du web, tel quel : il doit être téléchargé, pas lu puis recopié.",
+        origin="Un fichier du web, tel quel : il doit être téléchargé, pas lu puis recopié. "
+        "Lire la page après un envoi raté (pas de canal en éval) est un repli, pas ce défaut.",
         at=paris(2026, 10, 20, 20, 0),
         steps=(
             Say("Télécharge le fichier https://www.w3schools.com/xml/note.xml et envoie-le moi"),
         ),
-        checks=(uses("file:download", "file:send"), avoids("web_read")),
+        checks=(
+            uses("file:download"),
+            uses("file:send"),
+            before("file:send", "web_read"),
+        ),
         live_web=True,
     ),
     Case(
