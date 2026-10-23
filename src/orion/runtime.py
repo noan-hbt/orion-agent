@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from orion.cognition.finish import offer_check
 from orion.cognition.loop import (
     Budget,
     Finished,
@@ -497,6 +498,9 @@ class Orion:
             timezone=self._agent.timezone,
             asking=asking,
             halted=halted,
+            finish_check=offer_check
+            if thread_id == OWNER_THREAD and kind == "message.received"
+            else None,
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,

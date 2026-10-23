@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 import time_machine
 
 from orion.app import build_app
+from orion.cognition.finish import ends_on_offer
 from orion.config import OrionConfig
 from orion.core.events import Trust
 from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval
@@ -243,6 +244,15 @@ def called_with(tool: str, *fragments: str) -> Check:
     return check
 
 
+def no_offer_at_the_end() -> Check:
+    """The reply does not stop on an offer to do what Orion could do itself (D118)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return "ends on an offer instead of doing it" if ends_on_offer(o.last) else None
+
+    return check
+
+
 def works_at_night(*tools: str) -> Check:
     """At night, Orion used at least one of `tools` (`tool` or `tool:action`)."""
 
@@ -250,6 +260,26 @@ def works_at_night(*tools: str) -> Check:
         if any(t in o.night_tools or t.partition(":")[0] in o.night_tools for t in tools):
             return None
         return f"did none of {', '.join(tools)} at night (did: {', '.join(o.night_tools)})"
+
+    return check
+
+
+def before(first: str, then: str) -> Check:
+    """`then`, if used at all, only after `first` was (`tool` or `tool:action`)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        def at(tool: str) -> int:
+            name, _, action = tool.partition(":")
+            for i, (used, arguments) in enumerate(o.tools):
+                if used == name and (not action or _action(arguments) == action):
+                    return i
+            return -1
+
+        later = at(then)
+        if later == -1:
+            return None
+        start = at(first)
+        return None if 0 <= start < later else f"used {then} before {first}"
 
     return check
 
