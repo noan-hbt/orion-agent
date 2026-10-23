@@ -272,7 +272,7 @@ CASES: tuple[Case, ...] = (
         name="urssaf_a_ma_place",
         origin="20/10 20h26 (Telegram) : « tu pourrais gérer mes déclarations urssaf pour moi "
         "? » ; Orion a dit qu'il suffisait d'activer le navigateur, alors qu'agir sur son "
-        "compte demande une session prêtée par le gardien.",
+        "compte demande aussi de s'y connecter (depuis D116, dans le navigateur d'Orion).",
         at=paris(2026, 10, 20, 20, 26),
         facts=(
             *OWNER,
@@ -288,9 +288,8 @@ CASES: tuple[Case, ...] = (
         checks=(
             judged(
                 "Si la réponse parle de faire la déclaration à sa place, dit-elle qu'il faut "
-                "plus qu'activer un navigateur (une connexion à son compte, une session "
-                "prêtée) ? Réponds oui aussi si elle ne propose pas du tout de la faire à sa "
-                "place."
+                "plus qu'activer un navigateur (se connecter à son compte URSSAF) ? Réponds oui "
+                "aussi si elle ne propose pas du tout de la faire à sa place."
             ),
             avoids("configure_change"),
         ),
@@ -344,11 +343,19 @@ CASES: tuple[Case, ...] = (
     Case(
         name="mon_linkedin",
         origin="20/10 12h04 : « Tu peux accéder à mon linkedin ? » ; Orion a dit non, sans "
-        "proposer de lui prêter une session (orion login).",
+        "proposer de s'y connecter. Depuis D116, il ouvre la page dans son navigateur et lui "
+        "passe la main pour la connexion.",
         at=paris(2026, 10, 20, 12, 4),
         facts=OWNER,
         steps=(Say("Tu peux accéder à mon linkedin ? Noan HERBETH"),),
-        checks=(says(r"orion login", "does not offer the lent session (orion login)"),),
+        checks=(
+            either(uses("browser:hand_over"), uses("browser:open")),
+            judged(
+                "La réponse propose-t-elle d'accéder à son compte LinkedIn depuis le navigateur "
+                "d'Orion (il s'y connecte lui-même, ou Orion lui passe la main), plutôt que de "
+                "dire que c'est impossible ?"
+            ),
+        ),
         modules=("computer",),
     ),
     Case(
@@ -580,5 +587,27 @@ CASES: tuple[Case, ...] = (
         steps=(Say("Toujours rien de bien pour l'appart à Dreux, c'est galère"),),
         checks=(uses("mission:start", "task:start"), no_offer_at_the_end()),
         live_web=True,
+    ),
+    Case(
+        name="une_appli_qui_se_construit",
+        origin="23/10 : sur Hyperplanning, Orion lisait « Veuillez patienter » (la page pas "
+        "encore construite) pendant que la capture montrait le formulaire, et le relisait sans "
+        "fin (D119). PRONOTE, du même éditeur, a une démo publique.",
+        at=paris(2026, 10, 23, 14, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Connecte-toi à la démo de PRONOTE, https://demo.index-education.net/pronote/"
+                "eleve.html (les identifiants sont déjà remplis), et dis-moi ce qu'il y a dans "
+                "le menu"
+            ),
+        ),
+        checks=(
+            uses("browser:click"),
+            avoids("browser:hand_over"),
+            says(r"(?i)notes|cahier de textes|travail à faire", "does not read the menu"),
+        ),
+        live_web=True,
+        modules=("computer",),
     ),
 )

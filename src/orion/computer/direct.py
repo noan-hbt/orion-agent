@@ -228,13 +228,16 @@ class BrowserDesk:
         live = self._live.get(ctx.thread_id)
         if live is None:
             raise Refused("No page is open: browser open first.")
-        if not live.text:  # he had the tab in hand: the page as he left it
 
-            async def look(_session: Session) -> None:
-                return None
+        async def look(_session: Session) -> None:
+            return None
 
-            await self._act(ctx, look)
+        # Always the page as it is now: what was read after the last action may have been a
+        # « veuillez patienter » long gone (seen for real on Hyperplanning, D119).
+        page = await self._act(ctx, look)
         text = live.text
+        if not find and (part == 0 or (part == 1 and len(text) <= SHOWN_CHARS)):
+            return page  # it fits: the whole page, as it is now
         if find:
             spots = [m.start() for m in re.finditer(re.escape(find), text, re.IGNORECASE)][:5]
             if not spots:
@@ -450,6 +453,12 @@ class BrowserDesk:
         await self._runner.catch_up()
 
 
+MOVING = (
+    "[La page bougeait encore, ou disait encore d'attendre, au bout de quelques secondes : "
+    "relis-la (browser read) avant de conclure qu'elle est bloquée.]"
+)
+
+
 def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     text = snapshot.text[:SHOWN_CHARS]
     more = (
@@ -469,6 +478,8 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     if snapshot.images:
         lines += ["", "Images de la page (à envoyer avec `file`, action download) :"]
         lines += [f"- {text or 'image'} — {url}" for url, text in snapshot.images]
+    if not snapshot.steady:
+        lines += ["", MOVING]
     if blocked:
         lines += [
             "",
