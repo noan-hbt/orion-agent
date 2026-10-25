@@ -2598,3 +2598,24 @@ part (D28), ce qui n'était pas son cas : Orion répondait « le gardien ne tour
 - **Depuis son téléphone** : `browser` save_password lui envoie un formulaire (servi par la
   console, vérifié par Telegram) pour donner un identifiant ; il va dans le coffre.
 - Orion regarde son coffre avant de passer la main pour une connexion.
+
+## D123 — Un aide qu'Orion attend (proposée)
+
+*25/10/2026 · proposée · prolongerait D110*
+
+Étude : [`docs/research/04-sous-agents.md`](research/04-sous-agents.md). Claude Code, Codex et
+Cline confient une lecture à un enfant au contexte neuf, dont seul le dernier message revient.
+Orion a déjà cet enfant (les tâches de fond, D110), mais ne peut pas l'attendre : le résultat
+arrive au tour suivant.
+
+Proposition : `task` start prend une attente (`wait`, 0 à 180 s, 0 par défaut). L'aide qui
+finit à temps rend son bilan dans le tour ; sinon il continue en fond comme aujourd'hui.
+Plusieurs aides attendus peuvent tourner en même temps. Le cantonnement du gardien, le budget
+de l'aide et le journal ne changent pas.
+
+Ce que ça n'apporte pas : de la confiance en plus. Le bilan d'un aide qui a lu le web vaut le
+web, et les accords demandés restent les mêmes (D26, D90).
+
+À trancher par le propriétaire avant d'écrire le code : l'accord avec D114 (Orion ne voit plus
+la page, seulement ce que son aide en dit), les outils de l'aide (web seulement, ou aussi ses
+mails et sa bibliothèque en lecture), et le délai maximal.
