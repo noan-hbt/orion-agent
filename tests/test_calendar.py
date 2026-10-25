@@ -308,3 +308,27 @@ def test_the_module_loads_from_its_section_and_reports_in_doctor(tmp_path: Path)
     lines = module.doctor()
     assert lines[0] == "perso ok" and "CAL_BOULOT_MISSING" in lines[1]
     assert lines[2] == "owner_emails empty: every invitation stays hidden"
+
+
+async def test_a_feed_that_fails_never_shows_its_secret_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from orion.calendar.service import CalendarAccount, FeedError, fetch_feed
+    from orion.config import SecretRef
+
+    monkeypatch.setenv("CAL_PERSO", "https://calendar.example/private-SECRETTOKEN/basic.ics")
+    account = CalendarAccount(name="perso", url=SecretRef(env="CAL_PERSO"))
+    for answer in (httpx.Response(404), httpx.ConnectError("refused")):
+
+        def handle(request: httpx.Request, answer: object = answer) -> httpx.Response:
+            if isinstance(answer, Exception):
+                raise answer
+            assert isinstance(answer, httpx.Response)
+            return answer
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+            with pytest.raises(FeedError) as failed:
+                await fetch_feed(http, account)
+        assert "SECRETTOKEN" not in str(failed.value) and "perso" in str(failed.value)

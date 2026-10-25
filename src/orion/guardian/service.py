@@ -44,7 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from orion.calendar.service import CalendarAccount, CalendarSettings, fetch_feed
+from orion.calendar.service import CalendarAccount, CalendarSettings, FeedError, fetch_feed
 from orion.calendar.write import CalendarWriteError, NewCalendarEvent, write_event
 from orion.channels.imessage import REACTION_NO, REACTION_YES, answer_word, normalize_number
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient, InkboxError, verify_signature
@@ -945,7 +945,7 @@ class GuardianService:
             return refused(f"no calendar account {name!r}", 404)
         try:
             feed = await self._fetch_calendar(account)
-        except (LookupError, httpx.HTTPError) as exc:
+        except (LookupError, FeedError) as exc:  # never with its address: it is the secret
             log.warning("guardian.calendar_failed", account=name, error=str(exc))
             return refused(f"calendar {name!r} unreadable: {exc}", 502)
         return PlainTextResponse(feed, media_type="text/calendar")

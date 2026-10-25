@@ -129,10 +129,19 @@ class CalendarState:
             self.synced[str(payload["account"])] = datetime.fromisoformat(str(payload["at"]))
 
 
+class FeedError(ValueError):
+    """A calendar that could not be read, said without its address: the address is the
+    owner's secret, and httpx puts it in every error message."""
+
+
 async def fetch_feed(http: httpx.AsyncClient, account: CalendarAccount) -> str:
     url = account.url.resolve().get_secret_value()
-    response = await http.get(url.replace("webcal://", "https://", 1))
-    response.raise_for_status()
+    try:
+        response = await http.get(url.replace("webcal://", "https://", 1))
+    except httpx.HTTPError as exc:
+        raise FeedError(f"calendar {account.name!r} unreachable ({type(exc).__name__})") from None
+    if response.status_code >= 400:
+        raise FeedError(f"calendar {account.name!r} answered HTTP {response.status_code}")
     return response.text
 
 

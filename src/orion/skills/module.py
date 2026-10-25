@@ -33,6 +33,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -42,6 +43,7 @@ from orion.core.events import Trust
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.tools.actions import Action, action_tool
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
+from orion.web.fetch import FetchError, check_public
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -52,6 +54,9 @@ NAME = r"^[a-z0-9][a-z0-9-]{1,40}$"
 CATALOG = Path(__file__).resolve().parents[3] / "catalog"
 """The public catalog, beside the code (a checkout of Orion's repository)."""
 MAX_SKILL = 20_000
+MAX_CATALOG = 1_000_000
+LISTED = 15
+"""Skills named in the system message; `skill` (list) gives the rest."""
 
 
 class SkillsSettings(ModuleSettings):
@@ -88,6 +93,10 @@ def parse(raw: str, fallback: str) -> Skill:
     return Skill(
         head.get("name") or fallback, description[:200], body.strip(), head.get("source", "")
     )
+
+
+def _short(text: str, at: int = 80) -> str:
+    return text if len(text) <= at else text[: at - 1].rstrip() + "…"
 
 
 def render(skill: Skill) -> str:
@@ -134,11 +143,11 @@ class Skills:
             entry = tomllib.loads(path.read_text("utf-8"))
             found.append({"kind": "mcp", **entry})
         outside = False
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as http:
             for url in self.urls:
                 try:
-                    index = cast(dict[str, Any], (await http.get(url)).raise_for_status().json())
-                except (httpx.HTTPError, ValueError) as exc:
+                    index = cast(dict[str, Any], json.loads(await _get_public(http, url)))
+                except (httpx.HTTPError, ValueError, FetchError) as exc:
                     log.warning("skills.catalog_unreachable", url=url, error=repr(exc))
                     continue
                 outside = True
@@ -152,10 +161,27 @@ class Skills:
         if "catalog" not in entry:
             path = self.catalog / "skills" / f"{entry['name']}.md"
             return parse(path.read_text("utf-8"), str(entry["name"]))
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as http:
-            raw = (await http.get(str(entry["url"]))).raise_for_status().text[:MAX_SKILL]
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=False) as http:
+            raw = (await _get_public(http, str(entry["url"])))[:MAX_SKILL]
         skill = parse(raw, str(entry["name"]))
         return Skill(skill.name, skill.description, skill.text, str(entry["url"]))
+
+
+async def _get_public(http: httpx.AsyncClient, url: str) -> str:
+    """A catalog's file: over https, from a public address (an index cannot point Orion at
+    the server itself or its network), and no bigger than a skill may be."""
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        raise FetchError(f"a catalog is read over https only: {url[:100]}")
+    await check_public(parts.hostname, parts.port or 443)
+    async with http.stream("GET", url) as response:
+        response.raise_for_status()
+        data = b""
+        async for chunk in response.aiter_bytes():
+            data += chunk
+            if len(data) > MAX_CATALOG:
+                raise FetchError(f"{url[:100]} is too large for a catalog")
+    return data.decode("utf-8", errors="replace")
 
 
 class NameInput(BaseModel):
@@ -220,21 +246,25 @@ def skill_tool(skills: Skills) -> Tool:
             server = {k: v for k, v in entry.items() if k not in ("kind", "catalog", "secret")}
             secret = entry.get("secret")
             return ToolResult(
-                "An MCP server is a settings change: propose `configure_change` with op add on "
-                f"`modules.mcp.servers`, value {json.dumps(server, ensure_ascii=False)}"
+                trust=Trust.THIRD_PARTY if "catalog" in entry else Trust.SYSTEM,
+                content="An MCP server is a settings change: propose `configure_change` with op "
+                f"add on `modules.mcp.servers`, value {json.dumps(server, ensure_ascii=False)}"
                 + (
                     f' plus "token": {{"env": "{secret}"}}, after `secret_ask` for {secret}'
                     if secret
                     else ""
                 )
-                + ", and `modules.mcp.enabled` true. Then you restart with its tools."
+                + ", and `modules.mcp.enabled` true. Then you restart with its tools.",
             )
         try:
             skill = await skills.fetch(entry)
-        except (httpx.HTTPError, OSError) as exc:
+        except (httpx.HTTPError, OSError, FetchError) as exc:
             return ToolResult(f"Not installed: {exc!r}", is_error=True)
         skills.write(Skill(args.name, skill.description, skill.text, skill.source))
-        return ToolResult(f"Skill {args.name} installée : {skill.description}")
+        return ToolResult(
+            f"Skill {args.name} installée : {skill.description}",
+            trust=Trust.THIRD_PARTY if skill.source else Trust.SYSTEM,
+        )
 
     return action_tool(
         "skill",
@@ -289,13 +319,22 @@ class SkillsModule(Module):
         self.skills = Skills(config.data_dir / "skills", CATALOG, settings.catalog_urls)
 
     def instructions_text(self) -> str:
+        """Bounded, whatever the number of skills: the section must fit the prompt's budget,
+        or Orion would not start. A skill from a catalog is named, never described here: its
+        words are a stranger's, and this is the system message."""
         found = self.skills.all()
         if not found:
             return ""
-        lines = "\n".join(f"- {s.name} : {s.description}" for s in found)
+        shown = found[:LISTED]
+        lines = [
+            f"- {s.name} : {_short(s.description)}" if not s.source else f"- {s.name} (catalogue)"
+            for s in shown
+        ]
+        if len(found) > len(shown):
+            lines.append(f"- … et {len(found) - len(shown)} autre(s) : `skill` (list)")
         return (
             "# Tes skills\n\nAvant une tâche qu'une de ces skills couvre, lis-la en entier "
-            f"(`skill`, read) :\n{lines}"
+            "(`skill`, read) :\n" + "\n".join(lines)
         )
 
     async def assemble(self, plate: Plate) -> list[Tool]:

@@ -31,7 +31,7 @@ import httpx
 import structlog
 
 from orion.mail.service import MailAccount
-from orion.mail.smtp import Outgoing, SendError, build, smtp_send
+from orion.mail.smtp import ADDRESS, Outgoing, SendError, build, smtp_send
 
 log = structlog.get_logger(__name__)
 
@@ -159,13 +159,25 @@ def append_draft(account: MailAccount, message: EmailMessage) -> None:
             raise imaplib.IMAP4.error(f"cannot write to {account.drafts_folder!r}")
 
 
+def _https(url: str) -> str:
+    if not url.startswith("https://"):
+        raise ValueError("an unsubscribe link must be https")
+    return url
+
+
 def _mailto(address: str) -> Outgoing:
+    """The unsubscribe mail a sender's header asks for, held to what an unsubscribe is: one
+    address (never `victim@x, other@y`), a subject and one short line, from his account."""
     parsed = urlparse(address)
     query = parse_qs(parsed.query)
+    to = unquote(parsed.path).strip()
+    if not re.fullmatch(ADDRESS, to) or "to" in query or "cc" in query or "bcc" in query:
+        raise ValueError(f"not a single unsubscribe address: {to[:80]!r}")
+    body = (query.get("body") or ["unsubscribe"])[0].strip()
     return Outgoing(
-        to=[unquote(parsed.path)],
+        to=[to],
         subject=(query.get("subject") or ["unsubscribe"])[0][:200] or "unsubscribe",
-        body=(query.get("body") or ["unsubscribe"])[0][:2000] or "unsubscribe",
+        body=body if body and len(body) <= 200 and "\n" not in body else "unsubscribe",
     )
 
 
@@ -200,7 +212,7 @@ async def local_tidy(
             try:
                 if target.one_click:
                     response = await client.post(
-                        target.one_click, data={"List-Unsubscribe": "One-Click"}
+                        _https(target.one_click), data={"List-Unsubscribe": "One-Click"}
                     )
                     response.raise_for_status()
                 elif target.mailto:

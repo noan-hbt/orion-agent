@@ -219,6 +219,18 @@ class Unsendable(ValueError):
     """A server file Orion may not or cannot send."""
 
 
+SECRET_NAMES = (".netrc", ".pgpass", "id_rsa", "id_ecdsa", "id_ed25519", "credentials.json")
+SECRET_SUFFIXES = (".env", ".pem", ".key", ".p12", ".pfx")
+
+
+def _secret_file(name: str) -> bool:
+    """`.env`, `.env.production`, `prod.env`, a private key…: never sent, wherever they are."""
+    lowered = name.lower()
+    return (
+        lowered in SECRET_NAMES or lowered.startswith(".env") or lowered.endswith(SECRET_SUFFIXES)
+    )
+
+
 def read_server_file(given: str, closed: tuple[Path, ...]) -> tuple[Path, bytes]:
     """A file on Orion's server, resolved (links followed) before it is checked."""
     path = Path(given).expanduser()
@@ -228,7 +240,7 @@ def read_server_file(given: str, closed: tuple[Path, ...]) -> tuple[Path, bytes]
     shut = (*SYSTEM_DIRS, *(c.resolve() for c in closed))
     if any(path == d or d in path.parents for d in shut):
         raise Unsendable(f"{path} is in a folder Orion never sends from (secrets).")
-    if path.name == ".env" or path.name.endswith(".env"):
+    if _secret_file(path.name):
         raise Unsendable(f"{path} holds secrets.")
     try:
         if not path.is_file():
@@ -534,7 +546,8 @@ class FilesModule(Module):
                 lambda: self.deliver,
                 web=lambda: web.desk if web is not None else None,
                 hands=lambda: hands.desk if hands is not None else None,
-                closed=(guardian.data_dir, guardian.socket.parent),
+                # Orion's own data too: its journal, its memory, its ChatGPT tokens.
+                closed=(self.config.data_dir, guardian.data_dir, guardian.socket.parent),
             )
         ]
 

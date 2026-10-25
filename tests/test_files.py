@@ -219,6 +219,8 @@ async def test_a_file_on_the_server_but_never_a_secret(
     (site_dir / "index.php").write_text("<?php echo 'bonjour'; ?>")
     (site_dir / ".env").write_text("KEY=secret")
     (site_dir / "prod.env").write_text("KEY=secret")
+    (site_dir / ".env.production").write_text("KEY=secret")
+    (site_dir / "server.pem").write_text("-----BEGIN PRIVATE KEY-----")
     guardian = tmp_path / "guardian"
     guardian.mkdir()
     (guardian / "guardian.sqlite3").write_bytes(b"ledger")
@@ -233,6 +235,8 @@ async def test_a_file_on_the_server_but_never_a_secret(
     refused = {
         str(site_dir / ".env"): "secrets",
         str(site_dir / "prod.env"): "secrets",
+        str(site_dir / ".env.production"): "secrets",
+        str(site_dir / "server.pem"): "secrets",
         str(guardian / "guardian.sqlite3"): "never sends from",
         str(site_dir / "innocent.txt"): "never sends from",  # a link is followed, then checked
         "/proc/self/environ": "never sends from",
@@ -299,3 +303,17 @@ def test_a_file_keeps_its_own_name() -> None:
     assert _safe_name("photo.jpeg", "image/jpeg") == "photo.jpeg"
     assert _safe_name("image", "image/png") == "image.png"
     assert _safe_name("", "application/pdf") == "fichier.pdf"
+
+
+async def test_orions_own_data_is_never_sent_from_the_server(tmp_path: Path) -> None:
+    from orion.app import build_app
+    from orion.config import OrionConfig
+    from tests.fakes import ScriptedProvider
+
+    config = OrionConfig.model_validate({"data_dir": tmp_path / "data"})
+    async with build_app(config, ScriptedProvider()) as app:
+        tool = app.orion.registry.get("file")
+        assert tool is not None
+        journal = str((tmp_path / "data" / "journal.sqlite3").resolve())
+        result = await run(tool, action="server", path=journal)
+    assert result.is_error and "never sends from" in result.content

@@ -166,3 +166,15 @@ async def test_two_tools_with_the_same_safe_name_do_not_stop_orion(monkeypatch: 
     tools = await module.assemble(SimpleNamespace(guardian=None))  # pyright: ignore[reportArgumentType]
     assert [t.name for t in tools] == ["mcp_notes_get_page"]
     await module.close()
+
+
+async def test_a_catalog_never_points_orion_at_the_server_itself() -> None:
+    import pytest
+
+    from orion.skills.module import _get_public  # pyright: ignore[reportPrivateUsage]
+    from orion.web.fetch import FetchError
+
+    async with httpx.AsyncClient() as http:
+        for url in ("https://127.0.0.1/index.json", "http://example.org/index.json"):
+            with pytest.raises(FetchError):
+                await _get_public(http, url)
