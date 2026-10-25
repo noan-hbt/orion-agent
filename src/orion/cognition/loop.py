@@ -19,6 +19,7 @@ from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 
 import structlog
 
@@ -52,6 +53,19 @@ class StopReason(StrEnum):
     the failure, so the thread stays well formed for the next turn."""
 
 
+ANSWERED = frozenset(
+    {
+        StopReason.COMPLETED,
+        StopReason.MAX_STEPS,
+        StopReason.BUDGET_EXHAUSTED,
+        StopReason.STALLED,
+        StopReason.TRUNCATED,
+    }
+)
+"""The stops where the owner got a reply, possibly a wrap-up: what he said in such a turn is
+remembered. Errors and called-off work are not: their words were never answered."""
+
+
 Halted = Callable[[], Awaitable[bool]]
 """Whether the work was called off meanwhile."""
 
@@ -79,6 +93,8 @@ class LoopSettings:
     origin_event_id: str | None = None
     timezone: str = "Europe/Paris"
     max_tokens: int | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    """How long the model thinks before each step (`AgentConfig.reasoning_effort`)."""
     budget: Budget = field(default_factory=Budget)
     wrap_up: bool = True
     """On a limit, one more model call (no tools) to report what was done and what is left."""
@@ -232,6 +248,7 @@ async def run_agent(
             tools=registry.specs(),
             session_id=settings.session_id,
             max_tokens=settings.max_tokens,
+            reasoning_effort=settings.reasoning_effort,
             no_tools=True,
         )
         try:
@@ -267,6 +284,7 @@ async def run_agent(
             tools=registry.specs(),
             session_id=settings.session_id,
             max_tokens=settings.max_tokens,
+            reasoning_effort=settings.reasoning_effort,
         )
         try:
             response = await provider.complete(request)

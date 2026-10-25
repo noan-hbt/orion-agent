@@ -109,6 +109,10 @@ class AgentConfig(BaseModel):
         ge=0,
         description="Times an owner's turn out of steps goes on (he is told) instead of stopping",
     )
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = Field(
+        default=None,
+        description="How long the model thinks before each step of a turn; none: its own default",
+    )
     prune_idle_minutes: int = Field(
         default=10,
         ge=0,

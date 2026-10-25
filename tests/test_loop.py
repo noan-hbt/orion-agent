@@ -456,3 +456,15 @@ async def test_over_the_cost_cap_it_does_not_go_on() -> None:
     events, _ = await run_with(provider, settings)
     assert told(events) == []
     assert finished(events).reason is StopReason.MAX_STEPS
+
+
+async def test_the_reasoning_effort_reaches_every_request() -> None:
+    provider = ScriptedProvider(call_tools(("echo", {"text": "a"})), reply("Fait."))
+    settings = LoopSettings(
+        model="m", session_id="s", thread_id="t", correlation_id="c", reasoning_effort="low"
+    )
+    await collect(provider, settings=settings)
+    assert [r.reasoning_effort for r in provider.requests] == ["low", "low"]
+    unset = ScriptedProvider(reply("Fait."))
+    await collect(unset)
+    assert unset.requests[0].reasoning_effort is None  # the model's own default, as before

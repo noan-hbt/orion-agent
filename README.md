@@ -197,8 +197,12 @@ Sur un serveur : `sudo deploy/install.sh` installe tout et pose les questions (v
 ```bash
 uv sync
 uv run orion setup     # prénom, clé OpenRouter, bot Telegram : chaque clé est vérifiée
-uv run orion serve     # (avec le gardien : `uv run orion guardian` à côté)
+uv run orion chat      # essayer tout de suite, dans ce terminal, sans aucun canal
+uv run orion serve     # le démon (avec le gardien : `uv run orion guardian` à côté)
 ```
+
+`serve` ne démarre que s'il a un canal (Telegram ou iMessage) : sans bot, `chat` est le moyen
+d'essayer.
 
 `orion setup` écrit `orion.toml`, et les secrets dans `core.env` et `guardian.env` à côté
 (jamais dans `orion.toml`). Ensuite, plus besoin d'éditer de fichier : dis à Orion « active le

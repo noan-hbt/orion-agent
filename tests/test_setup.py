@@ -119,3 +119,22 @@ def test_the_core_never_loads_the_guardians_secrets(
     monkeypatch.setenv("ORION_TEST_GUARDED", "already")
     load_env_files(tmp_path, "doctor")
     assert os.environ["ORION_TEST_GUARDED"] == "already"  # never overridden
+
+
+def test_without_a_channel_it_says_how_to_try_orion_now(tmp_path: Path) -> None:
+    # No channel means `serve` would refuse to start: the closing words point at `chat`.
+    said: list[str] = []
+    asked = answers("", "", "n", "n")  # name, timezone, no guardian, no Telegram
+    setup = Setup(
+        tmp_path / "orion.toml",
+        tmp_path,
+        ask=lambda _prompt: next(asked),
+        secret=lambda _prompt: "sk-good",
+        say=said.append,
+        http=httpx.Client(transport=fake_services([])),
+    )
+    assert setup.run() == 0
+    closing = "\n".join(said)
+    assert "orion --config" in closing and " chat" in closing
+    assert " serve" not in closing
+    assert load_config(tmp_path / "orion.toml").channels.telegram.enabled is False
