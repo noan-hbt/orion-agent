@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
+from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
@@ -164,8 +165,7 @@ class FileStore:
         stored = f"{file_id}/{named}"
         path = self.folder / stored
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_bytes, data)
-        path.chmod(0o600)
+        await asyncio.to_thread(write_private, path, data)
         await self._journal.append(
             [
                 NewEvent(

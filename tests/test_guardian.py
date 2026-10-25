@@ -96,6 +96,15 @@ async def test_the_core_cannot_open_the_line_or_act_for_another_identity(
         # Calling the owner is Orion's own business.
         call = await core.place_call(OWNER, "Ton réveil", "ident-1")
         assert call.remote_phone_number == OWNER
+        # Neither a dot segment nor a setting beyond the voice and its instructions slips by.
+        for method, path, body in (
+            ("GET", "/phone/calls/%2E%2E/transcripts", None),
+            ("PUT", "/phone/hosted-agent-config", {"instructions": "x", "phone_number": "1"}),
+        ):
+            with pytest.raises(InkboxError) as refused:
+                await core._request(method, path, json=body)  # pyright: ignore[reportPrivateUsage]
+            assert refused.value.status == 403
+        await core.voice_config("Sois bref.", "ident-1", voice="alloy")
         await core.aclose()
 
 
@@ -178,6 +187,35 @@ async def test_an_old_yes_does_not_approve_a_new_question(tmp_path: Path) -> Non
         grant, _ = await approval(g)
         with pytest.raises(InkboxError, match="has not said yes"):
             await core.place_call(GARAGE, brief(), grant=grant)
+        await core.aclose()
+
+
+async def test_a_yes_answers_only_the_last_question_before_it(tmp_path: Path) -> None:
+    async with running_guardian(guardian_config(tmp_path)) as g:
+        await owner_wrote(g.fake)
+        core = g.client.inkbox(max_attempts=1)
+        first, _ = await approval(g)
+        second, _ = await approval(g, goal="annuler jeudi")
+        g.fake.inbound("oui")  # after the second question: it answers that one
+        with pytest.raises(InkboxError, match="has not said yes"):
+            await core.place_call(GARAGE, brief(), grant=first)
+        await core.place_call(GARAGE, brief("annuler jeudi"), grant=second)
+        await core.aclose()
+
+
+async def test_one_yes_is_used_once_even_asked_twice_at_once(tmp_path: Path) -> None:
+    async with running_guardian(guardian_config(tmp_path)) as g:
+        await owner_wrote(g.fake)
+        core = g.client.inkbox(max_attempts=1)
+        grant, message_id = await approval(g)
+        g.fake.react(message_id, "like")
+        both = await asyncio.gather(
+            core.place_call(GARAGE, brief(), grant=grant),
+            core.place_call(GARAGE, brief(), grant=grant),
+            return_exceptions=True,
+        )
+        assert sum(isinstance(r, InkboxError) for r in both) == 1
+        assert len(g.fake.phone_calls) == 1
         await core.aclose()
 
 
@@ -422,3 +460,43 @@ def test_calendar_write_credentials_belong_to_the_guardian(tmp_path: Path) -> No
     assert exposed(config, {"GOOGLE_REFRESH_TOKEN": "r", "OPENROUTER_API_KEY": "k"}) == [
         "GOOGLE_REFRESH_TOKEN"
     ]
+
+
+async def test_one_tidy_yes_covers_the_cards_approved_and_no_more(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orion.mail import tidy
+    from orion.mail.tidy import Tidied
+
+    monkeypatch.setenv("MAIL_PERSO", "app-pw")
+    account = {"host": "imap.x", "username": "noan", "password": {"env": "MAIL_PERSO"}}
+    config = guardian_config(
+        tmp_path,
+        modules={
+            "mail": {
+                "enabled": True,
+                "accounts": [{"name": "perso", **account}, {"name": "pro", **account}],
+            }
+        },
+    )
+    tidied: list[tuple[str, list[int]]] = []
+
+    async def fake(account: MailAccount, action: str, uids: list[int], *_: Any) -> Tidied:
+        tidied.append((account.name, uids))
+        return Tidied(done=len(uids))
+
+    monkeypatch.setattr(tidy, "local_tidy", fake)
+    async with running_guardian(config) as g:
+        await owner_wrote(g.fake)
+        params = {"action": "archive", "cards": ["c1", "c2"], "senders": ["Shop"]}
+        grant, message_id = await g.client.request_approval("mail_tidy", params, "", CONVERSATION)
+        g.fake.react(message_id, "like")
+        box = MailAccount(name="perso", host="h", username="u", password=SecretRef(env="NONE"))
+        pro = box.model_copy(update={"name": "pro"})
+        with pytest.raises(ConnectionError, match="not what the owner approved"):
+            await g.client.mail_tidy(box, "archive", [1, 2, 3], grant)
+        await g.client.mail_tidy(box, "archive", [1], grant)
+        await g.client.mail_tidy(pro, "archive", [9], grant)  # the same yes, the other account
+        with pytest.raises(ConnectionError, match="already used"):
+            await g.client.mail_tidy(pro, "archive", [10], grant)
+        assert tidied == [("perso", [1]), ("pro", [9])]

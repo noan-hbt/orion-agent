@@ -13,6 +13,7 @@ signature is checked with the bot's token, and only the owner's user id gets the
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import secrets
@@ -24,6 +25,7 @@ from typing import Any
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
+from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
 
 LINK_CREATED = "console.link.created"
@@ -65,8 +67,8 @@ def session_key(data_dir: Path) -> bytes:
     path = data_dir / "console.key"
     if not path.exists():
         data_dir.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(secrets.token_bytes(32))
-        path.chmod(0o600)
+        with contextlib.suppress(FileExistsError):  # another process made it first: theirs
+            write_private(path, secrets.token_bytes(32), exclusive=True)
     return path.read_bytes()
 
 

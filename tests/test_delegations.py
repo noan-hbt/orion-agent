@@ -27,6 +27,9 @@ def test_limits_are_checked_on_every_recipient_and_site() -> None:
     assert not within("mail_send", AGENCY, {"to": ["marie@agence-dreux.fr"], "cc": ["a@b.fr"]})
     assert not within("mail_send", AGENCY, {"to": []})
     assert not within("mail_send", None, {"to": ["paul@x.fr"]})  # never mail alone unbounded
+    # One string holding two addresses is two recipients, not one ending with the agency's
+    assert not within("mail_send", AGENCY, {"to": ["x@evil.com, marie@agence-dreux.fr"]})
+    assert not within("mail_send", AGENCY, {"to": ["X <marie@agence-dreux.fr>"]})
     assert within("calendar_add", None, {})
     sites = Limits(domains=["doctolib.fr"])
     send = {"action": "send", "page": "https://www.doctolib.fr/rdv"}

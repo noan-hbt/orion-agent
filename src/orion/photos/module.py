@@ -49,6 +49,7 @@ from orion.config import AUDIO_MODEL, VISION_MODEL
 from orion.core.events import Event, NewEvent, Provenance
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
+from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.providers.base import Message, ModelProvider, ModelRequest, ProviderError
@@ -605,8 +606,7 @@ class Photos:
     def _write(self, name: str, data: bytes) -> Path:
         self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self.folder / name
-        path.write_bytes(data)
-        path.chmod(0o600)
+        write_private(path, data)
         return path
 
 

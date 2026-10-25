@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import json
 import mimetypes
+import re
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -90,6 +91,9 @@ class TelegramError(RuntimeError):
 RECONNECT = (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.WriteError)
 """Failures of the connection itself, before Telegram answered: worth one more try."""
 RETRY_PAUSES = (0.5, 2.0)
+FILE_PATH = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*(/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*")
+"""What a `file_path` from getFile looks like (`photos/file_12.jpg`): no `..`, query or escape,
+so a download never reaches another Bot API address."""
 
 
 class TelegramClient:
@@ -121,6 +125,8 @@ class TelegramClient:
         return f"{self._base}/bot{self._token}/{method}"
 
     def file_url(self, file_path: str) -> str:
+        if not FILE_PATH.fullmatch(file_path) or ".." in file_path:
+            raise TelegramError(f"download: not a Telegram file path: {file_path[:80]!r}", 400)
         return f"{self._base}/file/bot{self._token}/{file_path}"
 
     async def call(

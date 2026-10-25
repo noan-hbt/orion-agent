@@ -38,6 +38,7 @@ from starlette.routing import Route
 from orion.channels.inkbox import GRANT_HEADER
 from orion.core.events import Trust
 from orion.core.ids import new_id
+from orion.core.private import write_private
 from orion.federation.crypto import Identity, fingerprint, verify
 from orion.federation.wire import (
     ACCEPT,
@@ -643,6 +644,8 @@ def admin_token(directory: Path) -> str:
     if path.exists():
         return path.read_text(encoding="utf-8").strip()
     token = secrets.token_urlsafe(32)
-    path.write_text(token, encoding="utf-8")
-    path.chmod(0o600)
+    try:
+        write_private(path, token, exclusive=True)
+    except FileExistsError:  # another process made it first: theirs is the one
+        return path.read_text(encoding="utf-8").strip()
     return token

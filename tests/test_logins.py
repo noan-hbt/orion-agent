@@ -342,3 +342,19 @@ async def test_an_export_is_imported_from_the_command_line(
     finally:
         sys.stdin = stdin
     assert read_login(config, "ameli") is not None
+    # Imported again with another password: the one kept is not silently replaced.
+    export.write_text(
+        "name,url,username,password\nDoctolib,https://www.doctolib.fr/,n@x.fr,autre\n", "utf-8"
+    )
+    assert await _logins(config, command) == 0
+    assert "déjà gardé" in capsys.readouterr().out
+    kept = read_login(config, "doctolib")
+    assert kept is not None and kept.password == "p1"
+    # Created for its user alone, and removed only by its own name.
+    path = next(p for p in (tmp_path).rglob("doctolib.json"))
+    assert path.stat().st_mode & 0o777 == 0o600
+    outside = path.parent.parent / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    removing = argparse.Namespace(logins_command="remove", name="../outside")
+    assert await _logins(config, removing) == 2
+    assert outside.exists()

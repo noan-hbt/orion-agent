@@ -166,6 +166,20 @@ def test_the_owners_settings_are_never_changed_alone() -> None:
     assert within("configure_change", None, {"changes": [{"path": "agent.model", "value": "m"}]})
 
 
+def test_a_parent_path_does_not_hide_the_owners_setting() -> None:
+    from orion.configure.paths import tier
+    from orion.guardian.limits import within
+
+    for path, value in (
+        ("modules.secretary", {"contacts": [ANGELE]}),
+        ("modules", {"secretary": {"contacts": [ANGELE]}}),
+        ("modules", {"shell": {"enabled": True}}),
+    ):
+        assert tier(path, value) == "owner", (path, value)
+    asked = {"changes": [{"path": "agent", "value": {"approvals": {"mail_send": "never"}}}]}
+    assert not within("configure_change", None, asked)
+
+
 SPLIT_TOML = """# chez Noan
 data_dir = "core"
 

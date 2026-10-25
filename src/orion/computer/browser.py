@@ -36,6 +36,7 @@ from playwright.async_api import (
 )
 from playwright.async_api import Request as PwRequest
 
+from orion.core.private import write_private
 from orion.guardian.limits import host_in
 from orion.web.fetch import FetchError, check_public
 
@@ -294,8 +295,7 @@ class Session:
             return
         cookies = await self._context.cookies()
         path = self.profile / KEPT_COOKIES
-        path.write_text(json.dumps(cookies), encoding="utf-8")
-        path.chmod(0o600)
+        write_private(path, json.dumps(cookies))
 
     async def new_page(self) -> Page:
         """Another tab of this browser (one per conversation), sharing its cookies."""

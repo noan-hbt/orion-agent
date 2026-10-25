@@ -418,7 +418,14 @@ async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
     from getpass import getpass
 
     from orion.guardian.ledger import Ledger
-    from orion.guardian.logins import LoginError, add_login, make_login, read_export, remove_login
+    from orion.guardian.logins import (
+        LoginError,
+        add_login,
+        make_login,
+        read_export,
+        read_login,
+        remove_login,
+    )
 
     clock = HybridClock(f"{config.instance}-guardian")
     async with SqliteJournal(config.guardian_ledger_path, clock) as journal:
@@ -443,6 +450,9 @@ async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
                 else:
                     text = await asyncio.to_thread(args.file.read_text, "utf-8")
                 found, skipped = read_export(text)
+                kept_before = [login for login in found if read_login(config, login.name)]
+                found = [login for login in found if login not in kept_before]
+                skipped += [f"{login.name} (déjà gardé ; retire-le d'abord)" for login in kept_before]
                 for login in found:
                     await add_login(config, ledger, login)
                     print(f"- {login.name} : {', '.join(login.sites)}")
