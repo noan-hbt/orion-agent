@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -88,8 +89,11 @@ async def test_projection_rebuilds_identically(
 async def test_forget_source_removes_derived_memory_and_verifies(
     memory: MemoryService, journal: SqliteJournal
 ) -> None:
-    [mail] = await journal.append(
-        [make_event("mail.received", source="mail:42", body="RDV dentiste")]
+    [mail, neighbour] = await journal.append(
+        [
+            make_event("mail.received", source="mail:42", body="RDV dentiste"),
+            make_event("mail.received", source="mail:420", body="Facture"),  # not mail:42
+        ]
     )
     from_mail = Origin("orion:core", "thread:t1", Trust.THIRD_PARTY, derived_from=(mail.id,))
     await memory.remember("Rendez-vous chez le dentiste le 3 novembre.", from_mail)
@@ -107,6 +111,8 @@ async def test_forget_source_removes_derived_memory_and_verifies(
     assert await memory.store.search("dentiste", include_past=True) == []
     stored_mail = await journal.get(mail.id)
     assert stored_mail is not None and stored_mail.payload == {}
+    other = await journal.get(neighbour.id)
+    assert other is not None and other.payload == {"body": "Facture"}
 
 
 @pytest.mark.parametrize("text", ['"; DROP TABLE facts; --', "NEAR(a b) OR *", "a b c"])
@@ -200,3 +206,51 @@ async def test_extractor_survives_garbage(memory: MemoryService) -> None:
     )
     assert report.applied == [] and report.rejected == ["invalid JSON"]
     assert await memory.store.facts() == []
+
+
+async def test_a_fact_asserted_twice_is_found_once(journal: SqliteJournal) -> None:
+    from orion.memory.model import FACT_ASSERTED
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    fact = {"fact_id": "f1", "statement": "Il aime les noix."}
+    await journal.append([make_event(FACT_ASSERTED, **fact), make_event(FACT_ASSERTED, **fact)])
+    runner = ProjectionRunner(journal, [store])
+    await runner.catch_up()
+    assert len(await store.search("noix")) == 1
+    for event in await journal.read():  # applied again: already in, nothing changes
+        await store.apply(event)
+    assert len(await store.search("noix")) == 1
+    await store.close()
+
+
+async def test_a_failed_transaction_keeps_its_own_error(tmp_path: Path) -> None:
+    from orion.core.sqlite import SqliteWorker
+
+    worker = SqliteWorker(tmp_path / "x.sqlite3", "test", "CREATE TABLE t (x INTEGER);")
+    await worker.open()
+
+    def body() -> None:
+        with worker.transaction() as db:
+            db.execute("ROLLBACK")  # what SQLite does on its own after some failures
+            raise ValueError("the real cause")
+
+    with pytest.raises(ValueError, match="the real cause"):
+        await worker.run(body)
+
+    def after() -> None:
+        with worker.transaction() as db:  # the connection is usable again
+            db.execute("INSERT INTO t VALUES (1)")
+
+    await worker.run(after)
+    await worker.close()
+
+
+def test_a_commitment_closes_done_or_cancelled_never_open() -> None:
+    from pydantic import ValidationError
+
+    from orion.memory.tools import CommitmentCloseInput
+
+    assert CommitmentCloseInput(commitment_id="c1", status=CommitmentStatus.CANCELLED)
+    with pytest.raises(ValidationError):
+        CommitmentCloseInput.model_validate({"commitment_id": "c1", "status": "open"})

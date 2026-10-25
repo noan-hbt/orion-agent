@@ -18,6 +18,9 @@ log = structlog.get_logger(__name__)
 
 PROTOCOL = "2025-06-18"
 CLIENT = {"name": "orion", "version": "1"}
+CALL_TIMEOUT = 60.0
+"""How long a server Orion runs may take to answer, the same as a remote one (a hung server
+must not hold the conversation forever)."""
 
 
 class McpError(RuntimeError):
@@ -62,14 +65,15 @@ class HttpTransport:
 
     async def request(self, method: str, params: dict[str, Any]) -> Any:
         self._next += 1
-        body = {"jsonrpc": "2.0", "id": self._next, "method": method, "params": params}
+        request_id = self._next  # calls run at once: each waits for its own answer
+        body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         response = await self._post(body)
         if response.headers.get("content-type", "").startswith("text/event-stream"):
             for line in response.text.splitlines():
                 if not line.startswith("data:"):
                     continue
                 message = cast(dict[str, Any], json.loads(line[5:].strip() or "{}"))
-                if message.get("id") == self._next:
+                if message.get("id") == request_id:
                     return _result(message)
             raise McpError(f"no answer to {method}")
         return _result(cast(dict[str, Any], response.json()))
@@ -114,7 +118,10 @@ class StdioTransport:
                 {"jsonrpc": "2.0", "id": self._next, "method": method, "params": params}
             )
             while True:
-                line = await self._process.stdout.readline()
+                try:
+                    line = await asyncio.wait_for(self._process.stdout.readline(), CALL_TIMEOUT)
+                except TimeoutError:
+                    raise McpError(f"no answer to {method} in {CALL_TIMEOUT:.0f} s") from None
                 if not line:
                     raise McpError("the server stopped")
                 try:

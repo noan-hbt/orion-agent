@@ -145,8 +145,23 @@ def console_app(console: Console) -> Starlette:
 
         return check
 
+    async def login_page(request: Request) -> Response:
+        """The link only shows a button: a messaging app that previews the link (it fetches
+        it) must not use up the owner's one-time link before he clicks."""
+        token = escape(request.query_params.get("t", ""), quote=True)
+        return _page(
+            "Console d'Orion",
+            f'<form method="post" action="{PREFIX}/login">'
+            f'<input type="hidden" name="t" value="{token}">'
+            "<button>Ouvrir la console</button></form>",
+        )
+
     async def login(request: Request) -> Response:
-        cookie = await console.gate.redeem(request.query_params.get("t", ""))
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc != request.url.netloc:
+            return Response("cross-site request refused", status_code=403)
+        sent = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+        cookie = await console.gate.redeem((sent.get("t") or [""])[0])
         if cookie is None:
             return _page("Lien expiré", "<p>Ce lien a déjà servi ou a expiré. Redemande-le.</p>")
         response = RedirectResponse(f"{PREFIX}/", status_code=303)
@@ -316,11 +331,10 @@ def console_app(console: Console) -> Starlette:
         return _page("Engagements ouverts", body)
 
     async def close_commitment(request: Request) -> Response:
-        status = (
-            CommitmentStatus.DONE
-            if request.path_params["how"] == "done"
-            else CommitmentStatus.CANCELLED
-        )
+        how = request.path_params["how"]
+        if how not in ("done", "cancel"):
+            return Response("unknown way to close a commitment", status_code=404)
+        status = CommitmentStatus.DONE if how == "done" else CommitmentStatus.CANCELLED
         await console.memory.close_commitment(
             str(request.path_params["id"]), status, owner, evidence="depuis la console"
         )
@@ -436,7 +450,8 @@ def console_app(console: Console) -> Starlette:
 
     return Starlette(
         routes=[
-            Route(f"{PREFIX}/login", login, methods=["GET"]),
+            Route(f"{PREFIX}/login", login_page, methods=["GET"]),
+            Route(f"{PREFIX}/login", login, methods=["POST"]),
             Route(f"{PREFIX}/telegram", from_telegram, methods=["GET"]),
             Route(f"{PREFIX}/telegram", telegram_login, methods=["POST"]),
             Mount(f"{PREFIX}/browser", app=handed),

@@ -225,8 +225,12 @@ class ChatGPTAuth:
                     "resource": RESOURCE,
                 }
             )
-            id_token = str(token.get("id_token") or current.id_token)
-            claims = _claims(id_token)
+            if token.get("id_token"):  # a new one is checked like the first
+                id_token = str(token["id_token"])
+                claims = self._checked(id_token, current.client_id, None)
+            else:
+                id_token = current.id_token
+                claims = _claims(id_token)
             if claims.get("sub") != current.subject:
                 raise ChatGPTAuthError("refresh came back for another account")
             kept = {"refresh_token": current.refresh_token, "scope": " ".join(current.scopes)}
@@ -267,10 +271,15 @@ class ChatGPTAuth:
             raise ChatGPTAuthError(
                 f"token endpoint refused ({response.status_code}): {response.text[:300]}"
             )
-        return cast(dict[str, Any], response.json())
+        try:
+            return cast(dict[str, Any], response.json())
+        except ValueError as exc:
+            raise ChatGPTAuthError("token endpoint answered something that is not JSON") from exc
 
     @staticmethod
-    def _checked(id_token: str, client_id: str, nonce: str) -> dict[str, Any]:
+    def _checked(id_token: str, client_id: str, nonce: str | None) -> dict[str, Any]:
+        """Issuer, audience, expiry and account; and the nonce of a sign-in (a refresh has
+        none)."""
         claims = _claims(id_token)
         audience = claims.get("aud")
         audiences: list[object] = (
@@ -280,7 +289,7 @@ class ChatGPTAuth:
             raise ChatGPTAuthError(f"ID token from an unexpected issuer: {claims.get('iss')}")
         if client_id not in audiences:
             raise ChatGPTAuthError("ID token issued for another client")
-        if claims.get("nonce") != nonce:
+        if nonce is not None and claims.get("nonce") != nonce:
             raise ChatGPTAuthError("ID token does not answer this sign-in")
         if float(claims.get("exp", 0)) < time.time() - 60:
             raise ChatGPTAuthError("ID token already expired")

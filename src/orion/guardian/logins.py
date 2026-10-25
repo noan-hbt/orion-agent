@@ -47,6 +47,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from orion.channels.telegram import TelegramError, check_init_data
+from orion.core.private import write_private
 from orion.guardian.ledger import LOGIN_ADDED, LOGIN_CODE, LOGIN_LENT, LOGIN_REMOVED, Ledger
 
 if TYPE_CHECKING:
@@ -150,8 +151,7 @@ async def add_login(config: OrionConfig, ledger: Ledger, login: Login) -> None:
     folder.chmod(0o700)
     path = folder / f"{login.name}.json"
     data = json.dumps(asdict(login))
-    path.write_text(data, encoding="utf-8")
-    path.chmod(0o600)
+    write_private(path, data)
     await ledger.record(
         LOGIN_ADDED,
         {
@@ -184,6 +184,8 @@ async def keep_login(
 
 
 async def remove_login(config: OrionConfig, ledger: Ledger, name: str) -> bool:
+    if not NAME.match(name):
+        raise LoginError(f"not a login name: {name!r}")
     path = logins_dir(config) / f"{name}.json"
     existed = path.exists()
     path.unlink(missing_ok=True)

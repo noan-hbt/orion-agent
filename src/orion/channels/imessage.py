@@ -249,6 +249,9 @@ class IMessageChannel:
         self._approvals: dict[str, asyncio.Future[tuple[bool, str, list[str]]]] = {}
         self._polls = 0
         self._gone: set[str] = set()
+        self._receiving: set[str] = set()
+        """Messages being recorded: a webhook retried while the first is still being handled
+        (or the poll finding it meanwhile) is the same message, not a second one."""
         """Conversations the line no longer knows (another line): not polled again."""
         self.others: Callable[[IMessage], None] | None = None
         """Gets the messages of anyone but the owner (the secretary, D54), once journaled."""
@@ -352,6 +355,15 @@ class IMessageChannel:
     async def receive(self, message: IMessage) -> None:
         if message.direction != "inbound" or message.is_group:
             return
+        if message.id in self._receiving:
+            return
+        self._receiving.add(message.id)
+        try:
+            await self._receive(message)
+        finally:
+            self._receiving.discard(message.id)
+
+    async def _receive(self, message: IMessage) -> None:
         await self._runner.catch_up()
         if message.id in self.state.seen:
             return
@@ -499,7 +511,7 @@ class IMessageChannel:
         for message_id in list(self._approvals):
             message = await self._client.message(message_id, self._settings.identity_id)
             for reaction in message.reactions or []:
-                if reaction.direction == "inbound":
+                if self._is_owner_reaction(reaction):
                     self._resolve_by_reaction(message_id, reaction.reaction)
         self._polls += 1
         if self._polls % self._settings.reaction_poll_every == 0:
@@ -537,29 +549,38 @@ class IMessageChannel:
             APPROVAL_REQUESTED,
             {"approval_id": approval_id, "tool": proposal.tool.name, "arguments": arguments},
         )
-        if self._desk is not None:
-            # The guardian writes the question itself and will check the answer itself.
-            grant, message_id = await self._desk.request_approval(
-                proposal.tool.name, arguments, proposal.ask_reason, conversation
-            )
-        else:
-            [message_id, *_] = await self._send_to_owner(
-                f"Avant que je le fasse : {proposal.describe()}\n"
-                + (f"Je demande parce que {proposal.ask_reason}.\n" if proposal.ask_reason else "")
-                + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
-            )
-        future: asyncio.Future[tuple[bool, str, list[str]]] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._approvals[message_id] = future
         try:
-            approved, how, refs = await asyncio.wait_for(
-                future, self._settings.approval_timeout_seconds
+            if self._desk is not None:
+                # The guardian writes the question itself and will check the answer itself.
+                grant, message_id = await self._desk.request_approval(
+                    proposal.tool.name, arguments, proposal.ask_reason, conversation
+                )
+            else:
+                [message_id, *_] = await self._send_to_owner(
+                    f"Avant que je le fasse : {proposal.describe()}\n"
+                    + (
+                        f"Je demande parce que {proposal.ask_reason}.\n"
+                        if proposal.ask_reason
+                        else ""
+                    )
+                    + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
+                )
+        except (LineError, SendError, ConnectionError):
+            log.warning("imessage.approval_unsent", tool=proposal.tool.name, exc_info=True)
+            approved, how, refs = False, "unsent", list[str]()
+        else:
+            future: asyncio.Future[tuple[bool, str, list[str]]] = (
+                asyncio.get_running_loop().create_future()
             )
-        except TimeoutError:
-            approved, how, refs = False, "timeout", []
-        finally:
-            self._approvals.pop(message_id, None)
+            self._approvals[message_id] = future
+            try:
+                approved, how, refs = await asyncio.wait_for(
+                    future, self._settings.approval_timeout_seconds
+                )
+            except TimeoutError:
+                approved, how, refs = False, "timeout", []
+            finally:
+                self._approvals.pop(message_id, None)
         await self._approval_event(
             APPROVAL_DECIDED,
             {
@@ -570,7 +591,7 @@ class IMessageChannel:
                 **({"grant": grant} if grant else {}),
             },
         )
-        return Approval(approved, grant if approved else None)
+        return Approval(approved, grant if approved else None, reached=how != "unsent")
 
     def _resolve_by_word(self, inbound: Inbound) -> bool:
         answer = answer_word(inbound.text)
@@ -578,8 +599,9 @@ class IMessageChannel:
             return False
         message_id = next(reversed(self._approvals))
         future = self._approvals[message_id]
-        if not future.done():
-            future.set_result((answer, "word", [inbound.message_id]))
+        if future.done():
+            return False  # already answered: the message is an ordinary one
+        future.set_result((answer, "word", [inbound.message_id]))
         return True
 
     def _resolve_by_reaction(self, message_id: str, reaction: str) -> None:

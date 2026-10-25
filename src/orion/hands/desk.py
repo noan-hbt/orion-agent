@@ -103,6 +103,7 @@ class HandsDesk:
         self.state = HandsState()
         self._runner = ProjectionRunner(journal, [self.state])
         self.connected: dict[str, Connection] = {}
+        self._pairing = asyncio.Lock()
 
     async def start(self) -> None:
         await self._runner.catch_up()
@@ -120,15 +121,17 @@ class HandsDesk:
 
     async def pair(self, code: str, now: datetime | None = None) -> tuple[str, str] | None:
         """(device, secret) for a valid code, once."""
-        await self._runner.catch_up()
-        found = self.state.codes.get(_hash(code.strip()))
-        if found is None or (now or datetime.now(UTC)) > found[1]:
-            return None
-        device, secret = found[0], secrets.token_urlsafe(32)
-        await self._record(
-            PAIRED, {"device": device, "secret_hash": _hash(secret), "code_hash": _hash(code)}
-        )
-        return device, secret
+        code = code.strip()  # the same code, typed with a space, is still used up
+        async with self._pairing:  # two machines with one code at once: only one pairs
+            await self._runner.catch_up()
+            found = self.state.codes.get(_hash(code))
+            if found is None or (now or datetime.now(UTC)) > found[1]:
+                return None
+            device, secret = found[0], secrets.token_urlsafe(32)
+            await self._record(
+                PAIRED, {"device": device, "secret_hash": _hash(secret), "code_hash": _hash(code)}
+            )
+            return device, secret
 
     async def revoke(self, device: str) -> None:
         await self._record(REVOKED, {"device": device})

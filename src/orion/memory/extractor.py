@@ -18,7 +18,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from orion.core.events import Trust
-from orion.memory.model import Category, CommitmentStatus
+from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Fact
@@ -98,7 +98,7 @@ class _CloseCommitment(BaseModel):
     model_config = ConfigDict(extra="ignore")
     op: Literal["close_commitment"]
     commitment_id: str
-    status: CommitmentStatus = CommitmentStatus.DONE
+    status: Closing = CommitmentStatus.DONE
     evidence: str | None = None
 
 
@@ -112,6 +112,8 @@ _OPERATION = TypeAdapter[Operation](Operation)
 class ExtractionReport(BaseModel):
     applied: list[str] = Field(default_factory=list[str])
     rejected: list[str] = Field(default_factory=list[str])
+    unavailable: bool = False
+    """The model could not be reached: nothing was read, to be tried again."""
 
 
 class MemoryExtractor:
@@ -175,7 +177,7 @@ class MemoryExtractor:
             )
         except ProviderError:
             log.exception("memory.extract_failed")
-            return ExtractionReport(rejected=["provider error"])
+            return ExtractionReport(rejected=["provider error"], unavailable=True)
         return await self._apply(response.text, origin, set(known), {c.id for c in commitments})
 
     async def _apply(

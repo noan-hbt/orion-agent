@@ -187,3 +187,24 @@ async def test_a_source_does_not_catch_its_neighbours(world: World) -> None:
     assert (await world.provenances.trace("web:https://a.fr/x2")).turns == ["t9"]
     # A whole account still holds its mails; a full stop after a mention still counts.
     assert len((await world.provenances.trace("mail:perso")).origins) == 2
+
+
+async def test_the_lineage_of_a_memory_stops_at_what_was_forgotten(world: World) -> None:
+    w = world
+    [mail] = await w.journal.append(
+        [
+            NewEvent(
+                kind="mail.card",
+                payload={"card_id": "m_1"},
+                provenance=Provenance(source="mail:perso:<paul@x>", actor="orion:mail"),
+                trust=Trust.THIRD_PARTY,
+            )
+        ]
+    )
+    derived = Origin("orion:core", "thread:owner", Trust.THIRD_PARTY, derived_from=(mail.id,))
+    fact = await w.memory.remember("Paul vient dîner samedi.", derived)
+    assert any("paul@x" in line for line in await w.provenances.lineage(fact))
+    await w.journal.redact([mail.id], reason="test", actor="owner:main")
+    lines = await w.provenances.lineage(fact)
+    assert lines[-1] == "(effacé à la demande du propriétaire)"
+    assert not any("paul@x" in line for line in lines)

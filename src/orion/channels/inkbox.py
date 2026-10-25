@@ -43,7 +43,8 @@ class LineError(RuntimeError):
 
 
 class InkboxError(LineError):
-    pass
+    unsent: bool = False
+    """The request never reached Inkbox (no connection): trying again cannot do it twice."""
 
 
 class _Model(BaseModel):
@@ -485,6 +486,10 @@ class InkboxClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
     ) -> Any:
+        # A POST without an idempotency key may have been done already when it fails (a 502
+        # after the call was placed): it is tried again only if it never left.
+        keyed = any(k.lower() == "idempotency-key" for k in headers or {})
+        repeatable = method in ("GET", "PUT", "DELETE") or keyed
         attempt = 0
         while True:
             attempt += 1
@@ -492,6 +497,8 @@ class InkboxClient:
                 return await self._once(method, path, json, params, headers)
             except InkboxError as exc:
                 if not exc.retryable or attempt >= self._max_attempts:
+                    raise
+                if not repeatable and not exc.unsent:
                     raise
                 delay = min(8.0, 0.5 * 2 ** (attempt - 1)) * (0.5 + random.random())
                 log.warning("inkbox.retry", path=path, attempt=attempt, status=exc.status)
@@ -510,7 +517,9 @@ class InkboxClient:
                 method, path, json=json, params=params, headers=headers
             )
         except httpx.TransportError as exc:
-            raise InkboxError(f"{method} {path}: {exc!r}", retryable=True) from exc
+            error = InkboxError(f"{method} {path}: {exc!r}", retryable=True)
+            error.unsent = isinstance(exc, httpx.ConnectError | httpx.ConnectTimeout)
+            raise error from exc
         if response.status_code >= 400:
             detail = response.text[:300]
             raise InkboxError(

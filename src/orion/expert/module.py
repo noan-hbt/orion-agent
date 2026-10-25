@@ -15,8 +15,10 @@ Both are journaled with their cost (`expert.consulted`, `expert.switched`), and 
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -99,11 +101,19 @@ class SwitchInput(BaseModel):
 
 class Expert:
     def __init__(
-        self, journal: EventStore, provider: ModelProvider, settings: ExpertSettings
+        self,
+        journal: EventStore,
+        provider: ModelProvider,
+        settings: ExpertSettings,
+        timezone: str = "Europe/Paris",
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._journal = journal
         self._provider = provider
         self.settings = settings
+        zone = ZoneInfo(timezone)
+        self._clock = clock or (lambda: datetime.now(zone))
+        """The owner's day: the daily allowance resets at his midnight, not the server's."""
         self.model = settings.model or STRONG_MODEL
         self._day = _Day()
         self._runner = ProjectionRunner(journal, [self._day])
@@ -113,7 +123,7 @@ class Expert:
         return self.settings.max_per_day - self._day.used.get(today.isoformat(), 0)
 
     async def consult(self, question: str, context: str, ctx: ToolContext) -> ToolResult:
-        today = datetime.now().date()
+        today = self._clock().date()
         if await self._left_today(today) <= 0:
             return ToolResult("No consultation left today: answer with what you have.", True)
         content = f"{context}\n\nQuestion : {question}" if context else question
@@ -159,7 +169,7 @@ class Expert:
         )
 
     async def switch(self, why: str, ctx: ToolContext) -> ToolResult:
-        today = datetime.now().date()
+        today = self._clock().date()
         if await self._left_today(today) <= 0:
             return ToolResult("No switch left today: carry on with the everyday model.", True)
         await self._record(
@@ -230,7 +240,12 @@ class ExpertModule(Module):
         settings: ExpertSettings = self.settings
         model = settings.model or self.config.agent.strong_model
         return expert_tools(
-            Expert(plate.journal, plate.provider, settings.model_copy(update={"model": model}))
+            Expert(
+                plate.journal,
+                plate.provider,
+                settings.model_copy(update={"model": model}),
+                self.config.agent.timezone,
+            )
         )
 
     def doctor(self) -> list[str]:

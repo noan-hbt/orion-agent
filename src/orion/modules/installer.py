@@ -181,6 +181,19 @@ Runner = Callable[[list[str], dict[str, str]], tuple[int, str]]
 """(command, environment) → (exit code, output): how the installer runs a process."""
 
 
+_INSTALL_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "NO_PROXY", "no_proxy")
+_INSTALL_PREFIXES = ("UV_", "PIP_", "SSL_CERT_", "HTTP_PROXY", "HTTPS_PROXY", "http_proxy",
+                     "https_proxy", "REQUESTS_CA_BUNDLE")  # fmt: skip
+
+
+def install_env() -> dict[str, str]:
+    """What installing a package needs (where to find it, through which proxy), never Orion's
+    keys: a package's build script runs code of its own."""
+    return {
+        k: v for k, v in os.environ.items() if k in _INSTALL_KEEP or k.startswith(_INSTALL_PREFIXES)
+    }
+
+
 def run_process(command: list[str], env: dict[str, str]) -> tuple[int, str]:
     try:
         done = subprocess.run(
@@ -238,13 +251,14 @@ class Installer:
         (self.directory / "site").mkdir(parents=True, exist_ok=True)
         tmp = site(self.directory, f".{name}.new")
         shutil.rmtree(tmp, ignore_errors=True)
-        env = {**os.environ, "UV_CACHE_DIR": str(self.directory / ".cache")}
+        env = {**install_env(), "UV_CACHE_DIR": str(self.directory / ".cache")}
         command = [self._uv, "pip", "install", "--quiet", "--python", sys.executable]
         code, out = self._run([*command, "--target", str(tmp), self._spec(entry)], env)
         if code != 0:
             shutil.rmtree(tmp, ignore_errors=True)
             raise InstallError(f"l'installation de « {name} » a échoué : {out[-400:]}")
-        code, out = self._run([sys.executable, "-c", _VERIFY, str(tmp), name], env)
+        # -I: neither the working directory nor PYTHON* variables decide what it imports.
+        code, out = self._run([sys.executable, "-I", "-c", _VERIFY, str(tmp), name], env)
         if code != 0 or not out.endswith("ok"):
             shutil.rmtree(tmp, ignore_errors=True)
             raise InstallError(f"« {name} » ne se charge pas : {out[-400:]}")

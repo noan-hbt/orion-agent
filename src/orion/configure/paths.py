@@ -90,6 +90,16 @@ def _keys(value: object) -> set[str]:
     return set()
 
 
+def reached(path: str, value: object = None) -> set[str]:
+    """Every setting a change writes: its path, and the paths of the tables inside its value
+    (setting `modules` to `{"shell": …}` writes `modules.shell`)."""
+    found = {path.strip()}
+    if isinstance(value, dict):
+        for key, item in cast(dict[object, object], value).items():
+            found |= reached(f"{path.strip()}.{key}", item)
+    return found
+
+
 def _owners_key(key: str) -> bool:
     return key in OWNER_KEYS or any(key.endswith(f"_{k}") for k in OWNER_KEYS)
 
@@ -102,7 +112,11 @@ def tier(path: str, value: object = None) -> Tier:
         raise ConfigureError(f"{path!r}: the value holds a key never changed by message")
     if (
         parts[0] in OWNER_SECTIONS
-        or any(joined == p or joined.startswith(p + ".") for p in OWNER_PATHS)
+        or any(
+            each == p or each.startswith(p + ".")
+            for each in reached(joined, value)
+            for p in OWNER_PATHS
+        )
         or any(_owners_key(k) for k in (*parts, *inside))
     ):
         return "owner"

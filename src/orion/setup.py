@@ -26,6 +26,7 @@ from typing import Any, cast
 import httpx
 
 from orion.configure.module import Change, apply_changes, validate
+from orion.core.private import write_private
 
 CORE_ENV = "core.env"
 GUARDIAN_ENV = "guardian.env"
@@ -75,10 +76,7 @@ def write_env(path: Path, values: dict[str, str]) -> None:
             kept.append(line)
     kept += [f"{name}={value}" for name, value in left.items()]
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text("\n".join(kept) + "\n", "utf-8")
-    tmp.chmod(0o600)
-    tmp.replace(path)
+    write_private(path, "\n".join(kept) + "\n")
 
 
 def load_env_files(folder: Path, command: str) -> list[str]:

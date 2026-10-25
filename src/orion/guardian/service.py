@@ -44,7 +44,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from orion.calendar.service import CalendarAccount, CalendarSettings, fetch_feed
+from orion.calendar.service import CalendarAccount, CalendarSettings, FeedError, fetch_feed
 from orion.calendar.write import CalendarWriteError, NewCalendarEvent, write_event
 from orion.channels.imessage import REACTION_NO, REACTION_YES, answer_word, normalize_number
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient, InkboxError, verify_signature
@@ -302,6 +302,14 @@ class GuardianService:
         self._contact_cap = secretary.max_replies_per_day
         self._contact_sends: dict[tuple[str, date], int] = {}
         self.monotonic: Callable[[], float] = time.monotonic
+        self._tidied: dict[str, int] = {}
+        """Mails tidied so far under each `mail_tidy` yes."""
+        self._spending = asyncio.Lock()
+        self._configuring = asyncio.Lock()
+        self._restarting: asyncio.Task[None] | None = None
+        """Kept so the restart is not garbage-collected while it waits."""
+        """Held from checking a yes (or today's allowance) to recording it spent, so two requests
+        at once never both use one."""
         self._last_beat = self.monotonic()
         """Since the guardian started, until the core's first heartbeat."""
         self._core_silent = False
@@ -442,6 +450,8 @@ class GuardianService:
         if self._inkbox is None:
             return refused("Inkbox is not configured on the guardian", 503)
         path = "/" + str(request.path_params["path"])
+        if any(part in (".", "..") for part in path.split("/")) or "%" in path or "\\" in path:
+            return await self.deny(f"{request.method} {path}", "not a plain Inkbox path")
         params = list(request.query_params.multi_items())
         content = await request.body()
         if request.method == "POST" and path == "/imessage/media":
@@ -511,6 +521,8 @@ class GuardianService:
                 return "too many messages this minute"
             return None
         if method == "PUT" and path == "/phone/hosted-agent-config":
+            if set(body) - {"instructions", "voice", "agent_identity_id"}:
+                return "only the voice and the instructions of Orion's line may change"
             return None
         if method == "POST" and path == "/phone/place-call":
             number = normalize_number(str(body.get("to_number", "")))
@@ -621,7 +633,7 @@ class GuardianService:
 
     def may_send(self) -> bool:
         """A message to the owner fits in `max_sends_per_minute` (and is counted)."""
-        now = time.monotonic()
+        now = self.monotonic()
         while self._sends and now - self._sends[0] > 60:
             self._sends.popleft()
         if len(self._sends) >= self.config.guardian.max_sends_per_minute:
@@ -675,6 +687,8 @@ class GuardianService:
                 return refused("approvals go through iMessage, which is not configured", 503)
             if not await self.is_owner_conversation(asked.conversation_id):
                 return await self.deny("approval", "that conversation is not the owner's")
+            if not self.may_send():
+                return await self.deny("approval", "too many messages this minute")
             text = question + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
             sent = await self._inkbox.send(
                 asked.conversation_id, text, approval_id, self._identity_id
@@ -801,9 +815,10 @@ class GuardianService:
             if reason is not None:
                 return await self.deny("configure", reason)
         try:
-            before, after = await asyncio.to_thread(rewrite, source, changes)
-            if after != before:
-                write(source, before, after)
+            async with self._configuring:  # two changes at once never undo each other
+                before, after = await asyncio.to_thread(rewrite, source, changes)
+                if after != before:
+                    write(source, before, after)
         except ConfigureError as exc:
             return refused(str(exc), 422)
         if after == before:
@@ -814,7 +829,7 @@ class GuardianService:
         )
         log.info("guardian.config_changed", paths=[c.path for c in changes])
         if self.restart is not None:
-            asyncio.get_running_loop().create_task(self.restart())
+            self._restarting = asyncio.get_running_loop().create_task(self.restart())
         return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
 
     async def _autonomy_revoke(self, request: Request) -> Response:
@@ -826,18 +841,19 @@ class GuardianService:
     async def autonomous(self, action: str, params: dict[str, Any] | None = None) -> bool:
         """The owner let Orion do this alone, within the limits they set, and today's
         allowance is not spent."""
-        await self.ledger.catch_up()
-        state = self.ledger.state
-        if action not in state.autonomous or action not in self.config.guardian.autonomable:
-            return False
-        bounds = state.limits.get(action)
-        if not within(action, Limits.model_validate(bounds) if bounds else None, params or {}):
-            return False
-        day = self.clock().date().isoformat()
-        if state.autonomous_days.get(day, 0) >= self.config.guardian.max_autonomous_per_day:
-            return False
-        await self.ledger.record(AUTONOMOUS, {"action": action, "day": day})
-        return True
+        async with self._spending:
+            await self.ledger.catch_up()
+            state = self.ledger.state
+            if action not in state.autonomous or action not in self.config.guardian.autonomable:
+                return False
+            bounds = state.limits.get(action)
+            if not within(action, Limits.model_validate(bounds) if bounds else None, params or {}):
+                return False
+            day = self.clock().date().isoformat()
+            if state.autonomous_days.get(day, 0) >= self.config.guardian.max_autonomous_per_day:
+                return False
+            await self.ledger.record(AUTONOMOUS, {"action": action, "day": day})
+            return True
 
     async def use_grant(
         self, grant: str | None, action: str, matches: Match, consume: bool
@@ -845,6 +861,12 @@ class GuardianService:
         """None when `grant` is the owner's yes to this very request; otherwise why not."""
         if not grant:
             return f"{action} needs the owner's approval"
+        async with self._spending:
+            return await self._use_grant(grant, action, matches, consume)
+
+    async def _use_grant(
+        self, grant: str, action: str, matches: Match, consume: bool
+    ) -> str | None:
         await self.ledger.catch_up()
         approval = self.ledger.state.approvals.get(grant)
         if approval is None or approval.action != action:
@@ -873,10 +895,18 @@ class GuardianService:
         if votes & REACTION_YES:
             return True
         recent = await self._inkbox.recent(approval.conversation_id, self._identity_id, limit=50)
+        questions = {
+            a.message_id
+            for a in self.ledger.state.approvals.values()
+            if a.conversation_id == approval.conversation_id and a.id != approval.id
+        }
         newer: list[str] = []
         for m in recent:  # newest first, down to the approval message
             if m.id == approval.message_id:
                 break
+            if m.direction != "inbound" and m.id in questions:
+                newer = []  # what came after a later question answers that one, not this
+                continue
             if m.direction == "inbound" and normalize_number(m.sender or "") == self._owner:
                 newer.append(m.content or "")
         for text in reversed(newer):  # the first answer after the question decides
@@ -915,7 +945,7 @@ class GuardianService:
             return refused(f"no calendar account {name!r}", 404)
         try:
             feed = await self._fetch_calendar(account)
-        except (LookupError, httpx.HTTPError) as exc:
+        except (LookupError, FeedError) as exc:  # never with its address: it is the secret
             log.warning("guardian.calendar_failed", account=name, error=str(exc))
             return refused(f"calendar {name!r} unreadable: {exc}", 502)
         return PlainTextResponse(feed, media_type="text/calendar")
@@ -1005,7 +1035,7 @@ class GuardianService:
 
     async def _mail_tidy(self, request: Request) -> Response:
         """Archiving or unsubscribing, by uid: the guardian reads the unsubscribe addresses
-        from the server itself. Approved as a batch (the number of mails must match), or done
+        from the server itself. Approved as a batch (never more mails than approved), or done
         alone within an autonomy the owner granted."""
         from orion.mail.tidy import local_tidy
 
@@ -1022,14 +1052,25 @@ class GuardianService:
             return refused("malformed tidy request", 400)
         grant = request.headers.get(GRANT_HEADER)
         if grant or not await self.autonomous("mail_tidy", {"action": action}):
-            reason = await self.use_grant(
-                grant,
-                "mail_tidy",
-                lambda p: p.get("action") == action and len(p.get("cards") or []) >= len(uids),
-                consume=True,
-            )
-            if reason is not None:
-                return await self.deny(f"mail tidy {name}", reason)
+            # One yes covers the batch across the owner's accounts: never more mails in all than
+            # the cards he approved, and it is spent once they are all done.
+            if not grant:
+                return await self.deny(f"mail tidy {name}", "mail_tidy needs the owner's approval")
+            async with self._spending:
+                done = self._tidied.get(grant, 0)
+                approved = 0
+
+                def matches(p: dict[str, Any]) -> bool:
+                    nonlocal approved
+                    approved = len(p.get("cards") or [])
+                    return p.get("action") == action and done + len(uids) <= approved
+
+                reason = await self._use_grant(grant, "mail_tidy", matches, consume=False)
+                if reason is not None:
+                    return await self.deny(f"mail tidy {name}", reason)
+                self._tidied[grant] = done + len(uids)
+                if done + len(uids) >= approved:
+                    await self.ledger.record(APPROVAL_USED, {"approval_id": grant})
         outcome = await local_tidy(account, cast(Any, action), uids)
         log.info("guardian.mail_tidied", account=name, action=action, done=outcome.done)
         return JSONResponse(outcome.payload())
@@ -1111,7 +1152,8 @@ def _same_number(params: dict[str, Any], number: str) -> bool:
 
 def _mentions(reason: str, params: dict[str, Any]) -> bool:
     """The call's brief carries the approved name and goal word for word."""
-    return str(params.get("name", "")) in reason and str(params.get("goal", "")) in reason
+    name, goal = str(params.get("name", "")).strip(), str(params.get("goal", "")).strip()
+    return bool(name) and bool(goal) and name in reason and goal in reason
 
 
 __all__ = ["GuardianError", "GuardianService", "MailAccount", "refused"]

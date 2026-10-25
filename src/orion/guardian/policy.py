@@ -111,8 +111,9 @@ NIGHT_THREAD = "night"
 """Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
 tasks and notes what he will say in the morning. Nothing that acts on the world, and nothing
 put to the owner: what needs his yes is proposed when he wakes up."""
-NIGHT_NEVER = frozenset({"file:send", "initiative_settings"})
-"""Internal, yet not for the night: a file reaches him at once, and his settings are his."""
+NIGHT_NEVER = frozenset({"file:send", "initiative_settings", "hand_notify", "hand_open"})
+"""Internal, yet not for the night: a file or a notification on his machine reaches him at
+once, and his settings are his."""
 NIGHT_REFUSAL = (
     "{tool} is not for the night: the owner sleeps. Nothing leaves, nothing reaches him and "
     "nothing is put to him now; propose it to him in your morning note instead"

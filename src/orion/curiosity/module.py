@@ -299,6 +299,10 @@ class Curiosity:
 
     async def hunt(self, now: datetime) -> Hunt:
         hunt = await self._hunt(now)
+        if hunt.outcome == "model unavailable":
+            # Not this week's hunt: the model was out of reach. The next tick tries again.
+            log.warning("curiosity.hunt_postponed")
+            return hunt
         await self.record(
             RUN,
             {"day": now.date().isoformat(), "lead": hunt.lead, "outcome": hunt.outcome},

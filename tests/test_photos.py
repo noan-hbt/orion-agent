@@ -345,3 +345,26 @@ def test_a_forgotten_photo_leaves_its_text_alone(tmp_path: Path) -> None:
     photos = Photos(None, ScriptedProvider(), PhotoSettings(), tmp_path, None)  # type: ignore[arg-type]
     message = {"role": "user", "content": '<photo id="ph_01ABC" vue="directe">\n…\n</photo>'}
     assert photos.inline(message) == message
+
+
+def test_a_document_that_unzips_into_gigabytes_is_not_read_by_code() -> None:
+    import io
+    import zipfile
+
+    from orion.photos.module import MAX_UNZIPPED, text_of
+
+    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    small = io.BytesIO()
+    with zipfile.ZipFile(small, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", b"<w:t>a</w:t>" * (MAX_UNZIPPED // 10))
+    assert len(small.getvalue()) < 1_000_000  # small to download, huge once unzipped
+    assert text_of(small.getvalue(), docx) == ""
+
+
+async def test_a_file_being_kept_is_not_taken_for_a_forgotten_one(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    photos = photos_for(journal, ScriptedProvider(), tmp_path / "photos", [])
+    photos._write("ph_new.jpg", b"\xff\xd8")  # pyright: ignore[reportPrivateUsage]
+    await photos.sync()  # its event is not appended yet
+    assert [p.name for p in photos.folder.iterdir()] == ["ph_new.jpg"]

@@ -91,3 +91,18 @@ async def test_an_expert_that_only_thought_says_so(journal: SqliteJournal) -> No
     expert = Expert(journal, Silent(), ExpertSettings())
     result = await expert.consult("q ?", "", ToolContext("t", "c"))
     assert result.is_error and "wrote nothing" in result.content
+
+
+async def test_the_daily_allowance_follows_the_owners_midnight(journal: SqliteJournal) -> None:
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    # 23:30 UTC on the 24th is already the 25th in Paris: a new day for him.
+    now = [datetime(2026, 10, 24, 23, 30, tzinfo=UTC).astimezone(ZoneInfo("Europe/Paris"))]
+    settings = ExpertSettings(model="big/model", max_per_day=1)
+    expert = Expert(journal, Routed(), settings, "Europe/Paris", lambda: now[0])
+    ctx = ToolContext("owner", "c")
+    assert not (await expert.consult("Lequel ?", "", ctx)).is_error
+    [event] = await journal.read()
+    assert event.payload["day"] == "2026-10-25"
+    assert (await expert.consult("Et l'autre ?", "", ctx)).is_error  # one a day

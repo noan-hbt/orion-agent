@@ -424,7 +424,11 @@ class Orion:
             events.append(
                 self._event(
                     PRUNED_KIND,
-                    {"thread_id": thread_id, "indexes": prune},
+                    {
+                        "thread_id": thread_id,
+                        "indexes": prune,
+                        "seqs": [thread.seqs[i] for i in prune],
+                    },
                     Trust.SYSTEM,
                     correlation_id,
                     received.id,
@@ -465,7 +469,11 @@ class Orion:
             events.append(
                 self._event(
                     REBASED_KIND,
-                    {"thread_id": thread_id, "base": new_base},
+                    {
+                        "thread_id": thread_id,
+                        "base": new_base,
+                        "after_seq": thread.after_seq(new_base),
+                    },
                     Trust.SYSTEM,
                     correlation_id,
                     received.id,
@@ -669,9 +677,8 @@ class Orion:
         """Forget a source everywhere: memory, and the conversations that will be replayed."""
         if self._memory is None:
             raise RuntimeError("memory is not configured")
-        report = await self._memory.forget_source(source_prefix, reason, actor="owner:main")
-        await self._projections.rebuild(self.threads.name)
-        return report
+        # Every projection on the journal is rebuilt by the forgetting, these threads included.
+        return await self._memory.forget_source(source_prefix, reason, actor="owner:main")
 
     @property
     def journal(self) -> EventStore:
@@ -700,11 +707,17 @@ class Orion:
         if turn.reason is not StopReason.COMPLETED or not turn.owner_text:
             return report
         recorded: list[Fact] = []
-        for event in await self._journal.read(0, 100_000):
-            if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
-                fact = await self._memory.store.fact(str(event.payload["fact_id"]))
-                if fact is not None:
-                    recorded.append(fact)
+        # What this turn recorded itself: read from the turn's first event on, not the whole
+        # journal (which grows forever).
+        received = await self._journal.get(turn.origin_event_id)
+        cursor = received.seq - 1 if received is not None else 0
+        while batch := await self._journal.read(cursor, 1000):
+            cursor = batch[-1].seq
+            for event in batch:
+                if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
+                    fact = await self._memory.store.fact(str(event.payload["fact_id"]))
+                    if fact is not None:
+                        recorded.append(fact)
         origin = Origin(
             actor="orion:extractor",
             source=f"thread:{turn.thread_id}",

@@ -101,3 +101,24 @@ async def test_a_past_slot_is_refused(journal: SqliteJournal) -> None:
     (tool,) = booking_tools(keeper)
     args = tool.parse(json.dumps({"action": "book", "what": "rdv", "start": "2026-10-19T10:00"}))
     assert (await tool.handler(args, ToolContext("owner", "c"))).is_error
+
+
+async def test_one_booking_that_breaks_does_not_keep_the_others_from_settling(
+    journal: SqliteJournal,
+) -> None:
+    class Broken(FakeCalendar):
+        async def add(
+            self, event: NewCalendarEvent, grant: str | None, correlation: str | None
+        ) -> Any:
+            if event.title == "Kiné":
+                raise RuntimeError("a bug in the calendar")
+            return await super().add(event, grant, correlation)
+
+    keeper, _timers = bookings(journal, Broken())
+    (tool,) = booking_tools(keeper)
+    kine = await book(tool, "c1", what="Kiné", start="2026-10-24T09:00")
+    await done(tool, kine, ok=True)
+    dinner = await book(tool, "c2", what="Dîner chez Mori", start="2026-10-23T20:00")
+    await done(tool, dinner, ok=True)
+    statuses = {b.what: b.status for b in keeper.state.bookings.values()}
+    assert statuses["Dîner chez Mori"] == "confirmed"

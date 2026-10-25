@@ -78,3 +78,18 @@ async def test_a_new_token_replaces_the_old_and_reminders_can_be_cancelled(
     except PermissionError:
         pass
     assert await places.signal(new, "pharmacie", "arrive") == []
+
+
+async def test_the_phone_posting_twice_at_once_fires_a_reminder_once(
+    journal: SqliteJournal,
+) -> None:
+    import asyncio
+
+    places = Places(journal)
+    tools = {t.name: t for t in place_tools(places)}
+    token = await places.new_token()
+    await call(tools, "remind_at_place", place="pharmacie", what="l'ordonnance")
+    both = await asyncio.gather(
+        places.signal(token, "pharmacie", "arrive"), places.signal(token, "pharmacie", "arrive")
+    )
+    assert sorted(len(fired) for fired in both) == [0, 1]

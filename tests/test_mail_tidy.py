@@ -78,6 +78,21 @@ async def test_unsubscribing_posts_once_mails_or_returns_the_page(
     assert mailed[0].to == ["stop@b.example"] and mailed[0].subject == "unsubscribe me"
 
 
+def test_an_unsubscribe_header_cannot_make_him_write_to_anyone() -> None:
+    from orion.mail.tidy import _mailto  # pyright: ignore[reportPrivateUsage]
+
+    for steered in (
+        "mailto:victim@x.com,other@y.com",
+        "mailto:stop@b.example?cc=victim@x.com",
+        "mailto:Victim <victim@x.com>",
+    ):
+        with pytest.raises(ValueError, match="single unsubscribe address"):
+            _mailto(steered)
+    long = _mailto("mailto:stop@b.example?body=" + "spam%20" * 100)
+    assert long.body == "unsubscribe"  # a short line, or the plain word
+    assert _mailto("mailto:stop@b.example?body=unsubscribe%20news").body == "unsubscribe news"
+
+
 async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) -> None:
     server = Server(parse_message(10, PLAIN, NOW), parse_message(12, NEWSLETTER, NOW))
     box = mailbox(journal, server, ScriptedProvider(json_reply(PAUL_CARD)))

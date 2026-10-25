@@ -181,6 +181,10 @@ def test_a_long_answer_is_cut_at_paragraphs() -> None:
     long = "a" * 3000 + "\n\n" + "b" * 3000
     assert [len(p) for p in _parts(long)] == [3000, 3000]
     assert _parts("court") == ["court"]
+    # A paragraph longer than a message goes after what came before it, in order.
+    text = "A\n\n" + "x" * 5000 + "\n\nB"
+    parts = _parts(text)
+    assert parts[0] == "A" and "".join(parts).replace("\n", "") == "A" + "x" * 5000 + "B"
 
 
 async def test_a_dropped_connection_is_tried_again(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -202,3 +206,21 @@ async def test_a_dropped_connection_is_tried_again(monkeypatch: pytest.MonkeyPat
     assert await client.send_message(1, "Oui ou non ?") == 9
     assert len(tries) == 2
     await client.aclose()
+
+
+async def test_a_word_after_the_answer_is_an_ordinary_message() -> None:
+    from types import SimpleNamespace
+    from typing import cast
+
+    from orion.channels.telegram import TelegramChannel
+
+    resolve = TelegramChannel._resolve_by_word  # pyright: ignore[reportPrivateUsage]
+    answered: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    answered.set_result(("yes", "button", list[str]()))
+    approvals: dict[int, asyncio.Future[object]] = {1: answered}
+    channel = cast(TelegramChannel, SimpleNamespace(_approvals=approvals))
+    assert not resolve(channel, "ok", "r1")
+    waiting: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    approvals[2] = waiting
+    assert resolve(channel, "ok", "r2")
+    assert waiting.result() == (True, "word", ["r2"])

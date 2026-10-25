@@ -377,3 +377,25 @@ async def test_orion_answers_a_contact_with_all_it_knows(journal: SqliteJournal)
     assert "rentre à Dreux pour la Toussaint" in str(provider.requests[0].messages)
     assert sent == [(MUM_CHAT, "Il rentre pour la Toussaint !")]
     await store.close()
+
+
+async def test_a_message_that_breaks_does_not_stop_the_next_ones(journal: SqliteJournal) -> None:
+    import asyncio
+
+    secretary = Secretary(journal, SETTINGS, "Noan", "Europe/Paris", None, lambda: NOW)
+    answered: list[str] = []
+
+    async def answer(message: Incoming) -> None:
+        if message.text == "casse":
+            raise RuntimeError("a bug")
+        answered.append(message.text)
+
+    secretary.answer = answer  # pyright: ignore[reportAttributeAccessIssue]
+    worker = asyncio.create_task(secretary.run())
+    for text in ("casse", "bonjour"):
+        secretary.receive(Incoming("imessage", "+33600000000", "conv-1", f"m-{text}", text))
+    async with asyncio.timeout(2):
+        while not answered:  # noqa: ASYNC110 - the worker drains its queue
+            await asyncio.sleep(0.01)
+    worker.cancel()
+    assert answered == ["bonjour"]

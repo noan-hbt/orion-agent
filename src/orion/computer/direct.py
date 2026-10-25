@@ -197,8 +197,9 @@ class BrowserDesk:
 
     async def _close_later(self, thread: str) -> None:
         await asyncio.sleep(self._idle)
-        if thread not in self.held:
-            await self.close(thread)
+        async with self._lock:  # never under an action running on that tab
+            if thread not in self.held:
+                await self.close(thread)
 
     def tab(self, thread: str) -> _Live | None:
         return self._live.get(thread)

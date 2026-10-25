@@ -26,7 +26,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -60,7 +60,10 @@ class HandConfig:
 
     def save(self, path: Path = CONFIG) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self.__dict__, indent=2), encoding="utf-8")
+        # Created 0600: the device's secret is never readable by another user, even briefly.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(json.dumps(self.__dict__, indent=2))
         path.chmod(0o600)
 
     def socket_url(self) -> str:
@@ -146,7 +149,8 @@ class Hand:
         target = self._inside(path)
         if not target.is_file():
             raise Refused(f"{path} is not a file")
-        data = target.read_bytes()[:MAX_READ]
+        with target.open("rb") as file:  # never the whole of a huge file, only what is read
+            data = file.read(MAX_READ)
         if b"\x00" in data[:4096]:
             raise Refused(f"{path} is not text")
         return {"content": data.decode("utf-8", errors="replace"), "path": str(target)}
@@ -155,10 +159,10 @@ class Hand:
         target = self._inside(path)
         if not target.is_file():
             raise Refused(f"{path} is not a file")
-        size = target.stat().st_size
-        if size > MAX_FILE:
-            raise Refused(f"{path} is too large to send ({size // 1_048_576} MiB, 10 at most)")
-        data = target.read_bytes()
+        with target.open("rb") as file:
+            data = file.read(MAX_FILE + 1)  # the size as read, not as it was a moment before
+        if len(data) > MAX_FILE:
+            raise Refused(f"{path} is too large to send (10 MiB at most)")
         return {
             "content": f"{target.name}, {len(data)} bytes",
             "name": target.name,
@@ -184,7 +188,14 @@ class Hand:
             )
             log.info("hand.connected", server=self.config.server, device=self.config.device)
             async for raw in socket:
-                message: Any = json.loads(raw)
+                try:
+                    loaded: Any = json.loads(raw)
+                except ValueError:
+                    log.warning("hand.unreadable_message", size=len(raw))
+                    continue
+                if not isinstance(loaded, dict):
+                    continue
+                message = cast(dict[str, Any], loaded)
                 if message.get("type") != "call":
                     continue
                 call_id = str(message.get("id"))
@@ -193,7 +204,8 @@ class Hand:
                         str(message.get("action")), dict(message.get("args", {}))
                     )
                     reply: dict[str, Any] = {"type": "result", "id": call_id, "ok": True, **result}
-                except (Refused, OSError, subprocess.SubprocessError) as exc:
+                except (Refused, OSError, ValueError, subprocess.SubprocessError) as exc:
+                    # ValueError: a path with a NUL byte, arguments of the wrong shape…
                     log.info("hand.refused", action=message.get("action"), reason=str(exc))
                     reply = {"type": "result", "id": call_id, "ok": False, "error": str(exc)}
                 await socket.send(json.dumps(reply))

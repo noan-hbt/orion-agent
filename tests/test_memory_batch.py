@@ -18,7 +18,7 @@ from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, fail, reply
 from tests.test_adaptation import json_reply
 
 NOTHING: dict[str, list[object]] = {"operations": []}
@@ -142,3 +142,69 @@ async def test_the_past_is_taken_as_read_and_a_restart_resumes(
     passes = [e for e in await journal.read() if e.kind == EXTRACTED]
     assert [p.payload["exchanges"] for p in passes] == [0, 3]
     assert json.dumps(passes[-1].payload)  # journaled as plain data
+
+
+async def test_a_reader_out_of_reach_reads_the_same_conversation_later(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    provider, reader, clock = ScriptedProvider(), ScriptedProvider(), Clock()
+    orion = orion_on(journal, provider)
+    batch = batcher(journal, memory, reader, clock)
+    await batch.start()
+    await say(orion, provider, "un", "deux", "trois")
+    clock.later = timedelta(minutes=6)
+    reader.extend(fail("down", retryable=True))
+    report = await batch.tick()
+    assert report is not None and report.unavailable
+    reader.extend(json_reply(NOTHING))
+    assert await batch.tick() is not None
+    assert "Owner: un" in reader.requests[1].messages[-1]["content"]
+    passes = [e for e in await journal.read() if e.kind == EXTRACTED]
+    assert [p.payload["exchanges"] for p in passes] == [0, 3]
+
+
+async def test_a_turn_that_never_ended_does_not_block_reading(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    from orion.core.events import NewEvent, Provenance, Trust
+    from orion.memory.batch import RECEIVED
+
+    provider, reader, clock = ScriptedProvider(), ScriptedProvider(), Clock()
+    orion = orion_on(journal, provider)
+    batch = batcher(journal, memory, reader, clock)
+    await batch.start()
+    crashed = NewEvent(
+        kind=RECEIVED,
+        payload={"thread_id": "owner", "text": "perdu"},
+        provenance=Provenance(source="imessage:owner", actor="owner:main"),
+        trust=Trust.OWNER,
+        correlation_id="crashed-turn",
+    )
+    await journal.append([crashed])  # the process died before the turn finished
+    await say(orion, provider, "un", "deux", "trois")
+    clock.later = timedelta(minutes=6)
+    assert await batch.tick() is None  # it may still be running
+    clock.later = timedelta(minutes=61)
+    reader.extend(json_reply(NOTHING))
+    assert await batch.tick() is not None
+    read = reader.requests[0].messages[-1]["content"]
+    assert "Owner: un" in read and "perdu" not in read
+
+
+async def test_what_is_forgotten_before_reading_is_never_read(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    provider, reader, clock = ScriptedProvider(), ScriptedProvider(), Clock()
+    orion = orion_on(journal, provider)
+    batch = batcher(journal, memory, reader, clock)
+    await batch.start()
+    await say(orion, provider, "mon code de carte est 1234", "deux", "trois")
+    await say(orion, provider, "quatre")
+    assert await batch.tick() is None  # read into the pending batch, not yet extracted
+    await memory.forget_source("imessage:owner", reason="test", actor="owner:main")
+    await say(orion, provider, "cinq")
+    clock.later = timedelta(minutes=61)
+    reader.extend(json_reply(NOTHING))
+    await batch.tick()
+    [read] = reader.requests
+    assert "cinq" in str(read.messages) and "1234" not in str(read.messages)

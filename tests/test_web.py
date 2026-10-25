@@ -68,6 +68,11 @@ def test_text_and_links_are_extracted_by_code() -> None:
     ]
     assert normalize("HTTPS://Annonces.FR/a#b") == "https://annonces.fr/a"
     assert normalize("file:///etc/passwd") == ""
+    assert (
+        normalize("https://Noan:PassWord@Site.FR:8443/X") == "https://Noan:PassWord@site.fr:8443/X"
+    )
+    assert normalize("http://[::1") == "" and normalize("https://a.fr:port/") == ""
+    assert normalize("http://[2001:DB8::1]/") == "http://[2001:db8::1]/"
 
 
 async def test_private_addresses_are_refused_even_after_a_redirect() -> None:
@@ -170,3 +175,22 @@ def test_the_module_loads(tmp_path: Path) -> None:
     cfg = OrionConfig.model_validate({"data_dir": tmp_path, "modules": {"web": {"enabled": True}}})
     [module] = [m for m in load(cfg) if isinstance(m, WebModule)]
     assert "search" in module.doctor()[0]
+
+
+async def test_a_page_that_drips_forever_is_given_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from orion.web import fetch as fetching
+
+    async def dripping(_request: httpx.Request) -> httpx.Response:
+        async def body() -> object:
+            while True:
+                yield b"."
+                await asyncio.sleep(0.01)
+
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=body())  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(fetching, "DEADLINE", 0.2)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(dripping)) as client:
+        with pytest.raises(FetchError, match="took more than"):
+            await fetch(client, "https://slow.example/", allow_all)

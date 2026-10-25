@@ -33,13 +33,14 @@ class _TokenServer:
         self.nonce = nonce
         self.scope = scope
         self.counter = 0
+        self.issuer = ISSUER
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         form = {k: v[0] for k, v in parse_qs(request.content.decode()).items()}
         self.forms.append(form)
         self.counter += 1
         claims = {
-            "iss": ISSUER,
+            "iss": self.issuer,
             "aud": form["client_id"],
             "sub": "user-1",
             "email": "noan@example.com",
@@ -114,6 +115,11 @@ async def test_refresh_rotates_the_refresh_token(tmp_path: Path) -> None:
     assert server.forms[-1]["refresh_token"] == "refresh-1"
     reloaded = ChatGPTAuth(tmp_path / "chatgpt").load()
     assert reloaded is not None and reloaded.refresh_token == "refresh-2"
+    # A refreshed ID token is checked like the first: from anyone else, it is refused.
+    server.issuer = "https://evil.example"
+    auth._current = reloaded.model_copy(update={"expires_at": time.time()})  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ChatGPTAuthError, match="unexpected issuer"):
+        await auth.access_token()
 
 
 async def test_foreign_or_partial_sign_ins_are_refused(tmp_path: Path) -> None:

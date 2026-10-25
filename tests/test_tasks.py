@@ -159,3 +159,32 @@ async def test_a_task_only_looks_things_up(journal: SqliteJournal) -> None:
     assert await verdict("browser", Effect.EXTERNAL, "send") is Verdict.DENY  # Orion sends
     assert await verdict("browser", Effect.EXTERNAL, "login") is Verdict.DENY
     assert await verdict("remind_me", Effect.INTERNAL, thread="owner") is Verdict.ALLOW
+
+
+async def test_a_task_briefed_after_reading_a_page_is_worth_that_page(
+    journal: SqliteJournal,
+) -> None:
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    after_the_web = ToolContext("owner", "c1", context_trust=Trust.WEB)
+    await world.use(after_the_web, action="start", goal="Comparer", brief="Ce que dit la page.")
+    [running] = await world.tasks.running()
+    assert running.trust is Trust.WEB
+    provider.extend(reply("Rien de plus."))
+    await world.passes()
+    received = [e for e in await journal.read() if e.kind == "initiative.triggered"]
+    assert received and received[-1].trust is Trust.WEB  # its pass reads at the page's trust
+
+
+async def test_tasks_started_at_once_keep_to_the_limit(journal: SqliteJournal) -> None:
+    import asyncio
+
+    world = World(journal, ScriptedProvider())
+    started = await asyncio.gather(
+        *(
+            world.use(OWNER, action="start", goal=f"Recherche {i}", brief="Un brief complet.")
+            for i in range(4)
+        )
+    )
+    assert len(await world.tasks.running()) == 2
+    assert sum(r.is_error for r in started) == 2

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -50,21 +51,28 @@ async def test_nothing_without_a_link_and_a_link_works_once(world: World) -> Non
     await memory.remember("Aime le jazz", OWNER)
     page = await http.get("/console/memory")
     assert "jazz" not in page.text and "lien" in page.text
-    assert "expiré" in (await http.get("/console/login?t=forged")).text
+    assert "expiré" in (await http.post("/console/login", data={"t": "forged"})).text
     token = await gate.new_link()
-    login = await http.get(f"/console/login?t={token}")
+    # A messaging app previewing the link only sees a button: the link is still unused.
+    preview = await http.get(f"/console/login?t={token}")
+    assert preview.status_code == 200 and COOKIE not in preview.cookies
+    assert f'value="{token}"' in preview.text
+    login = await http.post("/console/login", data={"t": token})
     assert login.status_code == 303
     cookie = login.cookies[COOKIE]
     assert "httponly" in login.headers["set-cookie"].lower()
     assert "samesite=strict" in login.headers["set-cookie"].lower()
-    assert "expiré" in (await http.get(f"/console/login?t={token}")).text  # once
+    assert "expiré" in (await http.post("/console/login", data={"t": token})).text  # once
     http.cookies.set(COOKIE, cookie, domain="orion.test", path="/console")
     assert "jazz" in (await http.get("/console/memory")).text
     assert not gate.valid(cookie[:-1] + ("0" if cookie[-1] != "0" else "1"))  # tampered
+    link = await gate.new_link()
+    both = await asyncio.gather(gate.redeem(link), gate.redeem(link))
+    assert sum(c is not None for c in both) == 1  # two clicks at once: one session
 
 
 async def logged_in(http: httpx.AsyncClient, gate: Gate) -> None:
-    login = await http.get(f"/console/login?t={await gate.new_link()}")
+    login = await http.post("/console/login", data={"t": await gate.new_link()})
     http.cookies.set(COOKIE, login.cookies[COOKIE], domain="orion.test", path="/console")
 
 
@@ -333,3 +341,11 @@ async def test_the_console_serves_orions_browser_when_handed_over(
 
         console.browser = Starlette(routes=[Route("/", page)])
         assert (await http.get("/console/browser/?t=x")).text == "le navigateur"
+
+
+async def test_a_commitment_is_closed_only_in_a_known_way(world: World) -> None:
+    http, gate, memory, _ = world
+    await logged_in(http, gate)
+    owed = await memory.add_commitment("Payer le loyer", OWNER, debtor="owner", creditor="Agence")
+    assert (await http.post(f"/console/commitments/{owed}/whatever")).status_code == 404
+    assert [c.id for c in await memory.store.commitments()] == [owed]  # still open

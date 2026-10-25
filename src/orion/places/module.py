@@ -16,6 +16,7 @@ no coordinates, no track.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import secrets
@@ -144,6 +145,7 @@ class Places:
         self._journal = journal
         self.state = PlaceState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self._signalling = asyncio.Lock()
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -186,16 +188,18 @@ class Places:
         if not self.state.token or not hmac.compare_digest(digest(token), self.state.token):
             raise PermissionError("bad token")
         source = Provenance(source="phone:places", actor="owner:phone")
-        await self.append(ARRIVED, {"place": place, "event": moment}, source, SIGNAL_TRUST)
-        due = [
-            r
-            for r in self.state.reminders.values()
-            if r.when == moment and same_place(r.place, place)
-        ]
-        for reminder in due:
-            await self.append(
-                FIRED, {"reminder_id": reminder.id, "place": place}, source, SIGNAL_TRUST
-            )
+        async with self._signalling:  # the phone posting twice at once: one reminder
+            await self.sync()
+            await self.append(ARRIVED, {"place": place, "event": moment}, source, SIGNAL_TRUST)
+            due = [
+                r
+                for r in self.state.reminders.values()
+                if r.when == moment and same_place(r.place, place)
+            ]
+            for reminder in due:
+                await self.append(
+                    FIRED, {"reminder_id": reminder.id, "place": place}, source, SIGNAL_TRUST
+                )
         log.info("places.event", moment=moment, reminders=len(due))
         return [r.id for r in due]
 

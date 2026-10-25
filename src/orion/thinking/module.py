@@ -348,17 +348,27 @@ class Thinking:
         )
         promised = list(self.state.promised.values())
         report = NightReport(read=len(said))
+        failed = False
+        if (said or promised) and self.orion is None:
+            raise RuntimeError("Orion's night needs Orion: serve sets it before the night runs")
         if said or promised:
-            report = await self._work(said, promised, now)
+            try:
+                report = await self._work(said, promised, now)
+            except Exception:
+                # Recorded all the same: a night that breaks is not run again (and paid
+                # again) at every tick until morning. What it read is read tomorrow.
+                log.exception("thinking.night_failed", day=now.date().isoformat())
+                failed = True
         await self._journal.append(
             [
                 NewEvent(
                     kind=NIGHT,
                     payload={
                         "day": now.date().isoformat(),
-                        "upto": upto,
+                        "upto": self.state.upto if failed else upto,
                         "read": report.read,
                         "noted": bool(report.note),
+                        **({"failed": True} if failed else {}),
                     },
                     provenance=Provenance(source="orion:thinking", actor="orion:thinking"),
                     trust=Trust.SYSTEM,

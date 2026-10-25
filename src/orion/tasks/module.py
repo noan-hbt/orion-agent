@@ -99,7 +99,7 @@ class TaskWork:
 
         read = len(task.said)
         turn = await self._orion.handle_initiative(
-            task.thread, task.brief_for_pass(now), "tâche de fond", Trust.SYSTEM, now, stopped
+            task.thread, task.brief_for_pass(now), "tâche de fond", task.trust, now, stopped
         )
         current = await self._tasks.get(task.id)
         if current is None:
@@ -203,20 +203,24 @@ def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) ->
     def inside(ctx: ToolContext) -> str:
         return ctx.thread_id.removeprefix("task:") if ctx.thread_id.startswith("task:") else ""
 
+    starting = asyncio.Lock()  # counted and started as one: two at once never pass the cap
+
     async def start(args: Any, ctx: ToolContext) -> ToolResult:
         if inside(ctx):
             return ToolResult("A task does not start tasks: ask Orion.", is_error=True)
-        if len(await tasks.running()) >= max_running:
-            return ToolResult(f"Already {max_running} tasks running: stop one.", is_error=True)
-        task_id = await tasks.start(
-            args.goal,
-            args.brief,
-            args.budget_usd,
-            args.minutes,
-            clock(),
-            _origin(ctx),
-            ctx.correlation_id,
-        )
+        async with starting:
+            if len(await tasks.running()) >= max_running:
+                return ToolResult(f"Already {max_running} tasks running: stop one.", is_error=True)
+            task_id = await tasks.start(
+                args.goal,
+                args.brief,
+                args.budget_usd,
+                args.minutes,
+                clock(),
+                _origin(ctx),
+                ctx.correlation_id,
+                ctx.context_trust,
+            )
         return ToolResult(
             f"Tâche lancée ({task_id}) : elle travaille déjà, et t'écrira ce qu'elle trouve. "
             "Tu lui réponds avec `task` (say)."
@@ -237,7 +241,7 @@ def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) ->
         task = await tasks.get(args.task)
         if task is None or task.finished is not None:
             return ToolResult(f"No task {args.task} running.", is_error=True)
-        await tasks.finish(args.task, "stopped", args.why, _origin(ctx), Trust.OWNER)
+        await tasks.finish(args.task, "stopped", args.why, _origin(ctx), ctx.context_trust)
         return ToolResult("Tâche arrêtée : elle ne fait plus rien.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:

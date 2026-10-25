@@ -228,3 +228,11 @@ async def test_the_console_button_and_login_go_through_the_guardian(tmp_path: Pa
         assert await running.client.telegram_login(signed(TOKEN, OWNER, now)) == OWNER
         assert await running.client.telegram_login(signed("1:other", OWNER, now)) is None
         await client.aclose()
+
+
+async def test_a_download_reaches_only_a_file(split: Split) -> None:
+    client = split.tg.client()
+    for path in ("../../botX/sendMessage?chat_id=1", "photos/../../x", "a?b", "a%2F..", "/abs"):
+        with pytest.raises(TelegramError, match="not a Telegram file path"):
+            await client.download(path)
+    assert client.file_url("photos/file_12.jpg").endswith("/photos/file_12.jpg")

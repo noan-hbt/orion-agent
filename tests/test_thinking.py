@@ -206,6 +206,7 @@ async def test_the_night_never_acts_on_the_world_nor_asks_him(journal: SqliteJou
     assert await verdict("browser", Effect.EXTERNAL, "send") is Verdict.DENY
     assert await verdict("file", Effect.INTERNAL, "send") is Verdict.DENY  # it would wake him
     assert await verdict("initiative_settings", Effect.INTERNAL) is Verdict.DENY
+    assert await verdict("hand_notify", Effect.INTERNAL) is Verdict.DENY  # on his Mac, at 3am
     assert await verdict("remember", Effect.INTERNAL, trust=Trust.WEB) is Verdict.DENY
     assert approver.asked == 0  # never put to him at night
 
@@ -270,3 +271,20 @@ def _tool(name: str, effect: Effect) -> Tool:
         effect=effect,
         reversibility=Reversibility.REVERSIBLE,
     )
+
+
+async def test_a_night_that_breaks_is_not_paid_again_at_every_tick(
+    journal: SqliteJournal,
+) -> None:
+    thinking = thinking_for(journal, NIGHT)
+    orion = await a_day(journal, thinking_tools(thinking))
+    thinking.orion = orion
+
+    def broken(_request: object) -> object:
+        raise RuntimeError("a bug in the night")
+
+    scripted(orion).extend(broken)  # pyright: ignore[reportArgumentType]
+    report = await thinking.tick()
+    assert report is not None and not report.note
+    assert await thinking.tick() is None  # recorded: not run (and paid) again tonight
+    assert thinking.state.upto == 0  # what it read is read again tomorrow

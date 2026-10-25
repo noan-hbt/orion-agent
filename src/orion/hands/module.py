@@ -116,7 +116,8 @@ def hands_tools(desk: HandsDesk) -> list[Tool]:
             name="hand_find_files",
             description="Find files by name in the folders the owner shared on a machine.",
             input_model=FindInput,
-            handler=calling("find_files", ("query",)),
+            # File names come from downloads and mails too: not Orion's own words.
+            handler=calling("find_files", ("query",), Trust.OWNER_INSTANCE),
             effect=Effect.NONE,
             reversibility=Reversibility.REVERSIBLE,
             concurrency_safe=True,

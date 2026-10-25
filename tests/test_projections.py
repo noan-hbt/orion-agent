@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from orion.core.events import Event
@@ -45,6 +47,14 @@ async def test_catch_up_is_incremental(journal: SqliteJournal) -> None:
     assert await runner.catch_up() == 2
     assert projection.counts == {"a": 3, "b": 1}
     assert await runner.catch_up() == 0
+
+
+async def test_catch_ups_at_once_apply_each_event_once(journal: SqliteJournal) -> None:
+    projection = WordCount()
+    runner = ProjectionRunner(journal, [projection], batch=1)
+    await journal.append([make_event("note.added", "a", text=w) for w in ("un", "deux", "trois")])
+    await asyncio.gather(runner.catch_up(), runner.catch_up(), runner.rebuild_all())
+    assert projection.counts == {"a": 3}
 
 
 async def test_rebuild_gives_identical_state_and_reflects_redaction(journal: SqliteJournal) -> None:

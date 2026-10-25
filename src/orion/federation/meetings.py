@@ -79,6 +79,8 @@ from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResul
 log = structlog.get_logger(__name__)
 
 PROPOSED = "meeting.proposed"
+MAX_HANDLE_ATTEMPTS = 3
+"""Tries before a message that breaks every time is set aside as handled."""
 PEER_MESSAGE = "peer.message.received"
 ANSWERED = "meeting.answered"
 AGREED = "meeting.agreed"
@@ -462,6 +464,8 @@ class MeetingDesk:
         self.state = MeetingState(timezone=hours.timezone)
         self._runner = ProjectionRunner(journal, [self.state])
         self._working: set[str] = set()
+        self._failures: dict[str, int] = {}
+        """Times each message failed to be handled, in this process."""
         self._tasks: set[asyncio.Task[None]] = set()
         self._groups = asyncio.Lock()
         self.answer: Answer | None = None
@@ -637,12 +641,18 @@ class MeetingDesk:
 
     def _spawn(self, message: PeerMessage) -> None:
         async def guarded() -> None:
+            envelope_id = message.envelope.id
             try:
                 await self.handle(message)
             except Exception:
-                log.exception("federation.handle_failed", envelope=message.envelope.id)
+                log.exception("federation.handle_failed", envelope=envelope_id)
+                self._failures[envelope_id] = self._failures.get(envelope_id, 0) + 1
+                if self._failures[envelope_id] >= MAX_HANDLE_ATTEMPTS:
+                    # A message that breaks every time is set aside, not tried (and its model
+                    # call paid) every few seconds forever.
+                    await self._handled(message, "could not be handled")
             finally:
-                self._working.discard(message.envelope.id)
+                self._working.discard(envelope_id)
 
         task = asyncio.create_task(guarded())
         self._tasks.add(task)
@@ -1003,14 +1013,16 @@ class MeetingDesk:
         members = self.state.group(group)
         if any(m.status != "peer_accepted" for m in members):
             return
+        confirmed: list[Meeting] = []
         for m in members:
             try:
                 sent = await self.guardian.federation_send(
                     m.peer, CONFIRM, m.id, {"slot": slot.isoformat()}
                 )
             except GuardianUnavailableError as exc:
-                await self._failed(message, _summary(m), str(exc))
+                await self._failed(message, _summary(m), str(exc))  # the owner is told
                 continue
+            confirmed.append(m)
             await self._append(
                 AGREED,
                 {
@@ -1024,15 +1036,35 @@ class MeetingDesk:
                 Trust.TRUSTED_PEER,
                 message,
             )
-        first = members[0]
+        if not confirmed:
+            await self._append(
+                GROUP_FAILED,
+                {
+                    "group": group,
+                    "reason": "unreachable",
+                    "who": _names([m.label for m in members]),
+                },
+                Trust.TRUSTED_PEER,
+                message,
+            )
+            return
+        # Only those who got the confirmation are in it: one that could not be reached is not
+        # said to be coming (and the owner was told it failed).
+        first = confirmed[0]
         end = slot + timedelta(minutes=first.duration_minutes)
+        missing = [m.label for m in members if m not in confirmed]
         await self._append(
             GROUP_AGREED,
-            {"group": group, "start": slot.isoformat(), "end": end.isoformat()},
+            {
+                "group": group,
+                "start": slot.isoformat(),
+                "end": end.isoformat(),
+                **({"missing": missing} if missing else {}),
+            },
             Trust.TRUSTED_PEER,
             message,
         )
-        group_meeting = replace(first, label=_names([m.label for m in members]))
+        group_meeting = replace(first, label=_names([m.label for m in confirmed]))
         await self._to_calendar(group_meeting, slot, end)
         await self._commit(group_meeting, slot, message, "leurs Orion")
 
@@ -1055,6 +1087,10 @@ class MeetingDesk:
         meeting = self.state.meetings.get(envelope.context)
         if meeting is None or meeting.role != "asked" or meeting.peer != envelope.sender:
             await self._handled(message, "a refusal for no proposal of ours")
+            return
+        if meeting.status not in ("polling", "proposed", "available", "peer_accepted"):
+            # Agreed (or ended) already: a late refusal does not undo what both owners have.
+            await self._handled(message, f"a refusal for a meeting already {meeting.status}")
             return
         await self._append(
             DECLINED,

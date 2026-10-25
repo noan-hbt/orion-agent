@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.memory.model import Category, CommitmentStatus
+from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService, Origin
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
@@ -71,7 +71,7 @@ class CommitmentCloseInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     commitment_id: str
-    status: CommitmentStatus = CommitmentStatus.DONE
+    status: Closing = CommitmentStatus.DONE
     evidence: str | None = Field(default=None, description="How we know it is done")
 
 

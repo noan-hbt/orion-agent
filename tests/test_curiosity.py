@@ -18,7 +18,7 @@ from orion.memory.store import MemoryStore
 from orion.tools.base import ToolContext
 from orion.web.fetch import FetchError
 from orion.web.search import Findings, Reading, Result
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 SATURDAY = datetime(2026, 10, 24, 6, 5, tzinfo=PARIS)
@@ -148,6 +148,20 @@ async def test_the_hunt_waits_for_its_day_and_catches_up_a_missed_week(
     now[0] = datetime(2026, 11, 2, 9, 0, tzinfo=PARIS)  # Monday: Saturday 31 was missed
     provider.extend(reply(json.dumps({"piste": ""})))
     assert await curiosity.tick() is not None
+    assert await curiosity.tick() is None
+
+
+async def test_a_week_the_model_was_out_of_reach_is_hunted_later(
+    journal: SqliteJournal,
+) -> None:
+    now = [SATURDAY]
+    provider = ScriptedProvider(fail("down", retryable=True))
+    curiosity = curious(journal, None, provider, FakeWeb(), now)
+    hunt = await curiosity.tick()
+    assert hunt is not None and hunt.outcome == "model unavailable"
+    provider.extend(reply(json.dumps({"piste": ""})))
+    again = await curiosity.tick()  # not taken as this week's hunt
+    assert again is not None and again.outcome == "no lead"
     assert await curiosity.tick() is None
 
 

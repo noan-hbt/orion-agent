@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -129,11 +129,26 @@ class CalendarState:
             self.synced[str(payload["account"])] = datetime.fromisoformat(str(payload["at"]))
 
 
+class FeedError(ValueError):
+    """A calendar that could not be read, said without its address: the address is the
+    owner's secret, and httpx puts it in every error message."""
+
+
 async def fetch_feed(http: httpx.AsyncClient, account: CalendarAccount) -> str:
     url = account.url.resolve().get_secret_value()
-    response = await http.get(url.replace("webcal://", "https://", 1))
-    response.raise_for_status()
+    try:
+        response = await http.get(url.replace("webcal://", "https://", 1))
+    except httpx.HTTPError as exc:
+        raise FeedError(f"calendar {account.name!r} unreachable ({type(exc).__name__})") from None
+    if response.status_code >= 400:
+        raise FeedError(f"calendar {account.name!r} answered HTTP {response.status_code}")
     return response.text
+
+
+def _utc(moment: datetime) -> datetime:
+    """For comparing and subtracting: two times in the same zone compare by their wall clock in
+    Python, which is wrong across a change of hour (02:55 CEST is before 02:50 CET)."""
+    return moment.astimezone(UTC)
 
 
 def _hhmm(moment: datetime) -> str:
@@ -346,16 +361,18 @@ class Calendar:
             (
                 (account, o)
                 for (account, _), o in self.state.events.items()
-                if o.standing.visible and o.end > start and o.start < end
+                if o.standing.visible and _utc(o.end) > _utc(start) and _utc(o.start) < _utc(end)
             ),
-            key=lambda item: (item[1].start, item[1].title),
+            key=lambda item: (_utc(item[1].start), item[1].title),
         )
 
     def pending(self, start: datetime, end: datetime) -> int:
         return sum(
             1
             for o in self.state.events.values()
-            if o.standing is Standing.PENDING and o.end > start and o.start < end
+            if o.standing is Standing.PENDING
+            and _utc(o.end) > _utc(start)
+            and _utc(o.start) < _utc(end)
         )
 
     def day(self, day: date, after: datetime | None = None) -> list[str]:
@@ -372,10 +389,11 @@ class Calendar:
         await self._runner.catch_up()
         window = timedelta(minutes=self.settings.heads_up_minutes)
         found: list[Alert] = []
-        for account, o in self.between(now, now + window):
-            if o.all_day or not timedelta(0) < o.start - now <= window:
+        for account, o in self.between(now, _utc(now) + window):  # `+` keeps the wall clock
+            ahead = _utc(o.start) - _utc(now)  # real time: wall clocks jump at a change of hour
+            if o.all_day or not timedelta(0) < ahead <= window:
                 continue
-            minutes = max(1, int((o.start - now).total_seconds() // 60))
+            minutes = max(1, int(ahead.total_seconds() // 60))
             where = f" ({o.location})" if o.location else ""
             found.append(
                 Alert(
@@ -394,11 +412,12 @@ class Calendar:
         """Busy during a timed event; otherwise, when the last one ended (today)."""
         await self._runner.catch_up()
         today = datetime.combine(now.date(), datetime.min.time(), self._zone)
-        timed = [o for _, o in self.between(today, now + timedelta(minutes=1)) if not o.all_day]
-        if any(o.start <= now < o.end for o in timed):
+        soon = _utc(now) + timedelta(minutes=1)  # `now + …` would lose which 02:50 it is
+        timed = [o for _, o in self.between(today, soon) if not o.all_day]
+        if any(_utc(o.start) <= _utc(now) < _utc(o.end) for o in timed):
             return Moment(busy=True)
-        ended = [o.end for o in timed if o.end <= now]
-        return Moment(free_since=max(ended) if ended else None)
+        ended = [o.end for o in timed if _utc(o.end) <= _utc(now)]
+        return Moment(free_since=max(ended, key=_utc) if ended else None)
 
     async def digest(
         self, now: datetime, since: datetime, first_slot: bool, last_slot: bool

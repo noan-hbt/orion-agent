@@ -47,10 +47,13 @@ class SqliteWorker:
         db.execute("BEGIN IMMEDIATE")
         try:
             yield db
+            db.execute("COMMIT")
         except BaseException:
-            db.execute("ROLLBACK")
+            # SQLite may have rolled back already (a failed COMMIT, a full disk): then there
+            # is nothing to undo, and the original error is the one that matters.
+            if db.in_transaction:
+                db.execute("ROLLBACK")
             raise
-        db.execute("COMMIT")
 
     def _open_sync(self) -> None:
         if isinstance(self._path, Path):

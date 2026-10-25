@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
+from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
@@ -127,6 +128,8 @@ class FileStore:
         self.folder = folder
         self._kept = _Kept(folder)
         self._runner = ProjectionRunner(journal, [self._kept])
+        self._writing: set[Path] = set()
+        """Files written whose event is not appended yet."""
 
     async def sync(self) -> None:
         """Catch up, and remove the files no event names any more (forgotten)."""
@@ -134,8 +137,10 @@ class FileStore:
         if not self.folder.exists():
             return
         kept = {m.path for m in self._kept.files.values()}
+        self._writing -= kept
         for path in sorted(self.folder.rglob("*"), reverse=True):
-            if path.is_file() and path not in kept:
+            # Just written, its event not appended yet: being kept, not forgotten.
+            if path.is_file() and path not in kept and path not in self._writing:
                 path.unlink()
                 log.info("files.forgotten", file=path.relative_to(self.folder).as_posix())
             elif path.is_dir() and not any(path.iterdir()):
@@ -164,8 +169,8 @@ class FileStore:
         stored = f"{file_id}/{named}"
         path = self.folder / stored
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_bytes, data)
-        path.chmod(0o600)
+        self._writing.add(path)  # until MADE names it
+        await asyncio.to_thread(write_private, path, data)
         await self._journal.append(
             [
                 NewEvent(
@@ -219,6 +224,18 @@ class Unsendable(ValueError):
     """A server file Orion may not or cannot send."""
 
 
+SECRET_NAMES = (".netrc", ".pgpass", "id_rsa", "id_ecdsa", "id_ed25519", "credentials.json")
+SECRET_SUFFIXES = (".env", ".pem", ".key", ".p12", ".pfx")
+
+
+def _secret_file(name: str) -> bool:
+    """`.env`, `.env.production`, `prod.env`, a private key…: never sent, wherever they are."""
+    lowered = name.lower()
+    return (
+        lowered in SECRET_NAMES or lowered.startswith(".env") or lowered.endswith(SECRET_SUFFIXES)
+    )
+
+
 def read_server_file(given: str, closed: tuple[Path, ...]) -> tuple[Path, bytes]:
     """A file on Orion's server, resolved (links followed) before it is checked."""
     path = Path(given).expanduser()
@@ -228,7 +245,7 @@ def read_server_file(given: str, closed: tuple[Path, ...]) -> tuple[Path, bytes]
     shut = (*SYSTEM_DIRS, *(c.resolve() for c in closed))
     if any(path == d or d in path.parents for d in shut):
         raise Unsendable(f"{path} is in a folder Orion never sends from (secrets).")
-    if path.name == ".env" or path.name.endswith(".env"):
+    if _secret_file(path.name):
         raise Unsendable(f"{path} holds secrets.")
     try:
         if not path.is_file():
@@ -534,7 +551,8 @@ class FilesModule(Module):
                 lambda: self.deliver,
                 web=lambda: web.desk if web is not None else None,
                 hands=lambda: hands.desk if hands is not None else None,
-                closed=(guardian.data_dir, guardian.socket.parent),
+                # Orion's own data too: its journal, its memory, its ChatGPT tokens.
+                closed=(self.config.data_dir, guardian.data_dir, guardian.socket.parent),
             )
         ]
 

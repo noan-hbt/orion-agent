@@ -53,6 +53,9 @@ class Task:
     finished: str | None = None
     """How it ended (done, stopped, out of budget…), once ended."""
     summary: str = ""
+    trust: Trust = Trust.SYSTEM
+    """The lowest trust of what it was told (its brief, Orion's messages): a brief written
+    after reading a page is worth that page."""
 
     @property
     def thread(self) -> str:
@@ -125,6 +128,7 @@ class TaskState:
                 budget_usd=float(payload["budget_usd"]),
                 minutes=int(payload["minutes"]),
                 started_at=datetime.fromisoformat(str(payload["at"])),
+                trust=min(Trust.SYSTEM, event.trust),
             )
             return
         task = self.tasks.get(str(payload.get("task_id", "")))
@@ -132,6 +136,7 @@ class TaskState:
             return
         if event.kind == SAID:
             task.said.append(str(payload["text"]))
+            task.trust = min(task.trust, event.trust)
         elif event.kind == REPORTED:
             at = datetime.fromisoformat(str(payload["at"]))
             task.reports.append(
@@ -177,6 +182,7 @@ class Tasks:
         now: datetime,
         provenance: Provenance,
         correlation_id: str | None,
+        trust: Trust = Trust.OWNER,
     ) -> str:
         task_id = f"t_{new_id()}"
         await self._record(
@@ -190,7 +196,7 @@ class Tasks:
                 "at": now.isoformat(),
             },
             provenance,
-            Trust.OWNER,
+            trust,
             correlation_id,
         )
         self._wake()

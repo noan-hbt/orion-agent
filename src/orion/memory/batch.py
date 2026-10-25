@@ -53,6 +53,10 @@ class Exchange:
     facts: list[str] = field(default_factory=list[str])
     finished: str | None = None
     """The turn's stop reason, once it ended."""
+    trust: Trust = Trust.OWNER
+    """The lowest trust of what the turn read: what is drawn from it is worth no more."""
+    events: list[str] = field(default_factory=list[str])
+    """The exchange's events, so containing a source reaches what was drawn from them."""
 
 
 @dataclass
@@ -93,6 +97,8 @@ class Pending:
         if event.kind == RECEIVED and payload.get("thread_id") == self.thread_id:
             exchange = self.exchanges.setdefault(correlation, Exchange(event.seq, correlation))
             exchange.seq = event.seq
+            exchange.trust = min(exchange.trust, event.trust)
+            exchange.events.append(event.id)
             text = str(payload.get("text") or "")
             if payload.get("photos"):
                 text = f"{text} (avec une photo)".strip()
@@ -102,6 +108,9 @@ class Pending:
         exchange = self.exchanges.get(correlation)
         if exchange is None:
             return
+        if event.kind == MESSAGE:
+            exchange.trust = min(exchange.trust, event.trust)
+            exchange.events.append(event.id)
         if event.kind == FINISHED:
             exchange.finished = str(payload.get("reason"))
         elif event.kind == FACT_ASSERTED:
@@ -145,9 +154,11 @@ class MemoryBatcher:
         """The exchanges to read now, in order, or none: still talking, or too little said."""
         exchanges = sorted(self.pending.exchanges.values(), key=lambda e: e.seq)
         last = self.pending.last_said
-        if not exchanges or last is None or any(e.finished is None for e in exchanges):
+        if not exchanges or last is None:
             return []
         quiet = self._clock() - last
+        if any(e.finished is None for e in exchanges) and quiet < self._max_wait:
+            return []  # still talking; a turn that never ended (a crash) waits max_wait only
         enough = len(exchanges) >= self._min and quiet >= self._idle
         return exchanges if enough or quiet >= self._max_wait else []
 
@@ -169,7 +180,8 @@ class MemoryBatcher:
             origin = Origin(
                 actor="orion:extractor",
                 source=f"thread:{self.pending.thread_id}",
-                trust=EXTRACTOR_TRUST,
+                trust=min([EXTRACTOR_TRUST, *(e.trust for e in read)]),
+                derived_from=tuple(i for e in read for i in e.events),
                 correlation_id=last.correlation_id,
             )
             report = await self._extractor.consolidate_many(
@@ -178,6 +190,8 @@ class MemoryBatcher:
                 self._clock().astimezone(self._zone).date(),
                 recorded,
             )
+            if report.unavailable:
+                return report  # nothing read: the same exchanges are tried at the next tick
         await self._record(exchanges[-1].seq, len(read), report)
         return report
 

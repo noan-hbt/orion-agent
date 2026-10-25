@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.configure.paths import owners
+from orion.configure.paths import owners, reached
 
 REQUIRED = {
     "mail_send": "recipients",
@@ -69,6 +69,8 @@ def host_in(host: str, domains: list[str]) -> bool:
 
 def _recipient_in(address: str, allowed: list[str]) -> bool:
     address = address.strip().lower()
+    if not address or any(c in address for c in ',;<>"') or any(c.isspace() for c in address):
+        return False  # one bare address only: `x@evil.com, y@ok.com` is two recipients
     return any(
         address == a.lower() or (a.startswith("@") and address.endswith(a.lower())) for a in allowed
     )
@@ -78,7 +80,11 @@ def within(action: str, limits: Limits | None, params: dict[str, Any]) -> bool:
     """Whether an action with these parameters stays inside the autonomy's limits."""
     if action == "configure_change" and (
         owners(_items(params.get("changes")))
-        or any(_path(change) in ASKED_ALWAYS for change in _items(params.get("changes")))
+        or any(
+            each in ASKED_ALWAYS or any(each.startswith(a + ".") for a in ASKED_ALWAYS)
+            for change in _items(params.get("changes"))
+            for each in reached(_path(change), _value(change))
+        )
     ):
         return False  # the owner's settings, and what Orion asks him, never alone (D92)
     if limits is None:
@@ -115,6 +121,12 @@ def _path(change: object) -> str:
     if isinstance(change, dict):
         return str(change.get("path", "")).strip()  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
     return ""
+
+
+def _value(change: object) -> object:
+    if isinstance(change, dict):
+        return change.get("value")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    return None
 
 
 def _strings(value: object) -> list[str]:

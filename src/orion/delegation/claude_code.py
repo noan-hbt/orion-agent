@@ -9,7 +9,6 @@ own (`claude auth login` on the server), so the owner's subscription pays for it
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,11 +16,11 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from orion.providers.claude_code import child_env, stop
+
 log = structlog.get_logger(__name__)
 
 FILE_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep")
-_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR")
-_ENV_PREFIXES = ("CLAUDE", "ANTHROPIC")
 BRIEF = (
     "You work for Orion, a personal assistant, on a task its owner asked for. Work only inside "
     "the current directory. Finish with a short summary, in the language of the task, of what "
@@ -36,11 +35,6 @@ class AgentOutcome:
     cost_usd: float = 0.0
     files: list[str] = field(default_factory=list[str])
     error: str | None = None
-
-
-def child_env(environ: dict[str, str] | None = None) -> dict[str, str]:
-    source = os.environ if environ is None else environ
-    return {k: v for k, v in source.items() if k in _ENV_KEEP or k.startswith(_ENV_PREFIXES)}
 
 
 class ClaudeCodeAgent:
@@ -103,9 +97,9 @@ class ClaudeCodeAgent:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), self._timeout)
         except TimeoutError:
-            process.kill()
-            await process.wait()
             return AgentOutcome(False, "", error=f"timed out after {self._timeout:.0f}s")
+        finally:
+            await stop(process)  # timed out, or the job was cancelled: never left running
         files = await asyncio.to_thread(_list_files, workdir)
         return self._parse(process.returncode, stdout, stderr, files)
 

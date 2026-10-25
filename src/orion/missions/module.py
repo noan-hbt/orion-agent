@@ -61,7 +61,13 @@ class MissionWork:
         done: list[str] = []
         for mission in await self._missions.active():
             if mission.due(now):
-                await self.work(mission, now)
+                try:
+                    await self.work(mission, now)
+                except Exception:
+                    # One mission that breaks does not stop the others; it is tried again at
+                    # its next pass.
+                    log.exception("missions.pass_failed", mission=mission.id)
+                    continue
                 done.append(mission.id)
         return done
 
@@ -244,7 +250,9 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
     async def reject(args: Any, ctx: ToolContext) -> ToolResult:
         if await missions.get(args.mission) is None:
             return ToolResult(f"No mission {args.mission}.", is_error=True)
-        await missions.reject(args.mission, args.key, args.why, provenance(ctx), ctx.correlation_id)
+        await missions.reject(
+            args.mission, args.key, args.why, provenance(ctx), ctx.correlation_id, ctx.context_trust
+        )
         return ToolResult("Écarté ; la mission en tiendra compte.")
 
     async def close(args: Any, ctx: ToolContext) -> ToolResult:

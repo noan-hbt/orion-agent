@@ -191,11 +191,13 @@ def rewrite(source: Path, changes: list[Change]) -> tuple[str, str]:
 def write(source: Path, before: str, after: str) -> None:
     """Atomically, keeping the previous file beside it. Raises ConfigureError."""
     try:
+        if source.read_text("utf-8") != before:
+            raise ConfigureError(f"{source} changed meanwhile: read it again and redo the change")
         mode = source.stat().st_mode & 0o777  # the core reads what the guardian writes
         previous = source.with_name(f"{source.name}.previous")
         previous.write_text(before, "utf-8")
         previous.chmod(mode)
-        tmp = source.with_name(f".{source.name}.tmp")
+        tmp = source.with_name(f".{source.name}.{os.getpid()}.tmp")
         tmp.write_text(after, "utf-8")
         tmp.chmod(mode)
         tmp.replace(source)
@@ -254,6 +256,8 @@ class Configurator:
         self.guardian = guardian
         """When Orion runs split, the guardian writes the file (D92)."""
         self.restart: Restart | None = None
+        self._restarting: asyncio.Task[None] | None = None
+        """Kept so the restart is not garbage-collected while it waits."""
         self._lock = asyncio.Lock()
 
     def precheck(self, changes: list[Change]) -> str | None:
@@ -313,7 +317,7 @@ class Configurator:
         log.info("config.changed", paths=[c.path for c in changes])
         if self.restart is None:
             return "Réglage écrit. Il prendra effet au prochain démarrage d'Orion."
-        asyncio.get_running_loop().create_task(self.restart())
+        self._restarting = asyncio.get_running_loop().create_task(self.restart())
         return "Réglage écrit. Je redémarre dans quelques secondes pour l'appliquer."
 
 

@@ -22,6 +22,11 @@ class McpServer(BaseModel):
     token: SecretRef | None = Field(
         default=None, description="Sent as `Authorization: Bearer`; held by the guardian split"
     )
+    env: list[str] = Field(
+        default_factory=list[str],
+        description="For a `command` server: the environment variables it may read, by name "
+        "(e.g. ['NOTION_TOKEN']). It sees no other, so none of Orion's own keys",
+    )
     read_only: list[str] = Field(
         default_factory=list[str],
         description="Its tools that only read ('*': all): used without asking. Every other "

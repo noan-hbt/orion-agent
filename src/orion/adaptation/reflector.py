@@ -88,6 +88,8 @@ class ReflectionReport(BaseModel):
     learned: list[str] = Field(default_factory=list[str])
     retired: list[str] = Field(default_factory=list[str])
     rejected: list[str] = Field(default_factory=list[str])
+    unavailable: bool = Field(default=False, exclude=True)
+    """The model could not be reached: nothing was reviewed, to be tried again."""
 
 
 def render_signals(signals: list[Signal]) -> str:
@@ -139,7 +141,7 @@ class Reflector:
             )
         except ProviderError:
             log.exception("adaptation.reflect_failed")
-            return ReflectionReport(rejected=["provider error"])
+            return ReflectionReport(rejected=["provider error"], unavailable=True)
         evidence = {s.id for s in signals if s.kind in ("message", "reaction")}
         return await self._apply(response.text, {r.id: r for r in rules}, evidence)
 
