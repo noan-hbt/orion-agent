@@ -30,7 +30,7 @@ from orion.channels.imessage import normalize_number
 from orion.channels.inbox import Inbound, OwnerInbox
 from orion.channels.inkbox import ActionItem, Call, InkboxClient, TranscriptEntry, WebhookEvent
 from orion.context.threads import ThreadProjection
-from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.events import Event, NewEvent, Provenance, Trust, enclosed
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -144,8 +144,11 @@ def render_call(call: Call, entries: list[TranscriptEntry], items: list[ActionIt
         f'<appel sens="{"entrant" if call.direction == "inbound" else "sortant"}" '
         f'durée="{minutes}" statut="{call.status}">'
     )
-    body = "\n".join(lines) or "(pas de transcription)"
-    todo = "\n".join(f"- {i.action}" + (f" ({i.details})" if i.details else "") for i in items)
+    # What was said on the line cannot close the tag and pass for Orion's own words.
+    body = enclosed("\n".join(lines)) or "(pas de transcription)"
+    todo = enclosed(
+        "\n".join(f"- {i.action}" + (f" ({i.details})" if i.details else "") for i in items)
+    )
     return (
         f"{header}\n{body}"
         + (f"\nÀ faire, relevé par la voix :\n{todo}" if todo else "")

@@ -151,6 +151,11 @@ MIN_TEXT = 40
 """Fewer letters than this in a document: a scan, looked at by the model that sees."""
 
 
+MAX_UNZIPPED = 30_000_000
+"""Bytes of text parts an office file may unzip into before it is not read by code."""
+MAX_PAGES = 300
+
+
 def text_of(data: bytes, content_type: str) -> str:
     """A document's own text, taken out by code (no model): PDF, and the zipped office
     formats. Empty when there is none to take (a scan, an old binary format)."""
@@ -165,7 +170,8 @@ def text_of(data: bytes, content_type: str) -> str:
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(data))
-            text = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+            pages = reader.pages[:MAX_PAGES]  # a 5000-page file is not read whole
+            text = "\n\n".join((page.extract_text() or "") for page in pages)
         elif suffix in _PARTS:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 names = sorted(
@@ -173,6 +179,10 @@ def text_of(data: bytes, content_type: str) -> str:
                     for n in archive.namelist()
                     if n.startswith(_PARTS[suffix]) and n.endswith(".xml")
                 )
+                unzipped = sum(archive.getinfo(n).file_size for n in names)
+                if unzipped > MAX_UNZIPPED:  # a small file that unzips into gigabytes
+                    log.warning("photos.too_large_unzipped", type=content_type, size=unzipped)
+                    return ""
                 xml = "\n".join(archive.read(n).decode("utf-8", "replace") for n in names)
             text = unescape(_TAG.sub(" ", _BREAKS.sub("\n", xml)))
             text = "\n".join(" ".join(line.split()) for line in text.splitlines())
@@ -327,6 +337,8 @@ class Photos:
         self._fetch = fetch or _download
         self._kept = _Kept()
         self._runner = ProjectionRunner(journal, [self._kept])
+        self._writing: set[str] = set()
+        """Files written whose event is not appended yet."""
 
     async def sync(self) -> None:
         """Catch up, and remove the files no event names any more (forgotten)."""
@@ -334,8 +346,11 @@ class Photos:
         if not self.folder.exists():
             return
         names = {name for name, _, _ in self._kept.files.values()}
+        self._writing -= names  # named now: no longer in the making
         for path in self.folder.iterdir():
-            if path.is_file() and path.name not in names:
+            # A file just written is not named yet (its event follows, after a model call
+            # for a document): it is not taken for a forgotten one.
+            if path.is_file() and path.name not in names and path.name not in self._writing:
                 path.unlink()
                 log.info("photos.forgotten", file=path.name)
 
@@ -605,6 +620,7 @@ class Photos:
 
     def _write(self, name: str, data: bytes) -> Path:
         self.folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._writing.add(name)  # until an event names it (or the process ends)
         path = self.folder / name
         write_private(path, data)
         return path

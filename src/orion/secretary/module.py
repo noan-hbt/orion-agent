@@ -278,7 +278,17 @@ class Secretary:
 
     async def run(self) -> None:
         while True:
-            await self.answer(await self._queue.get())
+            message = await self._queue.get()
+            try:
+                await self.answer(message)
+            except Exception:
+                # One contact's message that breaks must not stop the next ones (nor, past the
+                # supervisor's patience, the whole of Orion).
+                log.exception(
+                    "secretary.answer_failed",
+                    channel=message.channel,
+                    conversation=message.conversation,
+                )
 
     async def answer(self, message: Incoming) -> Exchange | None:
         await self.sync()

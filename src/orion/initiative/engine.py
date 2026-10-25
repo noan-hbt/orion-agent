@@ -22,7 +22,7 @@ import asyncio
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
@@ -203,6 +203,8 @@ class Unsaid:
     day: date
     text: str
     reason: str
+    trust: Trust = Trust.SYSTEM
+    """Of what it was drawn from (a mail's subject is a stranger's words)."""
 
 
 @dataclass
@@ -243,6 +245,7 @@ class Ledger:
                     date.fromisoformat(str(payload["day"])),
                     str(payload["fallback"]),
                     str(payload.get("reason", "")),
+                    event.trust,
                 )
             )
         if event.kind == DELIVERED:
@@ -481,6 +484,7 @@ class InitiativeEngine:
             why="c'est le point de la semaine sur ce que j'ai gardé pour moi",
             fallback="Cette semaine, j'ai failli te dire :\n" + lines,
             importance=0.4,
+            trust=min(u.trust for u in unsaid),
             expires_at=datetime.combine(now.date(), time(22, 0), self._zone),
         )
 
@@ -513,9 +517,10 @@ class InitiativeEngine:
                 continue
             if due.tzinfo is None:
                 due = due.replace(tzinfo=self._zone)
-            if not timedelta(0) < due - now <= self._settings.heads_up:
+            ahead = due.astimezone(UTC) - now.astimezone(UTC)  # real time, across a change of hour
+            if not timedelta(0) < ahead <= self._settings.heads_up:
                 continue
-            minutes = int((due - now).total_seconds() // 60)
+            minutes = int(ahead.total_seconds() // 60)
             found.append(
                 Candidate(
                     key=f"heads-up:{c.id}",
@@ -801,7 +806,7 @@ class InitiativeEngine:
                     kind=kind,
                     payload=payload,
                     provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
-                    trust=Trust.SYSTEM,
+                    trust=min(Trust.SYSTEM, candidate.trust),  # its fallback is its words
                     correlation_id=correlation_id or new_id(),
                 )
             ]

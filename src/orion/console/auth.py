@@ -13,6 +13,7 @@ signature is checked with the bot's token, and only the owner's user id gets the
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import hmac
@@ -78,6 +79,7 @@ class Gate:
         self._key = key
         self.state = LinkState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self._redeeming = asyncio.Lock()
 
     async def new_link(self, now: datetime | None = None) -> str:
         token = secrets.token_urlsafe(24)
@@ -87,12 +89,13 @@ class Gate:
 
     async def redeem(self, token: str, now: datetime | None = None) -> str | None:
         """A session cookie value, once, for a valid link."""
-        await self._runner.catch_up()
-        digest = _hash(token)
-        expires = self.state.links.get(digest)
-        if expires is None or (now or datetime.now(UTC)) > expires:
-            return None
-        await self._record(LINK_USED, {"hash": digest})
+        async with self._redeeming:  # two clicks at once: one session, not two
+            await self._runner.catch_up()
+            digest = _hash(token)
+            expires = self.state.links.get(digest)
+            if expires is None or (now or datetime.now(UTC)) > expires:
+                return None
+            await self._record(LINK_USED, {"hash": digest})
         return self.sign(time.time() + SESSION_DAYS * 86400)
 
     async def telegram_session(self, user_id: int) -> str:

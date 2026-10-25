@@ -210,3 +210,15 @@ async def test_what_happened_elsewhere_reaches_the_next_owner_message(
     provider.extend(reply("Rien depuis."))
     await world.orion.handle_owner_message("owner", "Et là ?", "telegram")
     assert "<pendant_ce_temps>" not in str(provider.requests[-1].messages[-1]["content"])
+
+
+async def test_one_mission_that_breaks_does_not_stop_the_others(journal: SqliteJournal) -> None:
+    def broken(_request: object) -> object:
+        raise RuntimeError("a bug")
+
+    provider = ScriptedProvider(broken, reply("Rien de neuf pour le vélo."))  # pyright: ignore[reportArgumentType]
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    await world.use("mission_start", owner, goal="Un appart à Dreux", every_hours=24)
+    await world.use("mission_start", owner, goal="Un vélo d'occasion", every_hours=24)
+    assert len(await world.work.once()) == 1  # the first broke; the second still ran

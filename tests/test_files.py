@@ -317,3 +317,15 @@ async def test_orions_own_data_is_never_sent_from_the_server(tmp_path: Path) -> 
         journal = str((tmp_path / "data" / "journal.sqlite3").resolve())
         result = await run(tool, action="server", path=journal)
     assert result.is_error and "never sends from" in result.content
+
+
+async def test_a_file_being_saved_is_not_taken_for_a_forgotten_one(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    store = FileStore(journal, tmp_path / "files")
+    path = tmp_path / "files" / "fi_1" / "devis.pdf"
+    path.parent.mkdir(parents=True)
+    store._writing.add(path)  # pyright: ignore[reportPrivateUsage]  # as save does first
+    path.write_bytes(b"%PDF")
+    await store.sync()  # its event is not appended yet
+    assert path.exists()

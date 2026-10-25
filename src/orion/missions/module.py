@@ -61,7 +61,13 @@ class MissionWork:
         done: list[str] = []
         for mission in await self._missions.active():
             if mission.due(now):
-                await self.work(mission, now)
+                try:
+                    await self.work(mission, now)
+                except Exception:
+                    # One mission that breaks does not stop the others; it is tried again at
+                    # its next pass.
+                    log.exception("missions.pass_failed", mission=mission.id)
+                    continue
                 done.append(mission.id)
         return done
 

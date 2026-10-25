@@ -332,3 +332,21 @@ async def test_a_feed_that_fails_never_shows_its_secret_address(
             with pytest.raises(FeedError) as failed:
                 await fetch_feed(http, account)
         assert "SECRETTOKEN" not in str(failed.value) and "perso" in str(failed.value)
+
+
+async def test_the_night_the_clocks_go_back_an_event_past_is_not_said_to_come(
+    journal: SqliteJournal,
+) -> None:
+    night = vevent(
+        "night",
+        "DTSTART;TZID=Europe/Paris:20261025T025500",  # 02:55 the first time (summer time)
+        "DTEND;TZID=Europe/Paris:20261025T040000",
+        "SUMMARY:Garde",
+    )
+    feeds = Feeds(**{"https://cal.example/perso.ics": feed(night)})
+    later = datetime(2026, 10, 25, 2, 50, fold=1, tzinfo=PARIS)  # 02:50 the second time
+    calendar = Calendar(journal, settings(), "Europe/Paris", feeds.fetch, Clock(later))
+    await calendar.start()
+    await calendar.sync_once()
+    assert await calendar.alerts(later) == []  # it began 55 minutes ago, not in 5
+    assert (await calendar.presence(later)).busy

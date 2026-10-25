@@ -128,6 +128,8 @@ class FileStore:
         self.folder = folder
         self._kept = _Kept(folder)
         self._runner = ProjectionRunner(journal, [self._kept])
+        self._writing: set[Path] = set()
+        """Files written whose event is not appended yet."""
 
     async def sync(self) -> None:
         """Catch up, and remove the files no event names any more (forgotten)."""
@@ -135,8 +137,10 @@ class FileStore:
         if not self.folder.exists():
             return
         kept = {m.path for m in self._kept.files.values()}
+        self._writing -= kept
         for path in sorted(self.folder.rglob("*"), reverse=True):
-            if path.is_file() and path not in kept:
+            # Just written, its event not appended yet: being kept, not forgotten.
+            if path.is_file() and path not in kept and path not in self._writing:
                 path.unlink()
                 log.info("files.forgotten", file=path.relative_to(self.folder).as_posix())
             elif path.is_dir() and not any(path.iterdir()):
@@ -165,6 +169,7 @@ class FileStore:
         stored = f"{file_id}/{named}"
         path = self.folder / stored
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._writing.add(path)  # until MADE names it
         await asyncio.to_thread(write_private, path, data)
         await self._journal.append(
             [
