@@ -145,7 +145,10 @@ async def _serve(config: OrionConfig) -> int:
         print(f"Impossible de démarrer : {exc}")
         return 2
     if not any(module.channel for module in modules):
-        print("Aucun canal activé : mets `enabled = true` dans [channels.imessage].")
+        print(
+            "Aucun canal activé. Relance `orion setup` pour Telegram, ou essaie "
+            "`orion chat` dans ce terminal."
+        )
         return 2
     if not _secrets_kept_apart(config):
         return 2
