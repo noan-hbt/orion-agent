@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import time
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -236,7 +237,20 @@ class Setup:
         if self.guardian_env:
             write_env(self.secrets / GUARDIAN_ENV, self.guardian_env)
         self.say(f"\nC'est écrit : {self.config}, et les secrets dans {self.secrets}.")
-        if self.server:
+        channels: dict[str, Any] = tomllib.loads(after).get("channels", {})
+        live = any(
+            cast(dict[str, Any], section).get("enabled")
+            for section in channels.values()
+            if isinstance(section, dict)
+        )
+        if not live:
+            # `serve` refuses to start without a channel: say what works without one.
+            self.say(
+                "\nAucun canal pour l'instant (pas de bot Telegram). Essaie-le d'abord dans ce "
+                f"terminal : `orion --config {self.config} chat`.\n"
+                "Pour Telegram, relance `orion setup` quand tu as le jeton du bot."
+            )
+        elif self.server:
             self.say("Démarre-le : sudo systemctl restart orion-guardian orion-core")
         elif split:
             self.say(
