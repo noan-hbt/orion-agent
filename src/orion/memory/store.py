@@ -340,6 +340,9 @@ class MemoryStore:
 
     def _apply_sync(self, event: Event) -> None:
         with self._sql.transaction() as db:
+            row = db.execute("SELECT value FROM meta WHERE key = 'checkpoint'").fetchone()
+            if row is not None and int(row[0]) >= event.seq:
+                return  # already applied
             if not event.redacted:
                 self._dispatch(db, event)
             db.execute(
@@ -447,7 +450,7 @@ class MemoryStore:
         for old in fact.supersedes:
             self._invalidate(db, old, f"superseded by {fact.fact_id}", fact.valid_from, event.seq)
         about = [a.strip() for a in fact.about if a.strip()]
-        db.execute(
+        inserted = db.execute(
             "INSERT OR IGNORE INTO facts (id, statement, about, category, valid_from, "
             "known_from_seq, known_from_hlc, trust, event_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
@@ -463,6 +466,8 @@ class MemoryStore:
                 event.provenance.source,
             ),
         )
+        if inserted.rowcount == 0:
+            return  # the same fact asserted again: searched once
         db.execute(
             "INSERT INTO facts_fts (fact_id, statement, about) VALUES (?,?,?)",
             (fact.fact_id, fact.statement, " ".join(about)),

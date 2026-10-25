@@ -8,6 +8,7 @@ store is a projection of those events. That keeps memory rebuildable, auditable,
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,6 +78,10 @@ class CommitmentCreated(BaseModel):
     creditor: str = Field(description="Who it is owed to: 'owner', 'orion', or a person's name")
     what: str = Field(min_length=1, max_length=500)
     due: str | None = Field(default=None, description="ISO date or datetime, if any")
+
+
+Closing = Literal[CommitmentStatus.DONE, CommitmentStatus.CANCELLED]
+"""How a commitment closes: never "open" again."""
 
 
 class CommitmentClosed(BaseModel):

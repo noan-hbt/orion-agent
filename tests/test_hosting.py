@@ -49,6 +49,17 @@ async def test_a_backup_is_a_checked_copy_and_old_ones_go(tmp_path: Path) -> Non
     copy.close()
 
 
+async def test_a_journal_under_an_odd_folder_name_is_backed_up(tmp_path: Path) -> None:
+    folder = tmp_path / "Mes données #1 ?"
+    folder.mkdir()
+    source = folder / "journal.sqlite3"
+    await journal_with(source, 2)
+    now = datetime(2026, 10, 1, tzinfo=UTC)
+    assert backup(source, tmp_path / "copies", keep=2, now=now).events == 2
+    with pytest.raises(BackupError, match="already being made"):  # the same second, twice
+        backup(source, tmp_path / "copies", keep=2, now=now)
+
+
 def test_nothing_to_back_up_fails_and_leaves_nothing(tmp_path: Path) -> None:
     with pytest.raises(BackupError):
         backup(tmp_path / "missing.sqlite3", tmp_path / "copies", keep=3)

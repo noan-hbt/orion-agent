@@ -39,7 +39,7 @@ class BackupResult:
 def _copy(source: Path, target: Path) -> int:
     if not source.exists():
         raise BackupError(f"nothing to back up: {source} does not exist")
-    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    src = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
     dst = sqlite3.connect(target)
     try:
         src.backup(dst)
@@ -57,7 +57,7 @@ def verify(path: Path) -> int:
     readable by this Orion, in order with no gap. Returns the number of events."""
     if not path.exists():
         raise BackupError(f"no journal at {path}")
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     try:
         (check,) = db.execute("PRAGMA integrity_check").fetchone()
@@ -91,7 +91,10 @@ def backup(source: Path, destination: Path, keep: int, now: datetime | None = No
         raise BackupError("keep at least one copy")
     stamp = (now or datetime.now(UTC)).astimezone(UTC).strftime(STAMP)
     folder = destination / stamp
-    folder.mkdir(parents=True, exist_ok=False)
+    try:
+        folder.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise BackupError(f"a backup is already being made at {folder}") from exc
     folder.chmod(0o700)
     try:
         events = _copy(source, folder / source.name)

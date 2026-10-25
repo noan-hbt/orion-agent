@@ -203,18 +203,26 @@ class Consolidator:
 
     async def consolidate(self, now: datetime) -> NightReport:
         semantic = self._memory.semantic
-        pairs = (
-            await semantic.similar_pairs(self.settings.similarity, self.settings.max_pairs)
-            if semantic is not None
-            else []
-        )
+        pairs: list[tuple[Fact, Fact, float]] = []
+        if semantic is not None:
+            try:
+                pairs = await semantic.similar_pairs(
+                    self.settings.similarity, self.settings.max_pairs
+                )
+            except ProviderError:  # no embeddings tonight: the names are still looked at
+                log.warning("memory.night_embeddings_failed", exc_info=True)
         names = self._name_candidates(
             await self._memory.store.facts(),
             await self._memory.store.aliases(),
         )
         report = NightReport(pairs=len(pairs))
         if pairs or names:
-            verdict = await self._judge(pairs, names)
+            try:
+                verdict = await self._judge(pairs, names)
+            except ProviderError:
+                # The model is out of reach: the night is not done, the next tick tries again.
+                log.warning("memory.night_judge_unreachable", exc_info=True)
+                return report
             if verdict is not None:
                 report = await self._apply(verdict, pairs, names, now)
         await self._journal.append(
@@ -266,7 +274,7 @@ class Consolidator:
                 )
             )
             return _Verdict.model_validate(json.loads(response.text))
-        except (ProviderError, json.JSONDecodeError, ValidationError):
+        except (json.JSONDecodeError, ValidationError):
             log.warning("memory.night_judge_failed", exc_info=True)
             return None
 

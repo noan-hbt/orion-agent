@@ -259,6 +259,9 @@ class Provenances:
         for _ in range(depth):
             if current is None:
                 break
+            if current.redacted:  # forgotten: not even where it came from is told
+                lines.append("(effacé à la demande du propriétaire)")
+                break
             lines.append(_line(current))
             parent = (current.provenance.derived_from or (current.causation_id,))[0]
             current = by_id.get(parent) if parent else None

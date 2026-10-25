@@ -33,7 +33,10 @@ def version_of(kind: str) -> int:
 
 def upcast(kind: str, version: int, payload: Payload) -> tuple[str, Payload]:
     """An event as written (`kind`, `version`, `payload`), in today's shape."""
-    kind = RENAMED.get(kind, kind)
+    if version < 1:
+        raise ValueError(f"event of kind {kind!r} has no valid version ({version})")
+    if kind in RENAMED:
+        kind, version = RENAMED[kind], 1  # its old versions are the new kind's first shape
     steps = UPCASTERS.get(kind, [])
     if version > len(steps) + 1:
         raise ValueError(

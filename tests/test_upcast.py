@@ -56,6 +56,16 @@ async def test_a_renamed_kind_is_read_under_its_new_name(tmp_path: Path, registr
         assert event.kind == "attachment.looked" and event.payload == {"id": "ph_1"}
 
 
+def test_a_renamed_kind_is_upcast_from_the_new_kinds_first_version(registry: None) -> None:
+    upcast.UPCASTERS["photo.looked"] = [lambda p: p]  # the old kind was at version 2
+    upcast.UPCASTERS["attachment.looked"] = [lambda p: {**p, "kind": "photo"}]
+    upcast.RENAMED["photo.looked"] = "attachment.looked"
+    kind, payload = upcast.upcast("photo.looked", 2, {"id": "ph_1"})
+    assert kind == "attachment.looked" and payload == {"id": "ph_1", "kind": "photo"}
+    with pytest.raises(ValueError, match="no valid version"):
+        upcast.upcast("attachment.looked", 0, {})
+
+
 async def test_an_event_from_a_newer_orion_is_refused(tmp_path: Path, registry: None) -> None:
     path = tmp_path / "j.sqlite3"
     upcast.UPCASTERS["x.y"] = [lambda p: p]
