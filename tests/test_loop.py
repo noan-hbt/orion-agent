@@ -315,3 +315,15 @@ async def test_a_tool_step_that_breaks_still_answers_every_call() -> None:
     asked: list[dict[str, Any]] = messages[1].get("tool_calls") or []
     answered = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
     assert answered == [str(c["id"]) for c in asked]
+
+
+async def test_the_reasoning_effort_reaches_every_request() -> None:
+    provider = ScriptedProvider(call_tools(("echo", {"text": "a"})), reply("Fait."))
+    settings = LoopSettings(
+        model="m", session_id="s", thread_id="t", correlation_id="c", reasoning_effort="low"
+    )
+    await collect(provider, settings=settings)
+    assert [r.reasoning_effort for r in provider.requests] == ["low", "low"]
+    unset = ScriptedProvider(reply("Fait."))
+    await collect(unset)
+    assert unset.requests[0].reasoning_effort is None  # the model's own default, as before

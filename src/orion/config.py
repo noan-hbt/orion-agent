@@ -104,6 +104,10 @@ class AgentConfig(BaseModel):
     )
     max_tool_calls: int = Field(default=80, ge=0)
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = Field(
+        default=None,
+        description="How long the model thinks before each step of a turn; none: its own default",
+    )
     prune_idle_minutes: int = Field(
         default=10,
         ge=0,
