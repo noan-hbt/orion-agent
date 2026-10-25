@@ -504,6 +504,7 @@ class Orion:
             correlation_id=correlation_id,
             origin_event_id=received.id,
             timezone=self._agent.timezone,
+            reasoning_effort=self._agent.reasoning_effort,
             asking=asking,
             halted=halted,
             finish_check=offer_check
