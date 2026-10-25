@@ -24,6 +24,7 @@ from orion.core.events import Event
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.memory.service import MemoryService
+from orion.memory.store import name_key
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -129,11 +130,17 @@ def style_tools(
         await runner.catch_up()
         parts = [style_card(list(writing.messages))]
         if args.to and memory is not None:
-            name = args.to.lower()
+            # Whole words of the name: « Paul » is « Paul Martin », not « Pauline » nor an
+            # entry of one letter that every name holds.
+            wanted = set(name_key(args.to).split())
             known = [
                 f.statement
                 for f in await memory.store.facts()
-                if any(name in a.lower() or a.lower() in name for a in f.about if a != "owner")
+                if any(
+                    (words := set(name_key(a).split())) and (words <= wanted or wanted <= words)
+                    for a in f.about
+                    if a != "owner"
+                )
             ]
             if known:
                 parts.append(

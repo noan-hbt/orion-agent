@@ -173,6 +173,8 @@ class VoiceChannel:
         self._client = client
         self._journal = journal
         self._inbox = inbox
+        self._ending: set[str] = set()
+        """Calls whose end is being recorded: the same end twice at once is one."""
         self._settings = settings
         self._owner = normalize_number(settings.owner_number)
         self._memory = memory
@@ -304,6 +306,17 @@ class VoiceChannel:
             await asyncio.sleep(interval)
 
     async def ended(
+        self, call: Call, entries: list[TranscriptEntry], items: list[ActionItem]
+    ) -> None:
+        if call.id in self._ending:  # the webhook retried, or the poll found it meanwhile
+            return
+        self._ending.add(call.id)
+        try:
+            await self._ended(call, entries, items)
+        finally:
+            self._ending.discard(call.id)
+
+    async def _ended(
         self, call: Call, entries: list[TranscriptEntry], items: list[ActionItem]
     ) -> None:
         await self._runner.catch_up()

@@ -57,7 +57,10 @@ def build_brief(
 ) -> str:
     trusted = Trust.SYSTEM
     sections: list[tuple[str, list[str]]] = [
-        ("Sa façon de travailler avec toi (à respecter)", [f"- {r.rule}" for r in rules]),
+        (
+            "Sa façon de travailler avec toi (à respecter)",
+            [f"- {r.rule}" for r in rules if r.trust >= trusted],
+        ),
         (
             "Ce que tu sais de lui",
             [

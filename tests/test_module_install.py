@@ -180,3 +180,12 @@ async def test_split_the_guardian_turns_it_on_under_the_yes_to_install_it(
         assert load_config(source).modules["des"]["enabled"] is True
         with pytest.raises(GuardianUnavailableError, match="already used"):
             await g.client.configure([switch[0].described()], "x", grant, "des")
+
+
+def test_installing_sees_none_of_orions_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-orion")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+    monkeypatch.setenv("UV_INDEX_URL", "https://pypi.example/simple")
+    env = installing.install_env()
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["HTTPS_PROXY"] == "http://proxy:3128" and "UV_INDEX_URL" in env

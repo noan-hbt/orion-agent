@@ -20,6 +20,10 @@ class AudioError(RuntimeError):
     pass
 
 
+FFMPEG_TIMEOUT = 120.0
+"""A conversion that hangs (a broken file) must not hold the turn."""
+
+
 async def _ffmpeg(arguments: list[str], data: bytes, expect_output: bool = True) -> bytes:
     binary = shutil.which("ffmpeg")
     if binary is None:
@@ -33,7 +37,14 @@ async def _ffmpeg(arguments: list[str], data: bytes, expect_output: bool = True)
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await process.communicate(data)
+    try:
+        out, err = await asyncio.wait_for(process.communicate(data), FFMPEG_TIMEOUT)
+    except TimeoutError as exc:
+        raise AudioError(f"ffmpeg took more than {FFMPEG_TIMEOUT:.0f} s") from exc
+    finally:
+        if process.returncode is None:  # timed out, or the turn was cancelled
+            process.kill()
+            await process.wait()
     if process.returncode != 0 or (expect_output and not out):
         raise AudioError(f"ffmpeg failed: {err.decode('utf-8', 'replace')[:300]}")
     return out

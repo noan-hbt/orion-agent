@@ -73,3 +73,12 @@ async def test_a_draft_for_someone_knows_how_he_talks_to_them(
     assert "emojis cœur" in result.content
     other = await tool.handler(tool.parse(json.dumps({"to": "Paul"})), ToolContext("owner", "c"))
     assert "Rien en mémoire sur sa façon d'écrire à Paul." in other.content
+    # A one-letter entry, or another name holding his, is not him.
+    for about in (["a"], ["Pauline"], [""]):
+        await memory.remember(
+            f"Note sur {about}.",
+            Origin(actor="owner:main", source="imessage:owner", trust=Trust.OWNER),
+            about=about,
+        )
+    still = await tool.handler(tool.parse(json.dumps({"to": "Paul"})), ToolContext("owner", "c"))
+    assert "Rien en mémoire sur sa façon d'écrire à Paul." in still.content

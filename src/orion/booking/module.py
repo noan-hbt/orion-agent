@@ -206,15 +206,21 @@ class Bookings:
             await self.sync()
             settled: list[Booking] = []
             for booking in self.state.unsettled():
-                if booking.ok:
-                    await self._confirm(booking)
-                else:
-                    await self._append(
-                        FAILED,
-                        {"booking_id": booking.id, "error": booking.error},
-                        _ORIGIN,
-                        booking.correlation_id,
-                    )
+                try:
+                    if booking.ok:
+                        await self._confirm(booking)
+                    else:
+                        await self._append(
+                            FAILED,
+                            {"booking_id": booking.id, "error": booking.error},
+                            _ORIGIN,
+                            booking.correlation_id,
+                        )
+                except Exception:
+                    # One booking that breaks does not keep the others from settling; it is
+                    # tried again at the next pass.
+                    log.exception("booking.settle_failed", booking=booking.id)
+                    continue
                 settled.append(self.state.bookings[booking.id])
             return settled
 
