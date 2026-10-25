@@ -17,10 +17,12 @@ used up is an error the router falls back on.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -41,6 +43,20 @@ log = structlog.get_logger(__name__)
 
 _SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PID")
 """Set when Orion itself runs under Claude Code: the child must not pass for that session."""
+_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR")
+_ENV_PREFIXES = ("CLAUDE", "ANTHROPIC")
+
+
+def child_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """What a `claude` Orion runs sees: what it needs to run and find its login, never Orion's
+    other keys (its provider keys, its bot token…), nor the session Orion itself may run in."""
+    source = os.environ if environ is None else environ
+    return {
+        k: v
+        for k, v in source.items()
+        if (k in _ENV_KEEP or k.startswith(_ENV_PREFIXES)) and k not in _SESSION_ENV
+    }
+
 
 _PROTOCOL = """
 
@@ -177,22 +193,25 @@ class ClaudeCodeProvider:
         if request.json_output:
             system += "\n\nRéponds par un seul objet JSON, sans rien autour."
         system_file = self._system_file(system)
-        process = await asyncio.create_subprocess_exec(
-            *self.command(request, system_file),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._workdir,
-            env={k: v for k, v in os.environ.items() if k not in _SESSION_ENV},
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *self.command(request, system_file),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._workdir,
+                env=child_env(),
+            )
+        except OSError as exc:  # no binary, no permission: another provider may answer
+            raise ProviderError(f"cannot start Claude Code: {exc}", retryable=False) from exc
         try:
             out, err = await asyncio.wait_for(
                 process.communicate(conversation.encode()), self._timeout
             )
         except TimeoutError as exc:
-            process.kill()
-            await process.wait()
             raise ProviderError("Claude Code did not answer in time", retryable=True) from exc
+        finally:
+            await stop(process)  # timed out, or the turn was cancelled: never left running
         return self.parse(request, out, err, process.returncode or 0)
 
     def _system_file(self, system: str) -> Path:
@@ -275,3 +294,11 @@ class ClaudeCodeProvider:
             model=next(iter(models), request.model),
             provider=self.name,
         )
+
+
+async def stop(process: asyncio.subprocess.Process) -> None:
+    """A child still running is killed and reaped (nothing if it already exited)."""
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()

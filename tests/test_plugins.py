@@ -86,3 +86,83 @@ async def test_skills_are_kept_read_and_installed_from_the_catalog(tmp_path: Pat
     # From a catalog outside Orion's own: read as outside content.
     skills.write(Skill("ailleurs", "x", "fais ceci", source="https://exemple.org/s.md"))
     assert (await run(action="read", name="ailleurs")).trust is Trust.THIRD_PARTY
+
+
+def test_a_server_orion_runs_sees_none_of_its_keys(monkeypatch: Any) -> None:
+    from orion.mcp.module import server_env
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-orion")
+    monkeypatch.setenv("NOTION_TOKEN", "secret-notion")
+    server = McpServer(name="notion", command=["notion-mcp"], env=["NOTION_TOKEN"])
+    env = server_env(server)
+    assert env["NOTION_TOKEN"] == "secret-notion" and "PATH" in env
+    assert "OPENROUTER_API_KEY" not in env
+
+
+async def test_calls_at_once_each_get_their_own_answer() -> None:
+    import asyncio
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        body: dict[str, Any] = json.loads(request.content)
+        if body["params"].get("slow"):
+            await asyncio.sleep(0.05)  # answered after the second call was sent
+        data = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": body["params"]})
+        return httpx.Response(200, text=f"data: {data}\n\n",
+                              headers={"content-type": "text/event-stream"})  # fmt: skip
+
+    transport = HttpTransport(httpx.AsyncClient(transport=httpx.MockTransport(handle)), "https://x")
+    slow, fast = await asyncio.gather(
+        transport.request("tools/call", {"slow": True}), transport.request("tools/call", {"n": 2})
+    )
+    assert slow == {"slow": True} and fast == {"n": 2}
+    await transport.aclose()
+
+
+async def test_a_server_that_never_answers_does_not_hold_the_turn(monkeypatch: Any) -> None:
+    import sys
+
+    import pytest
+
+    from orion.mcp import client as mcp_client
+    from orion.mcp.client import McpError, StdioTransport
+
+    monkeypatch.setattr(mcp_client, "CALL_TIMEOUT", 0.2)
+    hung = await StdioTransport.start(
+        [sys.executable, "-c", "import time; time.sleep(30)"], {"PATH": "/usr/bin:/bin"}
+    )
+    with pytest.raises(McpError, match="no answer"):
+        await hung.request("tools/list", {})
+    await hung.aclose()
+
+
+async def test_two_tools_with_the_same_safe_name_do_not_stop_orion(monkeypatch: Any) -> None:
+    from types import SimpleNamespace
+
+    from orion.config import OrionConfig
+    from orion.mcp import module as mcp_module
+    from orion.mcp.module import McpModule
+
+    def two_alike() -> httpx.MockTransport:
+        def handle(request: httpx.Request) -> httpx.Response:
+            body: dict[str, Any] = json.loads(request.content)
+            if "id" not in body:
+                return httpx.Response(202)
+            tools = [{"name": "get-page"}, {"name": "get.page"}]
+            result = {"tools": tools} if body["method"] == "tools/list" else {}
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+        return httpx.MockTransport(handle)
+
+    async def connect(server: McpServer, _guardian: object) -> McpClient:
+        client = McpClient(HttpTransport(httpx.AsyncClient(transport=two_alike()), server.url))
+        await client.start()
+        return client
+
+    monkeypatch.setattr(mcp_module, "connect", connect)
+    config = OrionConfig.model_validate(
+        {"modules": {"mcp": {"servers": [{"name": "notes", "url": "https://x/mcp"}]}}}
+    )
+    module = McpModule(config)
+    tools = await module.assemble(SimpleNamespace(guardian=None))  # pyright: ignore[reportArgumentType]
+    assert [t.name for t in tools] == ["mcp_notes_get_page"]
+    await module.close()

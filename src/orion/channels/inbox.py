@@ -197,7 +197,28 @@ class OwnerInbox:
                     self._held.appendleft(item)  # a different kind of message: its own turn
                     break
                 batch.append(item)
-            await self._handle(batch, waited=time.monotonic() - started)
+            try:
+                await self._handle(batch, waited=time.monotonic() - started)
+            except Exception:
+                # One failed turn (a provider bug, a reply that could not leave) must not stop
+                # the owner's next messages from being answered. The batch stays unanswered in
+                # its channel's journal, and is offered again at the next start.
+                log.exception(
+                    "inbox.turn_failed",
+                    channel=batch[0].channel,
+                    messages=len(batch),
+                    refs=[i for item in batch for i in item.message_ids],
+                )
+                await self._say_it_failed(batch[0])
+
+    async def _say_it_failed(self, first: Inbound) -> None:
+        reply = self._outlets.get(first.reply_via or first.channel)
+        if reply is None or first.allow_silence:
+            return
+        try:
+            await reply.deliver("(Je n'ai pas pu te répondre : une erreur de mon côté.)", None)
+        except Exception:
+            log.exception("inbox.failure_notice_failed", channel=reply.name)
 
     async def _next(self) -> Inbound:
         if self._held:

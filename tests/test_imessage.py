@@ -189,6 +189,7 @@ async def test_approval_by_tapback(
     await _bind_owner(channel, fake, provider)
     pending = asyncio.create_task(channel.approve(PROPOSAL))
     await until(lambda: len(fake.sent) == 2)
+    await until(lambda: bool(channel._approvals))  # pyright: ignore[reportPrivateUsage]
     assert "send_mail" in fake.texts()[1] and "paul@example.com" in fake.texts()[1]
     fake.react(fake.sent[1]["id"], "like")
     await channel.poll_once()
@@ -203,6 +204,7 @@ async def test_approval_by_word_is_not_a_new_turn(
     await _bind_owner(channel, fake, provider)
     pending = asyncio.create_task(channel.approve(PROPOSAL))
     await until(lambda: len(fake.sent) == 2)
+    await until(lambda: bool(channel._approvals))  # pyright: ignore[reportPrivateUsage]
     fake.inbound("Non.")
     await channel.poll_once()
     assert (await pending).granted is False
@@ -228,6 +230,43 @@ async def test_no_answer_means_no(
         worker.cancel()
         with pytest.raises(asyncio.CancelledError):
             await worker
+
+
+async def test_only_the_owners_tapback_answers_an_approval(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider
+) -> None:
+    await _bind_owner(channel, fake, provider)
+    pending = asyncio.create_task(channel.approve(PROPOSAL))
+    await until(lambda: len(fake.sent) == 2)
+    await until(lambda: bool(channel._approvals))  # pyright: ignore[reportPrivateUsage]
+    fake.react(fake.sent[1]["id"], "like", sender="+33699999999")
+    await channel.poll_once()
+    assert not pending.done()
+    fake.react(fake.sent[1]["id"], "dislike")
+    await channel.poll_once()
+    assert (await pending).granted is False
+
+
+async def test_an_approval_that_could_not_be_sent_is_no_and_says_so(
+    channel: IMessageChannel, fake: FakeInkbox, provider: ScriptedProvider, journal: SqliteJournal
+) -> None:
+    await _bind_owner(channel, fake, provider)
+    fake.fail_sends = [400]
+    approval = await channel.approve(PROPOSAL)
+    assert approval.granted is False and approval.reached is False
+    [decided] = [e for e in await journal.read() if e.kind == APPROVAL_DECIDED]
+    assert decided.payload["how"] == "unsent"
+
+
+async def test_a_message_delivered_twice_at_once_is_one_message(
+    channel: IMessageChannel, fake: FakeInkbox, journal: SqliteJournal
+) -> None:
+    from orion.channels.imessage import INBOUND
+    from orion.channels.inkbox import IMessage
+
+    message = IMessage.model_validate(fake.inbound("une fois"))
+    await asyncio.gather(channel.receive(message), channel.receive(message))
+    assert len([e for e in await journal.read() if e.kind == INBOUND]) == 1
 
 
 async def test_approval_refused_when_owner_never_wrote(channel: IMessageChannel) -> None:
@@ -302,6 +341,7 @@ async def test_a_text_tapback_answers_an_approval(
     await _bind_owner(channel, fake, provider)
     pending = asyncio.create_task(channel.approve(PROPOSAL))
     await until(lambda: len(fake.sent) == 2)
+    await until(lambda: bool(channel._approvals))  # pyright: ignore[reportPrivateUsage]
     question = fake.texts()[1]
     fake.inbound(f"A ajouté un « J\u2019aime » à « {question[:40]}… »")
     await channel.poll_once()

@@ -291,3 +291,23 @@ async def test_files_and_questions_go_where_he_last_wrote_from(
     telegram.up = False  # gone: the next one up
     await inbox.deliver_file(Path("b.pdf"), "", None)
     assert imessage.files == ["vocal.m4a", "b.pdf"]
+
+
+async def test_a_turn_that_breaks_does_not_stop_the_next_one(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+
+    def broken(_request: Any) -> Any:
+        raise RuntimeError("a bug somewhere")
+
+    provider.extend(broken, reply("Me revoilà."))
+    with structlog.testing.capture_logs() as logs:
+        inbox.submit(Inbound("imessage", ("a",), "un"))
+        await until(lambda: bool(imessage.sent))
+    assert imessage.sent == ["(Je n'ai pas pu te répondre : une erreur de mon côté.)"]
+    assert any(e["event"] == "inbox.turn_failed" for e in logs)
+    inbox.submit(Inbound("imessage", ("b",), "deux"))
+    await until(lambda: len(imessage.sent) == 2)
+    assert imessage.sent[-1] == "Me revoilà."

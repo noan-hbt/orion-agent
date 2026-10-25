@@ -76,10 +76,20 @@ def mcp_tool(server: McpServer, client: McpClient, spec: dict[str, Any]) -> Tool
     )
 
 
+BASE_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "USER")
+"""What any program needs to run (find its binaries, its cache, its language)."""
+
+
+def server_env(server: McpServer) -> dict[str, str]:
+    """A command server's environment: the basics and the variables named for it, never the
+    rest of Orion's (its provider keys, its bot token…)."""
+    return {name: os.environ[name] for name in (*BASE_ENV, *server.env) if name in os.environ}
+
+
 async def connect(server: McpServer, guardian: GuardianClient | None) -> McpClient:
     transport: Transport
     if server.command:
-        transport = await StdioTransport.start(server.command, dict(os.environ))
+        transport = await StdioTransport.start(server.command, server_env(server))
     elif guardian is not None and server.token is not None:
         transport = HttpTransport(guardian.relay(), f"/v1/mcp/{server.name}")
     else:
@@ -90,7 +100,11 @@ async def connect(server: McpServer, guardian: GuardianClient | None) -> McpClie
         )
         transport = HttpTransport(httpx.AsyncClient(headers=headers, timeout=60.0), server.url)
     client = McpClient(transport)
-    await client.start()
+    try:
+        await client.start()
+    except BaseException:
+        await client.aclose()  # a server that will not start is not left running
+        raise
     return client
 
 
@@ -107,16 +121,31 @@ class McpModule(Module):
 
         settings: McpSettings = self.settings
         tools: list[Tool] = []
+        taken: set[str] = set()
         for server in settings.servers:
             try:
                 client = await asyncio.wait_for(connect(server, plate.guardian), START_TIMEOUT)
-                specs = await asyncio.wait_for(client.tools(), START_TIMEOUT)
             except (McpError, OSError, LookupError, TimeoutError) as exc:
                 # One server down must not keep Orion from starting: it runs without its tools.
                 log.warning("mcp.server_unavailable", server=server.name, error=repr(exc))
                 continue
-            self.clients.append(client)
-            tools += [mcp_tool(server, client, spec) for spec in specs if spec.get("name")]
+            self.clients.append(client)  # closed with the module, whatever happens next
+            try:
+                specs = await asyncio.wait_for(client.tools(), START_TIMEOUT)
+            except (McpError, OSError, TimeoutError) as exc:
+                log.warning("mcp.server_unavailable", server=server.name, error=repr(exc))
+                continue
+            for spec in specs:
+                if not spec.get("name"):
+                    continue
+                tool = mcp_tool(server, client, spec)
+                if tool.name in taken:
+                    # Two tools that read the same once made safe (`a-b`, `a.b`): the first
+                    # keeps the name, the other is left out rather than stopping Orion.
+                    log.warning("mcp.tool_name_taken", server=server.name, tool=spec.get("name"))
+                    continue
+                taken.add(tool.name)
+                tools.append(tool)
             log.info("mcp.server", server=server.name, tools=len(specs))
         return tools
 

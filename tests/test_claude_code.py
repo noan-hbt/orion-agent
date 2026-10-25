@@ -69,6 +69,7 @@ async def test_tool_calls_come_back_and_nothing_of_claude_code_is_used(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CLAUDECODE", "1")  # Orion itself under Claude Code
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-orion")  # another of Orion's keys
     answer: dict[str, Any] = {
         "type": "result",
         "subtype": "success",
@@ -100,7 +101,7 @@ async def test_tool_calls_come_back_and_nothing_of_claude_code_is_used(
     system: str = got["system"]
     assert system.startswith("Tu es Orion.") and "## echo" in system
     assert got["cwd"] == str(tmp_path / "work")
-    assert "CLAUDECODE" not in str(got["env"])
+    assert "CLAUDECODE" not in got["env"] and "OPENROUTER_API_KEY" not in got["env"]
     assert '<tool_result id="c1">\n42\n</tool_result>' in str(got["stdin"])
 
 
@@ -136,3 +137,34 @@ async def test_pictures_are_refused_for_another_provider(tmp_path: Path) -> None
     with pytest.raises(ProviderError, match="text only") as caught:
         await provider.complete(picture)
     assert not caught.value.retryable
+
+
+async def test_a_claude_that_cannot_start_is_a_provider_error(tmp_path: Path) -> None:
+    from orion.providers.base import ProviderError
+
+    provider = ClaudeCodeProvider(tmp_path / "work", str(tmp_path / "no-such-claude"))
+    with pytest.raises(ProviderError, match="cannot start"):
+        await provider.complete(request())
+
+
+async def test_a_cancelled_turn_leaves_no_claude_running(tmp_path: Path) -> None:
+    import asyncio
+    import os
+
+    pid_file = tmp_path / "pid"
+    script = tmp_path / "claude"
+    script.write_text(
+        f"#!{sys.executable}\nimport os, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n"
+    )
+    script.chmod(0o755)
+    provider = ClaudeCodeProvider(tmp_path / "work", str(script))
+    turn = asyncio.create_task(provider.complete(request()))
+    async with asyncio.timeout(5):
+        while not pid_file.exists() or not pid_file.read_text():  # noqa: ASYNC110
+            await asyncio.sleep(0.02)
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)

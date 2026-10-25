@@ -655,8 +655,9 @@ class TelegramChannel:
         if answer is None:
             return False
         future = self._approvals[next(reversed(self._approvals))]
-        if not future.done():
-            future.set_result((answer, "word", [ref]))
+        if future.done():
+            return False  # already answered: the message is an ordinary one
+        future.set_result((answer, "word", [ref]))
         return True
 
     def _resolve(self, message_id: int, yes: bool, no: bool, how: str) -> None:
@@ -748,6 +749,9 @@ def _parts(text: str) -> list[str]:
     parts: list[str] = []
     current = ""
     for paragraph in text.split("\n\n"):
+        if len(paragraph) > MAX_TEXT and current:
+            parts.append(current)  # what came before goes first
+            current = ""
         while len(paragraph) > MAX_TEXT:
             parts.append(paragraph[:MAX_TEXT])
             paragraph = paragraph[MAX_TEXT:]
