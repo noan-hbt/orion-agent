@@ -25,7 +25,7 @@ from typing import Any
 import structlog
 
 from orion.context.threads import MESSAGE_KIND, REBASED_KIND
-from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.events import Event, NewEvent, Provenance, Trust, owned_by
 from orion.core.journal import EventStore
 from orion.initiative.timers import TIMER_SCHEDULED, Timers
 from orion.memory.model import (
@@ -106,11 +106,6 @@ _AFTER = r"(?![\w@-]|[.:/][\w])"
 `web:https://a.fr/x` is not `web:https://a.fr/x2` (a sentence's full stop is fine)."""
 
 
-def _owned_by(source: str, wanted: str) -> bool:
-    """`wanted` itself, or something under it (`mail:perso` holds `mail:perso:<id>`)."""
-    return source == wanted or source.startswith(wanted + ":")
-
-
 def _pattern(markers: set[str]) -> re.Pattern[str]:
     longest_first = sorted(markers, key=len, reverse=True)
     return re.compile("(?:" + "|".join(map(re.escape, longest_first)) + ")" + _AFTER)
@@ -123,7 +118,7 @@ def _mentions(event: Event, pattern: re.Pattern[str]) -> bool:
 def trace(events: list[Event], source: str) -> Trace:
     result = Trace(source)
     live = [e for e in events if not e.redacted]
-    result.origins = [e for e in live if _owned_by(e.provenance.source, source)]
+    result.origins = [e for e in live if owned_by(e.provenance.source, source)]
     if result.empty:
         return result
     pattern = _pattern(_markers(result.origins, source))

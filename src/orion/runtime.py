@@ -424,7 +424,11 @@ class Orion:
             events.append(
                 self._event(
                     PRUNED_KIND,
-                    {"thread_id": thread_id, "indexes": prune},
+                    {
+                        "thread_id": thread_id,
+                        "indexes": prune,
+                        "seqs": [thread.seqs[i] for i in prune],
+                    },
                     Trust.SYSTEM,
                     correlation_id,
                     received.id,
@@ -465,7 +469,11 @@ class Orion:
             events.append(
                 self._event(
                     REBASED_KIND,
-                    {"thread_id": thread_id, "base": new_base},
+                    {
+                        "thread_id": thread_id,
+                        "base": new_base,
+                        "after_seq": thread.after_seq(new_base),
+                    },
                     Trust.SYSTEM,
                     correlation_id,
                     received.id,
@@ -669,9 +677,8 @@ class Orion:
         """Forget a source everywhere: memory, and the conversations that will be replayed."""
         if self._memory is None:
             raise RuntimeError("memory is not configured")
-        report = await self._memory.forget_source(source_prefix, reason, actor="owner:main")
-        await self._projections.rebuild(self.threads.name)
-        return report
+        # Every projection on the journal is rebuilt by the forgetting, these threads included.
+        return await self._memory.forget_source(source_prefix, reason, actor="owner:main")
 
     @property
     def journal(self) -> EventStore:

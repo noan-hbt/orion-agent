@@ -43,6 +43,9 @@ class Thread:
     id: str
     messages: list[Message] = field(default_factory=list[Message])
     trusts: list[Trust] = field(default_factory=list[Trust])
+    seqs: list[int] = field(default_factory=list[int])
+    """Each message's journal position: what rebases and prunings name, so a message
+    forgotten since does not shift them."""
     base: int = 0
     last_at: datetime | None = None
     """When the last message was added (the turn's time), if recorded."""
@@ -77,6 +80,10 @@ class Thread:
             and len(str(self.messages[i].get("content") or "")) > min_chars
         ]
 
+    def after_seq(self, index: int) -> int:
+        """The journal position of the last message before `index` (0 for the start)."""
+        return self.seqs[index - 1] if 0 < index <= len(self.seqs) else 0
+
     def window_trust(self) -> Trust:
         return min(self.trusts[self.base :], default=Trust.OWNER)
 
@@ -97,16 +104,26 @@ class ThreadProjection:
                 thread = self._thread(event.payload["thread_id"])
                 thread.messages.append(event.payload["message"])
                 thread.trusts.append(event.trust)
+                thread.seqs.append(event.seq)
                 if "at" in event.payload:
                     thread.last_at = datetime.fromisoformat(str(event.payload["at"]))
                 thread.last_seq = event.seq
                 thread.last_correlation = event.correlation_id
             elif event.kind == REBASED_KIND:
                 thread = self._thread(event.payload["thread_id"])
-                thread.base = max(thread.base, int(event.payload["base"]))
+                if "after_seq" in event.payload:  # every message up to it is out of the window
+                    after = int(event.payload["after_seq"])
+                    base = sum(1 for seq in thread.seqs if seq <= after)
+                else:  # rebases from before positions were recorded
+                    base = int(event.payload["base"])
+                thread.base = max(thread.base, base)
             elif event.kind == PRUNED_KIND:
                 thread = self._thread(event.payload["thread_id"])
-                thread.pruned.update(int(i) for i in event.payload["indexes"])
+                if "seqs" in event.payload:
+                    named = {int(seq) for seq in event.payload["seqs"]}
+                    thread.pruned.update(i for i, seq in enumerate(thread.seqs) if seq in named)
+                else:
+                    thread.pruned.update(int(i) for i in event.payload["indexes"])
         self._checkpoint = event.seq
 
     async def reset(self) -> None:

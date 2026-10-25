@@ -10,6 +10,7 @@ projection itself, so applying an event and advancing the checkpoint happen atom
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import weakref
 from datetime import date, datetime, time, timedelta
@@ -90,6 +91,9 @@ class ProjectionRunner:
         self._journal = journal
         self._projections = projections
         self._batch = batch
+        self._lock = asyncio.Lock()
+        """One catch-up or rebuild at a time: two reading the same cursor would apply the same
+        events twice, and a rebuild must not reset state under a catch-up."""
         ProjectionRunner.live.add(self)
 
     @property
@@ -105,23 +109,50 @@ class ProjectionRunner:
         the names of those that came back different (their state does not depend on the
         journal alone). Resets live state: run it on a copy, or in tests."""
         different: list[str] = []
-        for projection in self._projections:
-            before = await state_of(projection)
-            await self.rebuild(projection.name)
-            if await state_of(projection) != before:
-                different.append(projection.name)
+        async with self._lock:
+            for projection in self._projections:
+                before = await state_of(projection)
+                await self._rebuild(projection)
+                if await state_of(projection) != before:
+                    different.append(projection.name)
         return different
 
     async def catch_up(self) -> int:
         """Apply every pending event to every projection. Returns the number of applications."""
         applied = 0
-        for projection in self._projections:
-            applied += await self._catch_up_one(projection)
+        async with self._lock:
+            for projection in self._projections:
+                applied += await self._catch_up_one(projection)
         return applied
 
     async def rebuild(self, name: str) -> int:
         """Reset one projection and replay the whole journal into it."""
         projection = self._find(name)
+        async with self._lock:
+            return await self._rebuild(projection)
+
+    async def rebuild_all(self) -> int:
+        """Every projection reset and replayed: after a redaction, nothing keeps what was
+        forgotten."""
+        applied = 0
+        async with self._lock:
+            for projection in self._projections:
+                applied += await self._rebuild(projection)
+        return applied
+
+    @classmethod
+    async def rebuild_everywhere(cls, journal: EventStore) -> int:
+        """Every projection of every runner on `journal` in this process, rebuilt: after a
+        redaction, no module keeps what was forgotten (its library, its pending extraction,
+        its doubts…), not only the one that forgot."""
+        applied = 0
+        for runner in list(cls.live):
+            if runner.journal is journal:
+                applied += await runner.rebuild_all()
+        return applied
+
+    async def _rebuild(self, projection: Projection) -> int:
+        name = projection.name
         await projection.reset()
         log.info("projection.rebuild", projection=name)
         return await self._catch_up_one(projection)

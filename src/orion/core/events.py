@@ -33,6 +33,15 @@ def derive_trust(inputs: Iterable[Trust]) -> Trust:
     return min(inputs, default=Trust.UNKNOWN)
 
 
+def owned_by(source: str, wanted: str) -> bool:
+    """`wanted` itself, or something under it (`mail:perso` holds `mail:perso:<id>`, not
+    `mail:perso2`; `mail:perso:1` does not hold `mail:perso:12`). Ending with `:`, `wanted`
+    is a whole family (`terminal:` holds every terminal thread)."""
+    if wanted.endswith(":"):
+        return source.startswith(wanted)
+    return source == wanted or source.startswith(wanted + ":")
+
+
 class Provenance(BaseModel):
     """Where a piece of content came from and what it was derived from."""
 

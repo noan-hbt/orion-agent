@@ -112,6 +112,8 @@ _OPERATION = TypeAdapter[Operation](Operation)
 class ExtractionReport(BaseModel):
     applied: list[str] = Field(default_factory=list[str])
     rejected: list[str] = Field(default_factory=list[str])
+    unavailable: bool = False
+    """The model could not be reached: nothing was read, to be tried again."""
 
 
 class MemoryExtractor:
@@ -175,7 +177,7 @@ class MemoryExtractor:
             )
         except ProviderError:
             log.exception("memory.extract_failed")
-            return ExtractionReport(rejected=["provider error"])
+            return ExtractionReport(rejected=["provider error"], unavailable=True)
         return await self._apply(response.text, origin, set(known), {c.id for c in commitments})
 
     async def _apply(

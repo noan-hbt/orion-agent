@@ -88,8 +88,11 @@ async def test_projection_rebuilds_identically(
 async def test_forget_source_removes_derived_memory_and_verifies(
     memory: MemoryService, journal: SqliteJournal
 ) -> None:
-    [mail] = await journal.append(
-        [make_event("mail.received", source="mail:42", body="RDV dentiste")]
+    [mail, neighbour] = await journal.append(
+        [
+            make_event("mail.received", source="mail:42", body="RDV dentiste"),
+            make_event("mail.received", source="mail:420", body="Facture"),  # not mail:42
+        ]
     )
     from_mail = Origin("orion:core", "thread:t1", Trust.THIRD_PARTY, derived_from=(mail.id,))
     await memory.remember("Rendez-vous chez le dentiste le 3 novembre.", from_mail)
@@ -107,6 +110,8 @@ async def test_forget_source_removes_derived_memory_and_verifies(
     assert await memory.store.search("dentiste", include_past=True) == []
     stored_mail = await journal.get(mail.id)
     assert stored_mail is not None and stored_mail.payload == {}
+    other = await journal.get(neighbour.id)
+    assert other is not None and other.payload == {"body": "Facture"}
 
 
 @pytest.mark.parametrize("text", ['"; DROP TABLE facts; --', "NEAR(a b) OR *", "a b c"])

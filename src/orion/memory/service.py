@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import BaseModel
 
-from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.events import Event, NewEvent, Provenance, Trust, owned_by
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -171,7 +171,7 @@ class MemoryService:
     async def forget_source(self, source_prefix: str, reason: str, actor: str) -> ForgetReport:
         """Redact every event from `source_prefix` and everything derived from it."""
         events = await self._all_events()
-        doomed = {e.id for e in events if e.provenance.source.startswith(source_prefix)}
+        doomed = {e.id for e in events if owned_by(e.provenance.source, source_prefix)}
         changed = True
         while changed:  # transitive closure over derivation and causation links
             changed = False
@@ -190,7 +190,7 @@ class MemoryService:
         commitments_before = {c.id for c in await self.store.commitments(status=None)}
         if doomed:
             await self._journal.redact(sorted(doomed), reason=reason, actor=actor)
-        await self._runner.rebuild(self.store.name)
+        await ProjectionRunner.rebuild_everywhere(self._journal)
         facts_after = {f.id for f in await self.store.facts(include_past=True)}
         commitments_after = {c.id for c in await self.store.commitments(status=None)}
 
