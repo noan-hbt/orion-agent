@@ -13,6 +13,7 @@ leaving them with a half-finished thought.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -148,6 +149,16 @@ just changed (a running call is never interrupted)."""
 
 SKIPPED = "Not run: the owner wrote meanwhile; read their message first, then decide."
 CALLED_OFF = "Not run: this work was called off."
+SAME_FAILURE = (
+    "\n[Orion · cet outil vient d'échouer deux fois de la même façon : réessayer ne changera "
+    "rien. Change d'approche, ou dis ce qui bloque.]"
+)
+CUT = (
+    "[Orion · ta réponse a été coupée par la limite de longueur. Continue exactement où elle "
+    "s'arrête, sans rien répéter.]"
+)
+MAX_CUTS = 2
+"""Times a reply cut by the length limit is continued before it goes as it is."""
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -162,6 +173,8 @@ class Told:
 
     text: str
 
+
+REPEAT_REFUSED = "repeat refused"
 
 EARLY = ("plan",)
 """Run before a step's other calls, so what they tell leaves before a slow tool runs."""
@@ -194,6 +207,8 @@ async def run_agent(
     model = settings.model
     max_cost = budget.max_cost_usd
     checked = False
+    failures: Counter[tuple[str, str]] = Counter()
+    parts: list[str] = []  # a reply cut by the length limit, so far: continued, then joined
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -266,8 +281,22 @@ async def run_agent(
             reason = (
                 StopReason.TRUNCATED if response.finish_reason == "length" else StopReason.COMPLETED
             )
+            if (
+                reason is StopReason.TRUNCATED
+                and len(parts) < MAX_CUTS
+                and _step < budget.max_steps - 1
+                and usage.cost_usd < max_cost
+            ):
+                # Cut mid-sentence: the model goes on from there, and the owner gets it whole.
+                log.info("loop.reply_cut", thread=settings.thread_id, cuts=len(parts) + 1)
+                parts.append(response.text or "")
+                more: Message = {"role": "user", "content": CUT}
+                messages.append(more)
+                yield MessageEmitted(more, Trust.SYSTEM)
+                continue
+            text = "".join([*parts, response.text or ""])
             note = (
-                settings.finish_check(response.text)
+                settings.finish_check(text)
                 if settings.finish_check is not None
                 and not checked
                 and reason is StopReason.COMPLETED
@@ -281,7 +310,7 @@ async def run_agent(
                 messages.append(nudge)
                 yield MessageEmitted(nudge, Trust.SYSTEM)
                 continue
-            yield finished(reason, response.text)
+            yield finished(reason, text)
             return
 
         tool_calls_made += len(response.tool_calls)
@@ -308,8 +337,8 @@ async def run_agent(
 
         stalled = False
         for call in response.tool_calls:
-            call_counts[(call.name, call.arguments)] += 1
-            if call_counts[(call.name, call.arguments)] > budget.max_identical_calls + 1:
+            call_counts[_signature(call)] += 1
+            if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
         started = time.monotonic()
@@ -360,10 +389,18 @@ async def run_agent(
                 model = switch
                 max_cost = max(max_cost, float(result.data.get(SWITCH_COST, max_cost)))
             context_trust = min(context_trust, result.trust)
+            content = result.content
+            if result.is_error and result.content != SKIPPED and reason != REPEAT_REFUSED:
+                # The same failure twice, whatever the arguments: say once that it will not pass.
+                failure = (call.name, result.content[:200])
+                failures[failure] += 1
+                if failures[failure] == 2:
+                    log.info("loop.same_failure", thread=settings.thread_id, tool=call.name)
+                    content += SAME_FAILURE
             tool_message: Message = {
                 "role": "tool",
                 "tool_call_id": call.id,
-                "content": result.content,
+                "content": content,
             }
             messages.append(tool_message)
             yield ToolExecuted(call, result, reason)
@@ -444,13 +481,13 @@ async def _execute_one(
     call_counts: Counter[tuple[str, str]],
     budget: Budget,
 ) -> tuple[ToolResult, str]:
-    if call_counts[(call.name, call.arguments)] > budget.max_identical_calls:
+    if call_counts[_signature(call)] > budget.max_identical_calls:
         return (
             ToolResult(
                 "You already made this exact call. Its result is above; change approach.",
                 is_error=True,
             ),
-            "repeat refused",
+            REPEAT_REFUSED,
         )
     tool = registry.get(call.name)
     if tool is None:
@@ -484,8 +521,25 @@ async def _execute_one(
 
 
 def _clip(result: ToolResult, tool: Tool) -> ToolResult:
-    if len(result.content) <= tool.max_output_chars:
+    """Too long: the start and the end are kept (where totals, errors and conclusions sit), and
+    the middle is cut, with what was cut said in its place."""
+    content = result.content
+    limit = tool.max_output_chars
+    if len(content) <= limit:
         return result
-    kept = result.content[: tool.max_output_chars]
-    note = f"\n[truncated: {len(result.content) - len(kept)} more characters not shown]"
-    return ToolResult(kept + note, result.is_error, result.data, result.trust)
+    tail = limit // 3
+    head = limit - tail
+    cut = len(content) - head - tail
+    note = f"\n[… {cut} characters cut here, of {len(content)} …]\n"
+    kept = content[:head] + note + (content[-tail:] if tail else "")
+    return ToolResult(kept, result.is_error, result.data, result.trust)
+
+
+def _signature(call: ToolCall) -> tuple[str, str]:
+    """The call as the repeat counter sees it: its arguments as data, not as typed, so spaces
+    or key order do not make a new call."""
+    try:
+        data = json.loads(call.arguments or "{}")
+    except json.JSONDecodeError:
+        return call.name, call.arguments
+    return call.name, json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))

@@ -2598,3 +2598,27 @@ part (D28), ce qui n'était pas son cas : Orion répondait « le gardien ne tour
 - **Depuis son téléphone** : `browser` save_password lui envoie un formulaire (servi par la
   console, vérifié par Telegram) pour donner un identifiant ; il va dans le coffre.
 - Orion regarde son coffre avant de passer la main pour une connexion.
+
+## D122 — Une boucle qui ne bute plus sur les mêmes murs
+
+*25/10/2026 · acceptée*
+
+Comparée au code public d'autres agents (Codex CLI, OpenHands, Cline, opencode), la boucle
+d'Orion avait quatre angles morts sur les tâches longues. On reprend ce qu'ils font de mieux,
+sans rien changer à la confiance ni au cache de prompt.
+
+- **Un appel répété se reconnaît même retapé** : le compteur lit les arguments comme des
+  données (clés triées, sans espaces), plus comme du texte. Un `{"text": "a"}` et un
+  `{"text":"a"}` sont le même appel.
+- **Le même échec deux fois est dit sans espoir** (comme le rappel d'OpenHands,
+  `stuck_detector.py`) : quand un outil renvoie deux fois la même erreur, même avec d'autres
+  arguments, son résultat dit une fois que réessayer ne changera rien.
+- **Une sortie trop longue garde son début et sa fin** (comme Codex,
+  `output-truncation`) : le milieu est coupé, avec ce qui l'a été à sa place. Les totaux, les
+  erreurs et les conclusions sont souvent à la fin.
+- **Une réponse coupée par la limite de longueur est continuée** (comme Cline) : jusqu'à deux
+  fois, le modèle reprend où elle s'arrête, et le propriétaire la reçoit entière.
+
+Déjà en place, et gardé : les nouvelles tentatives chez le fournisseur et les modèles de secours,
+le résumé structuré quand la fenêtre se décale, le bilan à court d'étapes, la pagination des
+pages.
