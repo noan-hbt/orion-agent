@@ -46,6 +46,9 @@ class StopReason(StrEnum):
     PROVIDER_ERROR = "provider_error"
     TRUNCATED = "truncated"
     HALTED = "halted"
+    TOOL_ERROR = "tool_error"
+    """A tool step failed in a way no tool result covers (a bug): every call is answered with
+    the failure, so the thread stays well formed for the next turn."""
 
 
 Halted = Callable[[], Awaitable[bool]]
@@ -311,25 +314,42 @@ async def run_agent(
 
         started = time.monotonic()
         first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
-        for call in response.tool_calls:
-            if call.name in EARLY:
-                result, reason = await _execute_one(
-                    call, registry, guardian, settings, context_trust, call_counts, budget
-                )
-                first[call.id] = (call, result, reason)
-                told = result.data.get(TELL)
-                if isinstance(told, str) and told and not result.is_error:
-                    yield Told(told)
-        rest = await _execute_calls(
-            [c for c in response.tool_calls if c.id not in first],
-            registry,
-            guardian,
-            settings,
-            context_trust,
-            call_counts,
-            budget,
-            waiting,
-        )
+        try:
+            for call in response.tool_calls:
+                if call.name in EARLY:
+                    result, reason = await _execute_one(
+                        call, registry, guardian, settings, context_trust, call_counts, budget
+                    )
+                    first[call.id] = (call, result, reason)
+                    told = result.data.get(TELL)
+                    if isinstance(told, str) and told and not result.is_error:
+                        yield Told(told)
+            rest = await _execute_calls(
+                [c for c in response.tool_calls if c.id not in first],
+                registry,
+                guardian,
+                settings,
+                context_trust,
+                call_counts,
+                budget,
+                waiting,
+            )
+        except Exception as exc:
+            # The assistant message asking for these calls is already journaled: each gets an
+            # answer, or every later request in this thread would be refused by the provider.
+            log.exception("loop.tool_step_failed", thread=settings.thread_id)
+            stopped = f"Not run: an internal error stopped the step ({type(exc).__name__})."
+            for call in response.tool_calls:
+                done = first.get(call.id)
+                answer: Message = {
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": done[1].content if done is not None else stopped,
+                }
+                messages.append(answer)
+                yield MessageEmitted(answer, done[1].trust if done is not None else Trust.SYSTEM)
+            yield finished(StopReason.TOOL_ERROR, last_text, repr(exc))
+            return
         by_id = {**first, **{c.id: (c, r, why) for c, r, why in rest}}
         executions = [by_id[c.id] for c in response.tool_calls]
         tool_seconds += time.monotonic() - started

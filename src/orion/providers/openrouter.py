@@ -186,7 +186,19 @@ class OpenRouterProvider:
         """`text` said aloud by an audio model, word for word. OpenRouter streams the audio with
         what was said, at no extra cost: an audio model is a chat model, and now and then it
         introduces the text instead of saying it. That voice is refused (Orion writes instead)."""
-        pcm, transcript = await self._speak_once(model, text, voice)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                pcm, transcript = await self._speak_once(model, text, voice)
+                break
+            except ProviderError as exc:  # a dropped stream or a busy model: tried again
+                if not exc.retryable or attempt >= self._max_attempts:
+                    raise
+                delay = self._backoff(attempt, exc)
+                log.warning("provider.retry", provider=self.name, attempt=attempt,
+                            status=exc.status, delay=round(delay, 2), error=str(exc))  # fmt: skip
+                await asyncio.sleep(delay)
         if said_as_written(text, transcript):
             return pcm
         log.warning("openrouter.speech_unfaithful", said=transcript[:200])
@@ -226,12 +238,12 @@ class OpenRouterProvider:
                         delta = cast(dict[str, Any], choice.get("delta") or {})
                         audio = cast(dict[str, Any], delta.get("audio") or {})
                         if audio.get("data"):
-                            chunks.append(base64.b64decode(str(audio["data"])))
+                            chunks.append(base64.b64decode(str(audio["data"]), validate=True))
                         if audio.get("transcript"):
                             said.append(str(audio["transcript"]))
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:  # not JSON, or audio that is not base64
             raise ProviderError("invalid event from provider", retryable=True) from exc
         if not chunks:
             raise ProviderError("the speech model sent no audio", retryable=False)

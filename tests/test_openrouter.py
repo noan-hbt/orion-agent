@@ -229,6 +229,28 @@ async def test_a_voice_that_introduces_the_text_is_refused() -> None:
         await provider.speak("openai/gpt-audio-mini", text, "alloy")
 
 
+async def test_a_busy_voice_is_tried_again_and_bad_audio_is_a_provider_error() -> None:
+    text = "C'est noté."
+    calls = 0
+
+    def busy_once(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(503, text="busy")
+        return speech(text)(request)
+
+    assert await provider_with(busy_once).speak("m", text, "alloy") == b"\x00\x01"
+    assert calls == 2
+
+    def garbled(_request: httpx.Request) -> httpx.Response:
+        line = json.dumps({"choices": [{"delta": {"audio": {"data": "%%%"}}}]})
+        return httpx.Response(200, text=f"data: {line}\n\ndata: [DONE]\n\n")
+
+    with pytest.raises(ProviderError, match="invalid event"):
+        await provider_with(garbled, max_attempts=1).speak("m", text, "alloy")
+
+
 def with_image() -> ModelRequest:
     image = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
     return ModelRequest(

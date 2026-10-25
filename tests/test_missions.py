@@ -113,6 +113,18 @@ async def test_what_a_mission_read_on_the_web_keeps_its_trust(journal: SqliteJou
     assert alert.trust <= Trust.WEB
 
 
+async def test_a_refusal_written_after_reading_a_page_is_worth_that_page(
+    journal: SqliteJournal,
+) -> None:
+    world = World(journal, ScriptedProvider())
+    await world.use("mission_start", ToolContext("owner", "c0"), goal="Un vélo", every_hours=24)
+    [mission] = await world.missions.active()
+    web = ToolContext("owner", "c1", context_trust=Trust.WEB)
+    await world.use("mission_reject", web, mission=mission.id, key="https://a.fr", why="trop")
+    [mission] = await world.missions.active()
+    assert mission.trust is Trust.WEB  # not recorded as the owner's own words
+
+
 async def test_a_mission_called_off_while_it_runs_stops_there(journal: SqliteJournal) -> None:
     provider = ScriptedProvider()
     world = World(journal, provider)

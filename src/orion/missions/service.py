@@ -307,12 +307,15 @@ class Missions:
         why: str,
         provenance: Provenance,
         correlation_id: str | None,
+        trust: Trust = Trust.OWNER,
     ) -> None:
+        """`trust`: of the conversation that turned it down (a refusal written after reading a
+        page is worth that page, and the mission's brief carries it)."""
         await self._record(
             REJECTED,
             {"mission_id": mission_id, "key": key, "why": why},
             provenance,
-            Trust.OWNER,
+            trust,
             correlation_id,
         )
 

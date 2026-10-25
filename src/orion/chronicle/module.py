@@ -168,13 +168,16 @@ class ChronicleState:
             )
         elif event.kind == OWNED and not event.redacted:
             payload = event.payload
-            self.owned.append(
-                (
-                    datetime.fromisoformat(str(payload["at"])),
-                    str(payload["what"]),
-                    str(payload.get("lesson", "")),
+            if event.trust >= TRUSTED_FLOOR:
+                # Owned after reading a page or a mail, it may be that page talking: the week's
+                # page, read back at SYSTEM trust, keeps only what came from trusted turns.
+                self.owned.append(
+                    (
+                        datetime.fromisoformat(str(payload["at"])),
+                        str(payload["what"]),
+                        str(payload.get("lesson", "")),
+                    )
                 )
-            )
         elif not event.redacted:
             failure = _failure(event)
             if failure is not None:
@@ -237,15 +240,13 @@ class Chronicle:
         await self.sync()
         now = self.clock().astimezone(self.zone)
         week = monday_of(now.date())
-        if (
-            now.weekday() != self.settings.weekday
-            or now.time() < self.settings.at
-            or week in self.state.pages
-        ):
+        if now.weekday() != self.settings.weekday or now.time() < self.settings.at:
             return None
-        page = await self.write(week, now)
+        page = await self.write(week, now) if week not in self.state.pages else None
         if now.day <= 7 and f"{now:%Y-%m}" not in self.state.noticed:
-            await self.notice(now)  # the first Sunday of the month
+            # The first Sunday of the month; tried again at each tick that day if the model
+            # was out of reach, even once the week's page is written.
+            await self.notice(now)
         return page
 
     async def notice(self, now: datetime) -> str:
@@ -373,14 +374,16 @@ class Chronicle:
         lines += [f"- {what}" + (f" ({n} fois)" if n > 1 else "") for what, n in failed.items()]
         return "\n".join(lines)
 
-    async def own(self, what: str, lesson: str, origin: Provenance) -> None:
+    async def own(
+        self, what: str, lesson: str, origin: Provenance, trust: Trust = Trust.SYSTEM
+    ) -> None:
         await self._journal.append(
             [
                 NewEvent(
                     kind=OWNED,
                     payload={"what": what, "lesson": lesson, "at": self.clock().isoformat()},
                     provenance=origin,
-                    trust=Trust.SYSTEM,
+                    trust=min(trust, Trust.SYSTEM),
                 )
             ]
         )
@@ -483,6 +486,7 @@ def chronicle_tools(chronicle: Chronicle) -> list[Tool]:
                 actor="orion:core",
                 derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
             ),
+            ctx.context_trust,
         )
         return ToolResult("Noté dans ton carnet d'erreurs : la chronique de dimanche en parlera.")
 

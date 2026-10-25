@@ -124,13 +124,22 @@ class Adapter:
         )
         if not due:
             return None
-        report = await self._reflector.reflect(signals[-MAX_SIGNALS:])
+        # The oldest first, MAX_SIGNALS at a time: what is left over is reviewed next time,
+        # never skipped.
+        batch = signals[:MAX_SIGNALS]
+        report = await self._reflector.reflect(batch)
+        if report.unavailable:
+            return report  # nothing reviewed: the same signals wait for the next pass
+        up_to = events[-1].seq
+        if len(signals) > MAX_SIGNALS:
+            seqs = {e.id: e.seq for e in events}
+            up_to = seqs.get(batch[-1].id, up_to)
         await self._journal.append(
             [
                 NewEvent(
                     kind=REFLECTED,
                     payload={
-                        "up_to_seq": events[-1].seq,
+                        "up_to_seq": up_to,
                         "at": now.isoformat(),
                         "signals": len(signals),
                         **report.model_dump(),

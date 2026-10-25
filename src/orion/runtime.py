@@ -707,11 +707,17 @@ class Orion:
         if turn.reason is not StopReason.COMPLETED or not turn.owner_text:
             return report
         recorded: list[Fact] = []
-        for event in await self._journal.read(0, 100_000):
-            if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
-                fact = await self._memory.store.fact(str(event.payload["fact_id"]))
-                if fact is not None:
-                    recorded.append(fact)
+        # What this turn recorded itself: read from the turn's first event on, not the whole
+        # journal (which grows forever).
+        received = await self._journal.get(turn.origin_event_id)
+        cursor = received.seq - 1 if received is not None else 0
+        while batch := await self._journal.read(cursor, 1000):
+            cursor = batch[-1].seq
+            for event in batch:
+                if event.correlation_id == turn.correlation_id and event.kind == FACT_ASSERTED:
+                    fact = await self._memory.store.fact(str(event.payload["fact_id"]))
+                    if fact is not None:
+                        recorded.append(fact)
         origin = Origin(
             actor="orion:extractor",
             source=f"thread:{turn.thread_id}",

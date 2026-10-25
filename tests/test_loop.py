@@ -296,3 +296,22 @@ async def test_a_shown_plan_leaves_before_a_slow_tool() -> None:
     results = [m["content"] for m in messages if m["role"] == "tool"]
     assert results[1].startswith("Plan : 0/2 fait.") and "Ensuite : chercher" in results[1]
     assert finished(events).text == "Voilà."
+
+
+async def test_a_tool_step_that_breaks_still_answers_every_call() -> None:
+    """A bug past the model's request must not leave a call unanswered: the thread would be
+    refused by the provider at every later turn."""
+
+    class Broken(Guardian):
+        async def decide(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("a bug in the guardian")
+
+    provider = ScriptedProvider(call_tools(("echo", {"text": "a"}), ("echo", {"text": "b"})))
+    messages: list[Message] = [{"role": "user", "content": "u"}]
+    registry = ToolRegistry([echo_tool()])
+    events = [e async for e in run_agent(provider, registry, Broken(), messages, SETTINGS)]
+    end = finished(events)
+    assert end.reason is StopReason.TOOL_ERROR and "a bug in the guardian" in end.detail
+    asked: list[dict[str, Any]] = messages[1].get("tool_calls") or []
+    answered = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
+    assert answered == [str(c["id"]) for c in asked]

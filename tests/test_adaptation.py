@@ -354,6 +354,27 @@ async def test_adapter_reflects_in_batches_and_never_twice_on_the_same_signals(
     assert len(provider.requests) == 1
 
 
+async def test_signals_are_reviewed_later_when_the_model_was_out_of_reach(
+    tjournal: SqliteJournal, memory: MemoryService, clock: WallClock
+) -> None:
+    from tests.fakes import fail
+
+    provider = ScriptedProvider(fail("down", retryable=True), json_reply({"operations": []}))
+    adapter = Adapter(
+        tjournal,
+        memory,
+        Reflector(provider, memory, "fake"),
+        AdaptationSettings(reflect_after_messages=3, reflect_daily_after_messages=2),
+        clock=clock,
+    )
+    await owner_says(tjournal, "un")
+    await owner_says(tjournal, "deux")
+    failed = (await adapter.tick()).reflection
+    assert failed is not None and failed.unavailable
+    assert (await adapter.tick()).reflection is not None  # the same signals, reviewed now
+    assert "deux" in str(provider.requests[1].messages)
+
+
 async def test_forgetting_a_conversation_forgets_what_was_learned_from_it(
     tjournal: SqliteJournal, memory: MemoryService, clock: WallClock
 ) -> None:

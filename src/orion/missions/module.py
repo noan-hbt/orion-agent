@@ -244,7 +244,9 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
     async def reject(args: Any, ctx: ToolContext) -> ToolResult:
         if await missions.get(args.mission) is None:
             return ToolResult(f"No mission {args.mission}.", is_error=True)
-        await missions.reject(args.mission, args.key, args.why, provenance(ctx), ctx.correlation_id)
+        await missions.reject(
+            args.mission, args.key, args.why, provenance(ctx), ctx.correlation_id, ctx.context_trust
+        )
         return ToolResult("Écarté ; la mission en tiendra compte.")
 
     async def close(args: Any, ctx: ToolContext) -> ToolResult:

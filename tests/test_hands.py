@@ -63,7 +63,7 @@ async def test_a_paired_hand_does_only_what_its_machine_allows(
     found = await tools["hand_find_files"].handler(
         tools["hand_find_files"].parse('{"device": "mac", "query": "bail"}'), ctx
     )
-    assert "bail-appartement.txt" in found.content
+    assert "bail-appartement.txt" in found.content and found.trust < found.trust.SYSTEM
     path = str(shared / "bail-appartement.txt")
     read = await tools["hand_read_file"].handler(
         tools["hand_read_file"].parse(json.dumps({"device": "mac", "path": path})), ctx
@@ -74,6 +74,11 @@ async def test_a_paired_hand_does_only_what_its_machine_allows(
         tools["hand_read_file"].parse(json.dumps({"device": "mac", "path": escape})), ctx
     )
     assert outside.is_error and "outside the allowed folders" in outside.content
+    nul = await tools["hand_read_file"].handler(
+        tools["hand_read_file"].parse(json.dumps({"device": "mac", "path": "bail\u0000.txt"})),
+        ctx,
+    )
+    assert nul.is_error and "mac" in desk.connected  # refused; the hand is still there
     with pytest.raises(HandError, match="does not allow open_url"):
         await desk.call("mac", "open_url", {"url": "https://example.com"})
     listed = await tools["hands"].handler(tools["hands"].parse("{}"), ctx)
@@ -169,3 +174,26 @@ def test_a_search_stops_walking_a_big_folder(
 
     monkeypatch.setattr(hand_module, "MAX_VISITED", 10)
     assert hand.find_files("bail") == {"content": "", "truncated": True}
+
+
+async def test_a_pairing_code_is_used_once_however_it_is_typed(journal: SqliteJournal) -> None:
+    desk = HandsDesk(journal)
+    await desk.start()
+    code = await desk.new_code("mac")
+    assert await desk.pair(f"  {code}\n") is not None
+    assert await desk.pair(code) is None
+    other = await desk.new_code("pc")
+    both = await asyncio.gather(desk.pair(other), desk.pair(other))
+    assert sum(found is not None for found in both) == 1
+
+
+def test_the_hands_secret_is_never_readable_by_others(tmp_path: Path) -> None:
+    import os
+
+    old = os.umask(0)
+    try:
+        path = tmp_path / "hand.json"
+        HandConfig(server="https://x", device="mac", secret="s").save(path)
+        assert path.stat().st_mode & 0o777 == 0o600
+    finally:
+        os.umask(old)

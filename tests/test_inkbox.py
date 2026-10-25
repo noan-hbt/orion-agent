@@ -121,6 +121,34 @@ async def test_client_retries_transient_errors() -> None:
     await client.aclose()
 
 
+async def test_a_call_that_may_have_been_placed_is_not_placed_again() -> None:
+    import httpx
+
+    from orion.channels.inkbox import InkboxClient
+
+    tries: list[str] = []
+
+    def gateway_lost(request: httpx.Request) -> httpx.Response:
+        tries.append(request.url.path)
+        return httpx.Response(502, text="bad gateway")  # the call may be ringing already
+
+    client = InkboxClient("k", transport=httpx.MockTransport(gateway_lost), max_attempts=3)
+    with pytest.raises(InkboxError):
+        await client.place_call("+33600000000", "Bonjour")
+    assert len(tries) == 1
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        tries.append(request.url.path)
+        raise httpx.ConnectError("no route", request=request)  # never left: safe again
+
+    client = InkboxClient("k", transport=httpx.MockTransport(unreachable), max_attempts=3)
+    tries.clear()
+    with pytest.raises(InkboxError):
+        await client.place_call("+33600000000", "Bonjour")
+    assert len(tries) == 3
+    await client.aclose()
+
+
 class FlakyTransport:
     def __init__(self, failures: list[SendError]) -> None:
         self.failures = failures
