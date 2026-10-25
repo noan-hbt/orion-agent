@@ -92,6 +92,20 @@ class _Live:
 MASK = "••••••"
 NO_VAULT = "No vault: the browser module has none (`orion logins add` fills it on the server)."
 HANDOVER_SECONDS = 30 * 60.0
+BROWSING = frozenset(
+    {
+        "browser_open",
+        "browser_click",
+        "browser_type",
+        "browser_select",
+        "browser_scroll",
+        "browser_back",
+        "browser_read",
+        "browser_login",
+        "browser_fill",
+    }
+)
+"""The tools that drive the page: a long turn says « je navigue sur le site » for them."""
 
 
 @dataclass
@@ -772,6 +786,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
             if effect is not Effect.EXTERNAL
             else Reversibility.IRREVERSIBLE,
             accepts_untrusted_context=effect is not Effect.EXTERNAL,
+            doing="je navigue sur le site" if name in BROWSING else "",
         )
 
     async def accounts(_args: Any, _ctx: ToolContext) -> ToolResult:

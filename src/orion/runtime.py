@@ -515,6 +515,9 @@ class Orion:
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
                 max_cost_usd=max_cost_usd or self._agent.max_cost_usd_per_turn,
+                continuations=self._agent.max_continuations
+                if thread_id == OWNER_THREAD and kind == "message.received"
+                else 0,
             ),
         )
 

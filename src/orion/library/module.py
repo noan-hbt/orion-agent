@@ -314,6 +314,7 @@ def library_tools(
         ),
         Tool(
             name="library_search",
+            doing="je cherche dans ta bibliothèque",
             description="Search the owner's library (their notes and documents) for passages "
             "about a question, by words and by meaning.",
             input_model=SearchInput,
@@ -322,6 +323,7 @@ def library_tools(
         ),
         Tool(
             name="conversations_search",
+            doing="je relis nos conversations",
             description="What was said with the owner, about something and/or between two "
             "dates (« qu'est-ce que je disais de ça en août ? »). Older than memory's facts.",
             input_model=RecallInput,

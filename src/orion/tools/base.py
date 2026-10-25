@@ -77,6 +77,9 @@ class Tool:
     check: Callable[[BaseModel], str | None] | None = None
     """For a tool with several actions: what is wrong with this call's arguments, if anything.
     Run by `parse`, so a bad call is refused before the owner is asked to approve it."""
+    doing: str = ""
+    """What a call does, in the owner's words (« je cherche sur le web »): said when a turn
+    runs long and the model said nothing (`LoopSettings.progress_after`)."""
 
     def effect_for(self, arguments: BaseModel) -> Effect:
         return self.effect_of(arguments) if self.effect_of is not None else self.effect

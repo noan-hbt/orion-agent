@@ -256,6 +256,7 @@ def mail_tools(
     tools = [
         Tool(
             name="mail",
+            doing="je regarde tes mails",
             description="The owner's recent mail (sender, subject, date), and a mail's whole "
             "text with `read`: you read it yourself. Read-only.",
             input_model=MailInput,

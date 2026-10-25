@@ -15,6 +15,7 @@ max_window_tokens = 120000   # visible conversation window before a one-step reb
 max_steps = 40               # model calls per turn (cost and repeats stop it first)
 max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
+max_continuations = 1        # out of steps, your turn goes on this many times (you are told)
 prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
 approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
                              # acting on the world, saying why (D90); "prudent" refuses that, and

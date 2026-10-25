@@ -13,6 +13,7 @@ leaving them with a half-finished thought.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -78,6 +79,9 @@ class Budget:
     max_tool_calls: int = 40
     max_cost_usd: float = 0.50
     max_identical_calls: int = 2
+    continuations: int = 0
+    """Times a turn that runs out of steps gets `max_steps` more instead of stopping, the owner
+    told it goes on. The cost cap still holds, and a stalled turn never goes on."""
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,10 @@ class LoopSettings:
     finish_check: FinishCheck | None = None
     """Asked once per run about the final reply before it goes: a note sends the model back
     to work for one more step (`orion.cognition.finish`)."""
+    progress_after: float = 10.0
+    progress_every: float = 30.0
+    """A turn still working after `progress_after` seconds says what it is doing (the tools'
+    `doing`) when the model said nothing, at most once per `progress_every` seconds."""
 
 
 WRAP_UP = (
@@ -164,6 +172,12 @@ just changed (a running call is never interrupted)."""
 
 SKIPPED = "Not run: the owner wrote meanwhile; read their message first, then decide."
 CALLED_OFF = "Not run: this work was called off."
+UNSENT = (
+    "[Orion · ta réponse ci-dessus n'est pas partie : un message est arrivé entre-temps. "
+    "Réponds en tenant compte de tout.]"
+)
+GOING_ON = "C'est plus long que prévu, je continue."
+WORKING = "Je m'en occupe, ça prend un peu de temps…"
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -210,6 +224,11 @@ async def run_agent(
     model = settings.model
     max_cost = budget.max_cost_usd
     checked = False
+    segment = 0  # model calls since the turn started or last went on (`Budget.continuations`)
+    continuations = budget.continuations
+    began = time.monotonic()
+    shown_at = -math.inf
+    shown: set[str] = set()
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -247,7 +266,18 @@ async def run_agent(
         yield MessageEmitted(message, min(context_trust, Trust.SYSTEM))
         yield finished(reason, response.text or last_text, detail)
 
-    for _step in range(budget.max_steps):
+    while True:
+        if segment == budget.max_steps:
+            if continuations <= 0 or usage.cost_usd >= max_cost:
+                async for event in wrap_up(StopReason.MAX_STEPS, ""):
+                    yield event
+                return
+            continuations -= 1
+            segment = 0
+            log.info("loop.going_on", thread=settings.thread_id, steps=steps)
+            yield Told(GOING_ON)
+        segment += 1
+        room = segment < budget.max_steps or continuations > 0  # another call fits after this
         request = ModelRequest(
             model=model,
             messages=messages,
@@ -284,12 +314,31 @@ async def run_agent(
             reason = (
                 StopReason.TRUNCATED if response.finish_reason == "length" else StopReason.COMPLETED
             )
+            # The owner wrote while this reply was written: it has not left yet, so the next
+            # one answers both instead of a reply to a question he may have just changed.
+            later = (
+                await steer()
+                if steer is not None
+                and reason is StopReason.COMPLETED
+                and room
+                and usage.cost_usd < max_cost
+                else None
+            )
+            if later is not None:
+                log.info("loop.reply_held", thread=settings.thread_id)
+                written, trust = later
+                messages.append(written)
+                context_trust = min(context_trust, trust)
+                unsent: Message = {"role": "user", "content": UNSENT}
+                messages.append(unsent)
+                yield MessageEmitted(unsent, Trust.SYSTEM)
+                continue
             note = (
                 settings.finish_check(response.text)
                 if settings.finish_check is not None
                 and not checked
                 and reason is StopReason.COMPLETED
-                and _step < budget.max_steps - 1
+                and room
                 else None
             )
             checked = True
@@ -324,6 +373,18 @@ async def run_agent(
                 yield event
             return
 
+        clock = time.monotonic()
+        if response.text and response.text.strip():
+            shown_at = clock  # the model said what it does: the caller delivers that
+        elif (
+            clock - began >= settings.progress_after and clock - shown_at >= settings.progress_every
+        ):
+            doing = _doing(registry, response.tool_calls)
+            if doing not in shown:
+                shown.add(doing)
+                shown_at = clock
+                yield Told(doing)
+
         stalled = False
         for call in response.tool_calls:
             call_counts[(call.name, call.arguments)] += 1
@@ -341,6 +402,7 @@ async def run_agent(
                     first[call.id] = (call, result, reason)
                     told = result.data.get(TELL)
                     if isinstance(told, str) and told and not result.is_error:
+                        shown_at = time.monotonic()
                         yield Told(told)
             rest = await _execute_calls(
                 [c for c in response.tool_calls if c.id not in first],
@@ -399,8 +461,18 @@ async def run_agent(
                 messages.append(message)
                 context_trust = min(context_trust, trust)
 
-    async for event in wrap_up(StopReason.MAX_STEPS, ""):
-        yield event
+
+def _doing(registry: ToolRegistry, calls: list[ToolCall]) -> str:
+    """What these calls do, in the owner's words: the tools' `doing`, else a plain notice."""
+    labels: list[str] = []
+    for call in calls:
+        tool = registry.get(call.name)
+        if tool is not None and tool.doing and tool.doing not in labels:
+            labels.append(tool.doing)
+    if not labels:
+        return WORKING
+    text = ", ".join(labels)
+    return f"{text[0].upper()}{text[1:]}…"
 
 
 async def _execute_calls(
