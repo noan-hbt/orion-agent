@@ -16,6 +16,7 @@ other Orions, and decides who they are.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import secrets
@@ -146,6 +147,8 @@ class FederationEdge:
         self._http = http or httpx.AsyncClient(timeout=20.0)
         self._zone = ZoneInfo(service.config.agent.timezone)
         self._inbound: defaultdict[str, deque[float]] = defaultdict(deque)
+        self._pairing = asyncio.Lock()
+        """Held from reading an invitation to marking it used: one invitation, one Orion."""
         self.card = PeerCard(
             instance=self.config.instance,
             owner_name=self.settings.owner_name,
@@ -263,7 +266,7 @@ class FederationEdge:
 
     def _admin(self, request: Request) -> bool:
         given = request.headers.get(ADMIN_HEADER, "")
-        return bool(given) and secrets.compare_digest(given, self.admin_token)
+        return bool(given) and secrets.compare_digest(given.encode(), self.admin_token.encode())
 
     async def _identity(self, _request: Request) -> Response:
         return JSONResponse(
@@ -557,7 +560,13 @@ class FederationEdge:
             return JSONResponse(a2a_error(None, str(exc)), status_code=400)
         reason, trust = await self._inbound_policy(envelope)
         if reason is not None:
-            await self.service.deny(f"federation {envelope.type} from {envelope.sender}", reason)
+            what = f"federation {envelope.type[:40]} from {envelope.sender[:80]}"
+            if self.state.peer(envelope.sender) is not None:
+                await self.service.deny(what, reason)
+            else:
+                # Anyone on the internet can post here: their refusals are logged, never
+                # journaled, so a stranger cannot fill the ledger.
+                log.warning("federation.refused_stranger", what=what, reason=reason)
             return JSONResponse(a2a_error(rpc_id, reason, -32001), status_code=403)
         if envelope.id not in self.state.envelope_ids:
             await self.service.ledger.record(
@@ -595,6 +604,11 @@ class FederationEdge:
         return None, Trust.TRUSTED_PEER
 
     async def _introduction(self, envelope: Envelope, body: Introduce) -> str | None:
+        async with self._pairing:
+            await self.service.ledger.catch_up()
+            return await self._introduce(envelope, body)
+
+    async def _introduce(self, envelope: Envelope, body: Introduce) -> str | None:
         invite = self.state.invites.get(_hash(body.token))
         if invite is None or invite.used:
             return "unknown or already used invitation"
@@ -606,6 +620,9 @@ class FederationEdge:
             return "bad signature"
         if not _safe_url(body.card.url):
             return "the Orion must be reachable over HTTPS"
+        known = self.state.peer(body.card.instance)
+        if known is not None and known.public_key != body.card.public_key:
+            return "an Orion of that name is already paired: the owner revokes it first"
         await self.service.ledger.record(INVITE_USED, {"token_hash": invite.token_hash})
         await self._add_peer(body.card, invite.label)
         return None

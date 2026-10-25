@@ -305,6 +305,9 @@ class GuardianService:
         self._tidied: dict[str, int] = {}
         """Mails tidied so far under each `mail_tidy` yes."""
         self._spending = asyncio.Lock()
+        self._configuring = asyncio.Lock()
+        self._restarting: asyncio.Task[None] | None = None
+        """Kept so the restart is not garbage-collected while it waits."""
         """Held from checking a yes (or today's allowance) to recording it spent, so two requests
         at once never both use one."""
         self._last_beat = self.monotonic()
@@ -630,7 +633,7 @@ class GuardianService:
 
     def may_send(self) -> bool:
         """A message to the owner fits in `max_sends_per_minute` (and is counted)."""
-        now = time.monotonic()
+        now = self.monotonic()
         while self._sends and now - self._sends[0] > 60:
             self._sends.popleft()
         if len(self._sends) >= self.config.guardian.max_sends_per_minute:
@@ -684,6 +687,8 @@ class GuardianService:
                 return refused("approvals go through iMessage, which is not configured", 503)
             if not await self.is_owner_conversation(asked.conversation_id):
                 return await self.deny("approval", "that conversation is not the owner's")
+            if not self.may_send():
+                return await self.deny("approval", "too many messages this minute")
             text = question + "👍 pour oui, 👎 pour non (ou réponds oui / non)."
             sent = await self._inkbox.send(
                 asked.conversation_id, text, approval_id, self._identity_id
@@ -810,9 +815,10 @@ class GuardianService:
             if reason is not None:
                 return await self.deny("configure", reason)
         try:
-            before, after = await asyncio.to_thread(rewrite, source, changes)
-            if after != before:
-                write(source, before, after)
+            async with self._configuring:  # two changes at once never undo each other
+                before, after = await asyncio.to_thread(rewrite, source, changes)
+                if after != before:
+                    write(source, before, after)
         except ConfigureError as exc:
             return refused(str(exc), 422)
         if after == before:
@@ -823,7 +829,7 @@ class GuardianService:
         )
         log.info("guardian.config_changed", paths=[c.path for c in changes])
         if self.restart is not None:
-            asyncio.get_running_loop().create_task(self.restart())
+            self._restarting = asyncio.get_running_loop().create_task(self.restart())
         return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
 
     async def _autonomy_revoke(self, request: Request) -> Response:
@@ -1146,7 +1152,8 @@ def _same_number(params: dict[str, Any], number: str) -> bool:
 
 def _mentions(reason: str, params: dict[str, Any]) -> bool:
     """The call's brief carries the approved name and goal word for word."""
-    return str(params.get("name", "")) in reason and str(params.get("goal", "")) in reason
+    name, goal = str(params.get("name", "")).strip(), str(params.get("goal", "")).strip()
+    return bool(name) and bool(goal) and name in reason and goal in reason
 
 
 __all__ = ["GuardianError", "GuardianService", "MailAccount", "refused"]

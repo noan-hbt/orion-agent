@@ -452,7 +452,9 @@ async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
                 found, skipped = read_export(text)
                 kept_before = [login for login in found if read_login(config, login.name)]
                 found = [login for login in found if login not in kept_before]
-                skipped += [f"{login.name} (déjà gardé ; retire-le d'abord)" for login in kept_before]
+                skipped += [
+                    f"{login.name} (déjà gardé ; retire-le d'abord)" for login in kept_before
+                ]
                 for login in found:
                     await add_login(config, ledger, login)
                     print(f"- {login.name} : {', '.join(login.sites)}")

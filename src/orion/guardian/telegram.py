@@ -150,6 +150,10 @@ class TelegramGate:
 
     async def ask(self, text: str) -> int:
         """An approval question, with its two buttons. Returns its message id."""
+        if not self.owner_id:
+            raise TelegramError("the owner's Telegram id is not set", 503)
+        if not self.service.may_send():
+            raise TelegramError("too many messages to the owner this minute", 429)
         return await self.client.send_message(
             self.owner_id, text[:MAX_TEXT], [("Oui", YES), ("Non", NO)]
         )

@@ -247,3 +247,15 @@ async def test_split_the_guardian_writes_the_file_after_the_owners_yes(
         assert [e.kind for e in await journal.read()].count(CHANGED) == 1
         with pytest.raises(GuardianUnavailableError, match="already used"):
             await g.client.configure(add, "ajoute Angèle", grant)
+
+
+def test_a_change_never_overwrites_one_made_meanwhile(tmp_path: Path) -> None:
+    from orion.configure.module import write
+
+    source = tmp_path / "orion.toml"
+    source.write_text('[agent]\nmodel = "a"\n', "utf-8")
+    before = source.read_text("utf-8")
+    source.write_text('[agent]\nmodel = "b"\n', "utf-8")  # another change landed first
+    with pytest.raises(ConfigureError, match="changed meanwhile"):
+        write(source, before, '[agent]\nmodel = "c"\n')
+    assert 'model = "b"' in source.read_text("utf-8")

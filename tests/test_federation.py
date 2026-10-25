@@ -533,8 +533,29 @@ async def test_strangers_forgeries_and_replays_are_refused(tmp_path: Path) -> No
         assert (await post_a2a(noan, genuine)).status_code == 200  # a retry: kept once
         received = [e for e in noan.guardian.service.ledger.state.exchanged if e.direction == "in"]
         assert [e.envelope["id"] for e in received].count("evil-1") == 1
+        # A stranger's refusal is only logged: anyone can post here, nobody fills the ledger.
         denied = [e for e in await noan.guardian.journal.read(0, 1000) if e.kind == DENIED]
-        assert len(denied) == 4
+        assert len(denied) == 3
+
+
+async def test_an_invitation_cannot_replace_a_paired_orions_key(tmp_path: Path) -> None:
+    async with two_orions(tmp_path) as (noan, _paul):
+        invite = await noan.guardian.client.post("/v1/federation/invites", {"label": "X"}, ADMIN)
+        _card, token = decode_invite(invite["code"])
+        mallory = Identity(generate_secret())
+        card = PeerCard(
+            instance="orion-paul",
+            owner_name="Paul",
+            public_key=mallory.public_key,
+            url="https://mallory.example/a2a",
+        )
+        hello = signed(
+            mallory, type="orion.introduce", body={"token": token, "card": card.model_dump()}
+        )
+        answer = await post_a2a(noan, hello)
+        assert answer.status_code == 403 and "already paired" in answer.text
+        paul = noan.guardian.service.ledger.state.peer("orion-paul")
+        assert paul is not None and paul.public_key != mallory.public_key
 
 
 async def test_an_invitation_works_once_and_pairing_needs_the_admin_token(

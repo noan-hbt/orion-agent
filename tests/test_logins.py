@@ -351,7 +351,9 @@ async def test_an_export_is_imported_from_the_command_line(
     kept = read_login(config, "doctolib")
     assert kept is not None and kept.password == "p1"
     # Created for its user alone, and removed only by its own name.
-    path = next(p for p in (tmp_path).rglob("doctolib.json"))
+    from orion.guardian.logins import logins_dir
+
+    path = logins_dir(config) / "doctolib.json"
     assert path.stat().st_mode & 0o777 == 0o600
     outside = path.parent.parent / "outside.json"
     outside.write_text("{}", encoding="utf-8")

@@ -500,3 +500,11 @@ async def test_one_tidy_yes_covers_the_cards_approved_and_no_more(
         with pytest.raises(ConnectionError, match="already used"):
             await g.client.mail_tidy(pro, "archive", [10], grant)
         assert tidied == [("perso", [1]), ("pro", [9])]
+
+
+def test_a_call_brief_must_carry_a_name_and_a_goal() -> None:
+    from orion.guardian.service import _mentions  # pyright: ignore[reportPrivateUsage]
+
+    assert _mentions(brief(), {"name": "Garage Martin", "goal": "prendre rendez-vous mardi"})
+    assert not _mentions(brief(), {"name": "", "goal": ""})  # empty fields match everything
+    assert not _mentions(brief(), {"name": "Garage Martin"})
