@@ -2599,6 +2599,30 @@ part (D28), ce qui n'était pas son cas : Orion répondait « le gardien ne tour
   console, vérifié par Telegram) pour donner un identifiant ; il va dans le coffre.
 - Orion regarde son coffre avant de passer la main pour une connexion.
 
+## D121 — La boucle écoute jusqu'au bout, dit ce qu'elle fait, et ne s'arrête plus net
+
+*25/10/2026 · acceptée*
+
+Sur Telegram, trois choses rendaient Orion moins fiable qu'un agent comme Claude Code : un
+message écrit pendant qu'il rédigeait sa réponse arrivait trop tard, un long tour restait muet
+si le modèle ne commentait pas, et un tour à court d'étapes s'arrêtait net.
+
+- **Une réponse pas encore partie est retenue** (`orion.cognition.loop`). Quand le modèle a
+  fini, la boucle regarde si le propriétaire a écrit entre-temps, comme elle le fait déjà entre
+  deux appels d'outils (D23). S'il l'a fait, la réponse ne part pas : son message et une note
+  (`UNSENT`) rejoignent la conversation, et le modèle répond aux deux. S'il ne reste pas
+  d'étape ou de budget, la réponse part et le message ouvre le tour suivant.
+- **Un long tour dit ce qu'il fait.** Après 10 s, si le modèle n'a rien dit avant ses appels
+  d'outils, Orion envoie ce que font les outils (`Tool.doing` : « je cherche sur le web… »),
+  au plus une fois toutes les 30 s et jamais deux fois la même phrase. Les outils sans
+  étiquette donnent une phrase neutre, une seule fois.
+- **Un tour à court d'étapes continue une fois** (`[agent] max_continuations`, 1 par défaut),
+  pour les messages du propriétaire seulement, en le lui disant (« c'est plus long que prévu,
+  je continue »). Le plafond de coût du tour tient toujours ; un tour qui tourne en rond
+  (appels répétés) ne continue jamais.
+- **Ce qui ne change pas** : chaque requête prolonge la précédente octet pour octet (le cache
+  de prompt) ; les phrases de progression ne sont pas dans la conversation.
+
 ## D122 — Une boucle qui ne bute plus sur les mêmes murs
 
 *25/10/2026 · acceptée*

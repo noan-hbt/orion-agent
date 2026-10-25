@@ -21,6 +21,7 @@ import structlog
 
 from orion.cognition.finish import offer_check
 from orion.cognition.loop import (
+    ANSWERED,
     Budget,
     Finished,
     Halted,
@@ -504,6 +505,7 @@ class Orion:
             correlation_id=correlation_id,
             origin_event_id=received.id,
             timezone=self._agent.timezone,
+            reasoning_effort=self._agent.reasoning_effort,
             asking=asking,
             halted=halted,
             finish_check=offer_check
@@ -513,6 +515,9 @@ class Orion:
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
                 max_cost_usd=max_cost_usd or self._agent.max_cost_usd_per_turn,
+                continuations=self._agent.max_continuations
+                if thread_id == OWNER_THREAD and kind == "message.received"
+                else 0,
             ),
         )
 
@@ -704,7 +709,7 @@ class Orion:
                 [],
             )
             log.info("memory.flushed_before_rebase", applied=len(report.applied))
-        if turn.reason is not StopReason.COMPLETED or not turn.owner_text:
+        if turn.reason not in ANSWERED or not turn.owner_text:
             return report
         recorded: list[Fact] = []
         # What this turn recorded itself: read from the turn's first event on, not the whole

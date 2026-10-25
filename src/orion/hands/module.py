@@ -114,6 +114,7 @@ def hands_tools(desk: HandsDesk) -> list[Tool]:
         ),
         Tool(
             name="hand_find_files",
+            doing="je cherche sur ton ordinateur",
             description="Find files by name in the folders the owner shared on a machine.",
             input_model=FindInput,
             # File names come from downloads and mails too: not Orion's own words.
@@ -125,6 +126,7 @@ def hands_tools(desk: HandsDesk) -> list[Tool]:
         ),
         Tool(
             name="hand_read_file",
+            doing="je lis le fichier sur ton ordinateur",
             description="Read a text file from a folder the owner shared on a machine.",
             input_model=ReadInput,
             handler=calling("read_file", ("path",), Trust.OWNER_INSTANCE),
