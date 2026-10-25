@@ -51,6 +51,19 @@ class StopReason(StrEnum):
     the failure, so the thread stays well formed for the next turn."""
 
 
+ANSWERED = frozenset(
+    {
+        StopReason.COMPLETED,
+        StopReason.MAX_STEPS,
+        StopReason.BUDGET_EXHAUSTED,
+        StopReason.STALLED,
+        StopReason.TRUNCATED,
+    }
+)
+"""The stops where the owner got a reply, possibly a wrap-up: what he said in such a turn is
+remembered. Errors and called-off work are not: their words were never answered."""
+
+
 Halted = Callable[[], Awaitable[bool]]
 """Whether the work was called off meanwhile."""
 

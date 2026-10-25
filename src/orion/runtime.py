@@ -21,6 +21,7 @@ import structlog
 
 from orion.cognition.finish import offer_check
 from orion.cognition.loop import (
+    ANSWERED,
     Budget,
     Finished,
     Halted,
@@ -704,7 +705,7 @@ class Orion:
                 [],
             )
             log.info("memory.flushed_before_rebase", applied=len(report.applied))
-        if turn.reason is not StopReason.COMPLETED or not turn.owner_text:
+        if turn.reason not in ANSWERED or not turn.owner_text:
             return report
         recorded: list[Fact] = []
         # What this turn recorded itself: read from the turn's first event on, not the whole

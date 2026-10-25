@@ -280,3 +280,61 @@ async def test_memory_gets_a_last_look_at_what_a_rebase_drops(journal: SqliteJou
     flushed_owner, flushed_orion = seen[0]
     assert "message 0" in flushed_owner and "r" * 50 in flushed_orion
     await store.close()
+
+
+async def test_what_the_owner_said_in_a_turn_stopped_by_a_limit_is_remembered(
+    journal: SqliteJournal,
+) -> None:
+    """A turn that ran out of steps still answered him: his words are extracted. A turn that
+    failed (provider error) was never answered, so nothing is taken from it."""
+    from datetime import date
+
+    from orion.cognition.loop import StopReason
+    from orion.memory.extractor import ExtractionReport, MemoryExtractor
+    from orion.memory.service import MemoryService
+    from orion.memory.store import Fact, MemoryStore
+    from orion.providers.base import Usage
+    from orion.runtime import TurnResult
+
+    seen: list[str] = []
+
+    class Extractor(MemoryExtractor):
+        async def consolidate(
+            self,
+            owner_text: str,
+            reply_text: str,
+            origin: Any,
+            today: date,
+            recorded_this_turn: list[Fact],
+        ) -> ExtractionReport:
+            seen.append(owner_text)
+            return ExtractionReport()
+
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    orion = Orion(
+        journal=journal,
+        provider=ScriptedProvider(reply("unused")),
+        registry=ToolRegistry([*builtin_tools(), echo_tool()]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("CONSTITUTION", max_window_tokens=4_000),
+        agent=AgentConfig(),
+        memory=memory,
+        extractor=Extractor(ScriptedProvider(reply("unused")), memory, "fake"),
+    )
+
+    def turn(reason: StopReason, said: str) -> TurnResult:
+        return TurnResult(
+            text="Je m'arrête là.",
+            reason=reason,
+            usage=Usage(),
+            correlation_id="c1",
+            owner_text=said,
+        )
+
+    await orion.consolidate(turn(StopReason.MAX_STEPS, "je m'appelle Paul"))
+    assert seen == ["je m'appelle Paul"]
+    await orion.consolidate(turn(StopReason.PROVIDER_ERROR, "j'habite à Dreux"))
+    assert seen == ["je m'appelle Paul"]  # never answered: nothing taken from it
+    await store.close()
