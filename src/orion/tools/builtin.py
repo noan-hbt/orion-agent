@@ -107,10 +107,11 @@ def builtin_tools() -> list[Tool]:
         ),
         Tool(
             name="plan",
-            description="Your plan for a task of three steps or more: every step with its "
-            "status (todo, doing, done), the whole list each time you move on. Mark a step "
-            "done as soon as it is, one `doing` at a time. `show` sends him the plan when you "
-            "start. Not for a quick answer.",
+            description="Your plan, only for work that is long, ambiguous or costly, where "
+            "you could lose track: every step with its status (todo, doing, done), the whole "
+            "list each time you move on, one `doing` at a time. `show` sends him the plan when "
+            "you start. Never for one action or a few obvious steps: do them, without "
+            "announcing them.",
             input_model=PlanInput,
             handler=_plan,
             **common,

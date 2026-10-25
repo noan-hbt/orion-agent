@@ -195,6 +195,16 @@ CASES: tuple[Case, ...] = (
         checks=(uses("library:add"),),
     ),
     Case(
+        name="deux_choses_evidentes",
+        origin="Le plan était décrit comme dû dès trois étapes : des actions évidentes se "
+        "faisaient annoncer avant d'être faites. Une action simple se fait, sans plan.",
+        at=paris(2026, 10, 25, 18, 0),
+        steps=(
+            Say("Rappelle-moi d'appeler Paul à 19 h, et note que son anniversaire est le 3 mai"),
+        ),
+        checks=(uses("remind_me"), avoids("plan")),
+    ),
+    Case(
         name="entretien_jeudi",
         origin="Un moment qui compte : Orion devrait prévoir de demander comment ça s'est passé.",
         at=paris(2026, 10, 20, 18, 0),
