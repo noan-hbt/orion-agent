@@ -85,6 +85,7 @@ def web_tools(desk: WebDesk) -> list[Tool]:
     return [
         Tool(
             name="web_read",
+            doing="je lis la page",
             description="Read a web page yourself: its text (part after part, or where a word "
             "appears), its links and pictures. Only addresses the owner gave, or that a search "
             "or a page returned.",
@@ -97,6 +98,7 @@ def web_tools(desk: WebDesk) -> list[Tool]:
         ),
         Tool(
             name="web_search",
+            doing="je cherche sur le web",
             description="Search the web: the pages found (title, address). Read them with "
             "web_read.",
             input_model=SearchInput,

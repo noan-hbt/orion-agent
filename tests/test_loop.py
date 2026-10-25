@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel
 
 from orion.cognition.loop import (
+    GOING_ON,
+    UNSENT,
     Budget,
     Finished,
     LoopEvent,
     LoopSettings,
     MessageEmitted,
     StopReason,
+    Told,
     ToolExecuted,
     run_agent,
 )
@@ -315,3 +319,140 @@ async def test_a_tool_step_that_breaks_still_answers_every_call() -> None:
     asked: list[dict[str, Any]] = messages[1].get("tool_calls") or []
     answered = [m["tool_call_id"] for m in messages if m["role"] == "tool"]
     assert answered == [str(c["id"]) for c in asked]
+
+
+async def run_with(
+    provider: ScriptedProvider,
+    settings: LoopSettings,
+    steer: Any = None,
+    registry: ToolRegistry | None = None,
+) -> tuple[list[LoopEvent], list[Message]]:
+    messages: list[Message] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+    events = [
+        e
+        async for e in run_agent(
+            provider,
+            registry or ToolRegistry([*builtin_tools(), echo_tool()]),
+            Guardian(),
+            messages,
+            settings,
+            Trust.OWNER,
+            steer,
+        )
+    ]
+    return events, messages
+
+
+def told(events: list[LoopEvent]) -> list[str]:
+    return [e.text for e in events if isinstance(e, Told)]
+
+
+async def test_a_reply_is_held_when_the_owner_wrote_while_it_was_written() -> None:
+    """He changed his mind while Orion wrote: the reply that never left is answered again,
+    with his new message, instead of going out stale."""
+    pending = [({"role": "user", "content": "en fait, plutôt jeudi"}, Trust.OWNER)]
+
+    async def steer() -> tuple[Message, Trust] | None:
+        return pending.pop() if pending else None
+
+    provider = ScriptedProvider(reply("Mardi, c'est noté."), reply("Jeudi, alors."))
+    events, messages = await run_with(provider, SETTINGS, steer)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.COMPLETED, "Jeudi, alors.")
+    held = provider.requests[1].messages
+    assert held[-3] == {"role": "assistant", "content": "Mardi, c'est noté."}
+    assert held[-2] == {"role": "user", "content": "en fait, plutôt jeudi"}
+    assert held[-1] == {"role": "user", "content": UNSENT}
+    assert messages[-1] == {"role": "assistant", "content": "Jeudi, alors."}
+
+
+async def test_with_no_step_left_the_reply_goes_and_the_message_waits() -> None:
+    """No room for one more call: his message is not taken, so it starts the next turn."""
+    asked: list[bool] = []
+
+    async def steer() -> tuple[Message, Trust] | None:
+        asked.append(True)
+        return {"role": "user", "content": "autre chose"}, Trust.OWNER
+
+    settings = LoopSettings(
+        model="m", session_id="s", thread_id="t", correlation_id="c", budget=Budget(max_steps=1)
+    )
+    events, _ = await run_with(ScriptedProvider(reply("Voilà.")), settings, steer)
+    assert finished(events).text == "Voilà."
+    assert asked == []
+
+
+async def test_a_long_turn_says_what_it_is_doing_when_the_model_does_not() -> None:
+    searching = replace(echo_tool(), doing="je cherche sur le web")
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "a"})),
+        call_tools(("echo", {"text": "b"})),  # same work again: not said twice
+        call_tools(("echo", {"text": "c"}), text="Je compare les prix."),
+        reply("Trouvé."),
+    )
+    settings = replace(SETTINGS, progress_after=0.0, progress_every=0.0)
+    events, _ = await run_with(provider, settings, registry=ToolRegistry([searching]))
+    assert told(events) == ["Je cherche sur le web…"]
+    assert finished(events).text == "Trouvé."
+
+
+async def test_a_quick_turn_says_nothing_more() -> None:
+    provider = ScriptedProvider(call_tools(("echo", {"text": "a"})), reply("Fait."))
+    events, _ = await run_with(provider, SETTINGS)  # progress after 10 s: never reached here
+    assert told(events) == []
+
+
+async def test_a_turn_out_of_steps_goes_on_once_and_says_so() -> None:
+    provider = ScriptedProvider(
+        *[call_tools(("echo", {"text": str(i)})) for i in range(3)], reply("Fini.")
+    )
+    settings = LoopSettings(
+        model="m",
+        session_id="s",
+        thread_id="t",
+        correlation_id="c",
+        budget=Budget(max_steps=2, continuations=1),
+    )
+    events, _ = await run_with(provider, settings)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.COMPLETED, "Fini.")
+    assert told(events) == [GOING_ON]
+    assert not any(r.no_tools for r in provider.requests)
+
+
+async def test_once_it_went_on_the_limit_stops_it() -> None:
+    provider = ScriptedProvider(
+        *[call_tools(("echo", {"text": str(i)})) for i in range(4)], reply("Où j'en suis.")
+    )
+    settings = LoopSettings(
+        model="m",
+        session_id="s",
+        thread_id="t",
+        correlation_id="c",
+        budget=Budget(max_steps=2, continuations=1),
+    )
+    events, _ = await run_with(provider, settings)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.MAX_STEPS, "Où j'en suis.")
+    assert len(provider.requests) == 5 and provider.requests[-1].no_tools
+
+
+async def test_over_the_cost_cap_it_does_not_go_on() -> None:
+    provider = ScriptedProvider(
+        # 0.25 + 0.25 reaches the cap exactly: the step runs, but the turn does not go on.
+        *[call_tools(("echo", {"text": str(i)}), cost=0.25) for i in range(2)],
+        reply("Stop."),
+    )
+    settings = LoopSettings(
+        model="m",
+        session_id="s",
+        thread_id="t",
+        correlation_id="c",
+        budget=Budget(max_steps=2, continuations=1, max_cost_usd=0.5),
+    )
+    events, _ = await run_with(provider, settings)
+    assert told(events) == []
+    assert finished(events).reason is StopReason.MAX_STEPS

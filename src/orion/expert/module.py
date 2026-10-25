@@ -207,6 +207,7 @@ def expert_tools(expert: Expert) -> list[Tool]:
     return [
         Tool(
             name="consult_expert",
+            doing="je demande l'avis d'un modèle plus fort",
             description="Ask a stronger model one hard question (a plan with many constraints, "
             "a tricky calculation, a delicate message to write, a decision to weigh). It sees "
             "only what you put in `context`. Slower and dearer: not for simple things.",

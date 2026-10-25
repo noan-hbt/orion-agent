@@ -104,6 +104,11 @@ class AgentConfig(BaseModel):
     )
     max_tool_calls: int = Field(default=80, ge=0)
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
+    max_continuations: int = Field(
+        default=1,
+        ge=0,
+        description="Times an owner's turn out of steps goes on (he is told) instead of stopping",
+    )
     prune_idle_minutes: int = Field(
         default=10,
         ge=0,
