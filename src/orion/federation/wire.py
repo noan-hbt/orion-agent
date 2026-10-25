@@ -13,10 +13,9 @@ data that code checks.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from orion.federation.crypto import b64, canonical, fingerprint, unb64
 
@@ -74,9 +73,9 @@ class Introduce(_Body):
 class Propose(_Body):
     title: str = Field(min_length=1, max_length=80)
     duration_minutes: int = Field(ge=15, le=480)
-    window_start: datetime
-    window_end: datetime
-    slots: tuple[datetime, ...] = Field(min_length=1, max_length=MAX_SLOTS)
+    window_start: AwareDatetime
+    window_end: AwareDatetime
+    slots: tuple[AwareDatetime, ...] = Field(min_length=1, max_length=MAX_SLOTS)
     group: tuple[str, ...] = Field(default=(), max_length=MAX_GROUP)
     """A meeting of several: the names of the others invited, as the sender knows them. Shown
     to the owner asked, nothing more."""
@@ -93,18 +92,18 @@ class Propose(_Body):
 
 
 class Accept(_Body):
-    slot: datetime
+    slot: AwareDatetime
 
 
 class Confirm(_Body):
-    slot: datetime
+    slot: AwareDatetime
 
 
 class Available(_Body):
     """The answer to a poll: which of the starts offered are free. Code answers it, the owner
     is asked once the group has a common slot (D99)."""
 
-    slots: tuple[datetime, ...] = Field(max_length=MAX_SLOTS)
+    slots: tuple[AwareDatetime, ...] = Field(max_length=MAX_SLOTS)
 
 
 class Cancel(_Body):
@@ -164,7 +163,7 @@ class Envelope(BaseModel):
     recipient: str = Field(max_length=64)
     type: str = Field(max_length=40)
     context: str = Field(max_length=64, description="The negotiation this message belongs to")
-    sent_at: datetime
+    sent_at: AwareDatetime
     body: dict[str, Any]
     signature: str = ""
 

@@ -20,6 +20,8 @@ import httpx
 
 MAX_BYTES = 3_000_000
 MAX_REDIRECTS = 5
+DEADLINE = 60.0
+"""Seconds a whole fetch may take, redirects and body included."""
 _SKIP = {"script", "style", "noscript", "svg", "template", "head"}
 _IMAGE_META = {"og:image", "og:image:url", "og:image:secure_url", "twitter:image"}
 _NOT_A_PHOTO = ("logo", "icon", "sprite", "pixel", "placeholder", "avatar", "badge", "flag")
@@ -50,12 +52,20 @@ class Page:
 
 
 def normalize(url: str) -> str:
-    """The form URLs are compared in: no fragment, scheme and host lowercase."""
-    bare, _ = urldefrag(url.strip())
-    parts = urlsplit(bare)
-    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+    """The form URLs are compared in: no fragment, scheme and host lowercase (a login or a
+    path keeps its case). '' for what is not a web address, malformed ones included."""
+    try:
+        bare, _ = urldefrag(url.strip())
+        parts = urlsplit(bare)
+        host, port = parts.hostname, parts.port
+    except ValueError:  # `http://[::1`, a port that is not a number…
         return ""
-    return parts._replace(scheme=parts.scheme.lower(), netloc=parts.netloc.lower()).geturl()
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return ""
+    login = parts.netloc.rpartition("@")[0]
+    shown = f"[{host}]" if ":" in host else host
+    netloc = (f"{login}@" if login else "") + shown + (f":{port}" if port is not None else "")
+    return parts._replace(scheme=parts.scheme.lower(), netloc=netloc).geturl()
 
 
 async def check_public(host: str, port: int) -> None:
@@ -187,13 +197,32 @@ async def _get(
     """GET a public address, following redirects by hand (each target is checked). Returns the
     final address, the content type, the body (at most `limit` bytes) and its encoding. With
     `whole`, a body over `limit` is refused rather than cut."""
+    try:
+        async with asyncio.timeout(DEADLINE):  # a page that drips forever is given up
+            return await _get_within(client, url, check, limit, accept, whole)
+    except TimeoutError as exc:
+        raise FetchError(f"{url} took more than {DEADLINE:.0f} s") from exc
+
+
+async def _get_within(
+    client: httpx.AsyncClient,
+    url: str,
+    check: Check | None,
+    limit: int,
+    accept: Callable[[str], bool],
+    whole: bool,
+) -> tuple[str, str, bytes, str | None]:
     check = check or check_public
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        parts = urlsplit(current)
-        if parts.scheme not in ("http", "https") or not parts.hostname:
+        try:
+            parts = urlsplit(current)
+            host, port = parts.hostname, parts.port
+        except ValueError as exc:
+            raise FetchError(f"not a web address: {current}") from exc
+        if parts.scheme not in ("http", "https") or not host:
             raise FetchError(f"not a web address: {current}")
-        await check(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+        await check(host, port or (443 if parts.scheme == "https" else 80))
         try:
             async with client.stream(
                 "GET", current, headers={"user-agent": USER_AGENT}, follow_redirects=False

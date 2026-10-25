@@ -538,6 +538,34 @@ async def test_strangers_forgeries_and_replays_are_refused(tmp_path: Path) -> No
         assert len(denied) == 3
 
 
+async def test_a_time_without_its_zone_is_refused_at_the_door(tmp_path: Path) -> None:
+    async with two_orions(tmp_path) as (noan, paul):
+        naive = {
+            "title": "Déjeuner",
+            "duration_minutes": 60,
+            "window_start": "2026-10-20T09:00:00",
+            "window_end": "2026-10-20T19:00:00",
+            "slots": ["2026-10-20T12:00:00"],
+        }
+        answer = await post_a2a(noan, signed(paul.edge.identity, id="naive-1", body=naive))
+        assert answer.status_code == 403
+
+
+async def test_a_message_that_breaks_every_time_is_set_aside(tmp_path: Path) -> None:
+    async with two_orions(tmp_path) as (noan, paul):
+        await propose(paul)
+        desk = noan.desk
+
+        async def broken(_message: Any) -> None:
+            raise RuntimeError("a bug")
+
+        desk.handle = broken  # pyright: ignore[reportAttributeAccessIssue]
+        for _ in range(3):
+            await desk.poll_once()
+            await desk.settle()
+        assert desk.state.pending() == []
+
+
 async def test_an_invitation_cannot_replace_a_paired_orions_key(tmp_path: Path) -> None:
     async with two_orions(tmp_path) as (noan, _paul):
         invite = await noan.guardian.client.post("/v1/federation/invites", {"label": "X"}, ADMIN)
@@ -677,6 +705,29 @@ async def test_three_orions_find_the_first_slot_free_for_everyone(tmp_path: Path
         [theirs] = await paul.app.memory.store.commitments()
         assert theirs.what.startswith("Déjeuner avec Noan et Lea")
         assert any("avec aussi Lea" in r.notice for r in await paul.desk.reports())
+
+
+async def test_a_member_the_confirmation_never_reached_is_not_said_to_come(
+    tmp_path: Path,
+) -> None:
+    from orion.federation.wire import CONFIRM
+
+    async with three_orions(tmp_path) as (noan, paul, lea):
+        await propose(noan, also=["Lea"])
+        for side in (paul, lea, noan, paul, lea):
+            await side.step()
+        guardian = noan.desk.guardian
+        send = guardian.federation_send
+
+        async def lea_unreachable(peer: str, kind: str, *args: Any, **kwargs: Any) -> Any:
+            if kind == CONFIRM and "lea" in peer:
+                raise GuardianUnavailableError("Lea's Orion is down")
+            return await send(peer, kind, *args, **kwargs)
+
+        guardian.federation_send = lea_unreachable  # pyright: ignore[reportAttributeAccessIssue]
+        await noan.step()
+        [commitment] = await noan.app.memory.store.commitments()
+        assert commitment.what.startswith("Déjeuner avec Paul") and "Lea" not in commitment.what
 
 
 async def test_one_no_calls_the_group_off_for_everyone(tmp_path: Path) -> None:

@@ -107,3 +107,12 @@ def test_the_module_has_no_web_agent(tmp_path: Path) -> None:
     )
     [module] = [m for m in load(config) if isinstance(m, ComputerModule)]
     assert "no separate web agent" in module.doctor()[0]
+
+
+async def test_a_browser_that_cannot_start_leaves_nothing_running(tmp_path: Path) -> None:
+    from orion.computer.browser import Session
+
+    session = Session(executable=str(tmp_path / "no-such-chromium"))
+    with pytest.raises(Exception, match="no-such-chromium"):  # Playwright's own error
+        await session.__aenter__()
+    assert session._pw is None  # pyright: ignore[reportPrivateUsage]  # the driver was stopped

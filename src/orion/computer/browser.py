@@ -207,6 +207,13 @@ class Session:
         self._cleared: set[str] = set()
 
     async def __aenter__(self) -> Session:
+        try:
+            return await self._enter()
+        except BaseException:
+            await self.__aexit__(None, None, None)  # no browser or driver left behind
+            raise
+
+    async def _enter(self) -> Session:
         self._pw = await async_playwright().start()
         if self.profile is not None:
             phone = self.phone
@@ -291,11 +298,14 @@ class Session:
     async def keep_cookies(self) -> None:
         """Every cookie, session ones included, written beside the profile (0600): a site
         signed in to stays signed in after the browser closes or the server restarts."""
-        if self.profile is None or self._context is None:
+        if self._context is not None:
+            await self._keep(self._context)
+
+    async def _keep(self, context: BrowserContext) -> None:
+        if self.profile is None:
             return
-        cookies = await self._context.cookies()
-        path = self.profile / KEPT_COOKIES
-        write_private(path, json.dumps(cookies))
+        cookies = await context.cookies()
+        write_private(self.profile / KEPT_COOKIES, json.dumps(cookies))
 
     async def new_page(self) -> Page:
         """Another tab of this browser (one per conversation), sharing its cookies."""
@@ -376,13 +386,21 @@ class Session:
         await self._do(lambda: self._page().mouse.wheel(0, dy))
 
     async def __aexit__(self, *_exc: object) -> None:
-        if self._context is not None:
-            await self.keep_cookies()
-            await self._context.close()
-        if self._browser is not None:
-            await self._browser.close()
-        if self._pw is not None:
-            await self._pw.stop()
+        context, browser, driver = self._context, self._browser, self._pw
+        self._context, self._browser, self._pw = None, None, None
+        try:
+            if context is not None:
+                try:
+                    await self._keep(context)
+                finally:
+                    await context.close()
+        finally:
+            try:
+                if browser is not None:
+                    await browser.close()
+            finally:
+                if driver is not None:
+                    await driver.stop()
 
     async def _guard(self, route: Route, request: PwRequest) -> None:
         parts = urlsplit(request.url)
