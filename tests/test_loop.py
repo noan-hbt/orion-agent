@@ -7,7 +7,9 @@ from typing import Any
 from pydantic import BaseModel
 
 from orion.cognition.loop import (
+    CUT,
     GOING_ON,
+    SAME_FAILURE,
     UNSENT,
     Budget,
     Finished,
@@ -21,10 +23,15 @@ from orion.cognition.loop import (
 )
 from orion.core.events import Trust
 from orion.guardian.policy import Guardian
-from orion.providers.base import Message
+from orion.providers.base import Message, ModelRequest, ModelResponse
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
-from tests.fakes import ScriptedProvider, call_tools, echo_tool, fail, reply
+from tests.fakes import Script, ScriptedProvider, call_tools, echo_tool, fail, reply
+
+
+class _NoInput(BaseModel):
+    pass
+
 
 SETTINGS = LoopSettings(model="fake/model", session_id="s", thread_id="t", correlation_id="c")
 
@@ -321,6 +328,102 @@ async def test_a_tool_step_that_breaks_still_answers_every_call() -> None:
     assert answered == [str(c["id"]) for c in asked]
 
 
+def typed_as(arguments: str) -> Any:
+    """An `echo` call whose arguments are typed exactly so (spacing, key order)."""
+    base = call_tools(("echo", {"text": "a"}))
+
+    def make(request: Any) -> Any:
+        response = base(request)
+        call = response.tool_calls[0].model_copy(update={"arguments": arguments})
+        wire = response.message["tool_calls"][0]
+        message = {
+            **response.message,
+            "tool_calls": [{**wire, "function": {"name": "echo", "arguments": arguments}}],
+        }
+        return response.model_copy(update={"tool_calls": [call], "message": message})
+
+    return make
+
+
+def cut(text: str) -> Script:
+    """A reply the provider cut at its length limit."""
+    base = reply(text)
+
+    def make(request: ModelRequest) -> ModelResponse:
+        return base(request).model_copy(update={"finish_reason": "length"})
+
+    return make
+
+
+async def test_spacing_or_key_order_does_not_make_a_new_call() -> None:
+    provider = ScriptedProvider(
+        typed_as('{"text": "a"}'),
+        typed_as('{"text":"a"}'),
+        typed_as('{ "text" :  "a" }'),
+        reply("ok"),
+    )
+    events, _ = await collect(provider)
+    refused = [
+        e for e in events if isinstance(e, ToolExecuted) and e.decision_reason == "repeat refused"
+    ]
+    assert len(refused) == 1  # the third is the same call, however it was typed
+
+
+async def test_the_same_failure_twice_is_said_once_to_be_hopeless() -> None:
+    class _In(BaseModel):
+        query: str
+
+    async def broken(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("Service indisponible.", is_error=True)
+
+    lookup = Tool(
+        name="lookup", description="d", input_model=_In, handler=broken, effect=Effect.NONE
+    )
+    provider = ScriptedProvider(
+        *[call_tools(("lookup", {"query": q})) for q in ("a", "b", "c")], reply("Ça bloque.")
+    )
+    _, messages = await collect(provider, ToolRegistry([lookup]))
+    results = [str(m["content"]) for m in messages if m["role"] == "tool"]
+    assert results[0] == "Service indisponible."
+    assert results[1] == "Service indisponible." + SAME_FAILURE  # other arguments, same wall
+    assert results[2] == "Service indisponible."  # said once
+
+
+async def test_a_long_output_keeps_its_start_and_its_end() -> None:
+    async def long(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("D" * 100 + "F" * 100)
+
+    big = Tool(
+        name="big",
+        description="d",
+        input_model=_NoInput,
+        handler=long,
+        effect=Effect.NONE,
+        max_output_chars=60,
+    )
+    provider = ScriptedProvider(call_tools(("big", {})), reply("ok"))
+    _, messages = await collect(provider, ToolRegistry([big]))
+    shown = str(next(m["content"] for m in messages if m["role"] == "tool"))
+    assert shown.startswith("D" * 40) and shown.endswith("F" * 20)
+    assert "[… 140 characters cut here, of 200 …]" in shown
+
+
+async def test_a_reply_cut_by_the_length_limit_is_continued_and_sent_whole() -> None:
+    provider = ScriptedProvider(cut("Voici la li"), reply("ste complète."))
+    events, _ = await collect(provider)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.COMPLETED, "Voici la liste complète.")
+    assert provider.requests[1].messages[-1] == {"role": "user", "content": CUT}
+
+
+async def test_a_reply_cut_again_and_again_goes_as_it_is() -> None:
+    provider = ScriptedProvider(cut("Un"), cut(" deux"), cut(" trois"))
+    events, _ = await collect(provider)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.TRUNCATED, "Un deux trois")
+    assert len(provider.requests) == 3  # two continuations, then it goes
+
+
 async def run_with(
     provider: ScriptedProvider,
     settings: LoopSettings,
@@ -468,3 +571,15 @@ async def test_the_reasoning_effort_reaches_every_request() -> None:
     unset = ScriptedProvider(reply("Fait."))
     await collect(unset)
     assert unset.requests[0].reasoning_effort is None  # the model's own default, as before
+
+
+async def test_a_cut_reply_held_for_a_new_message_is_dropped_whole() -> None:
+    """Cut, continued, then overtaken by his message: none of it left, so none of it is sent."""
+    pending = [({"role": "user", "content": "en fait, plutôt jeudi"}, Trust.OWNER)]
+
+    async def steer() -> tuple[Message, Trust] | None:
+        return pending.pop() if pending else None
+
+    provider = ScriptedProvider(cut("Mardi, c"), reply("'est noté."), reply("Jeudi, alors."))
+    events, _ = await run_with(provider, SETTINGS, steer)
+    assert finished(events).text == "Jeudi, alors."
