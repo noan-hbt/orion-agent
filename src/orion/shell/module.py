@@ -7,7 +7,9 @@ nothing else covers. What protects:
   is never something Orion does alone;
 - turning it on is the owner's setting (`modules.shell`, D92): his yes, never alone;
 - the command runs in Orion's workspace (`<data_dir>/workspace`), as Orion's user, with a
-  bare environment: no key of Orion's ever reaches it;
+  bare environment: no key of Orion's is in its environment. It runs as Orion's user all the
+  same, so a command can read what that user can (`core.env` beside orion.toml): the owner's
+  yes to the exact command is what stands between it and those files;
 - it stops after `timeout` seconds, the whole process group with it; output is bounded;
 - what it prints may come from anywhere (a download, a file): outside content.
 """
