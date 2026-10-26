@@ -36,7 +36,7 @@ import io
 import mimetypes
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -46,7 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.channels.inbox import Attachment
 from orion.config import AUDIO_MODEL, VISION_MODEL
-from orion.core.events import Event, NewEvent, Provenance
+from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
 from orion.core.private import write_private
@@ -317,6 +317,15 @@ class _Kept:
             self.files = {k: v for k, v in self.files.items() if v[2] not in gone}
 
 
+@dataclass(frozen=True)
+class Own:
+    """One of Orion's own files, as the files module keeps it."""
+
+    path: Path
+    content_type: str
+    trust: Trust
+
+
 class Photos:
     def __init__(
         self,
@@ -339,6 +348,9 @@ class Photos:
         self._runner = ProjectionRunner(journal, [self._kept])
         self._writing: set[str] = set()
         """Files written whose event is not appended yet."""
+        self.own: Callable[[str], Own | None] | None = None
+        """Orion's own files (`fi_…`: a picture it downloaded, a screenshot), when the files
+        module is on: looked at like the owner's."""
 
     async def sync(self) -> None:
         """Catch up, and remove the files no event names any more (forgotten)."""
@@ -558,15 +570,23 @@ class Photos:
         stored, content_type, _ = kept
         return (self.folder / stored).read_bytes(), content_type, stored
 
-    async def ask(self, file_id: str, question: str, part: int = 0) -> str:
+    async def ask(self, file_id: str, question: str, part: int = 0) -> tuple[str, Trust]:
         """A file's text, as it is, part after part; a picture or a scan is looked at by the
-        model that sees (the fallback), which answers `question`."""
+        model that sees (the fallback), which answers `question`. With the trust of what it
+        came from: a picture Orion downloaded is worth the page it came from."""
         await self.sync()
         kept = self._kept.files.get(file_id)
-        if kept is None:
+        own = self.own(file_id) if kept is None and self.own is not None else None
+        if kept is not None:
+            stored, content_type, _ = kept
+            data = (self.folder / stored).read_bytes()
+            trust = PHOTO_TRUST
+        elif own is not None:
+            data = own.path.read_bytes()
+            stored, content_type, trust = own.path.name, own.content_type, own.trust
+        else:
             raise KeyError(file_id)
-        stored, content_type, _ = kept
-        data = (self.folder / stored).read_bytes()
+        trust = min(trust, PHOTO_TRUST)
         kind = kind_of(content_type)
         text = (
             data.decode("utf-8", "replace")
@@ -576,10 +596,10 @@ class Photos:
             else ""
         )
         if text:  # Orion reads it itself (D114)
-            return _part(text, part)
+            return _part(text, part), trust
         if kind == "other":
             raise ValueError(f"a {content_type or 'unknown'} file cannot be read")
-        return await self._ask(ASK, data, content_type, stored, question)
+        return await self._ask(ASK, data, content_type, stored, question), trust
 
     async def _ask(
         self, system: str, data: bytes, content_type: str, name: str, question: str
@@ -649,7 +669,7 @@ async def _download(attachment: Attachment) -> bytes:
 class LookInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(description="The photo or file id (ph_… or at_…), as in its block")
+    id: str = Field(description="The photo or file id (ph_…, at_… or fi_…)")
     question: str = Field(
         default="", max_length=500, description="For a picture or a scan: what you need to know"
     )
@@ -672,20 +692,21 @@ def _part(text: str, part: int) -> str:
 def photo_tools(photos: Photos) -> list[Tool]:
     async def look(args: Any, _ctx: ToolContext) -> ToolResult:
         try:
-            answer = await photos.ask(args.id, args.question or "Décris-le.", args.part)
+            answer, trust = await photos.ask(args.id, args.question or "Décris-le.", args.part)
         except KeyError:
             return ToolResult(f"No photo or file {args.id} (or it was forgotten).", is_error=True)
         except ValueError as exc:
             return ToolResult(f"That file cannot be read: {exc}.", is_error=True)
         except ProviderError as exc:
             return ToolResult(f"The file could not be looked at: {exc}", is_error=True)
-        return ToolResult(answer, trust=PHOTO_TRUST)
+        return ToolResult(answer, trust=trust)
 
     return [
         Tool(
             name="attachment_look",
-            description="Read a file the owner sent again, part after part (the rest of a long "
-            "document), or ask about a detail of a picture or a scan.",
+            description="Read a file again, part after part (the rest of a long document), or "
+            "look at a picture or a scan: one the owner sent, or one you got (`fi_…`: a "
+            "download, a screenshot), before judging or sending it.",
             input_model=LookInput,
             handler=look,
             effect=Effect.NONE,
@@ -721,6 +742,16 @@ class PhotosModule(Module):
             names=self.config.memory.owner_names,
         )
         await self.photos.sync()
+        from orion.files.module import FilesModule
+
+        files = plate.module(FilesModule)
+        if files is not None:
+
+            def own(file_id: str) -> Own | None:
+                made = files.store.get(file_id) if files.store is not None else None
+                return Own(made.path, made.content_type, made.trust) if made else None
+
+            self.photos.own = own
         return photo_tools(self.photos)
 
     async def serve(self, daemon: Daemon) -> None:

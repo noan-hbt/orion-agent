@@ -99,7 +99,7 @@ class ComputerModule(Module):
                 "it (its text and numbered elements), then act on the page shown: click, type, "
                 "send forms. It stays signed in to the sites he signed in to; a page that needs "
                 "him (sign in, a code): hand_over.",
-                browser_tools(self.desk, keep),
+                browser_tools(self.desk, keep, looks=plate.has("photos")),
                 {
                     "browser_open": "open",
                     "browser_click": "click",

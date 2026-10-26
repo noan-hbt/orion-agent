@@ -110,7 +110,7 @@ async def test_a_screenshot_of_the_page_shown(journal: SqliteJournal, tmp_path: 
 
     site = Site()
     desk = BrowserDesk(journal, lambda: session(site))
-    tools = {t.name: t for t in browser_tools(desk, keep)}
+    tools = {t.name: t for t in browser_tools(desk, keep, looks=True)}
     try:
         nothing = await run(tools["browser_screenshot"])
         assert nothing.is_error
@@ -120,6 +120,7 @@ async def test_a_screenshot_of_the_page_shown(journal: SqliteJournal, tmp_path: 
         file_id = shot.content.split("(")[1].split(")")[0]
         made = store.get(file_id)
         assert made is not None and made.path.read_bytes().startswith(b"\x89PNG")
+        assert f"`attachment_look` ({file_id})" in shot.content  # it can see what it sends
         full = await run(tools["browser_screenshot"], full=True)
         assert "Capture prête" in full.content
     finally:
@@ -329,3 +330,52 @@ async def test_a_file_being_saved_is_not_taken_for_a_forgotten_one(
     path.write_bytes(b"%PDF")
     await store.sync()  # its event is not appended yet
     assert path.exists()
+
+
+async def test_a_picture_orion_downloads_can_be_looked_at(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """Photos of a flat on a site: Orion sends them, and can see them first, as content from
+    the page they came from."""
+    from orion.photos.module import Own, Photos, PhotoSettings, photo_tools
+    from tests.fakes import reply
+
+    jpeg = b"\xff\xd8\xff" + b"0" * 100
+    client = site(
+        {
+            "https://annonces.example/p/1.jpg": httpx.Response(
+                200, content=jpeg, headers={"content-type": "image/jpeg"}
+            ),
+            "https://annonces.example/plan.xml": httpx.Response(
+                200, content=b"<plan/>", headers={"content-type": "application/xml"}
+            ),
+        }
+    )
+    desk = WebDesk(journal, WebSearch(ScriptedProvider(), "m"), client, allow_all)
+    await desk.start()
+    store = FileStore(journal, tmp_path / "files")
+    tool = tool_for(store, [], web=lambda: desk, looks=True)
+    try:
+        said = await run(tool, action="download", url="https://annonces.example/p/1.jpg")
+        other = await run(tool, action="download", url="https://annonces.example/plan.xml")
+    finally:
+        await desk.aclose()
+    file_id = made_id(said)
+    assert f"`attachment_look` ({file_id})" in said.content
+    assert "attachment_look" not in other.content  # not a picture
+
+    provider = ScriptedProvider(reply("Un séjour lumineux, parquet, deux fenêtres."))
+    photos = Photos(journal, provider, PhotoSettings(direct=False), tmp_path / "photos")
+    await store.sync()
+
+    def own(given: str) -> Own | None:
+        made = store.get(given)
+        return Own(made.path, made.content_type, made.trust) if made else None
+
+    photos.own = own
+    (look,) = photo_tools(photos)
+    seen = await look.handler(
+        look.parse(json.dumps({"id": file_id, "question": "Le séjour est lumineux ?"})), CTX
+    )
+    assert seen.content.startswith("Un séjour lumineux") and seen.trust is Trust.WEB
+    assert "image_url" in str(provider.requests[0].messages)

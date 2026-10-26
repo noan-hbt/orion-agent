@@ -20,12 +20,12 @@ from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
 
 import structlog
 
 from orion.core.events import Trust
-from orion.guardian.policy import ALONE, ActionProposal, Guardian
+from orion.guardian.policy import ALONE, TRUSTED_FLOOR, ActionProposal, Guardian
 from orion.providers.base import (
     Message,
     ModelProvider,
@@ -108,10 +108,15 @@ class LoopSettings:
     finish_check: FinishCheck | None = None
     """Asked once per run about the final reply before it goes: a note sends the model back
     to work for one more step (`orion.cognition.finish`)."""
-    progress_after: float = 10.0
-    progress_every: float = 30.0
-    """A turn still working after `progress_after` seconds says what it is doing (the tools'
-    `doing`) when the model said nothing, at most once per `progress_every` seconds."""
+    progress_after: float = 15.0
+    progress_every: float = 60.0
+    """A turn still working after `progress_after` seconds says what it is doing when the model
+    said nothing, at most once per `progress_every` seconds, `PROGRESS_AT_MOST` times."""
+    progress_model: str | None = None
+    """Writes that line from the owner's request and the calls under way (a small, fast
+    model); without it, or when it fails, the tools' `doing` or a plain notice."""
+    progress_about: str = ""
+    """The owner's request this turn, for `progress_model`."""
 
 
 WRAP_UP = (
@@ -189,6 +194,16 @@ UNSENT = (
 )
 GOING_ON = "C'est plus long que prévu, je continue."
 WORKING = "Je m'en occupe, ça prend un peu de temps…"
+PROGRESS_AT_MOST = 3
+PROGRESS_SECONDS = 4.0
+"""How long the progress line may take to write before the plain one goes instead."""
+PROGRESS = (
+    "Tu es Orion, l'assistant personnel de ton propriétaire. Il attend pendant que tu "
+    "travailles. Écris-lui une seule phrase courte (quinze mots au plus), au tutoiement, à la "
+    "première personne, qui dit concrètement ce que tu es en train de faire. Pas de « je m'en "
+    "occupe », pas d'excuse, pas de délai promis, pas d'emoji. N'invente rien : seulement sa "
+    "demande et les actions listées. Ne répète pas ce que tu lui as déjà dit."
+)
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -410,7 +425,15 @@ async def run_agent(
             clock - began >= settings.progress_after and clock - shown_at >= settings.progress_every
         ):
             doing = _doing(registry, response.tool_calls)
-            if doing not in shown:
+            if doing not in shown and len(shown) < PROGRESS_AT_MOST:
+                if settings.progress_model is not None:
+                    written, spent = await _progress(
+                        provider, settings, response.tool_calls, doing, shown, context_trust
+                    )
+                    if spent is not None:
+                        usage = usage + spent.usage
+                        yield ModelCalled(spent)
+                    doing = written or doing
                 shown.add(doing)
                 shown_at = clock
                 yield Told(doing)
@@ -498,6 +521,57 @@ async def run_agent(
                 message, trust = interjection
                 messages.append(message)
                 context_trust = min(context_trust, trust)
+
+
+async def _progress(
+    provider: ModelProvider,
+    settings: LoopSettings,
+    calls: list[ToolCall],
+    doing: str,
+    shown: set[str],
+    context_trust: Trust,
+) -> tuple[str, ModelResponse | None]:
+    """The progress line, written for this turn by `progress_model`: "" when it cannot be (the
+    plain line goes instead). After content from elsewhere, the calls' arguments may carry its
+    words: then only their names reach the line, never what a page could have put in them."""
+    assert settings.progress_model is not None
+    trusted = context_trust >= TRUSTED_FLOOR
+    lines: list[str] = []
+    for call in calls:
+        try:
+            arguments: object = json.loads(call.arguments or "{}")
+        except json.JSONDecodeError:
+            arguments = {}
+        action = (
+            cast(dict[str, object], arguments).get("action")
+            if isinstance(arguments, dict)
+            else None
+        )
+        name = f"{call.name} ({action})" if isinstance(action, str) else call.name
+        lines.append(f"- {name} : {call.arguments[:300]}" if trusted else f"- {name}")
+    said = "".join(f"\n- « {s} »" for s in sorted(shown))
+    content = (
+        f"Sa demande : « {settings.progress_about[:500]} »\n"
+        f"Ce que tu fais maintenant :\n"
+        + "\n".join(lines)
+        + (f"\n(en bref : {doing})" if doing != WORKING else "")
+        + (f"\nDéjà dit pendant ce travail :{said}" if said else "")
+    )
+    request = ModelRequest(
+        model=settings.progress_model,
+        messages=[{"role": "system", "content": PROGRESS}, {"role": "user", "content": content}],
+        session_id=f"{settings.session_id}:progress",
+        max_tokens=80,
+    )
+    try:
+        response = await asyncio.wait_for(provider.complete(request), PROGRESS_SECONDS)
+    except (ProviderError, TimeoutError) as exc:
+        log.warning("loop.progress_unwritten", error=repr(exc))
+        return "", None
+    line = " ".join(response.text.split()).strip('«» "')
+    if not line or len(line) > 200 or line in shown:
+        return "", response
+    return line, response
 
 
 def _doing(registry: ToolRegistry, calls: list[ToolCall]) -> str:
