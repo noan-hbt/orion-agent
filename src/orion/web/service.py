@@ -147,7 +147,7 @@ class WebDesk:
         return page
 
     async def download(self, url: str, limit: int, correlation_id: str | None = None) -> Download:
-        """A file at an address the owner gave or a search found, byte for byte."""
+        """A file at any web address, byte for byte."""
         address = normalize(url)
         if not await self.may_open(address):
             raise NotAllowedError(f"{url} is not a web address (http or https)")

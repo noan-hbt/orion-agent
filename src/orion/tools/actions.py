@@ -17,7 +17,7 @@ checked against.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
@@ -43,6 +43,31 @@ class _NoArgs(BaseModel):
 NO_ARGS: type[BaseModel] = _NoArgs
 
 
+_SHAPE_KEYS = ("type", "enum", "format")
+
+
+def lean_shape(prop: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """What the model needs to fill a field right: its type and allowed values, not its
+    lengths or bounds (the action's own model checks those, and says what is wrong). An
+    optional field is shown as its type alone; a field that may be several types, as nothing."""
+    if "$ref" in prop:
+        name = str(prop["$ref"]).rsplit("/", 1)[-1]
+        prop = {**schema.get("$defs", {}).get(name, {}), **{k: v for k, v in prop.items()}}
+    options = [o for o in prop.get("anyOf", []) if o.get("type") != "null"]
+    if len(options) == 1:
+        prop = {**options[0], **{k: v for k, v in prop.items() if k != "anyOf"}}
+    elif options:
+        return {}
+    shape = {k: prop[k] for k in _SHAPE_KEYS if k in prop}
+    if "const" in prop:
+        shape["enum"] = [prop["const"]]
+    if shape.get("type") == "array" and isinstance(prop.get("items"), dict):
+        items = lean_shape(cast(dict[str, Any], prop["items"]), schema)
+        if items:
+            shape["items"] = items
+    return shape
+
+
 def _params(model: type[BaseModel]) -> str:
     fields = model.model_fields
     if not fields:
@@ -60,20 +85,34 @@ def action_tool(
     accepts_untrusted_context: bool = False,
 ) -> Tool:
     """A tool whose `action` picks one of `actions`; the other fields are that action's
-    parameters (all optional in the schema, checked against the action's own model)."""
+    parameters (all optional in the schema, with their type and allowed values, checked
+    against the action's own model)."""
     by_name = {a.name: a for a in actions}
     if len(by_name) != len(actions):
         raise ValueError(f"{name}: duplicate actions")
     fields: dict[str, Any] = {}
+    shapes: dict[str, list[dict[str, Any]]] = {}
     for action in actions:
+        schema = action.input_model.model_json_schema()
         for field_name, info in action.input_model.model_fields.items():
             if field_name == "action":
                 raise ValueError(f"{name}.{action.name}: 'action' is reserved")
+            shapes.setdefault(field_name, []).append(
+                lean_shape(schema["properties"][info.alias or field_name], schema)
+            )
             if field_name not in fields:
-                fields[field_name] = (
-                    Any,
-                    Field(default=None, description=info.description),
-                )
+                fields[field_name] = info.description
+    for field_name, said in list(fields.items()):
+        shape = shapes[field_name][0]
+        same = all(s == shape for s in shapes[field_name])
+        fields[field_name] = (
+            Any,
+            Field(
+                default=None,
+                description=said,
+                json_schema_extra=shape if same and shape else None,
+            ),
+        )
     choice: Any = Literal[tuple(by_name)]  # pyright: ignore[reportInvalidTypeArguments]
     model: type[BaseModel] = create_model(  # pyright: ignore[reportCallIssue, reportUnknownVariableType]
         f"{name.title().replace('_', '')}Input",

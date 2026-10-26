@@ -47,7 +47,7 @@ class Vault:
 
 def passport(valid_until: date) -> Paper:
     filed = datetime(2025, 1, 1, tzinfo=PARIS)
-    return Paper("pa_1", "f_1", "passeport", "Passeport", "", None, valid_until, filed)
+    return Paper("pa_1", "f_1", "Passeport", "passeport français", "", None, valid_until, filed)
 
 
 def departures(
@@ -84,7 +84,7 @@ async def test_a_flight_in_the_calendar_is_prepared_the_evening_before(
 
     (alert,) = await trips.alerts(datetime(2026, 10, 21, 19, 5, tzinfo=PARIS))
     assert "Il part jeudi à 07:10 : Vol TP433 pour Lisbonne, Orly." in alert.notice
-    assert "Passeport : valide jusqu'au 03/12/2026" in alert.notice
+    assert "Passeport (passeport français) : valide jusqu'au 03/12/2026" in alert.notice
     assert "`mail`" in alert.notice and "`web_search`" in alert.notice
     assert "SILENCE" in alert.notice
     assert alert.expires_at == THURSDAY_7 - timedelta(hours=1)
@@ -100,10 +100,11 @@ async def test_an_expired_passport_is_said_first(journal: SqliteJournal) -> None
     assert "expirée pour un voyage passe en premier" in alert.notice
 
 
-def test_only_his_own_identity_papers_count() -> None:
+def test_only_his_own_papers_with_an_end_count() -> None:
     filed = datetime(2025, 1, 1, tzinfo=PARIS)
-    mother = Paper("pa_2", "f_2", "passeport", "Passeport de maman", "Maman", None, None, filed)
-    payslip = Paper("pa_3", "f_3", "fiche de paie", "Paie", "", None, None, filed)
+    end = date(2027, 1, 1)
+    mother = Paper("pa_2", "f_2", "Passeport de maman", "", "Maman", None, end, filed)
+    payslip = Paper("pa_3", "f_3", "Paie", "fiche de paie", "", None, None, filed)
     assert papers_line([mother, payslip], date(2026, 10, 22)) == ""
 
 
@@ -125,7 +126,7 @@ async def test_an_exam_a_long_trip_and_ordinary_events(journal: SqliteJournal) -
     now[0] = datetime(2026, 10, 21, 19, 30, tzinfo=PARIS)
     (exam,) = await trips.alerts(now[0])
     assert exam.notice.startswith("Il a jeudi à 14:00 : Partiel de droit des contrats, Amphi B.")
-    assert "pièces d'identité" not in exam.notice
+    assert "papiers rangés" not in exam.notice
 
 
 async def test_a_departure_he_mentions_is_noted_listed_and_cancelled(
@@ -146,7 +147,7 @@ async def test_a_departure_he_mentions_is_noted_listed_and_cancelled(
     shown = await listing.handler(listing.parse("{}"), CTX)
     assert "voyage : Train pour Lyon, vendredi 23/10 07:04, Gare de Lyon" in shown.content
     (alert,) = await trips.alerts(datetime(2026, 10, 22, 19, 0, tzinfo=PARIS))
-    assert "Aucune pièce d'identité" not in alert.notice  # no vault: nothing said about papers
+    assert "Aucun papier" not in alert.notice  # no vault: nothing said about papers
 
     (departure_id,) = trips.state.planned
     await cancel.handler(cancel.parse(json.dumps({"departure": departure_id})), CTX)

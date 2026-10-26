@@ -2795,3 +2795,45 @@ refus d'avant (« il faut 120 minutes… »), que le message de refus lui disait
 quel. La constitution et ce message disent maintenant qu'un refus ne vaut que pour l'appel où il
 a eu lieu : s'il redemande, Orion rappelle l'outil, et c'est le contrôle qui décide. Cas
 `laisse_le_ecrire_seul`, 3/3 sur DeepSeek.
+
+## D131 — Des papiers sans types : on les retrouve en cherchant
+
+*26/10/2026 · acceptée · révise D74*
+
+Les papiers avaient un type pris dans une liste fixe (carte d'identité, fiche de paie, RIB…).
+Le modèle ne voyait pas cette liste : `papers` find avec « assurance » était refusé, et ce qui
+n'y entrait pas devenait « autre ». Le propriétaire trouve ces types inutiles ; ce qui sert,
+c'est de retrouver un document.
+
+- **Ranger** (`papers` file) : un libellé, et `about`, ce que c'est et ce qu'on y trouve, dans
+  les mots qu'une recherche emploierait (« attestation d'assurance habitation MAAF,
+  appartement Dreux »), jamais ses numéros. Plus de type.
+- **Chercher** (`papers` find) : par les mots (sans accents ni majuscules) et par le sens
+  (les vecteurs de la mémoire), fusionnés par rang comme dans la bibliothèque. Sans mots :
+  tous, du plus récent au plus ancien.
+- **Le dossier** : Orion choisit les papiers et leur ordre, et dit ce qui manque (`missing`) ;
+  l'ordre qu'attend un bailleur est dans la consigne, plus dans le code.
+- **L'expiration** : tout papier qui a une fin de validité est signalé trois mois puis un mois
+  avant. Avant un voyage, Orion voit ses papiers qui ont une date de fin, valides ou non le
+  jour du départ, et juge lui-même ceux qu'il lui faut.
+- Les papiers rangés avant gardent leur ancien type, lu comme ce qu'ils sont (`about`).
+
+## D132 — Ce que le modèle lit de ses outils dit vrai
+
+*26/10/2026 · acceptée*
+
+Une passe sur les 65 outils, et sur les 178 appels d'une évaluation, le 26/10 :
+
+- **Les outils à actions montrent les types** : chaque champ d'un outil groupé (`mission`,
+  `playbook`, `relations`…) était déclaré sans type ni valeurs permises. Le modèle ne savait
+  pas qu'un mois est un nombre, ni que `playbook` (learn) n'accepte que quatre portées : deux
+  appels sur 178 ont échoué ainsi, et chaque échec coûte une étape. Le schéma montre maintenant
+  le type et les valeurs permises de chaque champ (pas les longueurs : le modèle de l'action
+  les vérifie et dit ce qui ne va pas). Un champ que deux actions typent différemment reste
+  sans type. Le budget des outils (D84) passe à 37 600 caractères.
+- **Les descriptions suivent D115** : `browser` (open, type), `web_read` et `file` (download)
+  disaient encore « seulement les adresses qu'il a données » et « les formulaires sont
+  bloqués », ce qui n'est plus vrai depuis D115 et pouvait le faire renoncer.
+- **Petites erreurs** : un suivi (`follow_up`) prend l'identifiant `fu_…` (il partageait `f_…`
+  avec les faits) ; `autonomy_grant` n'a plus de champ `domains` (rien ne demande plus d'accord
+  pour le navigateur depuis D115) ; `hand_read_file` renvoie au bon nom d'outil.
