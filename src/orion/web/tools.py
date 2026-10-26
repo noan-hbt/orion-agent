@@ -32,7 +32,7 @@ class SearchInput(BaseModel):
 class ReadInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: str = Field(description="An address the owner gave, or one a search or a page returned")
+    url: str = Field(description="Any web address (http or https)")
     part: int = Field(default=0, ge=0, description="Which part of the page's text (0: the top)")
     find: str = Field(default="", max_length=80, description="Or: where this text appears")
 
@@ -87,8 +87,7 @@ def web_tools(desk: WebDesk) -> list[Tool]:
             name="web_read",
             doing="je lis la page",
             description="Read a web page yourself: its text (part after part, or where a word "
-            "appears), its links and pictures. Only addresses the owner gave, or that a search "
-            "or a page returned.",
+            "appears), its links and pictures. Any web address.",
             input_model=ReadInput,
             handler=web_read,
             effect=Effect.NONE,

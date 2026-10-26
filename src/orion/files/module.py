@@ -9,7 +9,7 @@ and sends it in the owner's conversation, with a short caption. Any type, 10 MiB
 - `pdf`: a document from text Orion writes (titles, paragraphs, lists), printed to PDF by the
   same headless Chromium the browser uses;
 - a screenshot of the page shown in Orion's browser is `browser` (screenshot);
-- `download`: a file on the web, byte for byte, at an address the owner gave or a search found
+- `download`: a file on the web, byte for byte, at any web address
   (the web module's rule: a made-up address could carry data out);
 - `server`: a file on Orion's own server. Not the guardian's folder, not `/proc`, `/sys`,
   `/dev`, not an `.env` file: those hold secrets, and a page could ask for them. In a context
@@ -507,8 +507,7 @@ def file_tool(
             Action("pdf", "Make a PDF document from text you write.", PdfInput, pdf),
             Action(
                 "download",
-                "Get a file from the web as it is (any type), at an address he gave or a "
-                "search found.",
+                "Get a file from the web as it is (any type), at its direct address.",
                 DownloadInput,
                 downloading,
                 accepts_untrusted_context=True,

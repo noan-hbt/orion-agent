@@ -133,3 +133,48 @@ def test_a_schema_carries_no_generated_titles_or_null_defaults() -> None:
     assert schema["properties"]["title"] == {"description": "Its title", "type": "string"}
     assert schema["properties"]["note"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
     assert schema["properties"]["shape"]["default"] == {"title": "kept"}
+
+
+def test_the_model_sees_each_fields_type_and_allowed_values() -> None:
+    """26/10: `playbook.learn` was called with scope « contacts », and `papers.find` with a kind
+    off the list: the grouped schema showed neither. Types and allowed values are shown; lengths
+    are not (the action's model checks them and says what is wrong); a field two actions type
+    differently is shown without a type."""
+    from enum import StrEnum
+    from typing import Literal
+
+    from orion.tools.base import compact_schema
+
+    class Scope(StrEnum):
+        STYLE = "style"
+        WORK = "work"
+
+    class Learn(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        rule: str = Field(min_length=3, max_length=300)
+        scope: Scope = Scope.STYLE
+        times: int | None = None
+        ids: list[str] = Field(default_factory=list[str])
+        day: int = 1
+
+    class Close(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        status: Literal["done", "cancelled"] = "done"
+        day: str = ""
+
+    tool = action_tool(
+        "rules",
+        "Rules.",
+        [Action("learn", "Learn.", Learn, add), Action("close", "Close.", Close, add)],
+    )
+    shown = compact_schema(tool.input_model.model_json_schema())["properties"]
+    assert shown["rule"] == {"type": "string"}
+    assert shown["scope"] == {"enum": ["style", "work"], "type": "string"}
+    assert shown["times"] == {"type": "integer"}
+    assert shown["ids"] == {"items": {"type": "string"}, "type": "array"}
+    assert shown["status"] == {"enum": ["done", "cancelled"], "type": "string"}
+    assert shown["day"] == {}
+    with pytest.raises(ToolInputError, match=r"rules\.learn"):
+        tool.parse(json.dumps({"action": "learn", "rule": "ok", "scope": "contacts"}))
