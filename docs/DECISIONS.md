@@ -2885,8 +2885,9 @@ ce qu'il fait (le `doing` de chaque outil, dans ses mots), les étapes déjà fa
   en plus : la fin du tour l'est déjà (`turn.finished`).
 - **Arrêter** s'applique entre deux étapes (`halted`, comme pour une tâche annulée) : un outil
   déjà lancé finit, le suivant ne part pas, et Orion répond « D'accord, j'arrête là. ».
-- Pas encore : basculer le travail en cours en tâche de fond ; pour l'instant, il faut le lui
-  demander.
+- **En fond** envoie, en clair dans la conversation, « Passe ça en tâche de fond et
+  préviens-moi quand c'est prêt. » : un message arrivé pendant un tour le rejoint entre deux
+  étapes, et Orion confie la suite à une tâche de fond (D110) avec tout ce qu'il sait.
 
 « Pour toi » (la cloche) rassemble ce qui l'attend et ce qu'Orion a en cours : les accords, les
 questions qu'Orion attend de lui (D129), ses tâches de fond (D110, avec leur dernier compte rendu,

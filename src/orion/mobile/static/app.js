@@ -1063,6 +1063,22 @@ function setWork(work) {
     },
     work.stopping ? "J'arrête…" : "Arrêter",
   );
+  // A message that arrives during a turn joins it between two steps: Orion reads this one,
+  // hands the rest to a background task with everything it knows, and says so.
+  const later = h(
+    "button",
+    {
+      type: "button",
+      class: "pill small ghost",
+      disabled: work.stopping || state.backgrounded === work.since,
+      onclick: () => {
+        state.backgrounded = work.since;
+        later.disabled = true;
+        submit("Passe ça en tâche de fond et préviens-moi quand c'est prêt.");
+      },
+    },
+    "En fond",
+  );
   const step = (text, current) =>
     h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? h("i") : icon("check", 13)), text);
   view.work.replaceChildren(
@@ -1071,9 +1087,9 @@ function setWork(work) {
       {},
       h("span", { class: "ico" }, icon("orion", 18, "none")),
       h("span", {}, h("b", {}, "Il travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
-      stop,
     ),
     h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
+    h("div", { class: "acts" }, later, stop),
   );
   bottom();
 }

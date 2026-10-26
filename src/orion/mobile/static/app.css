@@ -505,3 +505,4 @@ button.tile:active { transform: scale(0.98); }
 .work li.now .mark i { width: 10px; height: 10px; border-radius: 5px; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .list .item small.last { margin-top: 4px; color: var(--ink); opacity: 0.75; font-style: italic; }
+.work .acts { display: flex; gap: 6px; justify-content: flex-end; }
