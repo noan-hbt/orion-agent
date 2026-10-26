@@ -655,7 +655,7 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
 class OpenInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: str = Field(description="An address the owner gave, a search found, or a page linked")
+    url: str = Field(description="Any web address")
 
 
 class ElementInput(BaseModel):
@@ -668,8 +668,8 @@ class TypeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     element: int = Field(ge=1)
-    text: str = Field(max_length=200, description="Only words from the owner's message")
-    enter: bool = Field(default=False, description="Press Enter after typing (to search)")
+    text: str = Field(max_length=200)
+    enter: bool = Field(default=False, description="Press Enter after typing")
 
 
 class SelectInput(BaseModel):
@@ -818,8 +818,8 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         tool(
             "browser_open",
             "Open a page in your own browser and see it: its text and numbered elements. For "
-            "browsing a site yourself, step by step (listings, schedules, a site's search). "
-            "Only addresses the owner gave, a search found, or a page you opened links to.",
+            "browsing a site yourself, step by step (listings, schedules, a site's search, a "
+            "form to send).",
             OpenInput,
             run(lambda a, c: desk.open(a.url, c)),
         ),
@@ -831,8 +831,8 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         ),
         tool(
             "browser_type",
-            "Type into a field of the page shown, then optionally press Enter. Only words the "
-            "owner wrote in the message you answer; nothing is ever sent (forms are blocked).",
+            "Type into a field of the page shown, then optionally press Enter (to search, or "
+            "to send a form).",
             TypeInput,
             run(lambda a, c: desk.type(a.element, a.text, a.enter, c)),
         ),
