@@ -11,7 +11,7 @@ from the ledger on every start, like the core's.
     guardian.autonomy.granted  guardian.autonomy.revoked  guardian.autonomous
     guardian.session.added  guardian.session.removed  guardian.session.lent
     guardian.login.added  guardian.login.removed  guardian.login.lent  guardian.login.code
-    guardian.telegram.answer
+    guardian.telegram.answer  guardian.app.answer
     federation.invite.created  federation.invite.used  federation.peer.added
     federation.peer.revoked  federation.received  federation.sent
 """
@@ -46,6 +46,7 @@ LOGIN_REMOVED = "guardian.login.removed"
 LOGIN_LENT = "guardian.login.lent"
 LOGIN_CODE = "guardian.login.code"
 TELEGRAM_ANSWER = "guardian.telegram.answer"
+APP_ANSWER = "guardian.app.answer"
 CONFIG_CHANGED = "guardian.config.changed"
 INVITE_CREATED = "federation.invite.created"
 INVITE_USED = "federation.invite.used"

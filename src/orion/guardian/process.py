@@ -23,6 +23,7 @@ from orion.configure.module import reexec
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.federation.crypto import Identity
+from orion.guardian.app import AppEdge
 from orion.guardian.federation import FederationEdge, admin_token
 from orion.guardian.ledger import Ledger
 from orion.guardian.logins import LoginDesk, LoginForm
@@ -102,6 +103,19 @@ def _private_dir(path: Path) -> None:
     path.chmod(0o700)
 
 
+def app_edge(service: GuardianService) -> AppEdge:
+    """Orion's app: its passkeys, approvals and notifications live here when run split."""
+    from orion.modules.base import ModuleError
+
+    try:
+        edge = AppEdge(service)
+    except ModuleError as exc:
+        raise GuardianError(str(exc)) from exc
+    edge.install()
+    log.info("guardian.app", url=edge.url, port=edge.settings.port)
+    return edge
+
+
 def federation_edge(service: GuardianService) -> FederationEdge:
     settings = service.config.federation
     if not settings.public_url:
@@ -135,6 +149,7 @@ async def run(config: OrionConfig) -> None:
         service.restart = lambda: reexec(GUARDIAN_RESTART_AFTER)
         edge = federation_edge(service) if config.federation.enabled else None
         gate = telegram_gate(service) if config.channels.telegram.enabled else None
+        mobile = app_edge(service) if config.modules.get("mobile", {}).get("enabled") else None
         LoginDesk(service).install()
         if gate is not None and config.guardian.secrets_url:
             vault = Vault(service, gate, from_vault)
@@ -153,4 +168,6 @@ async def run(config: OrionConfig) -> None:
                 await edge.aclose()
             if gate is not None:
                 await gate.aclose()
+            if mobile is not None:
+                await mobile.aclose()
             await service.aclose()

@@ -1,5 +1,5 @@
 # Orion's public face: the Inkbox webhook and the control page (to the core), the federation
-# (to the guardian). Nothing else is reachable from outside.
+# and the app's edge (to the guardian). Nothing else is reachable from outside.
 @DOMAIN@ {
 	encode gzip
 
@@ -27,7 +27,11 @@
 	handle /secrets/* {
 		reverse_proxy 127.0.0.1:8794
 	}
-	# Orion's own app (D125): nothing works without a passkey paired with your phone.
+	# Orion's own app (D125): nothing works without a passkey paired with your phone. The
+	# conversation goes to the core; the app itself, its passkeys and approvals to the guardian.
+	handle /app/api/* {
+		reverse_proxy 127.0.0.1:8796
+	}
 	handle /app/* {
 		reverse_proxy 127.0.0.1:8795
 	}

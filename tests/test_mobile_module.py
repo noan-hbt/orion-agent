@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,7 +25,7 @@ def test_a_passkey_needs_a_domain_in_https() -> None:
             check_url(wrong)
 
 
-async def test_not_beside_a_separate_guardian_yet(tmp_path: Path) -> None:
+async def test_run_split_it_needs_the_guardian(tmp_path: Path) -> None:
     config = OrionConfig.model_validate(
         {
             "data_dir": tmp_path,
@@ -32,8 +33,8 @@ async def test_not_beside_a_separate_guardian_yet(tmp_path: Path) -> None:
             "modules": {"mobile": {"enabled": True, "public_url": "https://orion.example"}},
         }
     )
-    with pytest.raises(ModuleError, match="guardian"):
-        await MobileModule(config).assemble(None)  # type: ignore[arg-type]
+    with pytest.raises(ModuleError, match="guardian must be reachable"):
+        await MobileModule(config).assemble(SimpleNamespace(guardian=None))  # type: ignore[arg-type]
     assert MobileModule in builtin_modules()
 
 
@@ -62,3 +63,15 @@ async def _run(argv: list[str]) -> int:
     import asyncio
 
     return await asyncio.to_thread(main, argv)
+
+
+async def test_run_split_pairing_is_the_guardians_users_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    toml = tmp_path / "orion.toml"
+    toml.write_text(
+        '[guardian]\nenabled = true\n[modules.mobile]\nenabled = true\npublic_url = "https://orion.example"\n',
+        "utf-8",
+    )
+    assert await _run(["--config", str(toml), "app", "pair", "iphone"]) == 2
+    assert "orion-admin" in capsys.readouterr().out  # the core cannot read the admin token

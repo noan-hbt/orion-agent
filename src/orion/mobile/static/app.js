@@ -214,7 +214,7 @@ async function start() {
     });
   }
   try {
-    const me = await api("api/me");
+    const me = await api("me");
     state.device = me.device;
     state.pushKey = me.push_key;
     await conversation();
@@ -965,9 +965,7 @@ function listen() {
     if (data.type === "ready") {
       setTyping(data.typing);
       setWork(data.work);
-      state.approvals.clear();
-      for (const a of data.approvals) state.approvals.set(a.id, a);
-      paintApprovals();
+      loadApprovals();
       countQuestions();
     } else if (data.type === "message") {
       add(data.message);
@@ -979,9 +977,7 @@ function listen() {
     } else if (data.type === "work") {
       setWork(data.work);
     } else if (data.type === "approval") {
-      state.approvals.set(data.approval.id, data.approval);
-      paintApprovals();
-      bottom(true);
+      loadApprovals().then(() => bottom(true));
     } else if (data.type === "approval_closed") {
       state.approvals.delete(data.id);
       paintApprovals();
@@ -991,7 +987,7 @@ function listen() {
     setLive(false);
     source.close();
     try {
-      await api("api/me");
+      await api("me");
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return welcome("Ta session a expiré.");
     }
@@ -1067,6 +1063,22 @@ function setWork(work) {
     },
     work.stopping ? "J'arrête…" : "Arrêter",
   );
+  // A message that arrives during a turn joins it between two steps: Orion reads this one,
+  // hands the rest to a background task with everything it knows, and says so.
+  const later = h(
+    "button",
+    {
+      type: "button",
+      class: "pill small ghost",
+      disabled: work.stopping || state.backgrounded === work.since,
+      onclick: () => {
+        state.backgrounded = work.since;
+        later.disabled = true;
+        submit("Passe ça en tâche de fond et préviens-moi quand c'est prêt.");
+      },
+    },
+    "En fond",
+  );
   const step = (text, current) =>
     h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? h("i") : icon("check", 13)), text);
   view.work.replaceChildren(
@@ -1075,9 +1087,9 @@ function setWork(work) {
       {},
       h("span", { class: "ico" }, icon("orion", 18, "none")),
       h("span", {}, h("b", {}, "Il travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
-      stop,
     ),
     h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
+    h("div", { class: "acts" }, later, stop),
   );
   bottom();
 }
@@ -1091,6 +1103,21 @@ function paintStatus() {
 // -- approvals: yes takes Face ID, no does not ------------------------------------------------
 
 const ASK_TIME = new Intl.RelativeTimeFormat("fr-FR", { numeric: "auto" });
+
+async function loadApprovals() {
+  // The questions are read where they are kept (the guardian, run split), never from the stream.
+  try {
+    const { approvals } = await api("approvals");
+    const ids = new Set(approvals.map((a) => a.id));
+    const same = ids.size === state.approvals.size && [...ids].every((id) => state.approvals.has(id));
+    if (same) return;
+    state.approvals.clear();
+    for (const a of approvals) state.approvals.set(a.id, a);
+    paintApprovals();
+  } catch (error) {
+    console.warn("approvals", error);
+  }
+}
 
 function paintApprovals() {
   paintBadge();
@@ -1140,7 +1167,7 @@ function askCard(asked) {
   async function refuse() {
     no.disabled = true;
     try {
-      await api(`api/approvals/${asked.id}/refuse`, {});
+      await api(`approvals/${asked.id}/refuse`, {});
       card.classList.add("done");
     } catch (error) {
       status.hidden = false;
@@ -1152,9 +1179,9 @@ function askCard(asked) {
   async function accept() {
     status.hidden = true;
     try {
-      const opened = await api(`api/approvals/${asked.id}/options`, { answer: "yes" });
+      const opened = await api(`approvals/${asked.id}/options`, { answer: "yes" });
       const credential = await sign(opened.options);
-      await api(`api/approvals/${asked.id}`, { answer: "yes", ceremony: opened.ceremony, credential });
+      await api(`approvals/${asked.id}`, { answer: "yes", ceremony: opened.ceremony, credential });
       card.classList.add("done");
       toast("Accordé.");
       return true;
@@ -1444,12 +1471,14 @@ function actions() {
 
 function forYou() {
   panel("Pour toi", async (refresh, close) => {
-    let found = { approvals: [...state.approvals.values()], questions: [], waiting_on: [], tasks: [] };
+    await loadApprovals();
+    let found = { questions: [], waiting_on: [], tasks: [] };
     try {
       found = await api("api/for-you");
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) throw error; // controls off: approvals only
     }
+    found.approvals = [...state.approvals.values()];
     state.questions = found.questions.length;
     paintBadge();
     const act = (path) => async () => {
@@ -1715,7 +1744,7 @@ function menu() {
             type: "button",
             class: "danger",
             onclick: async () => {
-              await api("api/logout", {}).catch(() => {});
+              await api("logout", {}).catch(() => {});
               source?.close();
               layer.replaceChildren();
               open.length = 0;
@@ -2085,7 +2114,7 @@ async function subscribePush() {
     (await registration.pushManager.getSubscription()) ||
     (await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64url(state.pushKey) }));
   const json = subscription.toJSON();
-  await api("api/push/subscribe", { endpoint: json.endpoint, keys: json.keys });
+  await api("push/subscribe", { endpoint: json.endpoint, keys: json.keys });
 }
 
 // -- photo viewer -----------------------------------------------------------------------------

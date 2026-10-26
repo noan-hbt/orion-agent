@@ -188,7 +188,6 @@ async def test_for_you_gathers_what_waits_on_him(controlled: Controlled) -> None
     task = await controlled.tasks.start("Trouver un T2 à Dreux", "brief", 0.5, 60, NOW, orion, None)
 
     shown = (await http.get("/app/api/for-you")).json()
-    assert shown["approvals"] == []
     assert [(q["about"], q["who"]) for q in shown["questions"]] == [("le jour de la visite", "lui")]
     assert [(w["about"], w["who"]) for w in shown["waiting_on"]] == [("le dîner de samedi", "Paul")]
     assert [t["goal"] for t in shown["tasks"]] == ["Trouver un T2 à Dreux"]

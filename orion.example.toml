@@ -292,12 +292,13 @@ port = 8790
 
 # Orion's own app on your iPhone (D125), instead of Telegram: a web app added to the home screen,
 # with notifications and approvals signed with Face ID. It needs a domain in https (a passkey
-# belongs to a domain). Pair the phone with `orion app pair iphone`, which prints what to do.
-# Not yet with [guardian] enabled: the guardian must serve the app itself first.
+# belongs to a domain). Pair the phone with `orion app pair iphone`, which prints what to do
+# (with [guardian] enabled: `orion-admin app pair iphone`, as the guardian's user).
 [modules.mobile]
 enabled = false
 host = "127.0.0.1"
-port = 8795
+port = 8795                     # the app (run split: served by the guardian)
+core_port = 8796                # the conversation, /app/api/ (run split: served by the core)
 # public_url = "https://orion.example.com"
 approval_timeout_seconds = 900
 session_days = 30               # then Face ID again to open a session

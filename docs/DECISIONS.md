@@ -2718,8 +2718,8 @@ passkeys. Étude : `docs/research/05-application.md`.
 - **Un canal comme les autres** (D88) : module `app`, outbox, boîte de réception unifiée.
   Telegram peut rester allumé pendant la transition. Les proches restent sur Telegram ou
   iMessage.
-- Mode réuni d'abord (un processus, comme sur Railway) ; en mode séparé, le canal refuse de se
-  charger tant que le gardien ne sert pas l'application lui-même.
+- Mode réuni d'abord (un processus, comme sur Railway) ; en mode séparé, le gardien sert le bord
+  de l'application (D134).
 
 ## D126 — Des pièces structurées dans les messages : des balises, pas un outil
 
@@ -2885,11 +2885,35 @@ ce qu'il fait (le `doing` de chaque outil, dans ses mots), les étapes déjà fa
   en plus : la fin du tour l'est déjà (`turn.finished`).
 - **Arrêter** s'applique entre deux étapes (`halted`, comme pour une tâche annulée) : un outil
   déjà lancé finit, le suivant ne part pas, et Orion répond « D'accord, j'arrête là. ».
-- Pas encore : basculer le travail en cours en tâche de fond ; pour l'instant, il faut le lui
-  demander.
+- **En fond** envoie, en clair dans la conversation, « Passe ça en tâche de fond et
+  préviens-moi quand c'est prêt. » : un message arrivé pendant un tour le rejoint entre deux
+  étapes, et Orion confie la suite à une tâche de fond (D110) avec tout ce qu'il sait.
 
 « Pour toi » (la cloche) rassemble ce qui l'attend et ce qu'Orion a en cours : les accords, les
 questions qu'Orion attend de lui (D129), ses tâches de fond (D110, avec leur dernier compte rendu,
 et Arrêter), et les réponses qu'il attend des autres (Laisser tomber). La pastille compte les
 accords et les questions. Arrêter une tâche ou laisser tomber une attente est journalisé comme
 venant de lui.
+
+## D134 — En mode séparé, le gardien tient le bord de l'application
+
+*26/10/2026 · acceptée · complète D125*
+
+Sur un serveur, l'installation sépare le noyau et le gardien (D28). L'application ne pouvait pas
+s'y charger : un noyau compromis qui sert les pages, les passkeys et les questions pourrait
+afficher une action et en faire signer une autre. Le gardien tient donc maintenant le bord :
+- **il sert l'application elle-même** (ses fichiers, figés dans le paquet), l'appairage, la
+  connexion, les sessions (signées de sa clé), les accords et les abonnements aux
+  notifications, sur `[modules.mobile] port` ;
+- **les codes d'appairage ne viennent que de son utilisateur** (`orion-admin app pair iphone`,
+  avec son jeton d'administration) ; le noyau ne peut ni en tirer un ni couper un appareil ;
+- **les accords** : il rédige la question, l'application la lit chez lui, la signature de cet
+  accord et de cette réponse lui parvient, et seule une réponse qu'il a vérifiée laisse passer
+  l'action (`_owner_said_yes`) ; un « non » sans Face ID ne vaut jamais oui. Le noyau attend,
+  lui demande la réponse, et présente l'accord avec l'action, comme sur Telegram ;
+- **les notifications** : la clé VAPID, les abonnements, la limite de débit ;
+- **le noyau ne sert que la conversation**, `/app/api/`, sur `core_port`, en demandant au
+  gardien à qui est chaque session (gardé 30 secondes ; injoignable, c'est non).
+
+En mode réuni (Railway, un poste), le même processus sert tout, sur les deux ports, pour que
+les mêmes règles de Caddy marchent.
