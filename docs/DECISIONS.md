@@ -3035,3 +3035,24 @@ couleur par ligne) et voulait quelque chose de sobre, dans le style de l'applica
   le point vert « en ligne » ou « actif » ;
 - des titres un peu plus petits, des étiquettes de section en minuscules.
 Seules les couleurs changent (et le manifeste, blanc) ; la mise en page reste celle de D136.
+
+## D138 — L'application en cobalt : du relief, et une couleur pour Orion
+
+*26/10/2026 · acceptée · révise les couleurs de D137*
+
+Sur quatre pistes tirées de l'application de D137 (affinée, cobalt, douce, contrastée), le
+propriétaire a choisi le cobalt :
+- **du relief** : un fond gris clair comme dans iOS, des surfaces blanches avec une ombre légère
+  au lieu du filet, un seul arrondi, des titres un peu plus grands ;
+- **une couleur à Orion**, un bleu cobalt (`#2f5bff`), pour ce qu'il fait et ce que le
+  propriétaire choisit : son signe, le bouton qui compte, la glissière d'accord, l'onglet choisi,
+  les réponses rapides, les jauges, et les bulles du propriétaire ;
+- le reste ne change pas : pictogrammes noirs sans pastille, rouge pour ce qui défait, pastille
+  rouge pour ce qui attend.
+- **du mouvement**, sur des ressorts comme dans iOS, une seule animation par changement :
+  l'onglet choisi glisse sous une lentille, l'onglet arrive du côté de son bouton, le contenu
+  d'une page arrive en cascade, un nouveau message monte à sa place, les panneaux poussent
+  depuis la droite et les feuilles montent et redescendent ; ce qui se touche s'enfonce sous
+  le doigt, la glissière d'accord efface ses mots en avançant et finit sur une coche.
+C'est une couche à la fin de `app.css`, et quelques classes posées par `app.js` ; la mise en
+page reste celle de D136.
