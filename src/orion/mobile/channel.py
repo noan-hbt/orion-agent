@@ -36,6 +36,7 @@ from orion.adaptation.signals import FEEDBACK_REACTION, reaction_event
 from orion.channels.imessage import APPROVAL_DECIDED, APPROVAL_REQUESTED
 from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
+from orion.channels.markup import plain, public
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -88,6 +89,7 @@ class Said:
             "who": self.who,
             "text": self.text,
             "at": self.at,
+            "blocks": public(self.text) if self.who == "orion" else [],
             "files": [
                 {"ref": f"{self.ref}/{i}", "name": f.name, "type": f.content_type, "size": f.size}
                 for i, f in enumerate(self.files)
@@ -222,10 +224,10 @@ class Asked:
 
 
 def _safe_name(name: str, content_type: str) -> str:
-    plain = re.sub(r"[^\w.\- ]+", "_", Path(name).name).strip(" .") or "fichier"
-    if "." not in plain:
-        plain += mimetypes.guess_extension(content_type) or ""
-    return plain[:120]
+    safe = re.sub(r"[^\w.\- ]+", "_", Path(name).name).strip(" .") or "fichier"
+    if "." not in safe:
+        safe += mimetypes.guess_extension(content_type) or ""
+    return safe[:120]
 
 
 def _now() -> str:
@@ -236,6 +238,8 @@ class MobileChannel:
     """Inbound handling, outbound transport, inbox outlet and approver for the app."""
 
     name = CHANNEL
+    rich = True
+    """It draws Orion's choices and cards (D126)."""
 
     def __init__(
         self,
@@ -387,7 +391,7 @@ class MobileChannel:
         assert said is not None
         self.hub.publish({"type": "message", "message": self.state.public(said)})
         if not self.hub.listening:
-            body = text or (f"📎 {files[0].name}" if files else "")
+            body = plain(text) or (f"📎 {files[0].name}" if files else "")
             await self._notify({"title": "Orion", "body": body[:PUSH_PREVIEW], "tag": key})
         return key
 

@@ -12,7 +12,8 @@ that is the same whatever the channel:
   `SILENCE` (a call transcript that needs no follow-up, or a voice message already sent);
 - proactive messages, files and questions for approval go where he last wrote from, or else
   to the first available outlet, in order of preference (D88): a channel is one module, and
-  everything Orion sends goes through here, whatever the channel.
+  everything Orion sends goes through here, whatever the channel;
+- a channel that does not draw Orion's structured pieces (D126) gets them as plain text.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from typing import Protocol, runtime_checkable
 
 import structlog
 
+from orion.channels.markup import plain
 from orion.cognition.loop import StopReason
 from orion.guardian.outbox import SendError
 from orion.guardian.policy import ActionProposal, Approval
@@ -86,7 +88,8 @@ class Inbound:
 
 
 class Outlet(Protocol):
-    """A channel's owner-facing side: what every channel does."""
+    """A channel's owner-facing side: what every channel does. One that draws Orion's
+    structured pieces (choices, cards; D126) says so with `rich = True`."""
 
     name: str
 
@@ -116,6 +119,11 @@ class AskingOutlet(Outlet, Protocol):
 @asynccontextmanager
 async def nothing_to_show() -> AsyncGenerator[None]:
     yield
+
+
+def shown(outlet: Outlet, text: str) -> str:
+    """The text as this outlet can show it: pieces it cannot draw become plain text."""
+    return text if getattr(outlet, "rich", False) else plain(text)
 
 
 class OwnerInbox:
@@ -153,14 +161,14 @@ class OwnerInbox:
         outlet = await self._preferred()
         if outlet is None:
             raise RuntimeError("no owner channel is available")
-        await outlet.deliver(text, correlation_id)
+        await outlet.deliver(shown(outlet, text), correlation_id)
 
     async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
         """A file for the owner, on a channel that carries files."""
         outlet = await self._preferred(lambda o: isinstance(o, FileOutlet))
         if not isinstance(outlet, FileOutlet):
             raise SendError("no owner channel can carry a file", retryable=False)
-        await outlet.deliver_file(path, caption, correlation_id)
+        await outlet.deliver_file(path, shown(outlet, caption), correlation_id)
 
     async def approve(self, proposal: ActionProposal) -> Approval:
         """Put an action to the owner where he can answer it; nobody to ask means no."""
@@ -277,7 +285,7 @@ class OwnerInbox:
 
         async def progress(text: str, correlation_id: str) -> None:
             if reply is not None and not first.allow_silence and not is_silence(text):
-                await reply.deliver(text, correlation_id)
+                await reply.deliver(shown(reply, text), correlation_id)
 
         async with showing:
             looked = await self._look(batch)
@@ -307,7 +315,7 @@ class OwnerInbox:
             # needed. The word itself is never his to read.
             log.info("inbox.silence", channel=first.channel, allowed=first.allow_silence)
         elif text and reply is not None:
-            await reply.deliver(text, turn.correlation_id)
+            await reply.deliver(shown(reply, text), turn.correlation_id)
         elif text:
             log.warning("inbox.no_outlet", channel=first.reply_via or first.channel)
         log.info(
