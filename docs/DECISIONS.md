@@ -2721,6 +2721,81 @@ passkeys. Étude : `docs/research/05-application.md`.
 - Mode réuni d'abord (un processus, comme sur Railway) ; en mode séparé, le canal refuse de se
   charger tant que le gardien ne sert pas l'application lui-même.
 
+## D128 — Alléger seulement quand le cache est parti ; un constat se lit avec doute
+
+*26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D107)*
+
+Trois points de la passation, vérifiés le 21/10 :
+- **l'élagage cassait un cache encore chaud** : les vieux résultats d'outils étaient allégés
+  après 10 minutes sans message, en supposant le cache du modèle expiré. C'est vrai pour Claude
+  (5 minutes), pas pour DeepSeek, le modèle par défaut, qui garde le sien des heures : le tour
+  suivant repayait toute la conversation pour économiser quelques jetons déjà en cache.
+  L'élagage attend maintenant aussi la durée de vie du cache du modèle (`cache_minutes` :
+  5 min pour Claude, 4 h pour DeepSeek, 1 h ailleurs) ;
+- **`library` (keep)** : la note de mémoire d'une lecture gardée (titre, adresse, résumé,
+  sujets) pouvait dépasser les 1 000 caractères d'un fait. Le document était gardé, mais la note
+  refusée. L'adresse sort de la note d'abord (le document la garde), puis le résumé raccourcit ;
+- **le constat mal lu** : une photo de formulaire se lit mal, quel que soit le modèle. Orion dit
+  ce dont il doute et demande de quel côté est le propriétaire avant de conclure, et
+  l'extracteur de mémoire ne retient pas sa lecture d'une photo tant que le propriétaire ne l'a
+  pas confirmée (cas `le_constat_mal_lu`, 5/5 sur DeepSeek, 2/3 sans la consigne).
+Les évals faibles l'étaient en partie à cause du juge : Haiku, par OpenRouter, réfléchit avant
+de répondre et épuisait ses 400 jetons sans verdict, compté comme un non ; et il lisait « en
+retard, ou coupé ? » comme « les deux ». Un juge sans verdict est maintenant signalé à part.
+`il_etait_coupe`, `veille_de_partiel` et `un_lien_sans_un_mot` (qui avait besoin du module
+web) passent 3/3.
+
+## D129 — Attendre une réponse, et décider de relancer
+
+*26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D109)*
+
+Orion envoie des choses qui appellent une réponse (une question à un proche, un message à un
+autre Orion, un mail, une question au propriétaire), puis les oublie. Un rendez-vous de groupe
+restait bloqué pour toujours par un invité muet (D99). Noan voulait qu'Orion puisse décider de
+relancer, les autres comme lui. Module `awaiting`, allumé par défaut :
+- **Orion décide de ce qu'il attend** : `awaiting` (wait) dit qui doit répondre (lui, un proche,
+  un autre Orion, une adresse mail), à propos de quoi, et quand y revenir si rien n'arrive ;
+- **une réponse clôt l'attente seule**, lue dans le journal : le message d'un proche (le
+  secrétaire), n'importe quel message de cet Orion, un mail de cette adresse. Le prochain
+  message du propriétaire ne la clôt pas, car il peut parler d'autre chose : au moment venu,
+  Orion relit la conversation et se tait s'il a déjà eu sa réponse ;
+- **au moment venu sans réponse, Orion décide** dans un tour d'initiative : relancer (avec
+  `contact_message`, `peer_message` ou `mail_send` : les accords et l'autonomie s'appliquent
+  comme d'habitude), le dire au propriétaire, ou laisser tomber (`SILENCE`). Une relance suit
+  la précédente (`follows`) : deux au plus sur un même sujet (`max_rounds`), puis il le dit ;
+- **certaines attentes s'ouvrent seules** : une demande d'accord restée sans réponse (c'était
+  donc non) revient une fois, 3 h plus tard, pour lui demander s'il le veut toujours ; un
+  sondage ou une proposition de rendez-vous qu'un autre Orion laisse sans réponse revient au
+  bout de 24 h. Une réponse à une nouvelle demande pour la même action clôt l'ancienne ;
+- c'est une alerte du moteur d'initiative : heures calmes, budget du jour, vérificateur ;
+- tout se reconstruit depuis le journal : les seuls événements sont les attentes qu'Orion ouvre
+  (`awaiting.opened`) et celles qu'il retire (`awaiting.cancelled`).
+Les budgets du message système et des outils (D84) passent à 38 600 et 36 600 caractères. Cas
+`relance_le` et `il_a_deja_repondu`, 3/3 sur DeepSeek.
+Pas encore : annuler un rendez-vous de groupe qu'un invité laisse sans réponse (il n'y a pas
+d'outil d'annulation pour celui qui propose) ; Orion peut seulement relancer ou prévenir.
+
+## D130 — Laisser Orion faire seul se demande, même après un message d'un tiers (révise D90)
+
+*26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D111)*
+
+Le 21/10, juste après qu'Orion lui eut relayé deux messages de Victor, Noan a écrit « discute
+avec lui sans me consulter ». `autonomy_grant` (`contact_message`, Victor) a été refusé pendant
+2 h : la conversation contenait le message d'un tiers, et accorder de l'autonomie faisait partie
+des actions jamais faites depuis un tel contexte, même avec son oui. Le mode n'y était pour rien :
+il était déjà en `equilibre`.
+
+Désormais, en `equilibre`, `autonomy_grant` depuis une conversation qui contient du contenu venu
+d'ailleurs lui est **demandé**, avec l'autonomie exacte et la raison de la question, comme toute
+action sur le monde depuis D90. Elle n'est jamais prise seule, et `prudent` la refuse toujours.
+Installer ou retirer un module (D105) reste refusé dans ce contexte : c'est du code qui tourne
+avec sa mémoire.
+Dans le cas réel, Orion n'a même pas réessayé : à la demande suivante, il a répété de mémoire le
+refus d'avant (« il faut 120 minutes… »), que le message de refus lui disait de répéter tel
+quel. La constitution et ce message disent maintenant qu'un refus ne vaut que pour l'appel où il
+a eu lieu : s'il redemande, Orion rappelle l'outil, et c'est le contrôle qui décide. Cas
+`laisse_le_ecrire_seul`, 3/3 sur DeepSeek.
+
 ## D131 — Des papiers sans types : on les retrouve en cherchant
 
 *26/10/2026 · acceptée · révise D74*

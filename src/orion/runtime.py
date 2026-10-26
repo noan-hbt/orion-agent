@@ -55,7 +55,7 @@ from orion.memory.model import FACT_ASSERTED
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
-from orion.providers.base import Message, ModelProvider, Usage
+from orion.providers.base import Message, ModelProvider, Usage, cache_minutes
 from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
 
@@ -776,13 +776,15 @@ class Orion:
     def _prunable(self, thread: Thread, when: datetime) -> list[int]:
         """Old bulky tool results to shorten, once the conversation paused long enough for the
         provider's cache to have gone: shortening them then costs nothing (OpenClaw does the
-        same). Without a pause, only when they add up to `PRUNE_AT_ONCE`: one change of
+        same). Sooner, the next turn would pay the whole conversation again to save a little on
+        cached tokens. Without a pause, only when they add up to `PRUNE_AT_ONCE`: one change of
         prefix is then cheaper than carrying them at every step. The last two exchanges stay
         whole."""
-        if not self._agent.prune_idle_minutes:
+        idle = self._agent.prune_idle_minutes
+        if not idle:
             return []
         found = thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)
-        if self._idle(thread, when, self._agent.prune_idle_minutes):
+        if self._idle(thread, when, max(idle, cache_minutes(self._agent.model))):
             return found
         bulk = sum(len(str(thread.messages[i].get("content") or "")) for i in found)
         return found if bulk >= PRUNE_AT_ONCE else []
