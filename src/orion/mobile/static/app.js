@@ -26,7 +26,7 @@ function h(tag, props = {}, ...children) {
 }
 
 const ICONS = {
-  orion: '<circle cx="12" cy="12" r="6" stroke="#fff" stroke-width="1.7"/><circle cx="18" cy="6" r="1.6" fill="#9DA6FF" stroke="none"/>',
+  orion: '<circle cx="12" cy="12" r="6" stroke="#fff" stroke-width="1.7"/><circle cx="18" cy="6" r="1.6" fill="#fff" stroke="none"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
@@ -64,6 +64,9 @@ const ICONS = {
   phone: '<rect x="7" y="3" width="10" height="18" rx="3"/><path d="M11 18h2"/>',
   toml: '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h4"/>',
   chevron: '<path d="M9 5l7 7-7 7"/>',
+  people: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.2a3 3 0 0 1 0 5.6M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/>',
+  rules: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
+  wave: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
 };
 
 function icon(name, size = 20, stroke = "currentColor") {
@@ -425,7 +428,7 @@ async function conversation() {
       h("span", { class: "avatar" }, icon("orion", 22, "none")),
       h("span", {}, h("h1", {}, "Orion"), view.status),
     ),
-    h("button", { class: "round glass", type: "button", "aria-label": "Me parler", onclick: voiceMode }, icon("mic", 20)),
+    h("button", { class: "round glass", type: "button", "aria-label": "Mode voix", onclick: voiceMode }, icon("wave", 20)),
   );
 
   view.talk = h(
@@ -976,7 +979,9 @@ function listen() {
     if (data.type === "ready") {
       setTyping(data.typing);
       setWork(data.work);
-      loadApprovals();
+      // A question that waited while the app was closed shows at the end of the thread, in view.
+      const near = nearBottom();
+      loadApprovals().then(() => near && bottom(true));
       countQuestions();
       nowChanged();
     } else if (data.type === "message") {
@@ -1218,13 +1223,28 @@ const KEYS = {
   name: "Nom", path: "Fichier", query: "Recherche", address: "Adresse", phone: "Téléphone",
 };
 
+// What an action does, in his words; an unknown tool shows its name.
+const TOOL_NAMES = {
+  mail_send: "Envoyer un mail", mail_draft: "Préparer un mail", calendar_add: "Ajouter à ton agenda",
+  contact_message: "Écrire à un proche", peer_message: "Écrire à un autre Orion", call_someone: "Appeler quelqu'un",
+  meeting_propose: "Proposer un rendez-vous", meeting_accept: "Accepter un rendez-vous", configure_change: "Changer un réglage",
+  autonomy_grant: "Me laisser faire seul", module_install: "Installer un module", module_remove: "Retirer un module",
+  shell: "Lancer une commande sur le serveur", delegate: "Confier à un autre agent", booking: "Réserver",
+  hand_open: "Ouvrir sur ton ordinateur", hand_read_file: "Lire un fichier de ton ordinateur", secret_ask: "Te demander un secret",
+};
+
+function toolName(tool) {
+  if (TOOL_NAMES[tool]) return TOOL_NAMES[tool];
+  const words = tool.replace(/_/g, " ");
+  return `${words[0].toUpperCase()}${words.slice(1)}`;
+}
+
 function askTitle(asked) {
   // One line for a list: the action, and what it is about.
   const args = asked.arguments || {};
   const about = [args.subject, args.to, args.title, args.text, args.name].find((v) => typeof v === "string" && v);
   if (!asked.tool) return excerpt(asked.question.replace(/^Avant que je le fasse : /, ""), 90);
-  const tool = asked.tool.replace(/_/g, " ");
-  return excerpt(about ? `${tool[0].toUpperCase()}${tool.slice(1)} · ${about}` : `${tool[0].toUpperCase()}${tool.slice(1)}`, 90);
+  return excerpt(about ? `${toolName(asked.tool)} · ${about}` : toolName(asked.tool), 90);
 }
 
 function details(asked) {
@@ -1233,14 +1253,14 @@ function details(asked) {
   if (!asked.tool) return [h("p", {}, asked.question.replace(/^Avant que je le fasse : /, ""))];
   const value = (v) => (typeof v === "string" ? v : JSON.stringify(v, null, 1));
   return [
-    h("p", { class: "tool" }, asked.tool.replace(/_/g, " ")),
+    h("p", { class: "tool" }, toolName(asked.tool)),
     entries.length && h(
       "dl",
       { class: "args" },
       entries.map(([key, v]) => {
         const text = value(v);
-        const dd = h("dd", { class: text.length > 160 ? "long" : "" }, text);
-        if (text.length > 160) dd.addEventListener("click", () => dd.classList.toggle("open"));
+        const dd = h("dd", { class: text.length > 120 ? "long" : "" }, text);
+        if (text.length > 120) dd.addEventListener("click", () => dd.classList.toggle("open"));
         return [h("dt", {}, KEYS[key] || key.replace(/_/g, " ")), dd];
       }),
     ),
@@ -1496,7 +1516,7 @@ const TABS = [
 const DAY_TITLE = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
 function shell() {
-  view.nowWork = h("section", { class: "hero", "aria-live": "polite" });
+  view.nowWork = h("section", { class: "hero card", "aria-live": "polite" });
   view.tabs = {
     now: page("Maintenant", nowFill, () => DAY_TITLE.format(new Date())),
     talk: view.talk,
@@ -1537,7 +1557,7 @@ function show(key) {
 
 // A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
 function page(title, fill, subtitle) {
-  const line = h("p");
+  const line = h("p", { hidden: !subtitle });
   const body = h("div", { class: "page-body" });
   const el = h("section", { class: "tab page", "aria-label": title }, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
   let busy = false;
@@ -1579,7 +1599,7 @@ function paintNowWork() {
   const o = state.overview;
   const work = state.work && (state.work.steps > 0 || state.work.doing.length) ? state.work : null;
   const waiting = state.approvals.size + (state.questions || 0);
-  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, icon("orion", 36, "none"));
+  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, icon("orion", 24, "none"));
   let title;
   let line;
   let acts = [];
@@ -1596,12 +1616,15 @@ function paintNowWork() {
     acts = [h("button", { class: "pill small primary", type: "button", onclick: () => api("api/control/pause", { minutes: null }).then(nowChanged, (e) => toast(said(e))) }, "Reprendre")];
   } else if (waiting) {
     title = waiting > 1 ? `J'ai besoin de toi pour ${waiting} choses.` : "J'ai besoin de toi pour une chose.";
-    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : "elles sont juste en dessous";
+    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "";
   } else {
     title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Rien en cours. Je garde un œil sur tout.";
     line = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "écris-moi quand tu veux";
   }
-  view.nowWork.replaceChildren(orb, h("h2", {}, title), h("div", { class: "line" }, h("span", {}, line), acts));
+  view.nowWork.replaceChildren(
+    h("div", { class: "state-head" }, orb, h("span", {}, h("b", {}, title), line ? h("small", {}, line) : null)),
+    ...(acts.length ? [h("div", { class: "row2" }, acts)] : []),
+  );
 }
 
 async function nowFill(refresh) {
@@ -1741,22 +1764,33 @@ async function notebookFill() {
       if (error instanceof ApiError && error.status === 404) return null; // missions off
       throw error;
     });
-  const go = (name, title, count, open, wide = false) =>
-    h("button", { class: `tile link ${wide ? "wide" : ""}`, type: "button", onclick: open }, h("span", { class: `ico ${tint(name)}` }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
+  const kept = missions ? missions.reduce((n, m) => n + m.seen.filter((s) => !s.rejected).length, 0) : 0;
   return [
+    h("button", { class: "search glass", type: "button", onclick: memoryPanel }, icon("search", 18), h("span", {}, "Chercher dans ce que je sais")),
+    h("p", { class: "label" }, "Ce que je fais"),
     h(
       "div",
-      { class: "grid" },
-      missions ? go("target", "Missions", missions.length ? `${missions.length} en cours · ${plural(missions.reduce((n, m) => n + m.seen.filter((s) => !s.rejected).length, 0), "retenu", "retenus")}` : "aucune en cours", missionsPanel, true) : null,
-      go("spark", "Ce que je sais", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel, true),
-      go("file", "Mes papiers", "pièces, fiches, contrats", papersPanel),
-      go("where", "Mes proches", "anniversaires, nouvelles", peoplePanel),
-      go("book", "Mes semaines", "la page du dimanche", chroniclePanel, true),
-      go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
-      go("file", "Mon manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
-      go("calendar", "À venir", "ce que je ferai seul", plannedPanel),
-      go("clock", "Activité", "et mes silences", activityPanel),
-      go("shield", "Ce que je fais seul", o.alone.length ? `${o.alone.length} permis` : "je demande tout", autonomyPanel, true),
+      { class: "list items" },
+      missions ? row("target", "Missions", missions.length ? `${missions.length} en cours` : "aucune", missionsPanel, "", missions.length ? plural(kept, "trouvaille retenue", "trouvailles retenues") : "") : null,
+      row("calendar", "À venir", null, plannedPanel, "", "ce que je ferai seul"),
+      row("shield", "Ce que je fais seul", o.alone.length ? `${o.alone.length} permis` : "je demande tout", autonomyPanel),
+      row("clock", "Activité", null, activityPanel, "", "ce que j'ai fait, et mes silences"),
+    ),
+    h("p", { class: "label" }, "Ce que je sais"),
+    h(
+      "div",
+      { class: "list items" },
+      row("spark", "Mes souvenirs", String(o.counts.facts), memoryPanel),
+      row("people", "Mes proches", null, peoplePanel, "", "anniversaires, nouvelles"),
+      row("file", "Mes papiers", null, papersPanel, "", "pièces, fiches, contrats"),
+      row("book", "Mes semaines", null, chroniclePanel, "", "la page du dimanche"),
+    ),
+    h("p", { class: "label" }, "Ce que tu m'as confié"),
+    h(
+      "div",
+      { class: "list items" },
+      row("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
+      row("rules", "Mon manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
     ),
     h("p", { class: "hint" }, "Pour un rappel, dis-le-moi dans la conversation, ou touche + à côté du message."),
   ];
@@ -1769,18 +1803,19 @@ const TINTS = {
   toml: "gray", sliders: "gray", blocks: "purple", server: "blue", phone: "green", bell: "red",
   door: "red", shield: "indigo", check: "green", clock: "orange", calendar: "red", spark: "yellow",
   target: "pink", file: "blue", where: "teal", book: "orange", photo: "pink", face: "indigo",
+  people: "teal", rules: "purple", moon: "indigo", wave: "purple",
 };
 
 function tint(name) {
   return `c-${TINTS[name] || "gray"}`;
 }
 
-function row(name, title, value, onclick, tone = "") {
+function row(name, title, value, onclick, tone = "", sub = "") {
   return h(
     onclick ? "button" : "div",
     { class: "item", type: onclick ? "button" : undefined, onclick },
     h("span", { class: `ico ${tone || tint(name)}` }, icon(name, 17)),
-    h("span", {}, h("span", { class: "text" }, title)),
+    h("span", {}, h("span", { class: "text" }, title), sub ? h("small", {}, sub) : null),
     value !== null ? h("small", { class: "value" }, value) : null,
     onclick ? h("span", { class: "chev" }, icon("chevron", 14)) : null,
   );
@@ -1815,48 +1850,56 @@ async function settingsFill(refresh) {
     parts.push(
       h(
         "div",
-        { class: "grid" },
+        { class: `card state ${paused ? "paused" : ""}` },
         h(
           "div",
-          { class: `tile hero ${paused ? "paused" : ""}` },
+          { class: "state-head" },
           h("span", { class: "dot" }),
           h(
-            "div",
+            "span",
             {},
             h("b", {}, paused ? "Je suis en pause" : o.quiet_now ? "Je suis actif · heures calmes" : "Je suis actif"),
-            h("small", {}, paused ? `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même` : "je prends des initiatives, dans les limites ci-dessous"),
-          ),
-          h(
-            "div",
-            { class: "row" },
-            paused
-              ? h("button", { class: "pill small primary", type: "button", onclick: act("api/control/pause", { minutes: null }) }, "Reprendre")
-              : [
-                  h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: 60 }) }, "Pause 1 h"),
-                  h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: minutesUntilTomorrow(8) }) }, "Jusqu'à demain"),
-                ],
+            h("small", {}, paused ? `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même` : "je prends des initiatives, dans tes limites"),
           ),
         ),
-        o.cost
-          ? [
-              h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), o.cost.daily_cap ? meter(o.cost.today / o.cost.daily_cap, `sur ${money(o.cost.daily_cap)} · ${money(o.cost.alone_today)} de moi-même`) : h("small", {}, `dont ${money(o.cost.alone_today)} de moi-même`)),
-              h("div", { class: "tile" }, h("small", {}, "Ce mois-ci"), h("b", { class: "big" }, money(o.cost.month)), o.cost.monthly_cap ? meter(o.cost.month / o.cost.monthly_cap, `sur ${money(o.cost.monthly_cap)}`) : h("small", {}, "sans plafond")),
-            ]
-          : null,
         h(
           "div",
-          { class: "tile" },
-          h("small", {}, "Messages de moi-même / jour"),
-          h(
+          { class: "row2" },
+          paused
+            ? h("button", { class: "pill small primary", type: "button", onclick: act("api/control/pause", { minutes: null }) }, "Reprendre")
+            : [
+                h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: 60 }) }, "Pause 1 h"),
+                h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: minutesUntilTomorrow(8) }) }, "Jusqu'à demain"),
+              ],
+        ),
+      ),
+      o.cost
+        ? h(
             "div",
+            { class: "grid" },
+            h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), o.cost.daily_cap ? meter(o.cost.today / o.cost.daily_cap, `sur ${money(o.cost.daily_cap)} · ${money(o.cost.alone_today)} de moi-même`) : h("small", {}, `dont ${money(o.cost.alone_today)} de moi-même`)),
+            h("div", { class: "tile" }, h("small", {}, "Ce mois-ci"), h("b", { class: "big" }, money(o.cost.month)), o.cost.monthly_cap ? meter(o.cost.month / o.cost.monthly_cap, `sur ${money(o.cost.monthly_cap)}`) : h("small", {}, "sans plafond")),
+          )
+        : null,
+      h("p", { class: "label" }, "Quand je t'écris"),
+      h(
+        "div",
+        { class: "list items" },
+        h(
+          "div",
+          { class: "item" },
+          h("span", { class: `ico ${tint("bell")}` }, icon("bell", 17)),
+          h("span", {}, h("span", { class: "text" }, "Messages par jour"), h("small", {}, "de moi-même, au plus")),
+          h(
+            "span",
             { class: "stepper" },
             h("button", { type: "button", "aria-label": "Moins", disabled: o.daily_budget <= 0, onclick: act("api/control/settings", { daily_budget: o.daily_budget - 1 }) }, "−"),
-            h("b", { class: "big" }, String(o.daily_budget)),
+            h("b", {}, String(o.daily_budget)),
             h("button", { type: "button", "aria-label": "Plus", disabled: o.daily_budget >= 50, onclick: act("api/control/settings", { daily_budget: o.daily_budget + 1 }) }, "+"),
           ),
         ),
-        h("button", { class: "tile", type: "button", onclick: () => quietHours(o, refresh) }, h("small", {}, "Heures calmes"), h("b", { class: "big" }, `${o.quiet_start}–${o.quiet_end}`), h("small", {}, "je me tais, sauf urgence")),
-        h("button", { class: "tile wide", type: "button", onclick: () => digestsSheet(o, refresh) }, h("small", {}, "Mes points du jour"), h("b", { class: "big" }, o.digests?.length ? o.digests.join(" · ") : "aucun"), h("small", {}, "ce qui compte, en un message")),
+        row("moon", "Heures calmes", `${o.quiet_start} – ${o.quiet_end}`, () => quietHours(o, refresh), "", "je me tais, sauf urgence"),
+        row("calendar", "Points du jour", o.digests?.length ? o.digests.join(" · ") : "aucun", () => digestsSheet(o, refresh), "", "ce qui compte, en un message"),
       ),
     );
   }

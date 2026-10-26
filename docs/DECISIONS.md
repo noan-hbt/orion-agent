@@ -2992,3 +2992,46 @@ Constaté en vrai le jour même :
   et ne montent plus jusqu'en haut. Les bords flous remplacent les bandes. Les boutons sont
   teintés, les listes ont la forme des Réglages d'iOS, avec leurs icônes de couleur. L'app
   suit la zone visible quand le clavier monte.
+
+## D136 — L'application : moins de place pour le décor, plus pour ce qu'on fait
+
+*26/10/2026 · acceptée · révise la mise en page de D135*
+
+Le propriétaire trouvait l'interface peu pratique. Regardée à la taille d'un iPhone, avec des
+données réalistes :
+- **Maintenant** : le titre, un grand rond et une phrase en 28 px prenaient la moitié de
+  l'écran ; un accord à signer commençait au milieu et son curseur était caché sous la barre
+  d'onglets. L'état d'Orion tient maintenant dans une carte (le rond, une ligne, ce qui vient
+  ensuite, ses boutons), et « elles sont juste en dessous » a disparu ;
+- **un accord dit l'action en mots** (« Envoyer un mail », pas « MAIL SEND ») ; un outil
+  inconnu garde son nom. Un texte long se replie plus tôt (120 caractères), on le touche pour
+  le lire en entier ;
+- **la conversation** : un accord arrivé pendant que l'app était fermée restait sous le bas de
+  l'écran ; on y descend maintenant si on était en bas. Le bouton du mode voix a son icône
+  (une onde), il ne ressemble plus au micro du message vocal ;
+- **Carnet** : une mosaïque de tuiles de trois formes, deux icônes identiques, un « ? » pour
+  les proches. Ce sont maintenant trois listes courtes, comme les Réglages d'iOS (ce que je
+  fais, ce que je sais, ce que tu m'as confié), avec la recherche en haut ;
+- **Réglages** : le point vert débordait de sa carte, « 22:30–07:30 » tenait sur deux lignes,
+  et une tuile entière servait à un compteur. L'état et la pause forment une carte, les coûts
+  restent deux tuiles, et quand Orion écrit (messages par jour, heures calmes, points du jour)
+  est une liste, le compteur dans sa ligne ;
+- les icônes de couleur des listes restaient grises (une règle plus précise les écrasait).
+Rien ne change côté serveur ni dans ce qui est journalisé.
+
+## D137 — Une application sobre, comme celle de ChatGPT
+
+*26/10/2026 · acceptée · révise les couleurs de D125 et D135*
+
+Le propriétaire trouvait l'application trop colorée (lavande, halos, dégradés, une icône de
+couleur par ligne) et voulait quelque chose de sobre, dans le style de l'application ChatGPT :
+- **fond blanc, encre noire, surfaces gris clair** cernées d'un filet, sans ombre ni halo ni
+  dégradé ; le bouton qui compte est noir ;
+- **la conversation** : Orion écrit sur la page, sans bulle ; le propriétaire dans une bulle
+  grise ;
+- **les icônes** sont des pictogrammes gris, sans pastille de couleur ; l'onglet choisi est en
+  noir sur gris ;
+- **la couleur ne reste que là où elle dit quelque chose** : le rouge d'une action qui défait,
+  le point vert « en ligne » ou « actif » ;
+- des titres un peu plus petits, des étiquettes de section en minuscules.
+Seules les couleurs changent (et le manifeste, blanc) ; la mise en page reste celle de D136.
