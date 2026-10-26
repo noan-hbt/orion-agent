@@ -1,4 +1,4 @@
-/* Orion's app (D125): white, black ink, greys, round; colour only where it means something (D137).
+/* Orion's app (D125): a light grey ground, white surfaces, black ink, Orion's cobalt (D138).
    No dark mode, on purpose. */
 
 :root {
@@ -914,3 +914,130 @@ h2.section { font-size: 19px; font-weight: 600; }
 .page-body .label, .panel .label, .panel-body > .label { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
 button.search { background: var(--tile); box-shadow: none; color: var(--muted); }
 .ask .args { background: #fff; box-shadow: inset 0 0 0 0.5px var(--hair); }
+
+/* =============================================================================================
+   Cobalt (D138): D137 with depth and one colour. A light grey ground under white surfaces,
+   one radius, and Orion's cobalt for what Orion does and what the owner chooses.
+   ============================================================================================= */
+
+:root {
+  --bg: #f4f4f6; --surface: #ffffff; --tile: #f0f0f3; --fill: #ececf0; --hair: rgba(0, 0, 0, 0.07);
+  --muted: #6b6b73; --faint: #9a9aa3;
+  --accent: #2f5bff; --accent-ink: #2f5bff; --accent-soft: #e9eeff;
+}
+html, body, .panel, .voice { background: var(--bg); }
+
+/* surfaces: white, a soft shadow instead of the hairline */
+.card, .tile, .list, .list.items, .bento button, .file, .typing, .piece, .ask, .hero, .work {
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px -6px rgba(0, 0, 0, 0.06);
+}
+.card, .tile, .ask, .hero, .work { border-radius: 22px; }
+.list, .list.items { border-radius: 20px; }
+.ask .args { background: var(--bg); box-shadow: none; border-radius: 16px; }
+button.search { background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); }
+.sheet { background: #fff; }
+.panel > header { background: rgba(244, 244, 246, 0.92); }
+
+/* type */
+.page-head h1 { font-size: 34px; line-height: 40px; letter-spacing: -0.025em; }
+.page-head p { color: var(--faint); }
+h2.section { font-size: 22px; font-weight: 700; }
+.page-body .label, .panel .label, .panel-body > .label { font-size: 13px; color: var(--faint); }
+
+/* edges: the grey ground, not white */
+.top::before { background: linear-gradient(var(--bg), rgba(244, 244, 246, 0.85) 60%, rgba(244, 244, 246, 0)); }
+.dock::before { background: linear-gradient(rgba(244, 244, 246, 0), rgba(244, 244, 246, 0.94) 45%, var(--bg)); }
+
+/* Orion's colour: his sign, the button that matters, the chosen tab, the owner's words */
+.orb, .avatar, .ask header .ico, .work .ico, .done .ico { background: var(--accent); }
+.orb.busy { animation: orb-pulse 1.8s ease-in-out infinite; }
+@keyframes orb-pulse { 50% { box-shadow: 0 0 0 7px rgba(47, 91, 255, 0.16); } }
+.pill.primary, .pill.dark, .composer .send, .composer .send.mic, .slide .knob,
+.quick.answered button.chosen, .chip[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.pill.danger { background: rgba(180, 35, 24, 0.07); }
+.slide { background: var(--fill); }
+.tabbar, .find { background: rgba(255, 255, 255, 0.96); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px var(--hair); }
+.tabbar button[aria-current="page"] { color: var(--accent); background: var(--accent-soft); }
+.tabbar .badge, .badge { background: #ff3b30; }
+.msg.owner .bubble { background: var(--accent); color: #fff; }
+.msg.owner .bubble a { color: #fff; }
+.composer .field { background: #fff; box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px var(--hair); }
+.quick button { background: #fff; color: var(--accent); box-shadow: inset 0 0 0 1px rgba(47, 91, 255, 0.3); }
+.meter .fill { background: var(--accent); }
+.state .dot { background: var(--accent); box-shadow: 0 0 0 5px rgba(47, 91, 255, 0.14); }
+.who .status.live::before { background: var(--accent); }
+.who.glass, .round.glass, .top .round.glass { background: #fff; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06); }
+:focus-visible { outline-color: rgba(47, 91, 255, 0.5); }
+
+/* -- motion (D138): springs as in iOS, one movement per change, nothing that loops for show ---- */
+
+:root {
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);          /* iOS sheets and pushes */
+  --bounce: cubic-bezier(0.34, 1.56, 0.64, 1);       /* a small overshoot, for touch */
+}
+
+/* touch: what can be pressed gives under the finger */
+.pill, .round, .find, .tabbar button, .quick button, .tile, .bento button, .chip, .composer .send {
+  transition: transform 0.35s var(--bounce), background-color 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+}
+.pill:active, .round:active, .find:active, .tile:active, .bento button:active, .chip:active,
+.quick button:active, .composer .send:active { transform: scale(0.95); opacity: 1; transition-duration: 0.08s; }
+.tabbar button:active { transform: scale(0.9); transition-duration: 0.08s; }
+.list .item, .list button { transition: background-color 0.25s ease; }
+.list .item:active, .list button:active { opacity: 1; background-color: rgba(0, 0, 0, 0.045); transition-duration: 0s; }
+
+/* the tab bar: a lens slides under the chosen tab */
+.tabbar button { position: relative; z-index: 1; }
+.tabbar button[aria-current="page"] { background: none; }
+.tabbar .lens {
+  position: absolute; top: 4px; bottom: 4px; left: 0; width: 0; border-radius: 26px;
+  background: var(--accent-soft); transition: transform 0.45s var(--spring), width 0.45s var(--spring);
+}
+.badge.pop { animation: pop 0.45s var(--bounce); }
+@keyframes pop { 0% { transform: scale(0.4); } }
+
+/* tabs: the new one comes in from the side of its button */
+.tab.enter-right { animation: enter-right 0.38s var(--spring); }
+.tab.enter-left { animation: enter-left 0.38s var(--spring); }
+@keyframes enter-right { from { transform: translateX(24px); opacity: 0; } }
+@keyframes enter-left { from { transform: translateX(-24px); opacity: 0; } }
+
+/* what fills a page arrives in a short cascade */
+.page-body > *, .panel-body > * { animation: settle 0.42s var(--spring) backwards; }
+.page-body > :nth-child(2), .panel-body > :nth-child(2) { animation-delay: 0.03s; }
+.page-body > :nth-child(3), .panel-body > :nth-child(3) { animation-delay: 0.06s; }
+.page-body > :nth-child(4), .panel-body > :nth-child(4) { animation-delay: 0.09s; }
+.page-body > :nth-child(5), .panel-body > :nth-child(5) { animation-delay: 0.12s; }
+.page-body > :nth-child(n+6), .panel-body > :nth-child(n+6) { animation-delay: 0.15s; }
+@keyframes settle { from { transform: translateY(10px); opacity: 0; } }
+
+/* the conversation: a new message rises into place, the owner's from the composer */
+.msg.new { animation: settle 0.4s var(--spring) backwards; }
+.msg.owner.new .bubble { animation: from-composer 0.42s var(--spring); transform-origin: bottom right; }
+@keyframes from-composer { from { transform: translateY(18px) scale(0.92); opacity: 0.4; } }
+.quick button.chosen, .checklist label.on { animation: pop 0.4s var(--bounce); }
+
+/* panels push in from the right, as in iOS, and go back the same way */
+.panel { animation: push 0.46s var(--spring); }
+.panel.leaving { animation: pop-back 0.24s ease-in forwards; }
+@keyframes push { from { transform: translateX(100%); } }
+@keyframes pop-back { to { transform: translateX(100%); } }
+
+/* sheets rise on a spring and sink when closed; the scrim follows */
+.scrim { animation: fade 0.3s ease; }
+.sheet { animation: sheet-up 0.5s var(--spring); }
+.scrim.leaving { animation: fade-out 0.22s ease forwards; }
+.scrim.leaving .sheet { animation: sheet-down 0.22s ease-in forwards; }
+@keyframes sheet-up { from { transform: translateY(105%); } }
+@keyframes sheet-down { to { transform: translateY(105%); } }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* toasts drop in from below and fade away */
+.toast { animation: toast-in 0.45s var(--bounce); }
+.toast.leaving { animation: fade-out 0.2s ease forwards; }
+@keyframes toast-in { from { transform: translate(-50%, 16px) scale(0.9); opacity: 0; } }
+
+/* the slide to accept: the words fade as the knob goes, the knob turns to a tick at the end */
+.slide .label { opacity: calc(1 - var(--p, 0) * 1.6); transition: opacity 0.2s ease; }
+.slide .knob { transition: background-color 0.25s ease; }
+.slide.ok .knob { animation: pop 0.45s var(--bounce); background: var(--ok); }

@@ -82,7 +82,10 @@ function icon(name, size = 20, stroke = "currentColor") {
 function toast(text, ms = 2400) {
   const el = h("div", { class: "toast", role: "status" }, text);
   layer.append(el);
-  setTimeout(() => el.remove(), ms);
+  setTimeout(() => {
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 200);
+  }, ms);
 }
 
 class ApiError extends Error {
@@ -522,7 +525,10 @@ function add(message, live = true) {
   state.messages.push(message);
   const wasNear = nearBottom();
   view.list.querySelector(".first")?.remove();
-  view.list.append(...render(message, state.messages[state.messages.length - 2]));
+  const els = render(message, state.messages[state.messages.length - 2]);
+  // A message that arrives now rises into place; history does not.
+  if (live) for (const el of els) el.classList?.add("new");
+  view.list.append(...els);
   retail();
   if (live && (wasNear || message.who === "owner")) bottom(true);
 }
@@ -1149,6 +1155,12 @@ function paintApprovals() {
 function paintBadge() {
   // What waits on him: approvals, and the questions Orion waits on him for.
   const count = state.approvals.size + (state.questions || 0);
+  if (view.badge.textContent !== String(count)) {
+    // A new count pops, so a change is seen from the corner of the eye.
+    view.badge.classList.remove("pop");
+    void view.badge.offsetWidth;
+    view.badge.classList.add("pop");
+  }
   view.badge.hidden = !count;
   view.badge.textContent = String(count);
   paintNowWork();
@@ -1301,6 +1313,7 @@ function slider(label, done) {
     x = Math.max(0, Math.min(max(), event.clientX - startX));
     if (x > 6) moved = true;
     knob.style.transform = `translateX(${x}px)`;
+    el.style.setProperty("--p", String(x / max()));
   });
   el.addEventListener("pointerup", () => {
     if (!moved) return;
@@ -1310,13 +1323,17 @@ function slider(label, done) {
   el.addEventListener("pointercancel", reset);
   function reset() {
     el.classList.add("back");
+    el.classList.remove("ok");
     knob.style.transform = "translateX(0)";
+    el.style.setProperty("--p", "0");
     x = 0;
   }
   async function finish() {
     if (busy) return;
     busy = true;
     knob.style.transform = `translateX(${max()}px)`;
+    el.style.setProperty("--p", "1");
+    el.classList.add("ok");
     const ok = await done();
     busy = false;
     if (!ok) reset();
@@ -1375,8 +1392,12 @@ function sheet(...children) {
   const scrim = h("div", { class: "scrim", onclick: (event) => event.target === scrim && close() });
   const body = h("div", { class: "sheet", role: "dialog", "aria-modal": "true" }, h("span", { class: "grab" }), ...children);
   scrim.append(body);
+  let closed = false;
   function close() {
-    scrim.remove();
+    if (closed) return;
+    closed = true;
+    scrim.classList.add("leaving");
+    setTimeout(() => scrim.remove(), 220);
     unstack(close);
   }
   stack(close);
@@ -1524,9 +1545,12 @@ function shell() {
     settings: page("Réglages", settingsFill),
   };
   view.tabButtons = {};
+  // The chosen tab sits on a lens that slides from one tab to the next.
+  view.lens = h("span", { class: "lens", "aria-hidden": "true" });
   const bar = h(
     "nav",
     { class: "tabbar glass", "aria-label": "Onglets" },
+    view.lens,
     TABS.map(([key, title, name]) =>
       (view.tabButtons[key] = h(
         "button",
@@ -1543,6 +1567,15 @@ function shell() {
 
 function show(key) {
   if (!view.tabs[key]) key = "now";
+  const from = TABS.findIndex(([k]) => k === state.tab);
+  const to = TABS.findIndex(([k]) => k === key);
+  if (from >= 0 && from !== to) {
+    // The new tab comes in from the side of its button.
+    const el = view.tabs[key];
+    el.classList.remove("enter-left", "enter-right");
+    void el.offsetWidth;
+    el.classList.add(to > from ? "enter-right" : "enter-left");
+  }
   state.tab = key;
   try {
     localStorage.setItem("orion.tab", key);
@@ -1551,9 +1584,18 @@ function show(key) {
   }
   for (const [k, el] of Object.entries(view.tabs)) el.hidden = k !== key;
   for (const [k, b] of Object.entries(view.tabButtons)) b.setAttribute("aria-current", k === key ? "page" : "false");
+  placeLens();
   if (key === "talk") bottom(true);
   else view.tabs[key].refresh();
 }
+
+function placeLens() {
+  const b = view.tabButtons?.[state.tab];
+  if (!b || !view.lens) return;
+  view.lens.style.width = `${b.offsetWidth}px`;
+  view.lens.style.transform = `translateX(${b.offsetLeft}px)`;
+}
+addEventListener("resize", placeLens);
 
 // A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
 function page(title, fill, subtitle) {
