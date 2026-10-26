@@ -1,37 +1,46 @@
 """The app as a module: `[modules.mobile]` in orion.toml (off by default; D125).
 
 Orion's own app on the owner's iPhone, a web app added to his home screen: the conversation,
-approvals signed with Face ID, notifications. Served by the core on localhost, behind the HTTPS
-proxy at `public_url` (a domain: a passkey belongs to a domain, never to an address).
+approvals signed with Face ID, notifications. Served on localhost, behind the HTTPS proxy at
+`public_url` (a domain: a passkey belongs to a domain, never to an address).
 
     orion app pair iphone     a one-time code, to type in the app
     orion app devices         the paired devices
     orion app revoke iphone   cut one off
 
-With `[guardian] enabled` (D28), the guardian must serve the app and check the signatures
-itself (D125): until it does, the module refuses to load.
+Run as one process, the core serves all of it on `port` (and on `core_port` too, so the same
+proxy rules work). Run split (D28), the guardian serves the app's files, the passkeys, the
+approvals and the notifications on `port` (`orion.guardian.app`), and the core only the
+conversation, `/app/api/`, on `core_port`, checking each session with the guardian; the
+pairing commands then run as the guardian's user (`orion-admin app pair iphone`).
 """
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import httpx
+import structlog
 import uvicorn
 from pydantic import Field
 
 from orion.awaiting.module import AwaitingModule
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
 from orion.mobile.channel import MobileChannel
 from orion.mobile.control import Control
 from orion.mobile.devices import Devices, session_key
 from orion.mobile.push import Pusher, Vapid
-from orion.mobile.server import PREFIX, mobile_app
+from orion.mobile.server import PREFIX, Gate, core_app, mobile_app
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
 from orion.providers.spending import Spending
 from orion.tasks.module import TasksModule
+
+log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -41,6 +50,9 @@ if TYPE_CHECKING:
 class MobileSettings(ModuleSettings):
     host: str = "127.0.0.1"
     port: int = 8795
+    core_port: int = Field(
+        default=8796, description="The conversation, /app/api/ (run split: the core's own port)"
+    )
     public_url: str = Field(
         default="",
         description="Where the phone reaches the app (https://<domain>; a passkey needs a "
@@ -49,6 +61,39 @@ class MobileSettings(ModuleSettings):
     approval_timeout_seconds: float = Field(default=900.0, gt=0)
     session_days: int = Field(default=30, ge=1, le=365)
     notifications: bool = Field(default=True, description="Web Push when the app is closed")
+
+
+def origin_of(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+class GuardianSessions:
+    """Run split: the guardian signed the session, so it says whose it is. Remembered a
+    little, so the live stream and each message do not all ask."""
+
+    def __init__(self, guardian: GuardianClient, keep_seconds: float = 30.0) -> None:
+        self._guardian = guardian
+        self._keep = keep_seconds
+        self._known: dict[str, tuple[str | None, float]] = {}
+
+    async def __call__(self, cookie: str | None) -> str | None:
+        if not cookie:
+            return None
+        now = time.monotonic()
+        known = self._known.get(cookie)
+        if known is not None and now - known[1] < self._keep:
+            return known[0]
+        try:
+            device = (await self._guardian.post("/v1/app/session", {"cookie": cookie}))["device"]
+        except GuardianUnavailableError:
+            log.warning("mobile.session_unchecked", exc_info=True)
+            return None  # fail closed
+        found = str(device) if device else None
+        if len(self._known) > 256:
+            self._known.clear()
+        self._known[cookie] = (found, now)
+        return found
 
 
 def check_url(url: str) -> str:
@@ -78,6 +123,7 @@ class MobileModule(Module):
         self.app: MobileChannel | None = None
         self.control: Control | None = None
         self._http: httpx.AsyncClient | None = None
+        self._guardian: GuardianClient | None = None
 
     @property
     def folder(self) -> Path:
@@ -88,15 +134,15 @@ class MobileModule(Module):
         return check_url(settings.public_url or f"http://localhost:{settings.port}")
 
     async def assemble(self, plate: Plate) -> list[Tool]:
-        if self.config.guardian.enabled:
-            raise ModuleError(
-                "modules.mobile: with [guardian] enabled, the guardian must serve the app and "
-                "check its signatures itself (D125), which it does not do yet"
-            )
         settings: MobileSettings = self.settings
-        self.devices = Devices(
-            plate.journal, self.url(), session_key(self.folder), settings.session_days
-        )
+        if self.config.guardian.enabled:
+            if plate.guardian is None:
+                raise ModuleError("modules.mobile: run split, the guardian must be reachable")
+            self._guardian = plate.guardian
+        else:
+            self.devices = Devices(
+                plate.journal, self.url(), session_key(self.folder), settings.session_days
+            )
         config = self.config
         tasks = plate.module(TasksModule)
         waits = plate.module(AwaitingModule)
@@ -118,43 +164,58 @@ class MobileModule(Module):
         return []
 
     async def serve(self, daemon: Daemon) -> None:
-        assert self.devices is not None
         settings: MobileSettings = self.settings
-        pusher: Pusher | None = None
-        vapid: Vapid | None = None
-        if settings.notifications:
-            vapid = Vapid(self.folder / "vapid.pem", self.url())
-            self._http = httpx.AsyncClient(timeout=20.0)
-            pusher = Pusher(vapid, self._http)
-        channel = MobileChannel(
-            daemon.plate.journal,
-            daemon.inbox,
-            self.devices,
-            self.folder,
-            pusher,
-            settings.approval_timeout_seconds,
-        )
+        if self._guardian is not None:
+            channel = MobileChannel(
+                daemon.plate.journal,
+                daemon.inbox,
+                None,
+                self.folder,
+                approval_timeout_seconds=settings.approval_timeout_seconds,
+                guardian=self._guardian,
+            )
+            gate = Gate(origin_of(self.url()), GuardianSessions(self._guardian))
+            apps = [("mobile", core_app(channel, gate, self.control), settings.core_port)]
+        else:
+            assert self.devices is not None
+            pusher: Pusher | None = None
+            vapid: Vapid | None = None
+            if settings.notifications:
+                vapid = Vapid(self.folder / "vapid.pem", self.url())
+                self._http = httpx.AsyncClient(timeout=20.0)
+                pusher = Pusher(vapid, self._http)
+            channel = MobileChannel(
+                daemon.plate.journal,
+                daemon.inbox,
+                self.devices,
+                self.folder,
+                pusher,
+                settings.approval_timeout_seconds,
+            )
+            app = mobile_app(
+                channel,
+                vapid,
+                self.url().startswith("https://"),
+                settings.session_days,
+                self.control,
+            )
+            apps = [("mobile", app, settings.port), ("mobile-api", app, settings.core_port)]
         await channel.start()
         daemon.plate.approver.target = daemon.inbox  # it asks where he last wrote from
         self.app = channel
-        server = uvicorn.Server(
-            uvicorn.Config(
-                mobile_app(
-                    channel,
-                    vapid,
-                    self.url().startswith("https://"),
-                    settings.session_days,
-                    self.control,
-                ),
-                host=settings.host,
-                port=settings.port,
-                lifespan="off",
-                log_config=None,
-                access_log=False,
-                proxy_headers=True,
+        for name, app, port in apps:
+            server = uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host=settings.host,
+                    port=port,
+                    lifespan="off",
+                    log_config=None,
+                    access_log=False,
+                    proxy_headers=True,
+                )
             )
-        )
-        daemon.add_service("mobile", server.serve)
+            daemon.add_service(name, server.serve)
 
     async def close(self) -> None:
         if self.app is not None:

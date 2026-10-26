@@ -76,10 +76,13 @@ from orion.mail.smtp import Outgoing, SendError, smtp_send
 from orion.secretary.settings import REPLY_WINDOW_HOURS, Contact, SecretarySettings
 
 if TYPE_CHECKING:
+    from orion.guardian.app import AppEdge
     from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
 
+APP_CONVERSATION = "app:owner"
+"""Where the core asks for an approval in Orion's app (D125)."""
 CalendarFetch = Callable[[CalendarAccount], Awaitable[str]]
 CalendarWrite = Callable[[CalendarAccount, NewCalendarEvent], Awaitable[str]]
 MailSend = Callable[[MailAccount, Outgoing, str | None], Awaitable[str]]
@@ -329,6 +332,8 @@ class GuardianService:
         """Restarts this process once it wrote orion.toml (set by `orion guardian`)."""
         self.telegram: TelegramGate | None = None
         """Telegram through the guardian (D89), installed by `orion.guardian.telegram`."""
+        self.app_edge: AppEdge | None = None
+        """Orion's app through the guardian (D125), installed by `orion.guardian.app`."""
         self.routes: list[BaseRoute] = []
         """Extra routes for the core (federation adds its own)."""
         self.listeners: list[tuple[str, Starlette, str, int]] = []
@@ -682,6 +687,12 @@ class GuardianService:
                 message_id = str(await self.telegram.ask(question + "Oui ou non ?"))
             except TelegramError as exc:
                 return refused(f"Telegram unreachable: {exc}", 502)
+        elif asked.conversation_id.startswith("app:"):
+            if self.app_edge is None:
+                return refused("the app is not configured on the guardian", 503)
+            if asked.conversation_id != APP_CONVERSATION:
+                return await self.deny("approval", "that is not the owner's app")
+            message_id = await self.app_edge.ask(approval_id, question)
         else:
             if self._inkbox is None:
                 return refused("approvals go through iMessage, which is not configured", 503)
@@ -704,6 +715,11 @@ class GuardianService:
                 "message_id": message_id,
                 "conversation_id": asked.conversation_id,
                 "expires_at": expires.isoformat(),
+                **(
+                    {"question": question.strip(), "reason": asked.reason}
+                    if asked.conversation_id == APP_CONVERSATION
+                    else {}
+                ),
             },
         )
         return JSONResponse({"approval_id": approval_id, "message_id": message_id})
@@ -884,6 +900,8 @@ class GuardianService:
         return None
 
     async def _owner_said_yes(self, approval: PendingApproval) -> bool:
+        if approval.conversation_id.startswith("app:"):
+            return self.app_edge is not None and await self.app_edge.owner_said_yes(approval)
         if approval.conversation_id.startswith("telegram:"):
             return self.telegram is not None and await self.telegram.owner_said_yes(approval)
         if self._inkbox is None:

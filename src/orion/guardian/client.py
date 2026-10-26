@@ -256,9 +256,14 @@ class GuardianClient:
             headers={GRANT_HEADER: grant} if grant else None,
         )
 
-    async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         try:
-            response = await self._http.get(path, params=params)
+            response = await self._http.get(path, params=params, headers=headers)
         except httpx.TransportError as exc:
             raise GuardianUnavailableError(f"guardian unreachable: {exc!r}") from exc
         return _json(response)

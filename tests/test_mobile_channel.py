@@ -153,26 +153,26 @@ async def test_an_answer_counts_only_signed_for_that_question_and_that_answer(
         world.channel.approve(ActionProposal(tool, Empty(), Trust.OWNER, "o"))
     )
     await until(lambda: bool(world.channel.asked))
-    [pending] = (await world.http.get("/app/api/approvals")).json()["approvals"]
+    [pending] = (await world.http.get("/app/approvals")).json()["approvals"]
     assert "send_mail" in pending["question"]
     assert world.pusher.sent[-1]["title"] == "Orion demande ton accord"
 
     # Signed for « no », sent as « yes »: refused.
     opened = (
-        await world.http.post(f"/app/api/approvals/{pending['id']}/options", json={"answer": "no"})
+        await world.http.post(f"/app/approvals/{pending['id']}/options", json={"answer": "no"})
     ).json()
     signed = world.phone.sign(json.dumps(opened["options"]))
     forged = await world.http.post(
-        f"/app/api/approvals/{pending['id']}",
+        f"/app/approvals/{pending['id']}",
         json={"answer": "yes", "ceremony": opened["ceremony"], "credential": signed},
     )
     assert forged.status_code == 403 and not asking.done()
 
     opened = (
-        await world.http.post(f"/app/api/approvals/{pending['id']}/options", json={"answer": "yes"})
+        await world.http.post(f"/app/approvals/{pending['id']}/options", json={"answer": "yes"})
     ).json()
     answered = await world.http.post(
-        f"/app/api/approvals/{pending['id']}",
+        f"/app/approvals/{pending['id']}",
         json={
             "answer": "yes",
             "ceremony": opened["ceremony"],
@@ -266,16 +266,16 @@ async def test_no_needs_no_face_id_and_the_question_comes_readable(world: World)
     proposal = ActionProposal(tool, Mail(to="agence@immo.fr"), Trust.OWNER, "o", "nouvelle agence")
     asking = asyncio.create_task(world.channel.approve(proposal))
     await until(lambda: bool(world.channel.asked))
-    [pending] = (await world.http.get("/app/api/approvals")).json()["approvals"]
+    [pending] = (await world.http.get("/app/approvals")).json()["approvals"]
     assert pending["tool"] == "send_mail"
     assert pending["arguments"] == {"to": "agence@immo.fr"}
     assert pending["reason"] == "nouvelle agence"
 
-    refused = await world.http.post(f"/app/api/approvals/{pending['id']}/refuse")
+    refused = await world.http.post(f"/app/approvals/{pending['id']}/refuse")
     assert refused.status_code == 200
     approval = await asking
     assert not approval.granted and approval.reached
-    again = await world.http.post(f"/app/api/approvals/{pending['id']}/refuse")
+    again = await world.http.post(f"/app/approvals/{pending['id']}/refuse")
     assert again.status_code == 404
 
 

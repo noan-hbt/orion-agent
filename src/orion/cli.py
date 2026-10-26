@@ -309,7 +309,6 @@ async def _app(config: OrionConfig, args: argparse.Namespace) -> int:
     """Orion's own app on the owner's phone (D125): pair a device, list them, cut one off."""
     from orion.mobile.devices import Devices, session_key
     from orion.mobile.module import MobileModule
-    from orion.mobile.server import PREFIX
     from orion.modules.base import ModuleError
 
     module = MobileModule(config)
@@ -318,6 +317,8 @@ async def _app(config: OrionConfig, args: argparse.Namespace) -> int:
     except ModuleError as exc:
         print(exc)
         return 1
+    if config.guardian.enabled:
+        return await _app_through_guardian(config, args, module.enabled)
     async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
         devices = Devices(journal, url, session_key(module.folder))
         await devices.sync()
@@ -332,11 +333,61 @@ async def _app(config: OrionConfig, args: argparse.Namespace) -> int:
             print(f"{args.device} est coupé : sa passkey et ses sessions ne valent plus rien.")
             return 0
         code = await devices.new_code(args.device)
+    _pairing_steps(url, code, module.enabled)
+    return 0
+
+
+def _pairing_steps(url: str, code: str, enabled: bool) -> None:
+    from orion.mobile.server import PREFIX
+
     print(f"1. Sur l'iPhone, ouvre {url}{PREFIX}/ dans Safari.")
     print("2. Partager > « Sur l'écran d'accueil », puis ouvre Orion depuis l'écran d'accueil.")
     print(f"3. Saisis ce code (une fois, 10 minutes) : {code}")
-    if not module.enabled:
+    if not enabled:
         print("(Le module est éteint : [modules.mobile] enabled = true, puis redémarre.)")
+
+
+async def _app_through_guardian(
+    config: OrionConfig, args: argparse.Namespace, enabled: bool
+) -> int:
+    """Run split, the passkeys are the guardian's: only its own user may pair or cut off."""
+    from orion.guardian.client import GuardianClient, GuardianUnavailableError
+    from orion.guardian.federation import ADMIN_HEADER
+
+    token_file = config.guardian.data_dir / "admin.token"
+    try:
+        admin = {ADMIN_HEADER: token_file.read_text(encoding="utf-8").strip()}
+    except OSError:
+        print(
+            f"Impossible de lire {token_file} : lance cette commande sous l'utilisateur du "
+            "gardien (orion-admin app …), une fois `orion guardian` démarré avec "
+            "[modules.mobile] enabled = true."
+        )
+        return 2
+    client = GuardianClient.over_socket(config.guardian.socket)
+    try:
+        if args.app_command == "devices":
+            names = list((await client.get("/v1/app/devices", headers=admin))["devices"])
+            print(
+                "\n".join(names)
+                if names
+                else "Aucun appareil appairé : orion-admin app pair iphone"
+            )
+            return 0
+        if args.app_command == "revoke":
+            done = await client.post("/v1/app/revoke", {"device": args.device}, admin)
+            if not done.get("revoked"):
+                print(f"Aucun appareil {args.device!r}.")
+                return 1
+            print(f"{args.device} est coupé : sa passkey et ses sessions ne valent plus rien.")
+            return 0
+        data = await client.post("/v1/app/pair-code", {"device": args.device}, admin)
+    except GuardianUnavailableError as exc:
+        print(f"Le gardien a refusé ou ne répond pas : {exc}")
+        return 2
+    finally:
+        await client.aclose()
+    _pairing_steps(str(data["url"]), str(data["code"]), enabled)
     return 0
 
 

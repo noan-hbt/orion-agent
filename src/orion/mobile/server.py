@@ -1,8 +1,18 @@
-"""The app's HTTP side (D125), under `/app/`: its files, pairing, sessions, the conversation.
+"""The app's HTTP side (D125), under `/app/`, in two parts.
 
-Everything but pairing and signing in needs a session (a cookie Orion signed, HttpOnly, Secure,
-SameSite=Strict, for `/app/` only). A request that changes something must come from the app's
-own origin. Uploads come as JSON (base64): no form parser, nothing else to trust.
+**The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals and the
+notifications. Run split (D28), the guardian serves it on the public port: the passkeys, the
+text of a question and the signature that answers it never pass through the core, which could
+otherwise show one action and get another signed.
+
+**The conversation** (`core_routes`, under `/app/api/`): messages, files, the live stream, the
+controls. The core serves it; run split, on its own port, checking each session with the
+guardian, which signed it.
+
+Run as one process, both parts are one app (`mobile_app`). Everything but pairing and signing
+in needs a session (a cookie, HttpOnly, Secure, SameSite=Strict, for `/app/` only). A request
+that changes something must come from the app's own origin. Uploads come as JSON (base64): no
+form parser, nothing else to trust.
 """
 
 from __future__ import annotations
@@ -12,18 +22,19 @@ import base64
 import binascii
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from dataclasses import dataclass
 from importlib import resources
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import structlog
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
 
 from orion.mobile.channel import MAX_FILE_BYTES, MobileChannel
 from orion.mobile.control import Control, ControlError
-from orion.mobile.devices import DeviceError
+from orion.mobile.devices import DeviceError, Devices
 from orion.mobile.push import Vapid
 
 log = structlog.get_logger(__name__)
@@ -53,6 +64,34 @@ STATIC = {
 API_HEADERS = {"cache-control": "no-store", "referrer-policy": "no-referrer"}
 
 Handler = Callable[[Request], Awaitable[Response]]
+Guarded = Callable[[Request, str], Awaitable[Response]]
+Session = Callable[[str | None], Awaitable[str | None]]
+"""The session cookie → the device it was opened for, or None."""
+
+
+class Desk(Protocol):
+    """The approvals the app shows and answers: the channel itself in one process, the guardian
+    run split."""
+
+    async def pending(self) -> list[dict[str, Any]]: ...
+
+    async def options(self, approval_id: str, answer: str) -> tuple[str, str]:
+        """(ceremony, WebAuthn options) to sign this answer; LookupError if not pending."""
+        ...
+
+    async def answer(
+        self, approval_id: str, yes: bool, ceremony: str, credential: dict[str, Any]
+    ) -> str:
+        """The device that signed (LookupError, DeviceError otherwise)."""
+        ...
+
+    async def refuse(self, approval_id: str, device: str) -> None: ...
+
+
+class Subscriber(Protocol):
+    """Where a phone's push subscription is kept: beside the key that signs the pushes."""
+
+    async def subscribe(self, device: str, endpoint: str, p256dh: str, auth: str) -> None: ...
 
 
 def _refused(why: str, status: int = 400) -> JSONResponse:
@@ -63,28 +102,68 @@ def _ok(body: object) -> JSONResponse:
     return JSONResponse(body, headers=API_HEADERS)
 
 
-def mobile_app(
-    channel: MobileChannel,
+async def body(request: Request) -> dict[str, Any]:
+    raw = await request.body()
+    if len(raw) > MAX_BODY:
+        raise ValueError("too large")
+    parsed: object = json.loads(raw or b"{}")
+    if not isinstance(parsed, dict):
+        raise TypeError("not an object")
+    return cast(dict[str, Any], parsed)
+
+
+@dataclass(frozen=True)
+class Gate:
+    """Who may call: the app's own origin, and for most routes a session."""
+
+    origin: str
+    session: Session
+
+    def same_origin(self, request: Request) -> bool:
+        origin = request.headers.get("origin")
+        return origin is None or origin == self.origin
+
+    def public(self, handler: Handler) -> Handler:
+        async def check(request: Request) -> Response:
+            if request.method == "POST" and not self.same_origin(request):
+                return _refused("cross-site request refused", 403)
+            try:
+                return await handler(request)
+            except (ValueError, KeyError, TypeError) as exc:
+                log.info("mobile.bad_request", path=request.url.path, error=str(exc))
+                return _refused("malformed request")
+
+        return check
+
+    def guarded(self, handler: Guarded) -> Handler:
+        async def check(request: Request) -> Response:
+            device = await self.session(request.cookies.get(COOKIE))
+            if device is None:
+                return _refused("sign in", 401)
+            if request.method == "POST" and not self.same_origin(request):
+                return _refused("cross-site request refused", 403)
+            try:
+                return await handler(request, device)
+            except (ValueError, KeyError, TypeError) as exc:
+                log.info("mobile.bad_request", path=request.url.path, error=str(exc))
+                return _refused("malformed request")
+
+        return check
+
+
+# -- the edge: files, pairing, sessions, approvals, notifications --------------------------------
+
+
+def edge_routes(
+    devices: Devices,
+    desk: Desk,
+    subscriber: Subscriber,
     vapid: Vapid | None,
     secure_cookie: bool,
     session_days: int,
-    control: Control | None = None,
-) -> Starlette:
-    devices = channel.devices
+) -> list[BaseRoute]:
+    gate = Gate(devices.origin, devices.session_device)
     failures = [0]
-
-    def same_origin(request: Request) -> bool:
-        origin = request.headers.get("origin")
-        return origin is None or origin == devices.origin
-
-    async def body(request: Request) -> dict[str, Any]:
-        raw = await request.body()
-        if len(raw) > MAX_BODY:
-            raise ValueError("too large")
-        parsed: object = json.loads(raw or b"{}")
-        if not isinstance(parsed, dict):
-            raise TypeError("not an object")
-        return cast(dict[str, Any], parsed)
 
     def opened(device: str) -> Response:
         response = _ok({"device": device})
@@ -98,35 +177,6 @@ def mobile_app(
             path=PREFIX,
         )
         return response
-
-    def public(handler: Handler) -> Handler:
-        async def check(request: Request) -> Response:
-            if request.method == "POST" and not same_origin(request):
-                return _refused("cross-site request refused", 403)
-            try:
-                return await handler(request)
-            except (ValueError, KeyError, TypeError) as exc:
-                log.info("mobile.bad_request", path=request.url.path, error=str(exc))
-                return _refused("malformed request")
-
-        return check
-
-    def guarded(handler: Callable[[Request, str], Awaitable[Response]]) -> Handler:
-        async def check(request: Request) -> Response:
-            device = await devices.session_device(request.cookies.get(COOKIE))
-            if device is None:
-                return _refused("sign in", 401)
-            if request.method == "POST" and not same_origin(request):
-                return _refused("cross-site request refused", 403)
-            try:
-                return await handler(request, device)
-            except (ValueError, KeyError, TypeError) as exc:
-                log.info("mobile.bad_request", path=request.url.path, error=str(exc))
-                return _refused("malformed request")
-
-        return check
-
-    # -- the app's own files ------------------------------------------------------------------
 
     async def static(request: Request) -> Response:
         found = STATIC.get(request.path_params.get("name", ""))
@@ -143,8 +193,6 @@ def mobile_app(
         if name == "sw.js":
             headers["service-worker-allowed"] = f"{PREFIX}/"
         return Response(data, media_type=content_type, headers=headers)
-
-    # -- pairing, signing in ------------------------------------------------------------------
 
     async def pair_options(request: Request) -> Response:
         if failures[0] >= MAX_FAILURES:
@@ -191,11 +239,91 @@ def mobile_app(
         response.delete_cookie(COOKIE, path=PREFIX)
         return response
 
-    # -- the conversation ---------------------------------------------------------------------
-
     async def me(_request: Request, device: str) -> Response:
         return _ok({"device": device, "push_key": vapid.public_key if vapid else None})
 
+    async def approvals(_request: Request, _device: str) -> Response:
+        return _ok({"approvals": await desk.pending()})
+
+    async def approval_options(request: Request, _device: str) -> Response:
+        approval_id = str(request.path_params["approval"])
+        answer = str((await body(request))["answer"])
+        if answer not in ("yes", "no"):
+            return _refused("yes or no")
+        try:
+            ceremony, options = await desk.options(approval_id, answer)
+        except LookupError:
+            return _refused("no such question", 404)
+        return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def approval_refuse(request: Request, device: str) -> Response:
+        approval_id = str(request.path_params["approval"])
+        try:
+            await desk.refuse(approval_id, device)
+        except LookupError:
+            return _refused("no such question pending", 404)
+        log.info("mobile.answered", approval=approval_id, answer="no", device=device)
+        return _ok({})
+
+    async def approval_answer(request: Request, _device: str) -> Response:
+        approval_id = str(request.path_params["approval"])
+        sent = await body(request)
+        answer = str(sent["answer"])
+        if answer not in ("yes", "no"):
+            return _refused("yes or no")
+        try:
+            device = await desk.answer(
+                approval_id, answer == "yes", str(sent["ceremony"]), dict(sent["credential"])
+            )
+        except LookupError:
+            return _refused("no such question pending", 404)
+        except DeviceError as exc:
+            log.warning("mobile.answer_refused", approval=approval_id, error=str(exc))
+            return _refused(str(exc), 403)
+        log.info("mobile.answered", approval=approval_id, answer=answer, device=device)
+        return _ok({})
+
+    async def subscribe(request: Request, device: str) -> Response:
+        if vapid is None:
+            return _refused("notifications are off", 409)
+        sent = await body(request)
+        keys = cast(dict[str, Any], sent["keys"])
+        await subscriber.subscribe(
+            device, str(sent["endpoint"]), str(keys["p256dh"]), str(keys["auth"])
+        )
+        return _ok({})
+
+    return [
+        Route(f"{PREFIX}/pair/options", gate.public(pair_options), methods=["POST"]),
+        Route(f"{PREFIX}/pair", gate.public(pair), methods=["POST"]),
+        Route(f"{PREFIX}/login/options", gate.public(login_options), methods=["POST"]),
+        Route(f"{PREFIX}/login", gate.public(login), methods=["POST"]),
+        Route(f"{PREFIX}/logout", gate.guarded(logout), methods=["POST"]),
+        Route(f"{PREFIX}/me", gate.guarded(me)),
+        Route(f"{PREFIX}/approvals", gate.guarded(approvals)),
+        Route(
+            f"{PREFIX}/approvals/{{approval}}/options",
+            gate.guarded(approval_options),
+            methods=["POST"],
+        ),
+        Route(
+            f"{PREFIX}/approvals/{{approval}}/refuse",
+            gate.guarded(approval_refuse),
+            methods=["POST"],
+        ),
+        Route(f"{PREFIX}/approvals/{{approval}}", gate.guarded(approval_answer), methods=["POST"]),
+        Route(f"{PREFIX}/push/subscribe", gate.guarded(subscribe), methods=["POST"]),
+        Route(f"{PREFIX}/", static),
+        Route(f"{PREFIX}/{{name}}", static),
+    ]
+
+
+# -- the conversation and the controls, under /app/api/ -----------------------------------------
+
+
+def core_routes(
+    channel: MobileChannel, gate: Gate, control: Control | None = None
+) -> list[BaseRoute]:
     async def messages(request: Request, _device: str) -> Response:
         """The latest messages after `after`, or the ones just before `before` (scrolling
         back), `limit` at most; `more` says whether older ones remain."""
@@ -228,12 +356,7 @@ def mobile_app(
     async def stream(_request: Request, _device: str) -> Response:
         async def events() -> AsyncGenerator[str]:
             async with channel.hub.listen() as queue:
-                ready = {
-                    "type": "ready",
-                    "approvals": [channel.public(a) for a in channel.asked.values()],
-                    "typing": channel.typing,
-                    "work": channel.work,
-                }
+                ready = {"type": "ready", "typing": channel.typing, "work": channel.work}
                 yield f"data: {json.dumps(ready, ensure_ascii=False)}\n\n"
                 while True:
                     try:
@@ -271,62 +394,7 @@ def mobile_app(
         done = await channel.react(device, str(sent["ref"]), str(sent["emoji"])[:8])
         return _ok({}) if done else _refused("no such message of Orion's", 404)
 
-    # -- approvals ----------------------------------------------------------------------------
-
-    async def approvals(_request: Request, _device: str) -> Response:
-        return _ok({"approvals": [channel.public(a) for a in channel.asked.values()]})
-
-    async def approval_options(request: Request, _device: str) -> Response:
-        approval_id = str(request.path_params["approval"])
-        answer = str((await body(request))["answer"])
-        if answer not in ("yes", "no") or approval_id not in channel.asked:
-            return _refused("no such question", 404)
-        ceremony, options = await devices.signing_options(f"approval:{approval_id}:{answer}")
-        return _ok({"ceremony": ceremony, "options": json.loads(options)})
-
-    async def approval_refuse(request: Request, device: str) -> Response:
-        try:
-            channel.refuse(str(request.path_params["approval"]), device)
-        except LookupError:
-            return _refused("no such question pending", 404)
-        log.info("mobile.answered", approval=request.path_params["approval"], answer="no")
-        return _ok({})
-
-    async def approval_answer(request: Request, _device: str) -> Response:
-        approval_id = str(request.path_params["approval"])
-        sent = await body(request)
-        answer = str(sent["answer"])
-        if answer not in ("yes", "no"):
-            return _refused("yes or no")
-        try:
-            device = await channel.answer(
-                approval_id, answer == "yes", str(sent["ceremony"]), dict(sent["credential"])
-            )
-        except LookupError:
-            return _refused("no such question pending", 404)
-        except DeviceError as exc:
-            log.warning("mobile.answer_refused", approval=approval_id, error=str(exc))
-            return _refused(str(exc), 403)
-        log.info("mobile.answered", approval=approval_id, answer=answer, device=device)
-        return _ok({})
-
-    # -- notifications ------------------------------------------------------------------------
-
-    async def subscribe(request: Request, device: str) -> Response:
-        if vapid is None:
-            return _refused("notifications are off", 409)
-        sent = await body(request)
-        keys = cast(dict[str, Any], sent["keys"])
-        await channel.subscribe(
-            device, str(sent["endpoint"]), str(keys["p256dh"]), str(keys["auth"])
-        )
-        return _ok({})
-
-    # -- the controls -------------------------------------------------------------------------
-
-    def controls(
-        handler: Callable[[Request, Control], Awaitable[object]],
-    ) -> Callable[[Request, str], Awaitable[Response]]:
+    def controls(handler: Callable[[Request, Control], Awaitable[object]]) -> Guarded:
         async def run(request: Request, _device: str) -> Response:
             if control is None:
                 return _refused("the controls are not available here", 404)
@@ -383,11 +451,11 @@ def mobile_app(
     async def activity(_request: Request, c: Control) -> object:
         return {"activity": await c.activity()}
 
+    async def upcoming(_request: Request, c: Control) -> object:
+        return {"planned": await c.upcoming()}
+
     async def for_you(_request: Request, c: Control) -> object:
-        return {
-            "approvals": [channel.public(a) for a in channel.asked.values()],
-            **await c.for_you(),
-        }
+        return await c.for_you()
 
     async def stop_task(request: Request, c: Control) -> object:
         await c.stop_task(str(request.path_params["id"]))
@@ -397,64 +465,71 @@ def mobile_app(
         await c.drop_wait(str(request.path_params["id"]))
         return {}
 
-    async def upcoming(_request: Request, c: Control) -> object:
-        return {"planned": await c.upcoming()}
-
-    def api(
-        path: str, handler: Callable[[Request, Control], Awaitable[object]], post: bool = False
-    ) -> Route:
+    def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
-            f"{PREFIX}/api/{path}",
-            guarded(controls(handler)),
-            methods=["POST"] if post else ["GET"],
+            f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
         )
 
+    return [
+        api("messages", messages),
+        api("send", send, post=True),
+        api("stream", stream),
+        api("files/{ref}/{index:int}", file),
+        api("react", react, post=True),
+        api("stop", stop, post=True),
+        api("control", controls(overview)),
+        api("control/pause", controls(pause), post=True),
+        api("control/settings", controls(change), post=True),
+        api("memory", controls(memory)),
+        api("memory/{id}/forget", controls(forget), post=True),
+        api("commitments", controls(commitments)),
+        api("commitments/{id}/{how}", controls(close), post=True),
+        api("rules", controls(rules)),
+        api("rules/{id}/retire", controls(retire), post=True),
+        api("autonomy", controls(autonomy)),
+        api("autonomy/{action}/revoke", controls(take_back), post=True),
+        api("activity", controls(activity)),
+        api("planned", controls(upcoming)),
+        api("for-you", controls(for_you)),
+        api("tasks/{id}/stop", controls(stop_task), post=True),
+        api("waits/{id}/drop", controls(drop_wait), post=True),
+    ]
+
+
+def mobile_app(
+    channel: MobileChannel,
+    vapid: Vapid | None,
+    secure_cookie: bool,
+    session_days: int,
+    control: Control | None = None,
+) -> Starlette:
+    """The whole app, in one process: the channel is its own desk, its devices its own gate."""
+    devices = channel.devices
+    if devices is None:
+        raise ValueError("one process: the channel keeps the devices itself")
+    gate = Gate(devices.origin, devices.session_device)
     return Starlette(
         routes=[
-            api("control", overview),
-            api("control/pause", pause, post=True),
-            api("control/settings", change, post=True),
-            api("memory", memory),
-            api("memory/{id}/forget", forget, post=True),
-            api("commitments", commitments),
-            api("commitments/{id}/{how}", close, post=True),
-            api("rules", rules),
-            api("rules/{id}/retire", retire, post=True),
-            api("autonomy", autonomy),
-            api("autonomy/{action}/revoke", take_back, post=True),
-            api("activity", activity),
-            api("planned", upcoming),
-            api("for-you", for_you),
-            api("tasks/{id}/stop", stop_task, post=True),
-            api("waits/{id}/drop", drop_wait, post=True),
-            Route(f"{PREFIX}/pair/options", public(pair_options), methods=["POST"]),
-            Route(f"{PREFIX}/pair", public(pair), methods=["POST"]),
-            Route(f"{PREFIX}/login/options", public(login_options), methods=["POST"]),
-            Route(f"{PREFIX}/login", public(login), methods=["POST"]),
-            Route(f"{PREFIX}/api/logout", guarded(logout), methods=["POST"]),
-            Route(f"{PREFIX}/api/me", guarded(me)),
-            Route(f"{PREFIX}/api/messages", guarded(messages)),
-            Route(f"{PREFIX}/api/send", guarded(send), methods=["POST"]),
-            Route(f"{PREFIX}/api/stream", guarded(stream)),
-            Route(f"{PREFIX}/api/files/{{ref}}/{{index:int}}", guarded(file)),
-            Route(f"{PREFIX}/api/react", guarded(react), methods=["POST"]),
-            Route(f"{PREFIX}/api/stop", guarded(stop), methods=["POST"]),
-            Route(f"{PREFIX}/api/approvals", guarded(approvals)),
-            Route(
-                f"{PREFIX}/api/approvals/{{approval}}/options",
-                guarded(approval_options),
-                methods=["POST"],
-            ),
-            Route(
-                f"{PREFIX}/api/approvals/{{approval}}/refuse",
-                guarded(approval_refuse),
-                methods=["POST"],
-            ),
-            Route(
-                f"{PREFIX}/api/approvals/{{approval}}", guarded(approval_answer), methods=["POST"]
-            ),
-            Route(f"{PREFIX}/api/push/subscribe", guarded(subscribe), methods=["POST"]),
-            Route(f"{PREFIX}/", static),
-            Route(f"{PREFIX}/{{name}}", static),
+            *core_routes(channel, gate, control),
+            *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days),
         ]
+    )
+
+
+def core_app(channel: MobileChannel, gate: Gate, control: Control | None = None) -> Starlette:
+    """The conversation alone (run split): sessions are checked with the guardian."""
+    return Starlette(routes=core_routes(channel, gate, control))
+
+
+def edge_app(
+    devices: Devices,
+    desk: Desk,
+    subscriber: Subscriber,
+    vapid: Vapid | None,
+    secure_cookie: bool,
+    session_days: int,
+) -> Starlette:
+    """The edge alone (run split, served by the guardian)."""
+    return Starlette(
+        routes=edge_routes(devices, desk, subscriber, vapid, secure_cookie, session_days)
     )

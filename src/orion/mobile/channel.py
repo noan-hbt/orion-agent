@@ -42,6 +42,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
+from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.outbox import Outbox, SendError
 from orion.guardian.policy import ActionProposal, Approval
 from orion.mobile.devices import Devices
@@ -56,6 +57,8 @@ OUTBOUND = "mobile.outbound"
 SUBSCRIBED = "mobile.subscribed"
 UNSUBSCRIBED = "mobile.unsubscribed"
 MAX_FILE_BYTES = 25 * 1024 * 1024
+APPROVAL_POLL_SECONDS = 1.5
+"""Run split, how often the core asks the guardian whether he answered."""
 PUSH_PREVIEW = 180
 REACTIONS = {"👍": "like", "❤️": "love", "👎": "dislike", "😂": "laugh", "❓": "question"}
 
@@ -246,14 +249,19 @@ class MobileChannel:
         self,
         journal: EventStore,
         inbox: OwnerInbox,
-        devices: Devices,
+        devices: Devices | None,
         folder: Path,
         pusher: Sender | None = None,
         approval_timeout_seconds: float = 900.0,
+        guardian: GuardianClient | None = None,
     ) -> None:
+        if (devices is None) == (guardian is None):
+            raise ValueError("the devices are kept here (one process) or by the guardian")
         self._journal = journal
         self._inbox = inbox
         self.devices = devices
+        self._guardian = guardian
+        """Run split (D28): the guardian keeps the passkeys, asks, checks and notifies."""
         self.folder = folder
         self._pusher = pusher
         self._timeout = approval_timeout_seconds
@@ -400,6 +408,12 @@ class MobileChannel:
         return key
 
     async def _notify(self, message: dict[str, object]) -> None:
+        if self._guardian is not None:
+            try:
+                await self._guardian.post("/v1/app/notify", message)
+            except GuardianUnavailableError:
+                log.warning("mobile.push_refused_by_guardian", exc_info=True)
+            return
         if self._pusher is None:
             return
         await self.sync()
@@ -417,6 +431,13 @@ class MobileChannel:
                     )
 
     async def available(self) -> bool:
+        if self._guardian is not None:
+            try:
+                return bool((await self._guardian.get("/v1/app/paired"))["paired"])
+            except GuardianUnavailableError:
+                log.warning("mobile.guardian_unreachable", exc_info=True)
+                return False
+        assert self.devices is not None
         return await self.devices.any_paired()
 
     async def deliver(self, text: str, correlation_id: str | None) -> None:
@@ -469,8 +490,10 @@ class MobileChannel:
     # -- approvals ----------------------------------------------------------------------------
 
     async def approve(self, proposal: ActionProposal) -> Approval:
-        if not await self.devices.any_paired():
+        if not await self.available():
             return Approval(False, reached=False)
+        if self._guardian is not None:
+            return await self._approve_through(self._guardian, proposal)
         approval_id = f"a_{new_id()}"
         arguments = proposal.arguments.model_dump(mode="json")
         await self._approval_event(
@@ -513,6 +536,54 @@ class MobileChannel:
         )
         return Approval(approved, reached=True)
 
+    async def _approve_through(
+        self, guardian: GuardianClient, proposal: ActionProposal
+    ) -> Approval:
+        """Run split: the guardian writes the question, the app shows it from there, the
+        owner's signature goes there, and the guardian tells whether he said yes. The core
+        only waits, and presents the grant with the action, as on Telegram."""
+        arguments = proposal.arguments.model_dump(mode="json")
+        try:
+            grant, _asked = await guardian.request_approval(
+                proposal.tool.name, arguments, proposal.ask_reason, f"{CHANNEL}:owner"
+            )
+        except GuardianUnavailableError:
+            log.warning("mobile.approval_unsent", tool=proposal.tool.name, exc_info=True)
+            return Approval(False, reached=False)
+        await self._approval_event(
+            APPROVAL_REQUESTED,
+            {"approval_id": grant, "tool": proposal.tool.name, "arguments": arguments},
+        )
+        self.hub.publish({"type": "approval", "id": grant})
+        approved, how = False, "timeout"
+        deadline = asyncio.get_running_loop().time() + self._timeout
+        try:
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(APPROVAL_POLL_SECONDS)
+                verdict = await guardian.get(f"/v1/app/approvals/{grant}")
+                if verdict.get("answered"):
+                    approved = bool(verdict.get("approved"))
+                    how = str(verdict.get("how") or "guardian")
+                    break
+        except GuardianUnavailableError:
+            log.warning("mobile.approval_lost", tool=proposal.tool.name, exc_info=True)
+            approved, how = False, "guardian unreachable"
+        finally:
+            self.hub.publish({"type": "approval_closed", "id": grant})
+        await self._approval_event(
+            APPROVAL_DECIDED,
+            {"approval_id": grant, "approved": approved, "how": how, "refs": [], "grant": grant},
+        )
+        return Approval(approved, grant if approved else None, reached=True)
+
+    async def pending(self) -> list[dict[str, Any]]:
+        return [self.public(a) for a in self.asked.values()]
+
+    async def options(self, approval_id: str, answer: str) -> tuple[str, str]:
+        if approval_id not in self.asked or self.devices is None:
+            raise LookupError("no such question pending")
+        return await self.devices.signing_options(f"approval:{approval_id}:{answer}")
+
     @staticmethod
     def public(asked: Asked) -> dict[str, Any]:
         return {
@@ -524,7 +595,7 @@ class MobileChannel:
             "expires_at": asked.expires_at.isoformat(),
         }
 
-    def refuse(self, approval_id: str, device: str) -> None:
+    async def refuse(self, approval_id: str, device: str) -> None:
         """No, from a signed-in app: refusing needs no Face ID, it is what silence does too."""
         asked = self.asked.get(approval_id)
         if asked is None or asked.future.done():
@@ -537,7 +608,7 @@ class MobileChannel:
         """The owner's answer, signed for this approval and this answer, by a paired passkey:
         the device that signed (`DeviceError` otherwise)."""
         asked = self.asked.get(approval_id)
-        if asked is None or asked.future.done():
+        if asked is None or asked.future.done() or self.devices is None:
             raise LookupError("no such question pending")
         device = await self.devices.verify(
             ceremony, f"approval:{approval_id}:{'yes' if yes else 'no'}", credential
