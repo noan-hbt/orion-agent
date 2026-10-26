@@ -32,6 +32,7 @@ from orion.cognition.loop import (
     Told,
     ToolExecuted,
     Waiting,
+    Working,
     run_agent,
 )
 from orion.config import AgentConfig
@@ -134,6 +135,19 @@ def photo_block(photo: Photo) -> str:
 
 
 Progress = Callable[[str, str], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class Activity:
+    """Orion at work on his message, for a channel that shows it live (the app)."""
+
+    doing: tuple[str, ...]
+    """What the tools about to run do, in his words; empty between steps."""
+    cost_usd: float
+    steps: int
+
+
+Watch = Callable[[Activity], Awaitable[None]]
 """(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
 mid-turn, instead of holding everything for the final answer."""
 
@@ -196,6 +210,8 @@ class Orion:
         waiting: Waiting | None = None,
         photos: Sequence[Photo] = (),
         sent_at: datetime | None = None,
+        watch: Watch | None = None,
+        halted: Halted | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
         `refs` are the channel's own message ids, recorded so a restart knows they were handled.
@@ -203,7 +219,8 @@ class Orion:
         the turn, so Orion can change course instead of finishing a plan the owner revoked.
         `photos` came with the message: their content lowers the turn's trust (`PHOTO_TRUST`),
         and their words never count as the owner's (`owner_text`). `sent_at`, when the channel
-        knows it: a message that waited (Orion was down) says so, so the answer can too."""
+        knows it: a message that waited (Orion was down) says so, so the answer can too.
+        `watch` sees the work as it goes; `halted` lets him call it off between two steps."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         self.owner_wrote_at = now or datetime.now(UTC)
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
@@ -232,6 +249,8 @@ class Orion:
                 interjections=interjections,
                 progress=progress,
                 waiting=waiting,
+                halted=halted,
+                watch=watch,
             )
 
     async def handle_initiative(
@@ -365,6 +384,7 @@ class Orion:
         halted: Halted | None = None,
         model: str | None = None,
         max_cost_usd: float | None = None,
+        watch: Watch | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -385,6 +405,7 @@ class Orion:
                 halted,
                 model=model,
                 max_cost_usd=max_cost_usd,
+                watch=watch,
             )
 
     async def _turn_locked(
@@ -407,6 +428,7 @@ class Orion:
         *,
         model: str | None = None,
         max_cost_usd: float | None = None,
+        watch: Watch | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -585,6 +607,8 @@ class Orion:
             return message, Trust.OWNER
 
         result: TurnResult | None = None
+        spent = 0.0
+        steps_made = 0
         async for event in run_agent(
             self._provider,
             self._registry,
@@ -605,6 +629,8 @@ class Orion:
                         ]
                     )
                 case ModelCalled(response=response):
+                    spent += response.usage.cost_usd
+                    steps_made += 1
                     said = (response.text or "").strip()
                     if progress is not None and response.tool_calls and said:
                         await progress(said, correlation_id)
@@ -629,6 +655,9 @@ class Orion:
                 case Told(text=told):
                     if progress is not None:
                         await progress(told, correlation_id)
+                case Working(doing=doing):
+                    if watch is not None:
+                        await watch(Activity(doing, round(spent, 5), steps_made))
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
                     await self._journal.append(
                         [

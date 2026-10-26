@@ -219,12 +219,19 @@ class Told:
     text: str
 
 
+@dataclass(frozen=True)
+class Working:
+    """Tools about to run, in the owner's words: for a channel that shows the work live."""
+
+    doing: tuple[str, ...]
+
+
 REPEAT_REFUSED = "repeat refused"
 
 EARLY = ("plan",)
 """Run before a step's other calls, so what they tell leaves before a slow tool runs."""
 
-LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
+LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Working | Finished
 
 
 async def run_agent(
@@ -444,6 +451,7 @@ async def run_agent(
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
+        yield Working(_labels(registry, response.tool_calls))
         started = time.monotonic()
         first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
         try:
@@ -574,13 +582,19 @@ async def _progress(
     return line, response
 
 
-def _doing(registry: ToolRegistry, calls: list[ToolCall]) -> str:
-    """What these calls do, in the owner's words: the tools' `doing`, else a plain notice."""
+def _labels(registry: ToolRegistry, calls: list[ToolCall]) -> tuple[str, ...]:
+    """The tools' `doing`, once each, in order."""
     labels: list[str] = []
     for call in calls:
         tool = registry.get(call.name)
         if tool is not None and tool.doing and tool.doing not in labels:
             labels.append(tool.doing)
+    return tuple(labels)
+
+
+def _doing(registry: ToolRegistry, calls: list[ToolCall]) -> str:
+    """What these calls do, in the owner's words: the tools' `doing`, else a plain notice."""
+    labels = _labels(registry, calls)
     if not labels:
         return WORKING
     text = ", ".join(labels)

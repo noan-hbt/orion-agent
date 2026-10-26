@@ -34,7 +34,15 @@ from orion.channels.markup import plain
 from orion.cognition.loop import StopReason
 from orion.guardian.outbox import SendError
 from orion.guardian.policy import ActionProposal, Approval
-from orion.runtime import OWNER_THREAD, Interjection, Orion, Photo, TurnResult, is_silence
+from orion.runtime import (
+    OWNER_THREAD,
+    Activity,
+    Interjection,
+    Orion,
+    Photo,
+    TurnResult,
+    is_silence,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -114,6 +122,20 @@ class AskingOutlet(Outlet, Protocol):
     """A channel where the owner can say yes or no to an action (D26)."""
 
     async def approve(self, proposal: ActionProposal) -> Approval: ...
+
+
+@runtime_checkable
+class LiveOutlet(Outlet, Protocol):
+    """A channel that shows Orion's work as it goes, and where he can call it off (the app)."""
+
+    async def watch(self, activity: Activity) -> None: ...
+
+    async def stopped(self) -> bool:
+        """Whether he asked to stop the work on his message."""
+        ...
+
+
+STOPPED = "D'accord, j'arrête là."
 
 
 @asynccontextmanager
@@ -303,10 +325,14 @@ class OwnerInbox:
                 waiting=lambda: not first.allow_silence and self._waiting(first),
                 photos=photos,
                 sent_at=min((i.sent_at for i in batch if i.sent_at), default=None),
+                watch=source.watch if isinstance(source, LiveOutlet) else None,
+                halted=source.stopped if isinstance(source, LiveOutlet) else None,
             )
         thought = time.monotonic() - started
         text = turn.text.strip()
-        if turn.reason is not StopReason.COMPLETED:
+        if turn.reason is StopReason.HALTED and not text:
+            text = STOPPED
+        elif turn.reason is not StopReason.COMPLETED:
             log.warning("inbox.turn_incomplete", reason=turn.reason, detail=turn.detail)
             if not text:  # a limit already gets a closing answer; this is for the rest
                 text = f"(je me suis arrêté : {turn.reason.value})"

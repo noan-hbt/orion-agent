@@ -46,6 +46,7 @@ from orion.guardian.outbox import Outbox, SendError
 from orion.guardian.policy import ActionProposal, Approval
 from orion.mobile.devices import Devices
 from orion.mobile.push import PushError, Subscription, allowed_endpoint
+from orion.runtime import Activity
 
 log = structlog.get_logger(__name__)
 
@@ -262,6 +263,9 @@ class MobileChannel:
         self.hub = Hub()
         self.typing = False
         """Whether Orion is working on his message right now (an app that opens shows it)."""
+        self.work: dict[str, Any] | None = None
+        """What it is doing right now, as the app shows it."""
+        self._stop = False
         self.asked: dict[str, Asked] = {}
         inbox.register(self)
 
@@ -424,12 +428,43 @@ class MobileChannel:
     @asynccontextmanager
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
         self.typing = True
+        self._stop = False
+        self.work = {"since": _now(), "doing": [], "cost": 0.0, "steps": 0, "stopping": False}
         self.hub.publish({"type": "typing", "on": True})
+        self.hub.publish({"type": "work", "work": self.work})
         try:
             yield
         finally:
             self.typing = False
+            self.work = None
+            self._stop = False
             self.hub.publish({"type": "typing", "on": False})
+
+    async def watch(self, activity: Activity) -> None:
+        """The work as it goes: what is about to run, what it has cost so far."""
+        if self.work is None:
+            return
+        self.work = {
+            **self.work,
+            "doing": list(activity.doing),
+            "done": [*self.work.get("done", []), *self.work["doing"]][-12:],
+            "cost": activity.cost_usd,
+            "steps": activity.steps,
+        }
+        self.hub.publish({"type": "work", "work": self.work})
+
+    async def stopped(self) -> bool:
+        return self._stop
+
+    def stop(self) -> bool:
+        """He asks to stop the work on his message: it stops between two steps."""
+        if self.work is None:
+            return False
+        self._stop = True
+        self.work = {**self.work, "stopping": True}
+        self.hub.publish({"type": "work", "work": self.work})
+        log.info("mobile.stop_asked")
+        return True
 
     # -- approvals ----------------------------------------------------------------------------
 

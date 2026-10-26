@@ -2872,3 +2872,18 @@ Une passe sur les 65 outils, et sur les 178 appels d'une évaluation, le 26/10 :
 - **Petites erreurs** : un suivi (`follow_up`) prend l'identifiant `fu_…` (il partageait `f_…`
   avec les faits) ; `autonomy_grant` n'a plus de champ `domains` (rien ne demande plus d'accord
   pour le navigateur depuis D115) ; `hand_read_file` renvoie au bon nom d'outil.
+
+## D133 — Le travail en direct dans l'application, et l'arrêter
+
+*26/10/2026 · acceptée*
+
+Quand Orion travaille sur son message, l'application montre une carte à la place de « … » :
+ce qu'il fait (le `doing` de chaque outil, dans ses mots), les étapes déjà faites, le temps
+écoulé, ce que le tour a coûté, et **Arrêter**.
+- La boucle annonce les outils qu'elle va lancer (`Working`) ; un canal qui montre le travail
+  (`LiveOutlet` : `watch`, `stopped`) le reçoit par la boîte de réception. Rien n'est journalisé
+  en plus : la fin du tour l'est déjà (`turn.finished`).
+- **Arrêter** s'applique entre deux étapes (`halted`, comme pour une tâche annulée) : un outil
+  déjà lancé finit, le suivant ne part pas, et Orion répond « D'accord, j'arrête là. ».
+- Pas encore : basculer le travail en cours en tâche de fond ; pour l'instant, il faut le lui
+  demander.
