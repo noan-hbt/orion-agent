@@ -154,7 +154,8 @@ class Control:
         return until.isoformat()
 
     async def change(self, changes: dict[str, Any]) -> None:
-        """Quiet hours and the daily attention budget, as he set them in the app."""
+        """Quiet hours, the times of his summaries and the daily attention budget, as he set
+        them in the app."""
         for key, setting in (
             ("quiet_start", SettingKey.QUIET_START),
             ("quiet_end", SettingKey.QUIET_END),
@@ -165,6 +166,18 @@ class Control:
                 except ValueError as exc:
                     raise ControlError(f"{key}: not a time") from exc
                 await self.memory.change_setting(setting, value, "réglé depuis l'app", OWNER)
+        if "digests" in changes:
+            try:
+                digests = sorted(
+                    {time.fromisoformat(str(d)).strftime("%H:%M") for d in changes["digests"]}
+                )
+            except (TypeError, ValueError) as exc:
+                raise ControlError("digests: a list of times") from exc
+            if len(digests) > 6:
+                raise ControlError("digests: six at most")
+            await self.memory.change_setting(
+                SettingKey.DIGESTS, digests, "réglé depuis l'app", OWNER
+            )
         if "daily_budget" in changes:
             budget = int(changes["daily_budget"])
             if not 0 <= budget <= 50:

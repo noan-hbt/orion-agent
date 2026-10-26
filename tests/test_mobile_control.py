@@ -122,6 +122,11 @@ async def test_he_sets_quiet_hours_and_the_budget(controlled: Controlled) -> Non
         "07:30",
         5,
     )
+    timed = await http.post("/app/api/control/settings", json={"digests": ["18:00", "09:00"]})
+    assert timed.json()["digests"] == ["09:00", "18:00"]
+    assert (
+        await http.post("/app/api/control/settings", json={"digests": ["midi"]})
+    ).status_code == 404
     bad = await http.post("/app/api/control/settings", json={"daily_budget": 500})
     assert bad.status_code == 404
     assert (

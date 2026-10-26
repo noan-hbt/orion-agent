@@ -2959,3 +2959,15 @@ appairer un deuxième téléphone. Désormais :
 - **la version** : le commit qui tourne, sa date, et une mise à jour écartée par le serveur
   (`update.bad`, D94). Il n'y a rien à lancer : le serveur regarde toutes les deux minutes et
   revient en arrière si ça casse.
+- **le reste du carnet** (`orion.mobile.notebook`) :
+  - les papiers (D131), à chercher et à ouvrir, avec ceux qui expirent ;
+  - les proches, avec ce qu'Orion sait d'eux, leur anniversaire, leur rythme et « Vu
+    aujourd'hui », journalisé comme venant du propriétaire ;
+  - les pages de ses semaines (D52) ;
+- **les points du jour** : leurs heures se règlent dans Réglages, jusqu'à six ;
+- **prendre la main sur le navigateur** (D116) : une passation apparaît dans Maintenant, avec
+  l'onglet en direct (toucher pour cliquer, taper dessous, « J'ai fini »). Elle marche aussi
+  sans Telegram, l'app suffit. Ce qu'il tape va dans la page, jamais dans le journal ni les
+  logs ;
+- **le mode voix** : un rond pour parler, et les réponses d'Orion lues à voix haute (sa propre
+  voix s'il en envoie une, sinon la synthèse de l'iPhone).

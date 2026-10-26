@@ -422,6 +422,7 @@ async function conversation() {
       h("span", { class: "avatar" }, icon("orion", 22, "none")),
       h("span", {}, h("h1", {}, "Orion"), view.status),
     ),
+    h("button", { class: "round glass", type: "button", "aria-label": "Me parler", onclick: voiceMode }, icon("mic", 20)),
   );
 
   view.talk = h(
@@ -977,6 +978,7 @@ function listen() {
       nowChanged();
     } else if (data.type === "message") {
       add(data.message);
+      speak(data.message);
       if (data.message.who === "orion") setTyping(false, true);
       countQuestions();
       nowChanged();
@@ -1619,6 +1621,18 @@ async function nowFill(refresh) {
     }
   };
   const sections = [view.nowWork];
+  const { handovers } = await api("api/browser").catch(() => ({ handovers: [] }));
+  for (const handover of handovers) {
+    sections.push(
+      h(
+        "article",
+        { class: "ask card" },
+        h("header", {}, h("span", { class: "ico" }, icon("face", 18, "#fff")), h("span", {}, h("b", {}, "J'ai besoin de tes mains"), h("small", {}, "une page attend : te connecter, un code…"))),
+        h("p", {}, handover.why),
+        h("button", { class: "pill primary wide", type: "button", onclick: () => browserPanel(handover) }, "Prendre la main"),
+      ),
+    );
+  }
   const approvals = [...state.approvals.values()];
   if (approvals.length || found.questions.length) {
     sections.push(
@@ -1732,6 +1746,9 @@ async function notebookFill() {
       { class: "grid" },
       missions ? go("target", "Missions", missions.length ? `${missions.length} en cours · ${plural(missions.reduce((n, m) => n + m.seen.filter((s) => !s.rejected).length, 0), "retenu", "retenus")}` : "aucune en cours", missionsPanel, true) : null,
       go("spark", "Ce que je sais", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel, true),
+      go("file", "Mes papiers", "pièces, fiches, contrats", papersPanel),
+      go("where", "Mes proches", "anniversaires, nouvelles", peoplePanel),
+      go("book", "Mes semaines", "la page du dimanche", chroniclePanel, true),
       go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
       go("file", "Mon manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
       go("calendar", "À venir", "ce que je ferai seul", plannedPanel),
@@ -1825,6 +1842,7 @@ async function settingsFill(refresh) {
           ),
         ),
         h("button", { class: "tile", type: "button", onclick: () => quietHours(o, refresh) }, h("small", {}, "Heures calmes"), h("b", { class: "big" }, `${o.quiet_start}–${o.quiet_end}`), h("small", {}, "je me tais, sauf urgence")),
+        h("button", { class: "tile wide", type: "button", onclick: () => digestsSheet(o, refresh) }, h("small", {}, "Mes points du jour"), h("b", { class: "big" }, o.digests?.length ? o.digests.join(" · ") : "aucun"), h("small", {}, "ce qui compte, en un message")),
       ),
     );
   }
@@ -2288,6 +2306,275 @@ function versionPanel(server) {
       : null,
     h("p", { class: "hint" }, "Je me mets à jour seul : toutes les deux minutes, je regarde si le code a avancé. J'installe, je vérifie que je démarre, et je reviens en arrière si ça casse. Je te préviens dans les deux cas."),
   ]);
+}
+
+// -- papers, people, the pages of his weeks ------------------------------------------------------
+
+const LONG_DAY = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+
+function papersPanel() {
+  let timer = null;
+  const list = h("div", { class: "list items" });
+  const search = h("input", {
+    type: "search",
+    placeholder: "Chercher : passeport, fiche de paie…",
+    "aria-label": "Chercher un papier",
+    oninput: () => {
+      clearTimeout(timer);
+      timer = setTimeout(paint, 250);
+    },
+  });
+  async function paint() {
+    const { papers } = await api(`api/papers?q=${encodeURIComponent(search.value)}`);
+    list.replaceChildren(
+      ...(papers.length
+        ? papers.map((p) =>
+            h(
+              "a",
+              { class: "item", href: `${BASE}api/papers/${encodeURIComponent(p.id)}/file`, target: "_blank", rel: "noopener" },
+              h("span", { class: `ico ${p.expired ? "owner" : p.expiring ? "wait" : ""}` }, icon(p.type.startsWith("image/") ? "photo" : "file", 16)),
+              h(
+                "span",
+                {},
+                h("span", { class: "text" }, p.label),
+                h("small", { class: p.expired || p.expiring ? "warn" : "" }, [p.holder, p.issued && `du ${LONG_DAY.format(new Date(p.issued))}`, p.valid_until && `${p.expired ? "périmé depuis le" : "valable jusqu'au"} ${LONG_DAY.format(new Date(p.valid_until))}`].filter(Boolean).join(" · ") || p.about),
+              ),
+              h("span", { class: "chev" }, icon("chevron", 14)),
+            ),
+          )
+        : [h("p", { class: "empty" }, search.value ? "Aucun papier de ce genre." : "Aucun papier rangé. Envoie-moi une photo ou un PDF et dis-moi de le ranger.")]),
+    );
+  }
+  panel("Mes papiers", async () => {
+    await paint();
+    return [
+      h("label", { class: "search glass" }, icon("search", 18), search),
+      list,
+      h("p", { class: "hint" }, "Je te préviens trois mois puis un mois avant qu'un papier expire. Pour un dossier (location, banque), demande-le-moi : je l'assemble en un PDF."),
+    ];
+  });
+}
+
+function peoplePanel() {
+  panel("Mes proches", async (refresh) => {
+    const { people } = await api("api/people");
+    if (!people.length) return h("p", { class: "empty" }, "Je ne connais encore personne autour de toi.");
+    return h(
+      "div",
+      { class: "people" },
+      people.map((p) => {
+        const meta = [
+          p.birthday && (p.birthday.in_days === 0 ? "anniversaire aujourd'hui" : `anniversaire dans ${plural(p.birthday.in_days, "jour", "jours")}${p.birthday.age ? ` (${p.birthday.age} ans)` : ""}`),
+          p.every_days && (p.overdue ? `pas vu depuis plus de ${p.every_days} jours` : p.last_seen ? `vu le ${LONG_DAY.format(new Date(p.last_seen))}` : `tous les ${p.every_days} jours`),
+        ].filter(Boolean);
+        return h(
+          "article",
+          { class: `card person ${p.overdue ? "overdue" : ""}` },
+          h("header", {}, h("span", { class: "initial" }, p.name.slice(0, 1).toUpperCase()), h("span", {}, h("b", {}, p.name), meta.length ? h("small", {}, meta.join(" · ")) : null)),
+          p.facts.length ? h("ul", {}, p.facts.slice(-4).map((f) => h("li", {}, f))) : null,
+          p.commitments.length ? h("p", { class: "owe" }, `À faire : ${p.commitments.join(" ; ")}`) : null,
+          h(
+            "div",
+            { class: "acts" },
+            h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de ${p.name} : `) }, "En parler"),
+            h(
+              "button",
+              {
+                class: "pill small primary",
+                type: "button",
+                onclick: async () => {
+                  try {
+                    await api("api/people/saw", { name: p.name });
+                    toast(`Noté : tu as vu ${p.name} aujourd'hui.`);
+                    refresh();
+                  } catch (error) {
+                    toast(said(error));
+                  }
+                },
+              },
+              "Vu aujourd'hui",
+            ),
+          ),
+        );
+      }),
+    );
+  });
+}
+
+function chroniclePanel() {
+  panel("Mes semaines", async () => {
+    const { pages } = await api("api/chronicle");
+    if (!pages.length) return h("p", { class: "empty" }, "Pas encore de page. J'écris celle de ta semaine le dimanche soir.");
+    return pages.map((p, i) =>
+      h(
+        "details",
+        { class: "card page-week", open: i === 0 },
+        h("summary", {}, p.title),
+        h("p", {}, ...rich(p.text)),
+      ),
+    );
+  });
+}
+
+// -- the times of his summaries ------------------------------------------------------------------
+
+function digestsSheet(o, refresh) {
+  const times = [...(o.digests || [])];
+  const rows = h("div", { class: "times-list" });
+  function paint() {
+    rows.replaceChildren(
+      ...times.map((t, i) =>
+        h(
+          "div",
+          { class: "time-row" },
+          h("input", { type: "time", value: t, "aria-label": `Point ${i + 1}`, onchange: (e) => (times[i] = e.target.value) }),
+          h("button", { class: "round", type: "button", "aria-label": "Retirer", onclick: () => (times.splice(i, 1), paint()) }, icon("close", 18)),
+        ),
+      ),
+      times.length < 6 ? h("button", { class: "pill wide", type: "button", onclick: () => (times.push(times.length ? "18:00" : "09:00"), paint()) }, icon("plus", 18), "Ajouter un point") : null,
+    );
+  }
+  paint();
+  const close = sheet(
+    h("h2", {}, "Mes points du jour"),
+    h("p", { class: "quote" }, "À ces heures, je te dis en un message ce qui compte : ce que j'ai fait, ce qui t'attend, ce qui arrive."),
+    rows,
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api("api/control/settings", { digests: times.filter(Boolean) });
+            close();
+            refresh();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Enregistrer",
+    ),
+  );
+}
+
+// -- Orion's browser, in his hands (D116) ---------------------------------------------------------
+
+function browserPanel(handover) {
+  let size = { width: 412, height: 860 };
+  let over = false;
+  let n = 0;
+  const status = h("p", { class: "hint" }, "Ouverture…");
+  const picture = h("img", { class: "live", alt: "L'onglet de mon navigateur" });
+  const shot = () => {
+    if (!over && picture.isConnected) picture.src = `${BASE}api/browser/${handover.token}/shot?n=${n++}`;
+  };
+  let busy = false;
+  async function act(body) {
+    if (busy || over) return;
+    busy = true;
+    try {
+      const data = await api(`api/browser/${handover.token}/act`, body);
+      if (data.done) {
+        over = true;
+        toast(data.done);
+        close();
+        nowChanged();
+      } else {
+        status.textContent = data.url || "";
+        if (data.width) size = { width: data.width, height: data.height };
+      }
+    } catch (error) {
+      status.textContent = said(error);
+    } finally {
+      busy = false;
+      setTimeout(shot, 250);
+    }
+  }
+  picture.addEventListener("click", (event) => {
+    const box = picture.getBoundingClientRect();
+    act({ do: "tap", x: ((event.clientX - box.left) / box.width) * size.width, y: ((event.clientY - box.top) / box.height) * size.height });
+  });
+  picture.addEventListener("load", () => setTimeout(shot, 900));
+  picture.addEventListener("error", () => setTimeout(shot, 2000));
+  const field = h("input", { type: "password", autocomplete: "off", placeholder: "Texte à taper", "aria-label": "Texte à taper" });
+  const typeIt = () => {
+    if (!field.value) return;
+    act({ do: "type", text: field.value });
+    field.value = "";
+  };
+  field.addEventListener("keydown", (event) => event.key === "Enter" && (event.preventDefault(), typeIt()));
+  const key = (label, aria, body) => h("button", { class: "pill small", type: "button", "aria-label": aria, onclick: () => act(body) }, label);
+  const close = panel("Prendre la main", () => [
+    h("p", { class: "quote report" }, handover.why),
+    picture,
+    status,
+    h("div", { class: "type-row" }, h("label", { class: "field-edit" }, field), h("button", { class: "round", type: "button", "aria-label": field.type === "password" ? "Voir" : "Cacher", onclick: () => (field.type = field.type === "password" ? "text" : "password") }, icon("where", 18)), h("button", { class: "pill small primary", type: "button", onclick: typeIt }, "Taper")),
+    h("div", { class: "keys" }, key("⏎", "Entrée", { do: "key", key: "Enter" }), key("⌫", "Effacer", { do: "key", key: "Backspace" }), key("▲", "Monter", { do: "scroll", dy: -500 }), key("▼", "Descendre", { do: "scroll", dy: 500 }), key("←", "Page précédente", { do: "back" })),
+    h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: () => act({ do: "cancel" }) }, "Annuler"), h("button", { class: "pill primary", type: "button", onclick: () => act({ do: "done" }) }, "J'ai fini")),
+    h("p", { class: "hint" }, "Touche l'image pour cliquer, puis tape dessous. C'est mon navigateur, sur ton serveur : ce que tu tapes va dans la page, jamais dans notre conversation."),
+  ]);
+  setTimeout(() => act({ do: "start" }), 50);
+}
+
+// -- talking: a voice mode over the conversation ----------------------------------------------------
+
+const voice = { on: false, el: null, said: null };
+
+function voiceMode() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Le micro n'est pas disponible ici.");
+  voice.on = true;
+  const line = h("p", { class: "voice-line" }, "Touche le rond et parle. Touche encore pour m'envoyer.");
+  const orb = h("button", { class: "orb voice-orb", type: "button", "aria-label": "Parler", onclick: () => {
+        if (recorder.active) {
+          recorder.stop();
+          line.textContent = "J'ai entendu, je réfléchis…";
+        } else {
+          window.speechSynthesis?.cancel();
+          recorder.start();
+          line.textContent = "Je t'écoute… touche encore pour m'envoyer.";
+          orb.classList.add("busy");
+        }
+      } }, icon("mic", 36, "#fff"));
+  voice.line = line;
+  voice.orb = orb;
+  voice.el = h(
+    "section",
+    { class: "voice", role: "dialog", "aria-modal": "true", "aria-label": "Me parler" },
+    h("button", { class: "round glass voice-close", type: "button", "aria-label": "Fermer", onclick: () => stopVoice() }, icon("close", 20)),
+    orb,
+    line,
+    h("p", { class: "hint" }, "Je te réponds à voix haute. Ce qu'on se dit reste dans la conversation."),
+  );
+  stack(stopVoice);
+  layer.append(voice.el);
+}
+
+function stopVoice() {
+  voice.on = false;
+  if (recorder.active) {
+    recorder.cancelled = true;
+    recorder.media?.stop();
+  }
+  window.speechSynthesis?.cancel();
+  voice.el?.remove();
+  unstack(stopVoice);
+}
+
+function speak(message) {
+  // In voice mode, Orion's answers are read aloud (his own audio when he sent one).
+  if (!voice.on || message.who !== "orion") return;
+  voice.orb?.classList.remove("busy");
+  const audio = (message.files || []).find((f) => (f.type || "").startsWith("audio/"));
+  if (audio) {
+    new Audio(fileUrl(audio)).play().catch((error) => console.warn("voice", error));
+  } else if (message.text && window.speechSynthesis) {
+    const utterance = new SpeechSynthesisUtterance(message.text.replace(/\*\*/g, "").replace(/https?:\/\/\S+/g, "le lien"));
+    utterance.lang = "fr-FR";
+    window.speechSynthesis.speak(utterance);
+  }
+  if (voice.line) voice.line.textContent = excerpt(message.text || "…", 220);
 }
 
 async function signed(path, payload = {}) {

@@ -29,6 +29,8 @@ from pydantic import Field
 
 import orion
 from orion.awaiting.module import AwaitingModule
+from orion.chronicle.module import ChronicleModule
+from orion.computer.module import ComputerModule
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
@@ -37,10 +39,13 @@ from orion.missions.module import MissionsModule
 from orion.mobile.channel import MobileChannel
 from orion.mobile.control import Control
 from orion.mobile.devices import Devices, session_key
+from orion.mobile.notebook import Notebook
 from orion.mobile.push import Pusher, Vapid
 from orion.mobile.server import PREFIX, Gate, core_app, mobile_app
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
+from orion.papers.module import PapersModule
 from orion.providers.spending import Spending
+from orion.relations.module import RelationsModule
 from orion.tasks.module import TasksModule
 
 log = structlog.get_logger(__name__)
@@ -128,6 +133,7 @@ class MobileModule(Module):
         self.devices: Devices | None = None
         self.app: MobileChannel | None = None
         self.control: Control | None = None
+        self.notebook: Notebook | None = None
         self._http: httpx.AsyncClient | None = None
         self._guardian: GuardianClient | None = None
 
@@ -154,6 +160,10 @@ class MobileModule(Module):
         waits = plate.module(AwaitingModule)
         missions = plate.module(MissionsModule)
         hands = plate.module(HandsModule)
+        papers = plate.module(PapersModule)
+        relations = plate.module(RelationsModule)
+        chronicle = plate.module(ChronicleModule)
+        computer = plate.module(ComputerModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -173,6 +183,14 @@ class MobileModule(Module):
             hands=lambda: hands.desk if hands is not None else None,
             code=CODE,
         )
+        self.notebook = Notebook(
+            plate.journal,
+            self.control.now,
+            papers=lambda: papers.vault if papers is not None else None,
+            relations=lambda: relations.relations if relations is not None else None,
+            chronicle=lambda: chronicle.chronicle if chronicle is not None else None,
+            browser=lambda: computer.desk if computer is not None else None,
+        )
         return []
 
     async def serve(self, daemon: Daemon) -> None:
@@ -187,7 +205,9 @@ class MobileModule(Module):
                 guardian=self._guardian,
             )
             gate = Gate(origin_of(self.url()), GuardianSessions(self._guardian))
-            apps = [("mobile", core_app(channel, gate, self.control), settings.core_port)]
+            apps = [
+                ("mobile", core_app(channel, gate, self.control, self.notebook), settings.core_port)
+            ]
         else:
             assert self.devices is not None
             pusher: Pusher | None = None
@@ -210,9 +230,13 @@ class MobileModule(Module):
                 self.url().startswith("https://"),
                 settings.session_days,
                 self.control,
+                self.notebook,
             )
             apps = [("mobile", app, settings.port), ("mobile-api", app, settings.core_port)]
         await channel.start()
+        desk = self.notebook.browser() if self.notebook is not None else None
+        if desk is not None:
+            desk.in_app = True  # a hand-over shows in Maintenant (D135)
         daemon.plate.approver.target = daemon.inbox  # it asks where he last wrote from
         self.app = channel
         for name, app, port in apps:

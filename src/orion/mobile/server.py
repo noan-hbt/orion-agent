@@ -37,6 +37,7 @@ from starlette.routing import BaseRoute, Route
 from orion.mobile.channel import MAX_FILE_BYTES, MobileChannel
 from orion.mobile.control import Control, ControlError
 from orion.mobile.devices import DeviceError, Devices
+from orion.mobile.notebook import Notebook
 from orion.mobile.push import Vapid
 
 log = structlog.get_logger(__name__)
@@ -373,7 +374,10 @@ def edge_routes(
 
 
 def core_routes(
-    channel: MobileChannel, gate: Gate, control: Control | None = None
+    channel: MobileChannel,
+    gate: Gate,
+    control: Control | None = None,
+    notebook: Notebook | None = None,
 ) -> list[BaseRoute]:
     async def messages(request: Request, _device: str) -> Response:
         """The latest messages after `after`, or the ones just before `before` (scrolling
@@ -548,6 +552,52 @@ def core_routes(
         await c.machine_revoke(str(request.path_params["name"]))
         return {}
 
+    def shelf(handler: Callable[[Request, Notebook], Awaitable[Response | object]]) -> Guarded:
+        async def run(request: Request, _device: str) -> Response:
+            if notebook is None:
+                return _refused("the notebook is not available here", 404)
+            try:
+                done = await handler(request, notebook)
+            except ControlError as exc:
+                return _refused(str(exc), 404)
+            return done if isinstance(done, Response) else _ok(done)
+
+        return run
+
+    async def papers(request: Request, n: Notebook) -> object:
+        return {"papers": await n.paper_list(request.query_params.get("q", ""))}
+
+    async def paper(request: Request, n: Notebook) -> Response:
+        path, content_type, name = await n.paper_file(str(request.path_params["id"]))
+        return FileResponse(
+            path,
+            media_type=content_type or None,
+            filename=name,
+            content_disposition_type="inline",
+            headers=API_HEADERS,
+        )
+
+    async def people(_request: Request, n: Notebook) -> object:
+        return {"people": await n.people()}
+
+    async def saw(request: Request, n: Notebook) -> object:
+        await n.saw(str((await body(request))["name"]))
+        return {}
+
+    async def pages(_request: Request, n: Notebook) -> object:
+        return {"pages": await n.pages()}
+
+    async def handovers(_request: Request, n: Notebook) -> object:
+        return {"handovers": n.handovers()}
+
+    async def browser_shot(request: Request, n: Notebook) -> Response:
+        picture = await n.shot(str(request.path_params["token"]))
+        return Response(picture, media_type="image/png", headers=API_HEADERS)
+
+    async def browser_act(request: Request, n: Notebook) -> object:
+        # What he types goes into the page only: never logged, even on a bad request.
+        return await n.act(str(request.path_params["token"]), await body(request))
+
     def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
             f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
@@ -584,6 +634,14 @@ def core_routes(
         api("missions/{id}/close", controls(mission_close), post=True),
         api("machines", controls(machines)),
         api("machines/{name}/revoke", controls(machine_revoke), post=True),
+        api("papers", shelf(papers)),
+        api("papers/{id}/file", shelf(paper)),
+        api("people", shelf(people)),
+        api("people/saw", shelf(saw), post=True),
+        api("chronicle", shelf(pages)),
+        api("browser", shelf(handovers)),
+        api("browser/{token}/shot", shelf(browser_shot)),
+        api("browser/{token}/act", shelf(browser_act), post=True),
     ]
 
 
@@ -593,6 +651,7 @@ def mobile_app(
     secure_cookie: bool,
     session_days: int,
     control: Control | None = None,
+    notebook: Notebook | None = None,
 ) -> Starlette:
     """The whole app, in one process: the channel is its own desk, its devices its own gate."""
     devices = channel.devices
@@ -601,15 +660,20 @@ def mobile_app(
     gate = Gate(devices.origin, devices.session_device)
     return Starlette(
         routes=[
-            *core_routes(channel, gate, control),
+            *core_routes(channel, gate, control, notebook),
             *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days),
         ]
     )
 
 
-def core_app(channel: MobileChannel, gate: Gate, control: Control | None = None) -> Starlette:
+def core_app(
+    channel: MobileChannel,
+    gate: Gate,
+    control: Control | None = None,
+    notebook: Notebook | None = None,
+) -> Starlette:
     """The conversation alone (run split): sessions are checked with the guardian."""
-    return Starlette(routes=core_routes(channel, gate, control))
+    return Starlette(routes=core_routes(channel, gate, control, notebook))
 
 
 def edge_app(
