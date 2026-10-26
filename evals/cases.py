@@ -36,6 +36,12 @@ OWNER = (
     "A eu un constat (accident) et doit remplir les papiers d'assurance.",
 )
 """What Orion knew of the owner on 20/10, for cases where an empty memory would not be real."""
+AWAITING_OWNER = (
+    "Le mardi 21/10 à 10:00, tu attendais sa réponse : {about}. Rien depuis. Si ça compte "
+    "encore, relance-le en une phrase, sans reproche ; s'il a répondu autrement ou que ça ne "
+    "vaut plus la peine, réponds SILENCE."
+)
+"""The notice `awaiting` writes for a question to him left unanswered (D109)."""
 WEEKDAY_OR_DATE = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|\b\d{1,2}/\d{1,2}\b"
 
 CASES: tuple[Case, ...] = (
@@ -378,7 +384,11 @@ CASES: tuple[Case, ...] = (
             Say("Rappelle-moi dans 10 minutes d'appeler l'assurance", waited=timedelta(minutes=7)),
         ),
         checks=(
-            judged("La réponse dit-elle qu'Orion a répondu en retard, ou qu'il était coupé ?"),
+            judged(  # « … en retard, ou … coupé ? » : Haiku voulait les deux
+                "L'assistant signale-t-il, même en passant, qu'il a été absent ou lent à voir "
+                "le message (une coupure, un retard, une attente, par exemple « j'étais coupé » "
+                "ou « j'ai mis 7 minutes à le voir ») ?"
+            ),
             reminder_within(timedelta(minutes=1), timedelta(minutes=11)),
         ),
     ),
@@ -435,6 +445,7 @@ CASES: tuple[Case, ...] = (
         steps=(Say("https://www.service-public.fr/particuliers/vosdroits/F1314"),),
         checks=(uses("library:keep"), at_most(200)),
         live_web=True,
+        modules=("web",),
     ),
     Case(
         name="reponds_a_paul",
@@ -619,5 +630,91 @@ CASES: tuple[Case, ...] = (
         ),
         live_web=True,
         modules=("computer",),
+    ),
+    Case(
+        name="le_constat_mal_lu",
+        origin="20/10 : sur la photo d'un constat, Orion a lu les cases de travers, pris Noan "
+        "pour le véhicule A et conclu « tu es en tort » ; il conduisait le véhicule B.",
+        at=paris(2026, 10, 20, 19, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                '<photo id="p_constat">Constat amiable d\'accident automobile, photographié de '
+                "biais. Véhicule A : Renault Clio, DB-497-AZ, assurée chez MAAF. Véhicule B : "
+                "Mercedes Classe A, CT-430-BK. Rubrique 12, colonne A : les cases 8 et 10 "
+                "semblent cochées ; colonne B : la case 1 semble cochée, la case 13 est "
+                "peut-être cochée (trait léger). Croquis peu lisible. Signatures en bas des "
+                "deux colonnes.</photo>\nvoilà le constat, je suis en tort ou pas ?"
+            ),
+        ),
+        checks=(
+            judged(
+                "Does the reply avoid stating as certain who is at fault, and either ask "
+                "which vehicle (A or B) the owner was driving or clearly say it does not know "
+                "which one is his?"
+            ),
+            never_says(
+                r"\b(ta|votre) (renault|clio)\b",
+                "it gave him the Renault (vehicle A) when nothing says it is his",
+            ),
+        ),
+    ),
+    Case(
+        name="relance_le",
+        origin="Attendre une réponse (D109) : la question est restée sans réponse ; Orion "
+        "revient dessus, court et sans reproche.",
+        at=paris(2026, 10, 21, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say("faut que je choisisse le resto pour l'anniv de ma mère, je te redis le jour"),
+            Notice(
+                AWAITING_OWNER.format(about="quel jour il fête l'anniversaire de sa mère"),
+                "pas de réponse",
+                Trust.SYSTEM,
+                at=paris(2026, 10, 22, 18, 0),
+            ),
+        ),
+        checks=(
+            judged(
+                "La réponse lui redemande-t-elle le jour de l'anniversaire de sa mère, en une "
+                "ou deux phrases, sans reproche ?"
+            ),
+        ),
+    ),
+    Case(
+        name="il_a_deja_repondu",
+        origin="Témoin du précédent : il a répondu entre-temps ; Orion ne relance pas.",
+        at=paris(2026, 10, 21, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say("faut que je choisisse le resto pour l'anniv de ma mère, je te redis le jour"),
+            Say("c'est samedi midi finalement", at=paris(2026, 10, 21, 14, 0)),
+            Notice(
+                AWAITING_OWNER.format(about="quel jour il fête l'anniversaire de sa mère"),
+                "pas de réponse",
+                Trust.SYSTEM,
+                at=paris(2026, 10, 22, 18, 0),
+            ),
+        ),
+        checks=(says(r"^\s*SILENCE\.?\s*$", "it nudged him about what he already answered"),),
+    ),
+    Case(
+        name="laisse_le_ecrire_seul",
+        origin="21/10 16:17 : juste après un message de Victor relayé, « discute avec lui sans "
+        "me consulter » ; refusé 2 h, puis Orion a répété ce refus de mémoire sans réessayer "
+        "(D130).",
+        at=paris(2026, 10, 21, 16, 12),
+        facts=OWNER,
+        steps=(
+            Notice(
+                "En parlant avec Victor (un de ses proches), tu as noté pour lui. À lui "
+                "transmettre : Victor insiste pour le resto de demain soir.\nDis-le-lui en une "
+                "ou deux phrases.",
+                "Victor t'a écrit",
+                Trust.THIRD_PARTY,
+            ),
+            Say("écris à victor sans me demander à chaque fois, je m'en fous"),
+        ),
+        checks=(called_with("autonomy_grant", "contact_message", "Victor"),),
     ),
 )

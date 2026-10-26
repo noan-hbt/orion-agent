@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -32,7 +32,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.library.store import ADDED, REMOVED, LibraryStore, Passage
-from orion.memory.model import Category
+from orion.memory.model import MAX_STATEMENT, Category
 from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.providers.base import ProviderError
@@ -164,7 +164,7 @@ class KeepInput(BaseModel):
         max_length=800,
         description="What it says that could serve him later, in two or three sentences",
     )
-    topics: list[str] = Field(
+    topics: list[Annotated[str, Field(max_length=60)]] = Field(
         min_length=1,
         max_length=8,
         description="What it is about, in the words a later conversation would use",
@@ -196,6 +196,20 @@ class RemoveInput(BaseModel):
     doc: str = Field(description="The document id (d_…)")
 
 
+def kept_note(args: KeepInput, doc_id: str, day: datetime) -> str:
+    """The memory fact for a kept reading, within a fact's length: the address goes first (the
+    document keeps it), then the gist is shortened."""
+    topics = ", ".join(args.topics)
+    head = f"Lecture qu'il a gardée pour plus tard le {day:%d/%m/%Y} ({doc_id}) : « {args.title} »"
+    tail = f" Sujets : {topics}."[: MAX_STATEMENT // 4]
+    where = f" {args.url}" if args.url else ""
+    note = f"{head}{where}. En bref : {args.gist}{tail}"
+    if len(note) <= MAX_STATEMENT:
+        return note
+    room = MAX_STATEMENT - len(f"{head}. En bref : …{tail}")
+    return f"{head}. En bref : {args.gist[:room].rstrip()}…{tail}"
+
+
 def library_tools(
     library: Library, timezone: str, results: int, memory: MemoryService | None = None
 ) -> list[Tool]:
@@ -212,12 +226,8 @@ def library_tools(
             args.title, body, provenance, ctx.context_trust, ctx.correlation_id
         )
         if memory is not None:
-            day = datetime.now(zone)
-            where = f" {args.url}" if args.url else ""
             await memory.remember(
-                f"Lecture qu'il a gardée pour plus tard le {day:%d/%m/%Y} ({doc_id}) : "
-                f"« {args.title} »{where}. En bref : {args.gist} "
-                f"Sujets : {', '.join(args.topics)}.",
+                kept_note(args, doc_id, datetime.now(zone)),
                 Origin(
                     actor="orion:core",
                     source=provenance.source,
