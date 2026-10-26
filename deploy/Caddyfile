@@ -27,6 +27,10 @@
 	handle /secrets/* {
 		reverse_proxy 127.0.0.1:8794
 	}
+	# Orion's own app (D125): nothing works without a passkey paired with your phone.
+	handle /app/* {
+		reverse_proxy 127.0.0.1:8795
+	}
 	# The control page: reachable only with a one-time link Orion sends you.
 	handle /console/* {
 		reverse_proxy 127.0.0.1:8790

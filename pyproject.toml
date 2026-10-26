@@ -20,6 +20,7 @@ dependencies = [
     "tomlkit>=0.13",
     "tzdata>=2024.1",
     "uvicorn>=0.54,<1",
+    "webauthn>=2.5",
     "websockets>=13",
 ]
 

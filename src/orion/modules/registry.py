@@ -41,6 +41,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.memory.doubt import DoubtModule
     from orion.memory.night import NightModule
     from orion.missions.module import MissionsModule
+    from orion.mobile.module import MobileModule
     from orion.onboarding.module import OnboardingModule
     from orion.papers.module import PapersModule
     from orion.photos.module import PhotosModule
@@ -58,6 +59,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.web.module import WebModule
 
     return [
+        MobileModule,
         IMessageModule,
         TelegramModule,
         VoiceModule,
