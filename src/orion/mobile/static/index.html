@@ -2,18 +2,24 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Orion">
-<meta name="theme-color" content="#111111">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#EDEFF6">
+<meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="/app/manifest.webmanifest">
-<link rel="icon" href="/app/icon.svg">
-<link rel="apple-touch-icon" href="/app/icon.svg">
+<link rel="icon" href="/app/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/app/icon-180.png">
 <link rel="stylesheet" href="/app/app.css">
 <title>Orion</title>
 </head>
 <body>
-<main id="app"><p>Orion</p></main>
+<div class="backdrop" aria-hidden="true"><span class="blob one"></span><span class="blob two"></span></div>
+<main id="app" aria-live="polite"></main>
+<div id="layer"></div>
 <script src="/app/app.js" type="module"></script>
 </body>
 </html>
