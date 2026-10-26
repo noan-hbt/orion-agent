@@ -12,7 +12,7 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
@@ -90,8 +90,7 @@ class Tool:
         return self.accepts_untrusted_context
 
     def spec(self) -> ToolSpec:
-        schema = self.input_model.model_json_schema()
-        schema.pop("title", None)
+        schema = compact_schema(self.input_model.model_json_schema())
         return ToolSpec(name=self.name, description=self.description, parameters=schema)
 
     def parse(self, raw_arguments: str) -> BaseModel:
@@ -107,6 +106,36 @@ class Tool:
         if wrong is not None:
             raise ToolInputError(wrong)
         return parsed
+
+
+_SCHEMA_MAPS = ("properties", "$defs", "patternProperties")
+_SCHEMA_LISTS = ("anyOf", "oneOf", "allOf", "prefixItems")
+_SCHEMA_ONE = ("items", "additionalProperties", "not")
+
+
+def compact_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema without what pydantic adds for nobody: a `title` repeating each field's
+    name, and `default: null` on optional fields. Every request carries every tool's schema,
+    so this is paid on every call; only schema keywords are walked, never a value."""
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title" and isinstance(value, str):
+            continue
+        if key == "default" and value is None:
+            continue
+        if key in _SCHEMA_MAPS and isinstance(value, dict):
+            out[key] = {name: _sub(sub) for name, sub in cast(dict[str, Any], value).items()}
+        elif key in _SCHEMA_LISTS and isinstance(value, list):
+            out[key] = [_sub(sub) for sub in cast(list[Any], value)]
+        elif key in _SCHEMA_ONE:
+            out[key] = _sub(value)
+        else:
+            out[key] = value
+    return out
+
+
+def _sub(value: Any) -> Any:
+    return compact_schema(cast(dict[str, Any], value)) if isinstance(value, dict) else value
 
 
 class ToolInputError(ValueError):

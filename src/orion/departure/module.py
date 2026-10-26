@@ -390,8 +390,7 @@ def departure_tools(departures: Departures) -> list[Tool]:
         Tool(
             name="departure_plan",
             description="A trip or an exam the owner mentions that is not in his calendar (« je "
-            "prends le train pour Lyon vendredi à 7 h ») : you will prepare it the evening "
-            "before (ticket, papers, weather, when to leave).",
+            "prends le train pour Lyon vendredi à 7 h »).",
             input_model=PlanInput,
             handler=plan,
             effect=Effect.INTERNAL,

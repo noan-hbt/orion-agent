@@ -413,9 +413,7 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
     return [
         Tool(
             name="intention_set",
-            description="Follow something the owner wants to become or do lastingly (a habit, "
-            "a way of living: run more, spend less on restaurants, see his mother more), when he "
-            "says so or agrees you follow it. Not for one-off tasks (those are commitments).",
+            description="Follow one, when he says so or agrees you follow it.",
             input_model=SetInput,
             handler=set_,
             effect=Effect.INTERNAL,

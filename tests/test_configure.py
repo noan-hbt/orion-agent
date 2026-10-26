@@ -259,3 +259,21 @@ def test_a_change_never_overwrites_one_made_meanwhile(tmp_path: Path) -> None:
     with pytest.raises(ConfigureError, match="changed meanwhile"):
         write(source, before, '[agent]\nmodel = "c"\n')
     assert 'model = "b"' in source.read_text("utf-8")
+
+
+async def test_the_way_to_change_comes_with_the_settings(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """How to add a contact, the owner's own settings, secrets: read when Orion is about to
+    change something, not carried in every request's system message."""
+    from orion.resources import read_resource
+
+    source = tmp_path / "orion.toml"
+    source.write_text(TOML, "utf-8")
+    config = load_config(source)
+    show, _change = configure_tools(Configurator(journal, config.source), config)
+    shown = (await show.handler(show.parse("{}"), ToolContext("owner", "c1"))).content
+    assert "Comment les changer" in shown
+    assert "modules.secretary.contacts" in shown and "secret_ask" in shown
+    section = read_resource("configure.md")
+    assert "configure_show" in section and "secret_ask" not in section

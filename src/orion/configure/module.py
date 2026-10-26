@@ -55,6 +55,7 @@ from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
 from orion.modules.installer import Installer
 from orion.modules.tools import module_tools
+from orion.resources import read_resource
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
@@ -375,7 +376,12 @@ def secret_tool(guardian: GuardianClient) -> Tool:
 
 def configure_tools(configurator: Configurator, config: OrionConfig) -> list[Tool]:
     async def show(_args: Any, _ctx: ToolContext) -> ToolResult:
-        return ToolResult("Tes réglages, tels qu'ils sont :\n" + editable_view(config))
+        return ToolResult(
+            "Tes réglages, tels qu'ils sont :\n"
+            + editable_view(config)
+            + "\n\nComment les changer :\n"
+            + read_resource("configure-howto.md").strip()
+        )
 
     async def change(args: Any, ctx: ToolContext) -> ToolResult:
         origin = Provenance(

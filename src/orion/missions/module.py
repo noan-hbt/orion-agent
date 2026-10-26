@@ -304,8 +304,7 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
     return [
         tool(
             "mission_start",
-            "A goal you come back to alone over days (a flat, a price, a slot): now, then every "
-            "`every_hours`; you write to him only when there is news.",
+            "Now, then every `every_hours`; you write to him only when there is news.",
             StartInput,
             start,
         ),
