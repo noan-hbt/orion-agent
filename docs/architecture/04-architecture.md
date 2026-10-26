@@ -341,6 +341,8 @@ il a écrit en dernier, sinon le premier disponible. Ses réactions deviennent d
 - **iMessage** (D9) : derrière une « ligne » (`channels/line.py`) ; Inkbox aujourd'hui, Blooio ou
   BlueBubbles demain, une classe chacun. Indicateur de frappe, réactions, bulles.
 - **Telegram** (D88) : un bot à soi, gratuit et sans plafond ; boutons Oui / Non pour les accords.
+- **L'application** (D125) : une PWA sur l'écran d'accueil de l'iPhone (`orion.mobile`), appairée
+  par passkey ; notifications Web Push chiffrées, accords signés avec Face ID.
 - **Terminal** : développement et administration.
 - **Voix** (D10) : `orion-voice` (Pipecat + Twilio) parle au noyau par des outils à deux vitesses
   (`consult_fast` < 1,5 s ; `start_task` → résultat dans l'appel ou par iMessage). Brief préparé

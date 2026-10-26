@@ -290,6 +290,19 @@ host = "127.0.0.1"
 port = 8790
 # public_url = "https://orion.example.com"
 
+# Orion's own app on your iPhone (D125), instead of Telegram: a web app added to the home screen,
+# with notifications and approvals signed with Face ID. It needs a domain in https (a passkey
+# belongs to a domain). Pair the phone with `orion app pair iphone`, which prints what to do.
+# Not yet with [guardian] enabled: the guardian must serve the app itself first.
+[modules.mobile]
+enabled = false
+host = "127.0.0.1"
+port = 8795
+# public_url = "https://orion.example.com"
+approval_timeout_seconds = 900
+session_days = 30               # then Face ID again to open a session
+notifications = true
+
 # Orion's hands (D1): `orion hand` on your own machines dials out to the server and offers what
 # you allow there (notifications, finding and reading files in chosen folders, opening pages
 # with your approval). Pair a machine: `orion hands pair <name>` on the server gives a code,

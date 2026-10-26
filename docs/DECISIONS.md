@@ -2693,3 +2693,30 @@ constitution sans évaluations pour le vérifier.
   d'ailleurs, il ne voit que le nom des appels, jamais leurs arguments, où une page aurait pu
   glisser ses mots. Les phrases étant toutes différentes, on en limite le nombre : la première
   après quinze secondes, puis une par minute au plus, trois par tour.
+
+## D125 — Une application à soi : une PWA, servie par le gardien
+
+*26/10/2026 · acceptée*
+
+Le propriétaire veut remplacer Telegram par une application Orion sur son iPhone : parler à
+Orion, approuver, administrer. Sans payer les 99 $ par an d'Apple, une appli native n'a pas de
+notifications et expire tous les 7 jours. On fait donc une **application web ajoutée à l'écran
+d'accueil** (PWA) : notifications Web Push, plein écran, aucune expiration, Face ID par les
+passkeys. Étude : `docs/research/05-application.md`.
+
+- **Appairage** : un code à usage unique tiré sur le serveur (`orion app pair <appareil>`),
+  saisi dans l'application, qui crée une passkey liée à l'iPhone (vérification de
+  l'utilisateur exigée). Sans elle, l'adresse ne sert à rien.
+- **La page est servie par le gardien, la conversation par le noyau**, sur un même domaine :
+  un noyau compromis ne peut ni changer le code de l'application ni afficher une fausse
+  question.
+- **Un oui est une signature** : le gardien rédige la question et tire un défi lié à la demande
+  et au choix ; l'iPhone le signe après Face ID ; le gardien vérifie. Le noyau transmet, il ne
+  peut pas fabriquer d'accord.
+- **Les notifications** sont chiffrées et signées par le gardien, qui garde la clé VAPID et les
+  abonnements des seuls appareils appairés.
+- **Un canal comme les autres** (D88) : module `app`, outbox, boîte de réception unifiée.
+  Telegram peut rester allumé pendant la transition. Les proches restent sur Telegram ou
+  iMessage.
+- Mode réuni d'abord (un processus, comme sur Railway) ; en mode séparé, le canal refuse de se
+  charger tant que le gardien ne sert pas l'application lui-même.

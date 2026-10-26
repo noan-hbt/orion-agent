@@ -305,6 +305,41 @@ async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _app(config: OrionConfig, args: argparse.Namespace) -> int:
+    """Orion's own app on the owner's phone (D125): pair a device, list them, cut one off."""
+    from orion.mobile.devices import Devices, session_key
+    from orion.mobile.module import MobileModule
+    from orion.mobile.server import PREFIX
+    from orion.modules.base import ModuleError
+
+    module = MobileModule(config)
+    try:
+        url = module.url()
+    except ModuleError as exc:
+        print(exc)
+        return 1
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        devices = Devices(journal, url, session_key(module.folder))
+        await devices.sync()
+        if args.app_command == "devices":
+            names = sorted(devices.state.devices)
+            print("\n".join(names) if names else "Aucun appareil appairé : orion app pair iphone")
+            return 0
+        if args.app_command == "revoke":
+            if not await devices.revoke(args.device):
+                print(f"Aucun appareil {args.device!r}.")
+                return 1
+            print(f"{args.device} est coupé : sa passkey et ses sessions ne valent plus rien.")
+            return 0
+        code = await devices.new_code(args.device)
+    print(f"1. Sur l'iPhone, ouvre {url}{PREFIX}/ dans Safari.")
+    print("2. Partager > « Sur l'écran d'accueil », puis ouvre Orion depuis l'écran d'accueil.")
+    print(f"3. Saisis ce code (une fois, 10 minutes) : {code}")
+    if not module.enabled:
+        print("(Le module est éteint : [modules.mobile] enabled = true, puis redémarre.)")
+    return 0
+
+
 async def _places_token(config: OrionConfig) -> int:
     from orion.places.module import PATH, Places
 
@@ -892,6 +927,13 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-open", action="store_true", help="Let Orion open web pages (each one approved)"
     )
     hand_sub.add_parser("run", help="Connect and serve (keep it running)")
+    app = sub.add_parser("app", help="Orion's own app on your phone (D125)")
+    app_sub = app.add_subparsers(dest="app_command", required=True)
+    app_sub.add_parser("pair", help="A one-time code to pair a phone").add_argument(
+        "device", help="A name for it, e.g. 'iphone'"
+    )
+    app_sub.add_parser("devices", help="The paired devices")
+    app_sub.add_parser("revoke", help="Cut a device off").add_argument("device")
     console = sub.add_parser("console", help="The control page")
     console_sub = console.add_subparsers(dest="console_command", required=True)
     console_sub.add_parser("link", help="A one-time login link")
@@ -971,6 +1013,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_hands(config, args))
     if args.command == "console":
         return asyncio.run(_console_link(config))
+    if args.command == "app":
+        return asyncio.run(_app(config, args))
     if args.command == "contain":
         return asyncio.run(_contain(config, args.source, args.apply, args.reason))
     if args.command == "logins":
