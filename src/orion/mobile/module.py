@@ -160,6 +160,7 @@ class MobileModule(Module):
             planned=lambda now, until: everything_planned(plate.modules, plate.timers, now, until),
             tasks=lambda: tasks.tasks if tasks is not None else None,
             awaiting=lambda: waits.awaiting if waits is not None else None,
+            config=config,
         )
         return []
 

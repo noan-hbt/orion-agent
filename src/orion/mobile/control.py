@@ -5,6 +5,11 @@ The same things the console shows (D101), read from the same places, as JSON: wh
 costs; and the few things he changes from here: a pause, quiet hours, the daily attention
 budget. Every change is his own correction, journaled with trust OWNER, as the console does.
 Giving Orion more room (autonomy) is not here: that is asked and signed in the conversation.
+
+The server, read from here (`server`): the version, every setting of orion.toml that can be
+changed by message with whose yes it takes (D92), the modules and the catalog (D105). Nothing is
+written from here: a change is asked in the conversation, where Orion checks it whole and the
+owner signs it, the same way as by message.
 """
 
 from __future__ import annotations
@@ -12,9 +17,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
 
+from orion import __version__
 from orion.awaiting.module import Awaiting
 from orion.console.app import ACTIVITY, activity_detail
 from orion.console.dashboard import moment
@@ -27,6 +33,9 @@ from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Planned
 from orion.providers.spending import Spending
 from orion.tasks.service import Tasks
+
+if TYPE_CHECKING:
+    from orion.config import OrionConfig
 
 OWNER = Origin(actor="owner:app", source="app", trust=Trust.OWNER)
 FROM_APP = Provenance(source="app", actor="owner:main")
@@ -52,6 +61,8 @@ class Control:
     """Background tasks, once their module is assembled (after this one)."""
     awaiting: Callable[[], Awaiting | None] = lambda: None
     """The answers Orion waits for, once their module is assembled."""
+    config: OrionConfig | None = None
+    """The file Orion started with: what the server part shows."""
 
     @property
     def zone(self) -> ZoneInfo:
@@ -307,3 +318,59 @@ class Control:
         awaiting = self.awaiting()
         if awaiting is None or not await awaiting.cancel(wait_id, FROM_APP, None):
             raise ControlError("no such wait")
+
+    # -- the server: its settings and modules, read only --------------------------------------
+
+    async def server(self) -> dict[str, Any]:
+        if self.config is None:
+            raise ControlError("the server part is not available here")
+        return server_view(self.config)
+
+
+def server_view(config: OrionConfig) -> dict[str, Any]:
+    """What `orion.toml` holds that can be changed by message, with whose yes (D92), and the
+    modules: on or off, installed from the catalog, or there to install (D105)."""
+    from orion.configure.module import editable_sections
+    from orion.configure.paths import ConfigureError, tier
+    from orion.modules.installer import installed, modules_dir, read_catalog
+    from orion.modules.registry import discover
+
+    settings: list[dict[str, Any]] = []
+
+    def walk(prefix: str, value: object) -> None:
+        table = cast(dict[str, object], value) if isinstance(value, dict) else None
+        if table:
+            for key in sorted(table):
+                walk(f"{prefix}.{key}", table[key])
+            return
+        try:
+            settings.append(
+                {"path": prefix, "value": value, "tier": tier(prefix, cast(object, value))}
+            )
+        except ConfigureError:
+            return  # never changed by message: not shown
+
+    for section, value in editable_sections(config).items():
+        walk(section, value)
+    added = installed(modules_dir(config))
+    catalog = read_catalog()
+    modules = [
+        {"name": kind.name, "on": kind(config).enabled, "added": kind.name in added}
+        for kind in discover(config)
+    ]
+    return {
+        "version": __version__,
+        "split": config.guardian.enabled,
+        "settings": settings,
+        "modules": sorted(modules, key=lambda m: (not m["on"], m["name"])),
+        "catalog": [
+            {
+                "name": entry.name,
+                "description": entry.description,
+                "accesses": entry.accesses,
+                "settings": entry.settings,
+                "installed": entry.name in added,
+            }
+            for entry in catalog.values()
+        ],
+    }

@@ -2917,3 +2917,36 @@ afficher une action et en faire signer une autre. Le gardien tient donc maintena
 
 En mode réuni (Railway, un poste), le même processus sert tout, sur les deux ports, pour que
 les mêmes règles de Caddy marchent.
+
+## D135 — L'application en quatre onglets, et le serveur réglé depuis le téléphone
+
+*26/10/2026 · acceptée · étend D125, D127 et D92*
+
+L'application n'était qu'une conversation, avec un panneau Contrôle et un panneau Pour toi
+derrière deux boutons. Il fallait encore le serveur pour lire `orion.toml`, allumer un module ou
+appairer un deuxième téléphone. Désormais :
+- **quatre onglets**, dans une barre flottante en verre (style iOS 26), avec la recherche dans
+  ce qu'Orion sait dans un rond à part :
+  - **Maintenant** : ce qu'Orion fait, puis ce qui attend le propriétaire (les accords à
+    glisser, les questions), les tâches de fond, ce qu'Orion attend des autres et ce qu'il fera
+    bientôt. Le badge compte ce qui l'attend ;
+  - **Conversation** : comme avant ;
+  - **Carnet** : la mémoire, les engagements, le manuel, l'activité, ce qui est prévu, ce
+    qu'Orion fait seul ;
+  - **Réglages** : la pause, les coûts, les heures calmes, puis le serveur et les téléphones ;
+- **le serveur, en lecture** (`GET /app/api/server`) : la version, chaque réglage
+  d'`orion.toml` qui peut changer par message avec le niveau de oui qu'il demande (D92), les
+  modules allumés ou éteints et le catalogue (D105). Les secrets et les chemins n'y figurent
+  pas ;
+- **un changement se demande dans la conversation**. Toucher un réglage, un module ou
+  « Installer » envoie à Orion la demande exacte (« Dans orion.toml, mets `x` à `y` »). Orion la
+  vérifie en entier, et le propriétaire la signe avec Face ID, comme par message. L'application
+  n'écrit donc jamais le fichier : c'est le même chemin, vérifié par le gardien ;
+- **les téléphones** (`/app/devices`, au bord, donc au gardien en mode séparé) : la liste ;
+  un nouveau code d'appairage, ou un téléphone retiré, chacun signé avec Face ID pour ce
+  changement seul (`pair:<nom>`, `revoke:<nom>`). Le téléphone en main ne se retire pas lui-même :
+  il se déconnecte.
+- Orion parle de lui-même à la première personne partout dans l'application.
+
+Pas encore : lancer une mise à jour depuis l'app (le serveur se met déjà à jour seul, D94), ni
+de vue dédiée aux missions.

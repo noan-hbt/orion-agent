@@ -409,7 +409,7 @@ audio { width: 240px; height: 40px; }
 .list button small { margin-left: auto; font-size: 13px; color: var(--muted); font-weight: 500; }
 
 .toast {
-  position: fixed; left: 50%; bottom: calc(var(--bottom) + 84px); z-index: 20; transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(var(--bottom) + 96px); z-index: 20; transform: translateX(-50%);
   padding: 10px 16px; border-radius: 20px; background: var(--ink); color: #fff;
   font-size: 14px; font-weight: 600; box-shadow: var(--shadow); animation: rise 0.2s ease;
   max-width: calc(100vw - 32px);
@@ -524,3 +524,79 @@ button.tile:active { transform: scale(0.98); }
 @keyframes spin { to { transform: rotate(360deg); } }
 .list .item small.last { margin-top: 4px; color: var(--ink); opacity: 0.75; font-style: italic; }
 .work .acts { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* -- the tabs (Maintenant, Conversation, Carnet, Réglages) and the floating dock ------------ */
+
+.tab { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.page { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.page-head { padding: calc(var(--top) + 18px) 20px 4px; }
+.page-head p { margin: 0; min-height: 20px; font-size: 15px; font-weight: 600; color: var(--muted); }
+.page-head p::first-letter { text-transform: uppercase; }
+.page-head h1 { margin: 2px 0 0; font-size: 34px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
+.page-body { padding: 10px 12px calc(var(--bottom) + 108px); display: flex; flex-direction: column; gap: 10px; }
+.page-body > * { flex-shrink: 0; }
+.page-body .label { margin: 12px 8px 0; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.page-body .hint { margin: 2px 8px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.page-body .empty { margin: 24px 8px; color: var(--muted); text-align: center; }
+.page-body .ask { margin: 0; }
+h2.section { margin: 14px 8px 0; font-size: 21px; font-weight: 800; letter-spacing: -0.015em; display: flex; align-items: baseline; justify-content: space-between; }
+h2.section small { font-size: 14px; font-weight: 600; color: var(--muted); }
+
+.hero { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 12px; }
+.hero h2 { margin: 0; font-size: 28px; line-height: 1.18; font-weight: 800; letter-spacing: -0.025em; }
+.hero .line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hero .line > span { flex: 1; min-width: 150px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.orb {
+  width: 68px; height: 68px; border-radius: 34px; background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 8px rgba(171, 159, 242, 0.25), 0 0 0 18px rgba(171, 159, 242, 0.1), 0 0 48px rgba(140, 120, 255, 0.5);
+}
+.orb.busy { animation: breathe 2.4s ease-in-out infinite; }
+.orb.still { box-shadow: 0 0 0 8px rgba(138, 143, 160, 0.18); }
+@keyframes breathe { 50% { box-shadow: 0 0 0 12px rgba(171, 159, 242, 0.3), 0 0 0 26px rgba(171, 159, 242, 0.08), 0 0 60px rgba(140, 120, 255, 0.6); } }
+
+.dock {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; pointer-events: none;
+  padding: 0 16px calc(var(--bottom) + 10px); display: flex; gap: 10px; align-items: flex-end;
+}
+.dock > * { pointer-events: auto; }
+.tabbar { flex: 1; height: 64px; padding: 5px; border-radius: 32px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; }
+.tabbar button {
+  position: relative; border-radius: 27px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  font-size: 10px; font-weight: 600; color: var(--ink); min-width: 0;
+}
+.tabbar button span:not(.badge) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabbar button[aria-current="page"] {
+  color: var(--accent-ink);
+  background: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0.55)); box-shadow: inset 0 1px 1px #fff, 0 2px 8px rgba(40, 30, 90, 0.1);
+}
+.tabbar .badge { top: 3px; right: auto; left: calc(50% + 6px); background: var(--wait); }
+.find { width: 64px; height: 64px; border-radius: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.tabbar button:active, .find:active { transform: scale(0.95); }
+body.typing .dock { display: none; }
+
+/* the conversation sits above the dock; while he types, the dock steps aside */
+.tab .composer { padding-bottom: calc(var(--bottom) + 84px); }
+body.typing .tab .composer { padding-bottom: calc(var(--bottom) + 10px); }
+
+/* settings rows, as in iOS: an icon, a name, a value, a chevron */
+.list .item .value { margin: 0 0 0 auto; flex-shrink: 0; max-width: 45%; text-align: right; font-size: 14px; color: var(--muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .item .value.on { color: var(--ok); }
+.list .item .chev { color: var(--faint); display: flex; flex-shrink: 0; }
+.list .item.danger .text { color: var(--danger); }
+.list .item .ico.owner { background: var(--ink); color: #fff; }
+.list .item .ico.on { background: var(--lavender); color: var(--on-lavender); }
+.list .item .ico.wait { background: rgba(255, 159, 10, 0.16); color: var(--wait-ink); }
+.list .item .meter { margin-top: 6px; }
+.field-edit { display: block; }
+.field-edit input, .field-edit select, .field-edit textarea {
+  width: 100%; border: none; outline: none; border-radius: 18px; padding: 14px 16px; font-size: 17px;
+  background: var(--tile); box-shadow: inset 0 1px 2px rgba(40, 30, 90, 0.08); color: var(--ink);
+}
+.field-edit textarea { font-family: ui-monospace, "SF Mono", monospace; font-size: 14px; resize: vertical; }
+.add-phone { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.big-code { text-align: center; font-size: 34px !important; font-weight: 800; letter-spacing: 0.12em; font-family: ui-monospace, "SF Mono", monospace; }
+.sheet a.pill { text-decoration: none; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet .error { margin: 0 4px; color: var(--danger); font-size: 14px; font-weight: 600; }
+.sheet .hint { margin: 0 4px; font-size: 13px; color: var(--muted); line-height: 1.45; }
+.list .item > span.chev:not(.ico):not(.acts) { flex: 0 0 auto; }

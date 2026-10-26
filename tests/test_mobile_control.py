@@ -12,6 +12,7 @@ import pytest
 
 from orion.awaiting.module import Awaiting, AwaitingSettings
 from orion.channels.inbox import OwnerInbox
+from orion.config import load_config
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy
@@ -43,6 +44,7 @@ class Controlled:
     journal: SqliteJournal
     tasks: Tasks
     awaiting: Awaiting
+    control: Control
 
 
 @pytest.fixture
@@ -78,7 +80,7 @@ async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Co
         phone = FakePasskey(URL, "orion.example")
         world = World(channel, http, phone, ScriptedProvider(), FakePusher(), devices)
         await pair(world)
-        yield Controlled(world, memory, autonomy, journal, tasks, awaiting)
+        yield Controlled(world, memory, autonomy, journal, tasks, awaiting, control)
     await store.close()
 
 
@@ -201,3 +203,32 @@ async def test_for_you_gathers_what_waits_on_him(controlled: Controlled) -> None
     after = (await http.get("/app/api/for-you")).json()
     assert after["waiting_on"] == [] and after["tasks"] == []
     assert [q["id"] for q in after["questions"]] == [asked.id]
+
+
+async def test_the_server_part_shows_settings_with_whose_yes_and_the_modules(
+    controlled: Controlled, tmp_path: Path
+) -> None:
+    http = controlled.world.http
+    assert (await http.get("/app/api/server")).status_code == 404  # no config: not here
+
+    source = tmp_path / "orion.toml"
+    source.write_text(
+        'instance = "orion-main"\ndata_dir = "data"\n\n[initiative]\nquiet_start = "22:30:00"\n'
+        "\n[modules.web]\nenabled = false\n",
+        "utf-8",
+    )
+    controlled.control.config = load_config(source)
+    shown = (await http.get("/app/api/server")).json()
+    by_path = {s["path"]: s for s in shown["settings"]}
+    assert by_path["initiative.quiet_start"] == {
+        "path": "initiative.quiet_start",
+        "value": "22:30:00",
+        "tier": "orion",
+    }
+    assert by_path["modules.web.enabled"]["tier"] == "orion"
+    assert all(s["tier"] == "owner" for s in shown["settings"] if s["path"].startswith("budget."))
+    assert not any(s["path"].endswith(("api_key", "base_url", "_dir")) for s in shown["settings"])
+    web = next(m for m in shown["modules"] if m["name"] == "web")
+    assert web == {"name": "web", "on": False, "added": False}
+    assert shown["version"] and shown["split"] is False
+    assert all("description" in entry for entry in shown["catalog"])

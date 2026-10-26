@@ -206,6 +206,16 @@ def write(source: Path, before: str, after: str) -> None:
         raise ConfigureError(f"cannot write {source}: {exc}") from exc
 
 
+def editable_sections(config: OrionConfig) -> dict[str, Any]:
+    """The sections that can be changed by message, without what never is; the modules' as
+    written in the file."""
+    sections = {name for name in (*ORION_SECTIONS, *OWNER_SECTIONS) if name != "modules"}
+    data = cast(dict[str, Any], _changeable(config.model_dump(mode="json", include=sections)))
+    if config.modules:
+        data["modules"] = _changeable(config.modules)
+    return data
+
+
 def editable_view(config: OrionConfig) -> str:
     """Every setting that can be changed by message, and every installed module with whether
     it is on: a module absent from the file can be turned on all the same."""

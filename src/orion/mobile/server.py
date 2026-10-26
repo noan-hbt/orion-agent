@@ -1,9 +1,10 @@
 """The app's HTTP side (D125), under `/app/`, in two parts.
 
-**The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals and the
-notifications. Run split (D28), the guardian serves it on the public port: the passkeys, the
-text of a question and the signature that answers it never pass through the core, which could
-otherwise show one action and get another signed.
+**The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals, the
+notifications, and the phones (another one added, or one let go, each signed with Face ID).
+Run split (D28), the guardian serves it on the public port: the passkeys, the text of a
+question and the signature that answers it never pass through the core, which could otherwise
+show one action and get another signed.
 
 **The conversation** (`core_routes`, under `/app/api/`): messages, files, the live stream, the
 controls. The core serves it; run split, on its own port, checking each session with the
@@ -21,6 +22,7 @@ import asyncio
 import base64
 import binascii
 import json
+import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from importlib import resources
@@ -44,6 +46,8 @@ COOKIE = "orion_app"
 HEARTBEAT_SECONDS = 20.0
 MAX_FAILURES = 10
 """Wrong pairing codes before pairing stops until a restart."""
+DEVICE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+"""A phone's name, as `orion app pair <name>` takes it."""
 MAX_BODY = 40 * 1024 * 1024
 """Base64 makes a 25 MB file 34 MB."""
 CSP = (
@@ -283,6 +287,46 @@ def edge_routes(
         log.info("mobile.answered", approval=approval_id, answer=answer, device=device)
         return _ok({})
 
+    # -- the phones: listed, and another one added or let go, each signed with Face ID -------
+
+    async def phones(_request: Request, device: str) -> Response:
+        await devices.sync()
+        return _ok({"devices": sorted(devices.state.devices), "this": device})
+
+    def purpose(request: Request, device: str) -> str:
+        """`pair:<name>` or `revoke:<name>`: a signature answers that one change only."""
+        how, name = str(request.path_params["how"]), str(request.path_params["name"])
+        if how not in ("pair", "revoke") or not DEVICE_NAME.fullmatch(name):
+            raise ValueError("pair or revoke, and a name of lowercase letters and digits")
+        if how == "revoke" and name == device:
+            raise ValueError("this phone: sign out instead")
+        return f"{how}:{name}"
+
+    async def phone_options(request: Request, device: str) -> Response:
+        try:
+            ceremony, options = await devices.signing_options(purpose(request, device))
+        except DeviceError as exc:
+            return _refused(str(exc), 409)
+        return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def phone_change(request: Request, device: str) -> Response:
+        wanted = purpose(request, device)
+        sent = await body(request)
+        try:
+            signer = await devices.verify(str(sent["ceremony"]), wanted, dict(sent["credential"]))
+        except DeviceError as exc:
+            log.warning("mobile.phone_refused", change=wanted, error=str(exc))
+            return _refused(str(exc), 403)
+        how, name = wanted.split(":", 1)
+        log.info("mobile.phone_changed", change=wanted, device=signer)
+        if how == "pair":
+            if name in devices.state.devices:
+                return _refused("a phone has that name already", 409)
+            return _ok({"code": await devices.new_code(name), "device": name})
+        if not await devices.revoke(name):
+            return _refused("no such phone", 404)
+        return _ok({})
+
     async def subscribe(request: Request, device: str) -> Response:
         if vapid is None:
             return _refused("notifications are off", 409)
@@ -313,6 +357,13 @@ def edge_routes(
         ),
         Route(f"{PREFIX}/approvals/{{approval}}", gate.guarded(approval_answer), methods=["POST"]),
         Route(f"{PREFIX}/push/subscribe", gate.guarded(subscribe), methods=["POST"]),
+        Route(f"{PREFIX}/devices", gate.guarded(phones)),
+        Route(
+            f"{PREFIX}/devices/{{how}}/{{name}}/options",
+            gate.guarded(phone_options),
+            methods=["POST"],
+        ),
+        Route(f"{PREFIX}/devices/{{how}}/{{name}}", gate.guarded(phone_change), methods=["POST"]),
         Route(f"{PREFIX}/", static),
         Route(f"{PREFIX}/{{name}}", static),
     ]
@@ -465,6 +516,9 @@ def core_routes(
         await c.drop_wait(str(request.path_params["id"]))
         return {}
 
+    async def server(_request: Request, c: Control) -> object:
+        return await c.server()
+
     def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
             f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
@@ -493,6 +547,7 @@ def core_routes(
         api("for-you", controls(for_you)),
         api("tasks/{id}/stop", controls(stop_task), post=True),
         api("waits/{id}/drop", controls(drop_wait), post=True),
+        api("server", controls(server)),
     ]
 
 
