@@ -2774,3 +2774,24 @@ Les budgets du message système et des outils (D84) passent à 38 600 et 36 600 
 `relance_le` et `il_a_deja_repondu`, 3/3 sur DeepSeek.
 Pas encore : annuler un rendez-vous de groupe qu'un invité laisse sans réponse (il n'y a pas
 d'outil d'annulation pour celui qui propose) ; Orion peut seulement relancer ou prévenir.
+
+## D130 — Laisser Orion faire seul se demande, même après un message d'un tiers (révise D90)
+
+*26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D111)*
+
+Le 21/10, juste après qu'Orion lui eut relayé deux messages de Victor, Noan a écrit « discute
+avec lui sans me consulter ». `autonomy_grant` (`contact_message`, Victor) a été refusé pendant
+2 h : la conversation contenait le message d'un tiers, et accorder de l'autonomie faisait partie
+des actions jamais faites depuis un tel contexte, même avec son oui. Le mode n'y était pour rien :
+il était déjà en `equilibre`.
+
+Désormais, en `equilibre`, `autonomy_grant` depuis une conversation qui contient du contenu venu
+d'ailleurs lui est **demandé**, avec l'autonomie exacte et la raison de la question, comme toute
+action sur le monde depuis D90. Elle n'est jamais prise seule, et `prudent` la refuse toujours.
+Installer ou retirer un module (D105) reste refusé dans ce contexte : c'est du code qui tourne
+avec sa mémoire.
+Dans le cas réel, Orion n'a même pas réessayé : à la demande suivante, il a répété de mémoire le
+refus d'avant (« il faut 120 minutes… »), que le message de refus lui disait de répéter tel
+quel. La constitution et ce message disent maintenant qu'un refus ne vaut que pour l'appel où il
+a eu lieu : s'il redemande, Orion rappelle l'outil, et c'est le contrôle qui décide. Cas
+`laisse_le_ecrire_seul`, 3/3 sur DeepSeek.
