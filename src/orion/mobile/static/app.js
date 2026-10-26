@@ -206,8 +206,11 @@ function keepDraft(text) {
 // -- viewport: the keyboard shrinks the visual viewport, not the layout ----------------------
 
 function fit() {
-  const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  document.documentElement.style.setProperty("--app-h", `${height}px`);
+  // With the keyboard up, iOS shrinks the visual viewport and may slide it: the app follows it,
+  // so the composer sits right on the keyboard and nothing is pushed off the top.
+  const vv = window.visualViewport;
+  document.documentElement.style.setProperty("--app-h", `${vv ? vv.height : window.innerHeight}px`);
+  document.documentElement.style.setProperty("--app-top", `${vv ? Math.max(0, vv.offsetTop) : 0}px`);
   window.scrollTo(0, 0);
 }
 if (window.visualViewport) {
@@ -1739,7 +1742,7 @@ async function notebookFill() {
       throw error;
     });
   const go = (name, title, count, open, wide = false) =>
-    h("button", { class: `tile link ${wide ? "wide" : ""}`, type: "button", onclick: open }, h("span", { class: "ico" }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
+    h("button", { class: `tile link ${wide ? "wide" : ""}`, type: "button", onclick: open }, h("span", { class: `ico ${tint(name)}` }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
   return [
     h(
       "div",
@@ -1761,11 +1764,22 @@ async function notebookFill() {
 
 // -- Réglages: me, and what replaces the server ---------------------------------------------------
 
+// Each kind of row keeps its colour, as in iOS Settings.
+const TINTS = {
+  toml: "gray", sliders: "gray", blocks: "purple", server: "blue", phone: "green", bell: "red",
+  door: "red", shield: "indigo", check: "green", clock: "orange", calendar: "red", spark: "yellow",
+  target: "pink", file: "blue", where: "teal", book: "orange", photo: "pink", face: "indigo",
+};
+
+function tint(name) {
+  return `c-${TINTS[name] || "gray"}`;
+}
+
 function row(name, title, value, onclick, tone = "") {
   return h(
     onclick ? "button" : "div",
     { class: "item", type: onclick ? "button" : undefined, onclick },
-    h("span", { class: `ico ${tone}` }, icon(name, 16)),
+    h("span", { class: `ico ${tone || tint(name)}` }, icon(name, 17)),
     h("span", {}, h("span", { class: "text" }, title)),
     value !== null ? h("small", { class: "value" }, value) : null,
     onclick ? h("span", { class: "chev" }, icon("chevron", 14)) : null,
@@ -1858,7 +1872,7 @@ async function settingsFill(refresh) {
         row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
         row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
       ),
-      h("p", { class: "hint" }, `Je change mes réglages quand tu me le demandes, avec ton oui ; les ${owner} qui te protègent, toujours avec Face ID. Les secrets et les chemins ne se changent que sur le serveur.`),
+      h("p", { class: "hint" }, `Tu changes un réglage ici en le signant avec Face ID, sans passer par la conversation. ${plural(owner, "réglage te protège", "réglages te protègent")} : eux ne changent jamais sans ta signature.`),
     );
   }
   parts.push(
@@ -1887,7 +1901,7 @@ async function settingsFill(refresh) {
             welcome();
           },
         },
-        h("span", { class: "ico" }, icon("door", 16)),
+        h("span", { class: `ico ${tint("door")}` }, icon("door", 17)),
         h("span", {}, h("span", { class: "text" }, "Se déconnecter")),
       ),
     ),
@@ -1932,10 +1946,20 @@ function configPanel(server) {
     paint();
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
-      h("p", { class: "hint" }, "Le bouclier marque ce qui te protège : je te le demande toujours avec Face ID. Le reste est à moi : je te demande, sauf si tu m'as laissé faire seul."),
+      h("p", { class: "hint" }, "Touche un réglage pour le changer : tu signes avec Face ID, mon gardien l'écrit. Le bouclier marque ce qui te protège. Les secrets et les chemins ne se changent que sur le serveur."),
       list,
     ];
   });
+}
+
+async function writeSettings(changes) {
+  // Signed with Face ID for these exact changes, then written by my guardian: the change does
+  // not go through the conversation, so nothing read there can stand in the way (D135).
+  const opened = await api("settings/options", { changes });
+  const credential = await sign(opened.options);
+  const done = await api("settings", { changes, ceremony: opened.ceremony, credential });
+  toast(done.changed ? "C'est écrit. Je redémarre quelques secondes pour l'appliquer." : "C'était déjà réglé ainsi.", 3600);
+  return done;
 }
 
 function changeSheet(setting) {
@@ -1965,14 +1989,14 @@ function changeSheet(setting) {
     h("h2", {}, setting.path),
     h("p", { class: "quote" }, `Aujourd'hui : ${shown(setting.value)}`),
     h("label", { class: "field-edit" }, input),
-    h("p", { class: "hint" }, setting.tier === "owner" ? "Ce réglage te protège : je vérifie le fichier entier, puis je te demande ton accord sur ce changement exact, avec Face ID." : "Je vérifie le fichier entier avant d'écrire, puis je redémarre pour l'appliquer."),
+    h("p", { class: "hint" }, setting.tier === "owner" ? "Ce réglage te protège : tu signes ce changement exact avec Face ID, et mon gardien l'écrit après avoir vérifié le fichier entier." : "Tu signes avec Face ID, je vérifie le fichier entier, puis je redémarre pour l'appliquer."),
     status,
     h(
       "button",
       {
         class: "pill primary wide",
         type: "button",
-        onclick: () => {
+        onclick: async (event) => {
           let value;
           try {
             value = read();
@@ -1981,11 +2005,19 @@ function changeSheet(setting) {
             return;
           }
           if (JSON.stringify(value) === JSON.stringify(setting.value)) return close();
-          close();
-          talkAbout(`Dans orion.toml, mets \`${setting.path}\` à \`${JSON.stringify(value)}\`.`);
+          event.currentTarget.disabled = true;
+          try {
+            await writeSettings([{ path: setting.path, value }]);
+            setting.value = value;
+            close();
+          } catch (error) {
+            status.textContent = said(error);
+            event.currentTarget.disabled = false;
+          }
         },
       },
-      "Me le demander",
+      icon("face", 20),
+      "Changer avec Face ID",
     ),
   );
 }
@@ -1999,6 +2031,30 @@ function modulesPanel(server) {
       h("button", { class: "pill primary wide", type: "button", onclick: () => (close(), talkAbout(message)) }, button),
     );
   };
+  const toggle = (m) => {
+    const close = sheet(
+      h("h2", {}, m.name),
+      h("p", { class: "quote" }, m.on ? "Je l'éteins et je redémarre. Tu pourras le rallumer d'ici." : "Je l'allume et je redémarre. S'il lui manque un réglage, je te le dis avant que tu signes."),
+      h(
+        "button",
+        {
+          class: "pill primary wide",
+          type: "button",
+          onclick: async () => {
+            try {
+              await writeSettings([{ path: switchPath(m.name), value: !m.on }]);
+              m.on = !m.on;
+              close();
+            } catch (error) {
+              toast(said(error), 4000);
+            }
+          },
+        },
+        icon("face", 20),
+        m.on ? "Éteindre avec Face ID" : "Allumer avec Face ID",
+      ),
+    );
+  };
   panel("Modules", () => [
     h("p", { class: "label" }, "Les miens"),
     h(
@@ -2010,13 +2066,7 @@ function modulesPanel(server) {
           {
             type: "button",
             class: "item",
-            onclick: () =>
-              confirm(
-                m.name,
-                m.on ? "Je l'éteins et je redémarre. Tu pourras le rallumer d'ici." : "Je l'allume et je redémarre. S'il lui manque un réglage, je te le dis avant.",
-                m.on ? "Éteindre" : "Allumer",
-                `Dans orion.toml, mets \`${switchPath(m.name)}\` à \`${!m.on}\`.`,
-              ),
+            onclick: () => toggle(m),
           },
           h("span", { class: `ico ${m.on ? "on" : ""}` }, icon("blocks", 16)),
           h("span", {}, h("span", { class: "text" }, m.name), m.added ? h("small", {}, "installé depuis le catalogue") : null),

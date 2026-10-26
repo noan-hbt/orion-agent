@@ -63,7 +63,7 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-__all__ = ["CHANGED", "Change", "Configurator", "ConfigureError", "apply_changes"]
+__all__ = ["CHANGED", "Change", "Configurator", "ConfigureError", "SignedSettings", "apply_changes"]
 
 CHANGED = "config.changed"
 RESTART_AFTER = 8.0
@@ -331,6 +331,53 @@ class Configurator:
         self._restarting = asyncio.get_running_loop().create_task(self.restart())
         return "Réglage écrit. Je redémarre dans quelques secondes pour l'appliquer."
 
+    async def watch(self, every: float = 10.0) -> None:
+        """Restart when orion.toml changed under Orion: written by the guardian for a change
+        he signed in the app (D135), or by hand on the server. Its own changes restart it
+        already."""
+        if self.source is None or self.restart is None:
+            return
+        source = self.source
+        seen = digest(await asyncio.to_thread(source.read_text, "utf-8"))
+        while self._restarting is None:
+            await asyncio.sleep(every)
+            try:
+                now = digest(await asyncio.to_thread(source.read_text, "utf-8"))
+            except OSError as exc:
+                log.warning("config.unreadable", error=str(exc))
+                continue
+            if now != seen and self._restarting is None:
+                log.info("config.changed_on_disk")
+                self._restarting = asyncio.get_running_loop().create_task(self.restart())
+
+
+class SignedSettings:
+    """orion.toml changed by the owner in the app, signed with his passkey for those exact
+    changes (D135). In one process the configurator writes it, journaled as his; run split,
+    the guardian does (`orion.guardian.app`). The model is never in between, so a
+    conversation holding outside content does not stand in the way."""
+
+    def __init__(self, configurator: Configurator) -> None:
+        self.configurator = configurator
+
+    async def check(self, changes: list[dict[str, Any]]) -> str | None:
+        try:
+            parsed = [Change.model_validate(c) for c in changes]
+        except ValidationError as exc:
+            return str(exc)
+        wrong = await asyncio.to_thread(self.configurator.precheck, parsed)
+        return wrong.removeprefix("Not changed: ") if wrong else None
+
+    async def write(self, changes: list[dict[str, Any]], device: str) -> bool:
+        try:
+            parsed = [Change.model_validate(c) for c in changes]
+            said = await self.configurator.change(
+                parsed, "changé dans l'app", Provenance(source="app", actor=f"owner:{device}")
+            )
+        except (ConfigureError, ValidationError) as exc:
+            raise ValueError(str(exc)) from exc
+        return not said.startswith("Rien ne change")
+
 
 async def reexec(delay: float = RESTART_AFTER) -> None:
     """Restart in place (same process id under systemd): the new config is read at start."""
@@ -459,3 +506,4 @@ class ConfigureModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.configurator is not None:
             self.configurator.restart = reexec
+            daemon.add_service("configure.watch", self.configurator.watch)

@@ -76,6 +76,7 @@ from orion.mail.smtp import Outgoing, SendError, smtp_send
 from orion.secretary.settings import REPLY_WINDOW_HOURS, Contact, SecretarySettings
 
 if TYPE_CHECKING:
+    from orion.configure.module import Change
     from orion.guardian.app import AppEdge
     from orion.guardian.telegram import TelegramGate
 
@@ -796,7 +797,7 @@ class GuardianService:
         """The guardian writes orion.toml: Orion's own settings with the owner's yes or alone
         within an autonomy he granted; his settings (what protects him, who may write to
         Orion) only with his yes to this exact change. Never a secret, never a path."""
-        from orion.configure.module import Change, digest, rewrite, write
+        from orion.configure.module import Change
         from orion.configure.paths import ConfigureError
 
         body = await _body(request)
@@ -831,22 +832,34 @@ class GuardianService:
             if reason is not None:
                 return await self.deny("configure", reason)
         try:
-            async with self._configuring:  # two changes at once never undo each other
-                before, after = await asyncio.to_thread(rewrite, source, changes)
-                if after != before:
-                    write(source, before, after)
+            done = await self.write_config(changes, {**params, "grant": grant})
         except ConfigureError as exc:
             return refused(str(exc), 422)
+        return JSONResponse(done)
+
+    async def write_config(self, changes: list[Change], record: dict[str, Any]) -> dict[str, Any]:
+        """Write orion.toml, checked whole, then record it and restart; the core sees the file
+        change and restarts too. `record`: what the ledger keeps of who asked and why. Raises
+        ConfigureError."""
+        from orion.configure.module import digest, rewrite, write
+        from orion.configure.paths import ConfigureError
+
+        source = self.config.source
+        if source is None:
+            raise ConfigureError("Orion runs without an orion.toml")
+        async with self._configuring:  # two changes at once never undo each other
+            before, after = await asyncio.to_thread(rewrite, source, changes)
+            if after != before:
+                write(source, before, after)
         if after == before:
-            return JSONResponse({"changed": False})
+            return {"changed": False}
         await self.ledger.record(
-            CONFIG_CHANGED,
-            {**params, "before": digest(before), "after": digest(after), "grant": grant},
+            CONFIG_CHANGED, {**record, "before": digest(before), "after": digest(after)}
         )
         log.info("guardian.config_changed", paths=[c.path for c in changes])
         if self.restart is not None:
             self._restarting = asyncio.get_running_loop().create_task(self.restart())
-        return JSONResponse({"changed": True, "before": digest(before), "after": digest(after)})
+        return {"changed": True, "before": digest(before), "after": digest(after)}
 
     async def _autonomy_revoke(self, request: Request) -> Response:
         """Taking autonomy back never needs asking."""

@@ -1,15 +1,17 @@
 /* Orion's app (D125): light Liquid Glass, lavender, round, bento. No dark mode, on purpose. */
 
 :root {
-  --bg: #eceaf8;
-  --ink: #0b0c10;
+  --bg: #f2f1f7;
+  --ink: #15131c;
   --muted: #5d5a6e;
   --faint: #8d8a9e;
   --line: rgba(11, 12, 16, 0.06);
-  --glass: linear-gradient(155deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.3) 55%, rgba(255, 255, 255, 0.42));
-  --glass-strong: linear-gradient(155deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.64));
+  --glass: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.5));
+  --glass-strong: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78));
   --edge: rgba(255, 255, 255, 0.95);
-  --tile: rgba(255, 255, 255, 0.55);
+  --tile: rgba(116, 108, 168, 0.09);
+  --fill: rgba(116, 108, 168, 0.12);
+  --hair: rgba(60, 55, 90, 0.1);
   --lavender: #ab9ff2;
   --on-lavender: #1a1530;
   --accent: #6f5fe0;
@@ -18,18 +20,17 @@
   --wait: #ff9f0a;
   --wait-ink: #9a5300;
   /* Liquid Glass: a lit top rim, a softer bottom one, an inner glow, then the drop shadow. */
-  --lens: inset 0 1.5px 1px rgba(255, 255, 255, 0.95), inset 0 -1px 1px rgba(255, 255, 255, 0.45),
-    inset 0 0 22px rgba(255, 255, 255, 0.28);
+  --lens: inset 0 1px 0.5px rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(60, 55, 90, 0.06);
   --rim: linear-gradient(135deg, #fff, rgba(255, 255, 255, 0.25) 32%, rgba(255, 255, 255, 0.05) 55%,
     rgba(255, 255, 255, 0.55) 85%, rgba(255, 255, 255, 0.95));
   --danger: #b42318;
   --danger-soft: rgba(180, 35, 24, 0.08);
   --ok: #16803c;
-  --shadow: 0 10px 30px rgba(40, 30, 90, 0.1), 0 1px 2px rgba(40, 30, 90, 0.06);
+  --shadow: 0 6px 22px rgba(40, 30, 90, 0.06), 0 1px 2px rgba(40, 30, 90, 0.05);
   --shadow-up: 0 -10px 40px rgba(40, 30, 90, 0.14);
   --r-sheet: 34px;
-  --r-card: 28px;
-  --r-tile: 22px;
+  --r-card: 24px;
+  --r-tile: 20px;
   --r-bubble: 24px;
   --app-h: 100dvh;
   --top: env(safe-area-inset-top, 0px);
@@ -45,7 +46,7 @@ html, body {
   background: var(--bg);
   color: var(--ink);
   font-family: -apple-system, "SF Pro Text", system-ui, Inter, sans-serif;
-  font-size: 16px;
+  font-size: 17px;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
@@ -63,12 +64,13 @@ a { color: var(--accent-ink); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .backdrop { position: fixed; inset: 0; overflow: hidden; pointer-events: none; }
-.blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: 0.9; }
-.blob.one { width: 500px; height: 420px; left: -110px; top: -170px; background: #b9adff; }
-.blob.two { width: 320px; height: 320px; left: -150px; top: 60%; background: #d6c7ff; }
-.blob.three { width: 280px; height: 280px; right: -130px; top: 14%; background: #9fe0ec; filter: blur(60px); }
+/* Soft halos, kept off the very top: the status bar above is the plain background. */
+.blob { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.38; }
+.blob.one { width: 420px; height: 360px; left: -160px; top: 16%; background: #b9adff; }
+.blob.two { width: 320px; height: 320px; right: -170px; top: 58%; background: #d6c7ff; }
+.blob.three { width: 260px; height: 260px; right: -140px; top: 22%; background: #a8e3ec; }
 
-#app { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h); display: flex; flex-direction: column; }
+#app { position: fixed; left: 0; right: 0; top: var(--app-top, 0px); height: var(--app-h); display: flex; flex-direction: column; }
 
 /* Liquid Glass: clear enough to show the halos behind, a light rim drawn by ::before. */
 .glass, .card {
@@ -660,3 +662,149 @@ img.live { display: block; width: 100%; border-radius: 22px; background: #fff; b
 .voice-orb { width: 132px; height: 132px; border-radius: 66px; }
 .voice-line { margin: 0; font-size: 22px; font-weight: 700; line-height: 1.3; letter-spacing: -0.015em; max-width: 420px; }
 .voice .hint { margin: 0; font-size: 13px; color: var(--muted); }
+
+/* =============================================================================================
+   Finish (D135, after his first look): calmer glass, tinted controls instead of white ones,
+   rows and icons as in iOS Settings, a lighter tab bar, edges that blur instead of bands.
+   ============================================================================================= */
+
+/* -- controls: tinted fills, not white blocks ------------------------------------------------- */
+
+.pill { background: var(--fill); box-shadow: none; font-weight: 600; letter-spacing: -0.01em; }
+.pill:active, .round:active, .tile:active, .item:active { opacity: 0.7; }
+.pill.small { height: 34px; padding: 0 14px; border-radius: 17px; font-size: 15px; }
+.pill.primary { box-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.7), 0 4px 14px rgba(120, 100, 250, 0.25); }
+.pill.dark { background: var(--ink); }
+.round { width: 42px; height: 42px; border-radius: 21px; box-shadow: none; }
+.round.glass, .find, .who.glass { box-shadow: var(--lens), 0 4px 16px rgba(40, 30, 90, 0.08); }
+.round:not(.glass) { background: var(--fill); }
+.glass::before, .card::before { opacity: 0.6; }
+
+/* -- the top of each screen: a soft blurred edge, no band ------------------------------------- */
+
+.top { background: none; padding-bottom: 14px; }
+.top::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: linear-gradient(var(--bg), rgba(242, 241, 247, 0.6) 55%, rgba(242, 241, 247, 0));
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(#000 45%, transparent); mask-image: linear-gradient(#000 45%, transparent);
+}
+.who { padding: 4px 14px 4px 4px; }
+.avatar { width: 34px; height: 34px; border-radius: 17px; }
+.who h1 { font-size: 15px; }
+.who .status { font-size: 12px; }
+
+.page-head { padding: calc(var(--top) + 14px) 20px 2px; }
+.page-head p { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; text-transform: none; }
+.page-head h1 { font-size: 34px; line-height: 41px; font-weight: 700; letter-spacing: -0.02em; margin-top: 0; }
+.page-body { padding: 8px 16px calc(var(--bottom) + 104px); gap: 12px; }
+.page-body .label, .panel .label, .panel-body > .label {
+  margin: 14px 16px -4px; font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.02em; color: var(--muted);
+}
+h2.section { margin: 18px 4px -2px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.page-body .hint, .panel .hint { margin: -4px 16px 0; font-size: 13px; line-height: 1.4; }
+
+/* panels: an iOS navigation bar that blurs what scrolls under it */
+.panel { background: var(--bg); }
+.panel > header {
+  position: relative; z-index: 2; padding: calc(var(--top) + 8px) 12px 10px; gap: 6px;
+  background: rgba(242, 241, 247, 0.78); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 0.5px 0 var(--hair);
+}
+.panel > header .round { width: 36px; height: 36px; background: none; box-shadow: none; color: var(--accent-ink); }
+.panel > header .round::before { display: none; }
+.panel > header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+.panel-body { padding: 14px 16px calc(var(--bottom) + 28px); gap: 12px; }
+
+/* -- the tab bar: lighter, tinted, the chosen tab in lavender ---------------------------------- */
+
+.dock { padding: 0 14px calc(var(--bottom) + 8px); gap: 8px; }
+.dock::before {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--bottom) + 96px); z-index: -1; pointer-events: none;
+  background: linear-gradient(rgba(242, 241, 247, 0), rgba(242, 241, 247, 0.85) 70%);
+}
+.tabbar {
+  height: 60px; padding: 4px; border-radius: 30px; gap: 0;
+  background: rgba(255, 255, 255, 0.66); -webkit-backdrop-filter: blur(24px) saturate(190%); backdrop-filter: blur(24px) saturate(190%);
+  box-shadow: inset 0 0 0 0.5px rgba(60, 55, 90, 0.08), 0 8px 28px rgba(40, 30, 90, 0.12);
+}
+.tabbar::before { display: none; }
+.tabbar button { border-radius: 26px; gap: 1px; font-size: 10px; font-weight: 600; color: #4a4757; }
+.tabbar button .badge { box-shadow: 0 0 0 2px #fff; }
+.tabbar button[aria-current="page"] { color: var(--accent); background: rgba(171, 159, 242, 0.2); box-shadow: none; }
+.find {
+  width: 60px; height: 60px; border-radius: 30px; color: #4a4757;
+  background: rgba(255, 255, 255, 0.66); -webkit-backdrop-filter: blur(24px) saturate(190%); backdrop-filter: blur(24px) saturate(190%);
+  box-shadow: inset 0 0 0 0.5px rgba(60, 55, 90, 0.08), 0 8px 28px rgba(40, 30, 90, 0.12);
+}
+.find::before { display: none; }
+
+/* -- grouped lists, as in iOS Settings --------------------------------------------------------- */
+
+.list, .list.items { border-radius: 14px; background: rgba(255, 255, 255, 0.82); box-shadow: 0 0.5px 0 var(--hair), 0 1px 3px rgba(40, 30, 90, 0.03); }
+.list .item, .list button { position: relative; min-height: 50px; padding: 8px 16px 8px 14px; gap: 12px; font-size: 17px; }
+.list .item + .item, .list button + button { border-top: none; }
+.list .item + .item::before, .list button + button::before {
+  content: ""; position: absolute; top: 0; right: 0; left: 56px; height: 0.5px; background: var(--hair);
+}
+.list .item .text { font-size: 16px; font-weight: 500; letter-spacing: -0.01em; }
+.list .item small { font-size: 13px; }
+.list .item .value { font-size: 16px; font-weight: 400; color: var(--faint); }
+.list .item .chev { color: #c3c1cc; }
+.list .item .ico, .tile .ico {
+  width: 30px; height: 30px; border-radius: 8px; color: #fff; background: #8e8e93;
+}
+.tile .ico { width: 36px; height: 36px; border-radius: 10px; }
+.ico.c-blue { background: #0a84ff; } .ico.c-green { background: #30c759; } .ico.c-orange { background: #ff9500; }
+.ico.c-red { background: #ff3b30; } .ico.c-purple { background: #8e6cf0; } .ico.c-indigo { background: #5856d6; }
+.ico.c-teal { background: #30b0c7; } .ico.c-pink { background: #ff2d70; } .ico.c-yellow { background: #ffcc00; color: #5a4300; }
+.ico.c-gray { background: #8e8e93; }
+.list .item .ico.on { background: #8e6cf0; color: #fff; }
+.list .item .ico.wait { background: #ff9500; color: #fff; }
+.list .item .ico.owner { background: #1c1c1e; color: #fff; }
+.list .item.danger .text { color: var(--danger); }
+
+/* -- cards and tiles --------------------------------------------------------------------------- */
+
+.card, .tile, .list.items { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.card { background: rgba(255, 255, 255, 0.82); border-radius: 22px; box-shadow: var(--shadow); }
+.card::before { display: none; }
+.tile { background: rgba(255, 255, 255, 0.82); border-radius: 22px; box-shadow: var(--shadow); padding: 14px 14px 12px; gap: 6px; min-height: 96px; }
+.tile small { font-size: 13px; font-weight: 500; }
+.tile .big { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+.tile.link b { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.tile.link.wide { flex-direction: row; align-items: center; min-height: 72px; gap: 12px; }
+.tile.link.wide b { flex: 1; }
+.tile.link.wide small { margin-left: auto; text-align: right; max-width: 45%; }
+.tile.hero b { font-size: 19px; font-weight: 700; }
+.grid { gap: 10px; }
+.meter .track { height: 6px; background: var(--fill); }
+.stepper button { background: var(--fill); }
+.chip { background: var(--fill); box-shadow: none; border: none; }
+
+/* -- Maintenant ----------------------------------------------------------------------------- */
+
+.hero { padding: 2px 4px 4px; gap: 10px; }
+.hero h2 { font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.02em; }
+.orb { width: 54px; height: 54px; border-radius: 27px; box-shadow: 0 0 0 6px rgba(171, 159, 242, 0.22), 0 8px 26px rgba(120, 100, 250, 0.35); }
+.ask { box-shadow: var(--shadow); }
+.ask header .ico, .work .ico { background: linear-gradient(155deg, #9a8af5, #6f5fe0); }
+
+/* -- the conversation ---------------------------------------------------------------------- */
+
+.msg.orion .bubble { background: rgba(255, 255, 255, 0.9); box-shadow: 0 1px 2px rgba(40, 30, 90, 0.06); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.bubble { font-size: 17px; line-height: 1.38; padding: 9px 14px; }
+.composer .field { background: rgba(255, 255, 255, 0.86); box-shadow: inset 0 0 0 0.5px var(--hair), 0 4px 16px rgba(40, 30, 90, 0.06); }
+.composer .field::before { display: none; }
+.composer textarea { font-size: 17px; }
+.quick button { background: rgba(255, 255, 255, 0.9); box-shadow: inset 0 0 0 1px rgba(111, 95, 224, 0.25); }
+
+/* while he types: the keyboard is the bottom edge, no safe area and no tab bar under it */
+body.typing .tab .composer { padding-bottom: 8px; }
+body.typing .dock { display: none; }
+
+/* -- sheets ---------------------------------------------------------------------------------- */
+
+.sheet { background: rgba(250, 249, 253, 0.94); border-radius: 30px; box-shadow: 0 -10px 40px rgba(40, 30, 90, 0.16); }
+.sheet .quote { background: var(--tile); }
+.field-edit input, .field-edit select, .field-edit textarea { background: #fff; box-shadow: inset 0 0 0 0.5px var(--hair); }

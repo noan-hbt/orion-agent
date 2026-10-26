@@ -20,6 +20,7 @@ from orion.computer.direct import BrowserDesk, Refused
 from orion.computer.handover import act_on, focused
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
+from orion.memory.model import Category
 from orion.memory.store import name_key
 from orion.mobile.control import ControlError
 from orion.papers.module import Vault
@@ -97,6 +98,14 @@ class Notebook:
         today = self.clock().date()
         shown: list[dict[str, Any]] = []
         for key, person in index.items():
+            # Memory names places, companies and the owner himself in `about` too: only someone
+            # known as a person, or followed as one (a birthday, a rhythm, a meeting), is shown.
+            current = [f for f in person.facts if f.current]
+            about = sum(f.category == Category.PERSON for f in current)
+            known = about > 0 and about >= sum(f.category == Category.PROFILE for f in current)
+            followed = key in state.birthdays or key in state.rhythms or key in state.contacts
+            if relations.is_owner(person.name) or not (known or followed):
+                continue
             birthday = state.birthdays.get(key)
             rhythm = state.rhythms.get(key)
             last = state.contacts.get(key)

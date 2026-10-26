@@ -31,6 +31,7 @@ import orion
 from orion.awaiting.module import AwaitingModule
 from orion.chronicle.module import ChronicleModule
 from orion.computer.module import ComputerModule
+from orion.configure.module import ConfigureModule, SignedSettings
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
@@ -224,6 +225,12 @@ class MobileModule(Module):
                 pusher,
                 settings.approval_timeout_seconds,
             )
+            configure = daemon.plate.module(ConfigureModule)
+            signed = (
+                SignedSettings(configure.configurator)
+                if configure is not None and configure.configurator is not None
+                else None
+            )
             app = mobile_app(
                 channel,
                 vapid,
@@ -231,6 +238,7 @@ class MobileModule(Module):
                 settings.session_days,
                 self.control,
                 self.notebook,
+                signed,
             )
             apps = [("mobile", app, settings.port), ("mobile-api", app, settings.core_port)]
         await channel.start()
