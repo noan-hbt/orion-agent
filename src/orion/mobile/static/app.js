@@ -26,7 +26,7 @@ function h(tag, props = {}, ...children) {
 }
 
 const ICONS = {
-  orion: '<circle cx="12" cy="12" r="6" stroke="#fff" stroke-width="1.7"/><circle cx="18" cy="6" r="1.6" fill="#9DA6FF" stroke="none"/>',
+  orion: '<circle cx="12" cy="12" r="6" stroke="#fff" stroke-width="1.7"/><circle cx="18" cy="6" r="1.6" fill="#fff" stroke="none"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
   mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',

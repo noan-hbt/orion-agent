@@ -1,24 +1,26 @@
-/* Orion's app (D125): light Liquid Glass, lavender, round, bento. No dark mode, on purpose. */
+/* Orion's app (D125): white, black ink, greys, round; colour only where it means something (D137).
+   No dark mode, on purpose. */
 
 :root {
-  --bg: #f2f1f7;
-  --ink: #15131c;
-  --muted: #5d5a6e;
-  --faint: #8d8a9e;
-  --line: rgba(11, 12, 16, 0.06);
-  --glass: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.5));
-  --glass-strong: linear-gradient(160deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.78));
-  --edge: rgba(255, 255, 255, 0.95);
-  --tile: rgba(116, 108, 168, 0.09);
-  --fill: rgba(116, 108, 168, 0.12);
-  --hair: rgba(60, 55, 90, 0.1);
-  --lavender: #ab9ff2;
-  --on-lavender: #1a1530;
-  --accent: #6f5fe0;
-  --accent-ink: #4636b8;
-  --accent-soft: rgba(171, 159, 242, 0.22);
-  --wait: #ff9f0a;
-  --wait-ink: #9a5300;
+  --bg: #ffffff;
+  --ink: #0d0d0d;
+  --muted: #5d5d5d;
+  --faint: #8f8f8f;
+  --line: rgba(0, 0, 0, 0.06);
+  --glass: rgba(255, 255, 255, 0.86);
+  --glass-strong: #ffffff;
+  --edge: #ffffff;
+  --tile: #f4f4f4;
+  --fill: #ececec;
+  --surface: #f7f7f7;
+  --hair: rgba(0, 0, 0, 0.09);
+  --lavender: #0d0d0d;
+  --on-lavender: #ffffff;
+  --accent: #0d0d0d;
+  --accent-ink: #0d0d0d;
+  --accent-soft: #f0f0f0;
+  --wait: #0d0d0d;
+  --wait-ink: #5d5d5d;
   /* Liquid Glass: a lit top rim, a softer bottom one, an inner glow, then the drop shadow. */
   --lens: inset 0 1px 0.5px rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(60, 55, 90, 0.06);
   --rim: linear-gradient(135deg, #fff, rgba(255, 255, 255, 0.25) 32%, rgba(255, 255, 255, 0.05) 55%,
@@ -26,8 +28,8 @@
   --danger: #b42318;
   --danger-soft: rgba(180, 35, 24, 0.08);
   --ok: #16803c;
-  --shadow: 0 6px 22px rgba(40, 30, 90, 0.06), 0 1px 2px rgba(40, 30, 90, 0.05);
-  --shadow-up: 0 -10px 40px rgba(40, 30, 90, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-up: 0 -8px 30px rgba(0, 0, 0, 0.1);
   --r-sheet: 34px;
   --r-card: 24px;
   --r-tile: 20px;
@@ -56,7 +58,7 @@ body { overflow: hidden; }
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; border: none; background: none; padding: 0; touch-action: manipulation; }
 button:disabled { opacity: 0.45; cursor: default; }
-:focus-visible { outline: 3px solid rgba(111, 95, 224, 0.45); outline-offset: 2px; }
+:focus-visible { outline: 2px solid rgba(0, 0, 0, 0.35); outline-offset: 2px; }
 a { color: var(--accent-ink); }
 
 [hidden] { display: none !important; }
@@ -827,3 +829,88 @@ button.search::before { display: none; }
 /* nothing reads through the tab bar */
 .dock::before { background: linear-gradient(rgba(242, 241, 247, 0), rgba(242, 241, 247, 0.92) 45%, var(--bg)); }
 
+/* =============================================================================================
+   Sober (D137): as in ChatGPT's app. White, black ink, grey surfaces with a hairline, no halos,
+   no gradients, grey icons. Colour is left to what means something: danger, and a live dot.
+   ============================================================================================= */
+
+.backdrop { display: none; }
+.glass::before, .card::before { display: none; }
+.glass, .card, .tile, .list, .list.items, .sheet { -webkit-backdrop-filter: none; backdrop-filter: none; }
+
+/* surfaces: light grey, a hairline, no shadow */
+.card, .tile, .list, .list.items, .bento button, .file, .typing, .piece {
+  background: var(--surface); box-shadow: inset 0 0 0 0.5px var(--hair);
+}
+.card, .tile { border-radius: 18px; }
+.list, .list.items { border-radius: 16px; }
+.panel, .voice { background: var(--bg); }
+.panel > header { background: rgba(255, 255, 255, 0.92); }
+.panel > header .round { color: var(--ink); }
+.sheet { background: #ffffff; }
+.sheet .grab { background: #d9d9d9; }
+.scrim { background: rgba(0, 0, 0, 0.25); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.top::before { background: linear-gradient(#fff, rgba(255, 255, 255, 0.85) 60%, rgba(255, 255, 255, 0)); }
+.dock::before { background: linear-gradient(rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.94) 45%, #fff); }
+
+/* buttons: grey, or black for the one that matters */
+.pill { background: var(--fill); color: var(--ink); box-shadow: none; }
+.pill.primary, .pill.dark { background: var(--ink); color: #fff; box-shadow: none; }
+.pill.ghost { background: transparent; }
+.round.glass, .find, .who.glass, .top .round.glass { background: #fff; box-shadow: inset 0 0 0 0.5px var(--hair); }
+
+/* icons: a grey glyph, no coloured tile */
+.list .item .ico, .tile .ico, .bento .ico,
+.list .item .ico[class*="c-"], .ico[class*="c-"], .list .item .ico.on, .list .item .ico.owner {
+  background: none; color: var(--ink);
+}
+.list .item .ico { width: 24px; }
+.list .item + .item::before, .list button + button::before { left: 50px; }
+.list .item .ico.wait { background: none; color: var(--muted); }
+.ask header .ico, .work .ico, .done .ico { background: var(--ink); }
+.avatar, .orb { background: var(--ink); }
+.orb, .orb.still { box-shadow: none; }
+.orb.busy { animation: breathe 1.8s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: 0.6; } }
+.person .initial { background: var(--fill); color: var(--ink); }
+
+/* the tab bar: white, the chosen tab in black on grey */
+.tabbar, .find { background: rgba(255, 255, 255, 0.94); box-shadow: inset 0 0 0 0.5px var(--hair), 0 4px 18px rgba(0, 0, 0, 0.06); }
+.tabbar button { color: var(--faint); }
+.tabbar button[aria-current="page"] { color: var(--ink); background: var(--tile); }
+.tabbar .badge, .badge { background: var(--ink); color: #fff; }
+.find { color: var(--ink); }
+
+/* the conversation: Orion writes on the page, his owner in a grey bubble */
+.msg.orion .bubble { background: none; box-shadow: none; padding-left: 4px; padding-right: 4px; }
+.msg.orion { max-width: 100%; }
+.msg.owner .bubble { background: var(--tile); color: var(--ink); box-shadow: none; }
+.msg.owner .bubble a { color: var(--ink); }
+.msg.orion.tail .bubble, .msg.owner.tail .bubble { border-radius: var(--r-bubble); }
+.day { background: none; color: var(--faint); }
+.who .status.live { color: var(--muted); }
+.who .status.live::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 3px; background: var(--ok); vertical-align: 1px; }
+.composer .field { background: #fff; box-shadow: inset 0 0 0 1px var(--hair), 0 2px 10px rgba(0, 0, 0, 0.05); }
+.composer .send, .composer .send.mic { background: var(--ink); }
+.quick button { background: #fff; color: var(--ink); box-shadow: inset 0 0 0 1px var(--hair); }
+.quick.answered button.chosen { background: var(--ink); color: #fff; }
+.piece .go { background: var(--fill); }
+.reactions { box-shadow: inset 0 0 0 0.5px var(--hair); }
+
+/* approvals: the slide is black on grey */
+.slide { background: var(--tile); }
+.slide .label { color: var(--muted); }
+.slide .knob { background: var(--ink); color: #fff; box-shadow: none; }
+
+.meter .fill { background: var(--ink); }
+.chip { background: var(--fill); }
+.chip[aria-pressed="true"] { background: var(--ink); color: #fff; }
+.tiles button.accent { background: var(--fill); color: var(--ink); }
+
+
+/* type: quieter titles, labels in sentence case */
+.page-head h1 { font-size: 30px; line-height: 36px; font-weight: 700; letter-spacing: -0.02em; }
+h2.section { font-size: 19px; font-weight: 600; }
+.page-body .label, .panel .label, .panel-body > .label { text-transform: none; letter-spacing: 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+button.search { background: var(--tile); box-shadow: none; color: var(--muted); }
+.ask .args { background: #fff; box-shadow: inset 0 0 0 0.5px var(--hair); }

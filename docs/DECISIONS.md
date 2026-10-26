@@ -3018,3 +3018,20 @@ données réalistes :
   est une liste, le compteur dans sa ligne ;
 - les icônes de couleur des listes restaient grises (une règle plus précise les écrasait).
 Rien ne change côté serveur ni dans ce qui est journalisé.
+
+## D137 — Une application sobre, comme celle de ChatGPT
+
+*26/10/2026 · acceptée · révise les couleurs de D125 et D135*
+
+Le propriétaire trouvait l'application trop colorée (lavande, halos, dégradés, une icône de
+couleur par ligne) et voulait quelque chose de sobre, dans le style de l'application ChatGPT :
+- **fond blanc, encre noire, surfaces gris clair** cernées d'un filet, sans ombre ni halo ni
+  dégradé ; le bouton qui compte est noir ;
+- **la conversation** : Orion écrit sur la page, sans bulle ; le propriétaire dans une bulle
+  grise ;
+- **les icônes** sont des pictogrammes gris, sans pastille de couleur ; l'onglet choisi est en
+  noir sur gris ;
+- **la couleur ne reste que là où elle dit quelque chose** : le rouge d'une action qui défait,
+  le point vert « en ligne » ou « actif » ;
+- des titres un peu plus petits, des étiquettes de section en minuscules.
+Seules les couleurs changent (et le manifeste, blanc) ; la mise en page reste celle de D136.
