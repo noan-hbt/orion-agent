@@ -282,7 +282,7 @@ class Thinking:
         trust: Trust,
         cid: str | None,
     ) -> str:
-        followup_id = f"f_{new_id()}"
+        followup_id = f"fu_{new_id()}"
         await self._append(
             FOLLOWUP,
             {
@@ -531,7 +531,7 @@ class FollowUpInput(BaseModel):
 class CancelInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    follow_up: str = Field(description="The follow-up id (f_…)")
+    follow_up: str = Field(description="The follow-up id (fu_…)")
 
 
 class ListInput(BaseModel):

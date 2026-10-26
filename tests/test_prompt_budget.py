@@ -25,10 +25,11 @@ CONSTITUTION_ALL_MODULES = 38_200
 for background tasks, D110, after trimming missions; 38.9k with going all the way, D118; 39.3k
 with pages read once ready, D119; 37.9k once the way to change settings came with
 `configure_show`, 26/10/2026)."""
-TOOLS_DEFAULT = 35_600
+TOOLS_DEFAULT = 37_600
 """Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 40.6k with
 background tasks, D110, after trimming missions; 35.3k without pydantic's titles and null
-defaults, 26/10/2026)."""
+defaults, 26/10/2026; 37.4k once grouped tools show each field's type and allowed values,
+D132)."""
 ONE_TOOL = 1_900
 """Characters of one tool's schema, actions included (the largest, `intention`: 1.6k)."""
 

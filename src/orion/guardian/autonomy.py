@@ -48,7 +48,6 @@ LABELS = {
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
     "mail_tidy": "archiver tes mails et te désabonner des newsletters",
-    "browser": "envoyer des formulaires et me connecter à tes comptes sur des sites",
     "configure_change": "changer tes propres réglages",
     "contact_message": "écrire à tes proches",
 }
@@ -118,10 +117,6 @@ class GrantInput(BaseModel):
         description="mail_send: only to these addresses, or '@domain' (required for mail); "
         "contact_message: the contacts' names (required; give them all, it replaces the "
         "earlier list)",
-    )
-    domains: list[str] = Field(
-        default_factory=list[str],
-        description="browser: only sending and signing in on these sites (required)",
     )
 
 
@@ -280,13 +275,13 @@ def autonomy_tools(autonomy: Autonomy) -> list[Tool]:
                 args.action,
                 ctx.grant,
                 ctx.correlation_id,
-                Limits(recipients=args.recipients, domains=args.domains),
+                Limits(recipients=args.recipients),
             )
         except ValueError as exc:
             return ToolResult(str(exc), is_error=True)
         except GuardianUnavailableError as exc:
             return ToolResult(f"Refused: {exc}", is_error=True)
-        bounds = Limits(recipients=args.recipients, domains=args.domains).describe()
+        bounds = Limits(recipients=args.recipients).describe()
         return ToolResult(
             f"Désormais je peux {label(args.action)}{f' ({bounds})' if bounds else ''} sans "
             "lui demander."

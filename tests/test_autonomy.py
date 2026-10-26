@@ -89,7 +89,6 @@ async def test_it_is_offered_after_a_run_of_yeses_once_a_month(journal: SqliteJo
         "action": "calendar_add",
         "approved_times": 3,
         "recipients": [],
-        "domains": [],
     }
     now[0] += timedelta(days=3)
     assert await autonomy.ritual(owner, grant_tool, never_quiet) is None

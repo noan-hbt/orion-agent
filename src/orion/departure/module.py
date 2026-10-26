@@ -7,7 +7,8 @@ driving test), Orion prepares it in one message (D77):
 - **What it sees.** Events in the calendar whose title or place says so (« Vol pour
   Lisbonne », « Partiel de droit », a trip of several days with a place), and departures the
   owner mentions that are not in his calendar (`departure` plan).
-- **What the code checks.** His identity papers in the vault (D74): valid on the day, or not.
+- **What the code checks.** His papers in the vault that have an end of validity (D74, D131):
+  valid on the day, or not; Orion judges which ones the trip needs.
 - **What Orion looks up** in the turn that writes the message, with its own tools: the ticket,
   the booking or the convocation in his mail, the weather there, the time to get there.
 - **What it says**: only what it verified, one line per point, no generic checklist. Nothing
@@ -84,7 +85,6 @@ ORDEAL_WORDS = (
     "permis",
     "interview",
 )
-IDENTITY = ("carte d'identité", "passeport", "titre de séjour")
 
 
 def words(text: str) -> set[str]:
@@ -161,17 +161,17 @@ def prepared_at(start: datetime, evening: time) -> datetime:
 
 
 def papers_line(papers: list[Paper], on: date) -> str:
-    """His identity papers in the vault, and whether each is valid on the day."""
+    """His own papers in the vault that have an end of validity, and whether each is valid on
+    the day: which ones a trip needs (an ID, a passport, an insurance) is Orion's to judge."""
     lines: list[str] = []
     for paper in papers:
-        if paper.kind not in IDENTITY or paper.holder:
+        if paper.holder or paper.valid_until is None:
             continue
-        if paper.valid_until is None:
-            lines.append(f"- {paper.label} : rangé, sans date de fin connue")
-        elif paper.valid_until < on:
-            lines.append(f"- {paper.label} : EXPIRÉ depuis le {paper.valid_until:%d/%m/%Y}")
+        name = f"{paper.label} ({paper.about})" if paper.about else paper.label
+        if paper.valid_until < on:
+            lines.append(f"- {name} : EXPIRÉ depuis le {paper.valid_until:%d/%m/%Y}")
         else:
-            lines.append(f"- {paper.label} : valide jusqu'au {paper.valid_until:%d/%m/%Y}")
+            lines.append(f"- {name} : valide jusqu'au {paper.valid_until:%d/%m/%Y}")
     return "\n".join(lines)
 
 
@@ -277,9 +277,9 @@ class Departures:
         if departure.kind == "voyage" and self.papers is not None:
             known = papers_line(self.papers.papers(), at.date())
             parts.append(
-                f"Ses pièces d'identité rangées :\n{known}"
+                f"Ses papiers rangés qui ont une date de fin (vois ceux qu'il lui faut) :\n{known}"
                 if known
-                else "Aucune pièce d'identité rangée dans ses papiers."
+                else "Aucun papier avec une date de fin dans ses papiers (pièce d'identité…)."
             )
         checks: list[str] = []
         if "mail" in self.tools:
