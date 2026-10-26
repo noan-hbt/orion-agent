@@ -20,7 +20,7 @@ from orion.initiative.engine import (
 )
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
-from orion.memory.model import CommitmentStatus
+from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Commitment, MemoryStore
 from orion.runtime import Orion
@@ -222,6 +222,32 @@ async def test_quiet_hours_budget_and_silence(world: World) -> None:
     assert (await kinds(world.journal, SUPPRESSED))[-1]["reason"] == "model chose silence"
     assert world.inbox.messages == []
     assert await kinds(world.journal, DELIVERED) == []
+
+
+async def test_paused_it_waits_but_his_reminders_still_come(world: World) -> None:
+    await world.memory.add_commitment(
+        "Payer le loyer", OWNER, debtor="owner", creditor="Proprio", due="2026-10-20"
+    )
+    world.provider.extend(
+        call_tools(("remind_me", {"when": "2026-10-20T09:00", "what": "Appeler le garagiste"})),
+        reply("Noté."),
+    )
+    await world.orion.handle_owner_message(
+        "owner", "rappelle-moi demain 9h le garagiste", "terminal", now=world.clock.now
+    )
+    await world.memory.change_setting(
+        SettingKey.PAUSED_UNTIL, at(20, 12).isoformat(), "pause depuis l'app", OWNER
+    )
+    digests = InitiativeSettings(digests=(time(9, 0),))
+    world.clock.now = at(20, 9, 1)
+    world.provider.extend(reply("Le garagiste, c'est maintenant."))
+    [delivered] = await world.engine(digests).tick()
+    assert delivered.startswith("timer:")  # what he asked for comes anyway
+    assert await kinds(world.journal, SUPPRESSED) == []  # the digest waits, it is not dropped
+
+    await world.memory.change_setting(SettingKey.PAUSED_UNTIL, "", "reprise", OWNER)
+    world.provider.extend(reply("Le loyer est à payer aujourd'hui."))
+    assert await world.engine(digests).tick() != []
 
 
 async def test_heads_up_before_a_timed_commitment(world: World) -> None:

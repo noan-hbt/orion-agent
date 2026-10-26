@@ -22,6 +22,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from orion.mobile.channel import MAX_FILE_BYTES, MobileChannel
+from orion.mobile.control import Control, ControlError
 from orion.mobile.devices import DeviceError
 from orion.mobile.push import Vapid
 
@@ -67,6 +68,7 @@ def mobile_app(
     vapid: Vapid | None,
     secure_cookie: bool,
     session_days: int,
+    control: Control | None = None,
 ) -> Starlette:
     devices = channel.devices
     failures = [0]
@@ -316,8 +318,94 @@ def mobile_app(
         )
         return _ok({})
 
+    # -- the controls -------------------------------------------------------------------------
+
+    def controls(
+        handler: Callable[[Request, Control], Awaitable[object]],
+    ) -> Callable[[Request, str], Awaitable[Response]]:
+        async def run(request: Request, _device: str) -> Response:
+            if control is None:
+                return _refused("the controls are not available here", 404)
+            try:
+                return _ok(await handler(request, control))
+            except ControlError as exc:
+                return _refused(str(exc), 404)
+
+        return run
+
+    async def overview(_request: Request, c: Control) -> object:
+        return await c.overview()
+
+    async def pause(request: Request, c: Control) -> object:
+        minutes = (await body(request)).get("minutes")
+        return {"paused_until": await c.pause(int(minutes) if minutes is not None else None)}
+
+    async def change(request: Request, c: Control) -> object:
+        await c.change(await body(request))
+        return await c.overview()
+
+    async def memory(request: Request, c: Control) -> object:
+        query = request.query_params.get("q", "")
+        return {"facts": await c.facts(query, request.query_params.get("past") == "1")}
+
+    async def forget(request: Request, c: Control) -> object:
+        await c.forget(str(request.path_params["id"]))
+        return {}
+
+    async def commitments(_request: Request, c: Control) -> object:
+        return {"commitments": await c.commitments()}
+
+    async def close(request: Request, c: Control) -> object:
+        how = str(request.path_params["how"])
+        if how not in ("done", "cancel"):
+            raise ControlError("done or cancel")
+        await c.close(str(request.path_params["id"]), how == "done")
+        return {}
+
+    async def rules(_request: Request, c: Control) -> object:
+        return {"rules": await c.rules()}
+
+    async def retire(request: Request, c: Control) -> object:
+        await c.retire(str(request.path_params["id"]))
+        return {}
+
+    async def autonomy(_request: Request, c: Control) -> object:
+        return {"actions": await c.autonomy_state()}
+
+    async def take_back(request: Request, c: Control) -> object:
+        await c.take_back(str(request.path_params["action"]))
+        return {}
+
+    async def activity(_request: Request, c: Control) -> object:
+        return {"activity": await c.activity()}
+
+    async def upcoming(_request: Request, c: Control) -> object:
+        return {"planned": await c.upcoming()}
+
+    def api(
+        path: str, handler: Callable[[Request, Control], Awaitable[object]], post: bool = False
+    ) -> Route:
+        return Route(
+            f"{PREFIX}/api/{path}",
+            guarded(controls(handler)),
+            methods=["POST"] if post else ["GET"],
+        )
+
     return Starlette(
         routes=[
+            api("control", overview),
+            api("control/pause", pause, post=True),
+            api("control/settings", change, post=True),
+            api("memory", memory),
+            api("memory/{id}/forget", forget, post=True),
+            api("commitments", commitments),
+            api("commitments/{id}/{how}", close, post=True),
+            api("rules", rules),
+            api("rules/{id}/retire", retire, post=True),
+            api("autonomy", autonomy),
+            api("autonomy/{action}/revoke", take_back, post=True),
+            api("activity", activity),
+            api("planned", upcoming),
             Route(f"{PREFIX}/pair/options", public(pair_options), methods=["POST"]),
             Route(f"{PREFIX}/pair", public(pair), methods=["POST"]),
             Route(f"{PREFIX}/login/options", public(login_options), methods=["POST"]),
