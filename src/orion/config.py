@@ -117,8 +117,16 @@ class AgentConfig(BaseModel):
         default=10,
         ge=0,
         description="After this long without messages (the model cache has expired anyway), "
-        "old bulky tool results are shown shortened; 0 never does",
+        "old bulky tool results are shown shortened (sooner once they add up); 0 never does",
     )
+    fresh_idle_minutes: int = Field(
+        default=60,
+        ge=0,
+        description="After this long without messages (the model cache has expired), a "
+        "conversation keeps only its latest exchanges, within fresh_window_tokens, and a "
+        "summary of the rest: otherwise the whole window is paid in full again; 0 never does",
+    )
+    fresh_window_tokens: int = Field(default=16_000, ge=2_000)
     approvals: Literal["prudent", "equilibre"] = Field(
         default="equilibre",
         description="When outside content (a web page, a mail) is in the conversation: "

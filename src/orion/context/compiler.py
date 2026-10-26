@@ -72,12 +72,24 @@ class ContextCompiler:
         window = thread.window()
         if estimate_tokens([*window, *incoming]) <= self.max_window_tokens:
             return None
-        target = int(self.max_window_tokens * self.rebase_target_ratio)
-        incoming_tokens = estimate_tokens(incoming)
-        for offset, message in enumerate(window):
-            if message.get("role") != "user":
-                continue
-            if estimate_tokens(window[offset:]) + incoming_tokens <= target:
-                return thread.base + offset
-        # Even the last user turn is too large: drop the whole window.
-        return thread.base + len(window)
+        return _cut(thread, incoming, int(self.max_window_tokens * self.rebase_target_ratio))
+
+    def fresh_point(self, thread: Thread, incoming: list[Message], budget: int) -> int | None:
+        """After a pause, the provider's cache is gone and the whole window would be paid in
+        full: keep only the latest exchanges that fit `budget`, cut at a user message."""
+        if estimate_tokens([*thread.window(), *incoming]) <= budget:
+            return None
+        return _cut(thread, incoming, budget)
+
+
+def _cut(thread: Thread, incoming: list[Message], target: int) -> int:
+    """The earliest user message after which the window and `incoming` fit `target`."""
+    window = thread.window()
+    incoming_tokens = estimate_tokens(incoming)
+    for offset, message in enumerate(window):
+        if message.get("role") != "user":
+            continue
+        if estimate_tokens(window[offset:]) + incoming_tokens <= target:
+            return thread.base + offset
+    # Even the last user turn is too large: drop the whole window.
+    return thread.base + len(window)
