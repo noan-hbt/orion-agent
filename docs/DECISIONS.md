@@ -2646,3 +2646,32 @@ sans rien changer à la confiance ni au cache de prompt.
 Déjà en place, et gardé : les nouvelles tentatives chez le fournisseur et les modèles de secours,
 le résumé structuré quand la fenêtre se décale, le bilan à court d'étapes, la pagination des
 pages.
+
+## D123 — Moins de tokens à chaque appel
+
+*26/10/2026 · acceptée*
+
+Chaque appel portait une partie fixe d'environ 70 000 caractères (constitution et schémas des
+outils), puis la fenêtre de conversation, qui pouvait monter jusqu'à 120 000 tokens avant le
+rebase. Le fil du propriétaire ne se termine jamais : la fenêtre est presque toujours grosse,
+elle repart à chaque étape d'une boucle, et après une pause le cache du fournisseur a expiré,
+donc tout est repayé plein tarif.
+
+- **Après une pause, une fenêtre légère** : au bout de `fresh_idle_minutes` (60) sans message,
+  la conversation repart de ses derniers échanges, dans `fresh_window_tokens` (16 000), avec le
+  résumé de ce qui sort, comme un rebase. Le cache est perdu de toute façon : ce décalage ne
+  coûte rien. Une conversation courte reste entière.
+- **Les vieux gros résultats partent plus tôt** : jusqu'ici raccourcis seulement après une
+  pause (pour ne pas casser le cache), ils le sont aussi dès qu'ils dépassent 40 000 caractères
+  au total, hors des deux derniers échanges. Le préfixe change une fois, puis chaque étape les
+  porte en moins.
+- **Des schémas sans bruit** : le `title` que pydantic ajoute à chaque champ et les
+  `default: null` sont retirés (12 % des schémas), et les descriptions d'action qui répétaient
+  celle de leur outil sont raccourcies.
+- **La marche à suivre des réglages vient avec eux** : le format d'un contact, les accords, les
+  secrets sont rendus par `configure_show`, que la section demande d'appeler d'abord, au lieu
+  d'être dans chaque message système.
+
+Les plafonds de `tests/test_prompt_budget.py` descendent d'autant. Non retenu : charger les
+outils à la demande, qui romprait le registre fixe du contrat de cache ; raccourcir la
+constitution sans évaluations pour le vérifier.

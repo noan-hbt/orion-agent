@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from orion.config import AgentConfig
-from orion.context.compiler import ContextCompiler
+from orion.context.compiler import ContextCompiler, estimate_tokens
 from orion.context.threads import MESSAGE_KIND, ThreadProjection
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
@@ -338,3 +338,71 @@ async def test_what_the_owner_said_in_a_turn_stopped_by_a_limit_is_remembered(
     await orion.consolidate(turn(StopReason.PROVIDER_ERROR, "j'habite à Dreux"))
     assert seen == ["je m'appelle Paul"]  # never answered: nothing taken from it
     await store.close()
+
+
+async def test_after_a_long_pause_only_the_latest_exchanges_are_carried(
+    journal: SqliteJournal,
+) -> None:
+    """Once the provider's cache is gone, the whole window would be paid in full again: the
+    conversation goes on from its latest exchanges and a summary of the rest."""
+    from datetime import timedelta
+
+    provider = _Summarizing(*[reply("r" * 3000) for _ in range(12)])
+    orion = make_orion(journal, provider)
+    orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
+    await orion.start()
+    for i in range(10):  # a lively conversation, well over the fresh window
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 3000, "terminal", now=at(i))
+    assert_prefix_stable(provider)
+    assert orion.threads.get("t1").base == 0
+
+    later = at(10) + timedelta(hours=2)
+    await orion.handle_owner_message("t1", "re", "terminal", now=later)
+    sent = provider.requests[-1].messages
+    assert estimate_tokens(sent[1:]) <= AgentConfig().fresh_window_tokens
+    assert sent[1]["role"] == "user"
+    assert "message 9" in str(sent) and "message 0" not in str(sent)
+    assert provider.summaries and "T2 à Lyon" in str(sent[-1]["content"])
+
+    await orion.handle_owner_message(
+        "t1", "et donc ?", "terminal", now=later + timedelta(minutes=1)
+    )
+    assert provider.requests[-1].messages[: len(sent)] == sent  # lively again: cache holds
+    rebuilt = ThreadProjection()
+    await ProjectionRunner(journal, [rebuilt]).catch_up()
+    assert rebuilt.get("t1").window() == orion.threads.get("t1").window()
+
+
+async def test_a_short_conversation_is_kept_whole_after_a_pause(journal: SqliteJournal) -> None:
+    from datetime import timedelta
+
+    provider = ScriptedProvider(reply("salut"), reply("re"))
+    orion = make_orion(journal, provider)
+    await orion.start()
+    await orion.handle_owner_message("t1", "hello", "terminal", now=at(0))
+    await orion.handle_owner_message("t1", "re", "terminal", now=at(1) + timedelta(hours=3))
+    assert_prefix_stable(provider)
+    assert not [e for e in await journal.read() if e.kind == "thread.rebased"]
+
+
+async def test_old_bulky_results_that_add_up_are_shortened_without_a_pause(
+    journal: SqliteJournal,
+) -> None:
+    """Carrying 40k characters of old pages at every step costs more than one change of
+    prefix: once the last two exchanges are past them, they are shortened, pause or not."""
+    pages = [f"page {n} " + "annonce " * 1600 for n in range(4)]
+    provider = ScriptedProvider(
+        call_tools(*[("echo", dict[str, object](text=p)) for p in pages]),
+        reply("quatre pages lues"),
+        *[reply("ok") for _ in range(4)],
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    for minute in range(4):  # a lively conversation
+        await orion.handle_owner_message("t1", f"m{minute}", "terminal", now=at(minute))
+    shown = [str(m["content"]) for m in provider.requests[-1].messages if m["role"] == "tool"]
+    assert len(shown) == 4 and all("ancien résultat allégé" in s for s in shown)
+
+    before = provider.requests[-1].messages
+    await orion.handle_owner_message("t1", "m4", "terminal", now=at(4))
+    assert provider.requests[-1].messages[: len(before)] == before  # shortened once only

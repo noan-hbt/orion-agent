@@ -63,6 +63,9 @@ log = structlog.get_logger(__name__)
 
 PRUNE_OVER = 2000
 """Tool results longer than this are shortened after a pause."""
+PRUNE_AT_ONCE = 40_000
+"""Characters of old bulky results worth shortening without waiting for a pause: the prefix
+changes once, and every later step of a lively conversation stops carrying them."""
 
 OWNER_THREAD = "owner"
 CONTACT_THREAD = "contact:"
@@ -436,11 +439,14 @@ class Orion:
                 )
             )
             thread = replace(thread, pruned=thread.pruned | set(prune))  # as it will be shown
-        new_base = (
-            len(thread.messages)
-            if stale
-            else self._compiler.rebase_point(thread, [render_user_message(body, when, channel)])
-        )
+        incoming = [render_user_message(body, when, channel)]
+        fresh = not stale and self._idle(thread, when, self._agent.fresh_idle_minutes)
+        if stale:
+            new_base: int | None = len(thread.messages)
+        elif fresh:
+            new_base = self._compiler.fresh_point(thread, incoming, self._agent.fresh_window_tokens)
+        else:
+            new_base = self._compiler.rebase_point(thread, incoming)
         window = thread.messages[new_base if new_base is not None else thread.base :]
         blocks = await self._memory_blocks(memory_query, window)
         if thread_id == OWNER_THREAD and kind == "message.received" and thread.last_seq:
@@ -465,7 +471,11 @@ class Orion:
                 "thread.rebase",
                 thread=thread_id,
                 base=new_base,
-                reason="untrusted content, conversation idle" if stale else "window budget",
+                reason="untrusted content, conversation idle"
+                if stale
+                else "conversation idle"
+                if fresh
+                else "window budget",
             )
             events.append(
                 self._event(
@@ -762,23 +772,34 @@ class Orion:
     def _prunable(self, thread: Thread, when: datetime) -> list[int]:
         """Old bulky tool results to shorten, once the conversation paused long enough for the
         provider's cache to have gone: shortening them then costs nothing (OpenClaw does the
-        same). The last two exchanges stay whole."""
-        idle = self._agent.prune_idle_minutes
-        if not idle or thread.last_at is None or when - thread.last_at < timedelta(minutes=idle):
+        same). Without a pause, only when they add up to `PRUNE_AT_ONCE`: one change of
+        prefix is then cheaper than carrying them at every step. The last two exchanges stay
+        whole."""
+        if not self._agent.prune_idle_minutes:
             return []
-        return thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)
+        found = thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)
+        if self._idle(thread, when, self._agent.prune_idle_minutes):
+            return found
+        bulk = sum(len(str(thread.messages[i].get("content") or "")) for i in found)
+        return found if bulk >= PRUNE_AT_ONCE else []
+
+    @staticmethod
+    def _idle(thread: Thread, when: datetime, minutes: int) -> bool:
+        """Whether the conversation paused for `minutes` (0: never counts as idle)."""
+        return bool(
+            minutes
+            and thread.last_at is not None
+            and when - thread.last_at >= timedelta(minutes=minutes)
+        )
 
     def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:
         """Untrusted content stays in the window, and everything written after it is tainted
         too, until the window starts afresh. Do it after a pause in the conversation: the
         content can no longer steer anything, and memory carries what mattered (D26)."""
-        idle = self._agent.untrusted_idle_minutes
         return bool(
-            idle
-            and thread.window()
+            thread.window()
             and thread.window_trust() < TRUSTED_FLOOR
-            and thread.last_at is not None
-            and when - thread.last_at >= timedelta(minutes=idle)
+            and self._idle(thread, when, self._agent.untrusted_idle_minutes)
         )
 
     async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:

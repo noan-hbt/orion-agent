@@ -114,3 +114,22 @@ def test_grouping_existing_tools_keeps_their_effects() -> None:
     assert group.effect is Effect.INTERNAL and group.reversibility is Reversibility.UNDO_WINDOW
     assert group.effect_for(group.parse('{"action": "list"}')) is Effect.NONE
     assert not group.concurrency_safe
+
+
+def test_a_schema_carries_no_generated_titles_or_null_defaults() -> None:
+    """Every request carries every schema: what pydantic adds for nobody is left out, and a
+    field named `title`, or a default that holds one, is kept."""
+    from orion.tools.base import compact_schema
+
+    class Doc(BaseModel):
+        title: str = Field(description="Its title")
+        note: str | None = None
+        shape: dict[str, str] = Field(default={"title": "kept"})
+
+    schema = compact_schema(Doc.model_json_schema())
+    text = json.dumps(schema)
+    assert '"title": "Doc"' not in text and '"title": "Note"' not in text
+    assert "default" not in schema["properties"]["note"]
+    assert schema["properties"]["title"] == {"description": "Its title", "type": "string"}
+    assert schema["properties"]["note"]["anyOf"] == [{"type": "string"}, {"type": "null"}]
+    assert schema["properties"]["shape"]["default"] == {"title": "kept"}

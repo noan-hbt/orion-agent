@@ -599,8 +599,7 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
         ),
         Tool(
             name="follow_up",
-            description="Plan to ask the owner how a moment that matters went (an interview, "
-            "a medical appointment, a visit, an exam), a few hours after it. You ask once.",
+            description="Plan it: `at` is a few hours after the moment.",
             input_model=FollowUpInput,
             handler=follow_up,
             effect=Effect.INTERNAL,

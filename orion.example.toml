@@ -17,6 +17,8 @@ max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
 max_continuations = 1        # out of steps, your turn goes on this many times (you are told)
 prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
+fresh_idle_minutes = 60      # after a longer pause, only the latest exchanges are carried on,
+fresh_window_tokens = 16000  # within this size, with a summary of the rest (D123)
 approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
                              # acting on the world, saying why (D90); "prudent" refuses that, and
                              # asks before each memory, reminder or voice message (D85)
