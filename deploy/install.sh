@@ -6,8 +6,8 @@
 # Without a domain, the server's IP is used through sslip.io (e.g. 51-83-1-2.sslip.io), which is
 # enough for Caddy to get a certificate. The first time, it asks a few questions (`orion
 # setup`: the keys, checked, and who you are); after that, Orion changes its settings itself,
-# by message. Safe to run again: it updates the code, never overwrites orion.toml or the
-# secret files.
+# by message. Safe to run again: it updates the code and Caddy, never overwrites orion.toml or
+# the secret files (it only adds sections that came later, like the app's).
 set -euo pipefail
 
 REPO="${ORION_REPO:-https://github.com/noan-hbt/orion-agent.git}"
@@ -74,6 +74,7 @@ if [ ! -f "$CONFIG" ]; then
         sed "s/@DOMAIN@/$DOMAIN/g" "$HERE/orion.production.toml" > "$CONFIG"
     fi
 fi
+"$HERE/add-app" "$CONFIG" "$DOMAIN"
 chown orion-guardian:orion "$CONFIG"
 chmod 0640 "$CONFIG"
 ln -sfn "$CONFIG" "$ROOT/orion.toml"

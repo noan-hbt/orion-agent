@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Give an orion.toml written before the app existed its [modules.mobile] section, taken from
+# orion.production.toml (run by install.sh; nothing else in the file is touched):
+#   add-app /srv/orion/config/orion.toml orion.example.com
+set -euo pipefail
+config="$1"
+domain="$2"
+grep -q '^\[modules\.mobile\]' "$config" && exit 0
+template="$(dirname "$0")/orion.production.toml"
+{
+    echo
+    sed -n '/^\[modules\.mobile\]/,/^$/p' "$template" | sed "s/@DOMAIN@/$domain/g"
+} >> "$config"
+echo "==> the app: added to $config"
