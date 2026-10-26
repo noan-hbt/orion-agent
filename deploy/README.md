@@ -62,6 +62,26 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
 (`federation invite`, `inkbox calls`…). Avec `--core`, il la lance sous celui du cœur
 (`doctor`, `memory`, `chat`).
 
+## L'app sur l'iPhone
+
+L'app d'Orion (D125) remplace Telegram : la conversation, tes accords signés par Face ID, les
+notifications et tout le pilotage. Elle est ouverte sur les installations récentes ; sur une
+installation plus ancienne, relance `sudo /srv/orion/app/deploy/install.sh` (avec ton domaine,
+ou sans argument pour garder `<ip>.sslip.io`) : il ajoute `[modules.mobile]` à `orion.toml`,
+remet Caddy à jour et redémarre Orion. Puis :
+
+```bash
+sudo /srv/orion/app/deploy/orion-admin app pair iphone
+```
+
+Ouvre le lien affiché dans Safari, Partager > « Sur l'écran d'accueil », ouvre Orion depuis
+l'écran d'accueil, saisis le code (une fois, 10 minutes) et crée la passkey. Les
+notifications se demandent depuis l'app.
+
+Une passkey est liée au nom du serveur (`public_url`) : avec `sslip.io`, si l'IP du VPS change
+ou si tu passes à un vrai domaine, il faut réappairer. `orion-admin app devices` liste les
+appareils, `orion-admin app revoke iphone` en coupe un.
+
 ## Au quotidien
 
 - **Logs** : `journalctl -u orion-core -f`, `journalctl -u orion-guardian -f`.

@@ -6,7 +6,11 @@ from __future__ import annotations
 import os
 import subprocess
 import tarfile
+import tomllib
 from pathlib import Path
+
+from orion.config import parse_config
+from orion.mobile.module import MobileSettings
 
 DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
 
@@ -157,3 +161,29 @@ def test_a_purge_keeps_nothing(tmp_path: Path) -> None:
     root, _ = installed(tmp_path)
     assert run(tmp_path, "uninstall.sh", "--purge", "--yes").startswith("0\n")
     assert not root.exists() and not list((tmp_path / "archives").iterdir())
+
+
+def test_an_older_install_gets_the_app_and_keeps_the_rest(tmp_path: Path) -> None:
+    config = tmp_path / "orion.toml"
+    template = (DEPLOY / "orion.production.toml").read_text()
+    before = template[: template.index("[modules.mobile]")].replace("@DOMAIN@", "1-2-3-4.sslip.io")
+    config.write_text(before)
+
+    def add() -> str:
+        return subprocess.run(
+            [DEPLOY / "add-app", config, "1-2-3-4.sslip.io"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    assert "added" in add()
+    after = config.read_text()
+    assert after.startswith(before)
+    loaded = parse_config(tomllib.loads(after), config)
+    mobile = MobileSettings.model_validate(loaded.modules["mobile"])
+    assert mobile.enabled
+    assert mobile.public_url == "https://1-2-3-4.sslip.io"
+
+    assert add() == ""  # already there: nothing changes
+    assert config.read_text() == after
