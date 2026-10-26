@@ -521,6 +521,10 @@ class Orion:
             finish_check=offer_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
+            progress_model=self._summary_model
+            if kind == "message.received" and progress is not None
+            else None,
+            progress_about=body if kind == "message.received" else "",
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,

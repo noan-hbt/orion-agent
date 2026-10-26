@@ -2675,3 +2675,21 @@ donc tout est repayé plein tarif.
 Les plafonds de `tests/test_prompt_budget.py` descendent d'autant. Non retenu : charger les
 outils à la demande, qui romprait le registre fixe du contrat de cache ; raccourcir la
 constitution sans évaluations pour le vérifier.
+
+## D124 — Il voit les images qu'il récupère, et dit lui-même ce qu'il fait
+
+*26/10/2026 · acceptée*
+
+- **Voir ce qu'il envoie.** Une image téléchargée sur un site ou une capture de son navigateur
+  était gardée et envoyée, mais jamais vue : `attachment_look` ne connaissait que les photos du
+  propriétaire. Il regarde maintenant aussi les fichiers d'Orion (`fi_…`), avec la confiance de
+  leur origine (la photo d'une annonce reste du contenu web), et le résultat d'un
+  téléchargement d'image ou d'une capture le lui rappelle. Il ne regarde que quand ça sert : pas
+  d'appel de vision pour chaque image.
+- **Un mot d'attente écrit pour le moment.** « Je m'en occupe, ça prend un peu de temps… »
+  revenait dès qu'un outil sans étiquette tournait plus de dix secondes. Le petit modèle (celui
+  des résumés) écrit maintenant la phrase, à partir de sa demande et des appels en cours ; s'il
+  échoue ou tarde plus de quatre secondes, l'ancienne phrase part. Après du contenu venu
+  d'ailleurs, il ne voit que le nom des appels, jamais leurs arguments, où une page aurait pu
+  glisser ses mots. Les phrases étant toutes différentes, on en limite le nombre : la première
+  après quinze secondes, puis une par minute au plus, trois par tour.
