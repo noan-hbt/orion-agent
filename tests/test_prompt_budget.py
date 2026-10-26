@@ -20,11 +20,11 @@ from orion.modules.base import Module, ModuleError
 from orion.modules.registry import builtin_modules
 from tests.fakes import ScriptedProvider
 
-CONSTITUTION_ALL_MODULES = 38_200
+CONSTITUTION_ALL_MODULES = 39_200
 """Characters of the system message with every built-in module on (34.7k on 20/10/2026; raised
 for background tasks, D110, after trimming missions; 38.9k with going all the way, D118; 39.3k
 with pages read once ready, D119; 37.9k once the way to change settings came with
-`configure_show`, 26/10/2026)."""
+`configure_show`, 26/10/2026; 39.0k with the app's structured pieces, D126)."""
 TOOLS_DEFAULT = 35_600
 """Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 40.6k with
 background tasks, D110, after trimming missions; 35.3k without pydantic's titles and null

@@ -2720,3 +2720,21 @@ passkeys. Étude : `docs/research/05-application.md`.
   iMessage.
 - Mode réuni d'abord (un processus, comme sur Railway) ; en mode séparé, le canal refuse de se
   charger tant que le gardien ne sert pas l'application lui-même.
+
+## D126 — Des pièces structurées dans les messages : des balises, pas un outil
+
+*26/10/2026 · acceptée*
+
+Dans l'application, un choix se fait d'un geste : réponses rapides, éléments à cocher, fiche
+d'une annonce, « Rappel posé » avec Annuler. Orion les écrit avec trois balises dans sa réponse
+(`<choices>`, `<choices multiple send="…">`, `<card title="…">`, `<done undo="…">`), décrites
+dans une section de la constitution présente quand le module `mobile` est allumé.
+
+- **Des balises plutôt qu'un outil** : pas d'appel de modèle en plus, rien qui change le
+  registre d'outils (cache), et un message reste un message, journalisé tel qu'envoyé.
+- **L'application dessine, les autres lisent** : un canal qui se déclare `rich` reçoit le
+  texte tel quel ; pour les autres (Telegram, iMessage), la boîte de réception le convertit en
+  texte simple (`orion.channels.markup.plain`), qui se lit bien. La notification aussi.
+- **Ce qui est mal formé reste du texte**, tel qu'écrit ; un lien de carte n'est gardé qu'en
+  https. Un appui envoie à Orion le texte de l'option (ou la phrase `undo`), comme s'il l'avait
+  écrit : aucune action ne part sans passer par lui ni par ses accords.

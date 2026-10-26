@@ -58,6 +58,7 @@ def check_url(url: str) -> str:
 class MobileModule(Module):
     name = "mobile"
     channel = True
+    instructions = "app.md"
     offer = (
         "Une application à toi sur son iPhone (écran d'accueil), qui remplace Telegram : "
         "conversation, accords signés avec Face ID, notifications. `[modules.mobile] enabled = "

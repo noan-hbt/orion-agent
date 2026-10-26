@@ -50,6 +50,7 @@ const ICONS = {
   spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>',
   target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 8l9 6 9-6"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>',
 };
 
@@ -555,6 +556,9 @@ function retail() {
     if (meta) meta.hidden = !last;
     const prev = items[i - 1];
     el.classList.toggle("other-side", !!prev && prev.dataset.who !== el.dataset.who);
+    if (el.dataset.who === "orion" && items.slice(i + 1).some((later) => later.dataset.who === "owner")) {
+      for (const group of el.querySelectorAll(".quick:not(.answered), .checklist:not(.answered)")) answered(group, []);
+    }
   });
   view.older.hidden = !state.more;
 }
@@ -567,12 +571,110 @@ function render(message, previous) {
   }
   const el = h("div", { class: `msg ${message.who}`, "data-who": message.who, "data-ref": message.ref });
   for (const [index, file] of message.files.entries()) el.append(attachment(message, file, index));
-  if (message.text) el.append(h("div", { class: "bubble" }, ...rich(message.text)));
+  if (message.blocks && message.blocks.length) el.append(...message.blocks.map(block));
+  else if (message.text) el.append(h("div", { class: "bubble" }, ...rich(message.text)));
   el.append(h("span", { class: "meta time" }, TIME.format(date)));
   if (message.reactions && message.reactions.length) showReactions(el, message.reactions);
   press(el, message);
   nodes.push(el);
   return nodes;
+}
+
+// -- structured pieces (D126): choices, cards, things done --------------------------------------
+
+function block(piece) {
+  if (piece.type === "choices") return piece.multiple ? checklist(piece) : quick(piece);
+  if (piece.type === "card") return card(piece);
+  if (piece.type === "done") return done(piece);
+  return h("div", { class: "bubble" }, ...rich(piece.text));
+}
+
+function answered(group, chosen) {
+  group.classList.add("answered");
+  for (const b of group.querySelectorAll("button, input")) b.disabled = true;
+  for (const b of chosen) b.classList.add("chosen");
+}
+
+function quick(piece) {
+  const group = h("div", { class: "quick", role: "group", "aria-label": "Réponses rapides" });
+  group.append(
+    ...piece.options.map((option) =>
+      h(
+        "button",
+        {
+          type: "button",
+          onclick: (event) => {
+            answered(group, [event.currentTarget]);
+            submit(option);
+          },
+        },
+        option,
+      ),
+    ),
+  );
+  return group;
+}
+
+function checklist(piece) {
+  const boxes = piece.options.map((option) => h("input", { type: "checkbox", value: option }));
+  const go = h("button", { type: "button", class: "pill primary wide", disabled: true }, piece.send);
+  const count = () => {
+    const n = boxes.filter((b) => b.checked).length;
+    go.disabled = !n;
+    go.textContent = n ? `${piece.send} · ${n}` : piece.send;
+  };
+  const group = h(
+    "div",
+    { class: "checklist card", role: "group" },
+    piece.options.map((option, i) => {
+      boxes[i].addEventListener("change", () => {
+        boxes[i].closest("label").classList.toggle("on", boxes[i].checked);
+        count();
+      });
+      return h("label", {}, h("span", {}, option), boxes[i]);
+    }),
+    go,
+  );
+  go.addEventListener("click", () => {
+    const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+    answered(group, [go]);
+    submit(`${piece.send} : ${picked.join(", ")}`);
+  });
+  return group;
+}
+
+function card(piece) {
+  const body = [
+    h("b", { class: "title" }, piece.title),
+    piece.subtitle ? h("span", { class: "subtitle" }, piece.subtitle) : null,
+    piece.lines.length ? h("ul", {}, piece.lines.map((line) => h("li", {}, ...rich(line)))) : null,
+  ];
+  if (!piece.link) return h("div", { class: "piece card" }, body);
+  return h(
+    "a",
+    { class: "piece card", href: piece.link, target: "_blank", rel: "noopener noreferrer" },
+    body,
+    h("span", { class: "go" }, new URL(piece.link).hostname.replace(/^www\./, ""), icon("arrow", 14)),
+  );
+}
+
+function done(piece) {
+  const undo = piece.undo
+    ? h(
+        "button",
+        {
+          type: "button",
+          class: "pill small",
+          onclick: (event) => {
+            event.currentTarget.disabled = true;
+            event.currentTarget.textContent = "Annulé";
+            submit(piece.undo);
+          },
+        },
+        "Annuler",
+      )
+    : null;
+  return h("div", { class: "done card" }, h("span", { class: "ico" }, icon("check", 16, "#fff")), h("span", { class: "what" }, piece.text), undo);
 }
 
 function showReactions(el, emoji) {
