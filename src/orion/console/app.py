@@ -400,7 +400,7 @@ def console_app(console: Console) -> Starlette:
         }
         rows: list[str] = []
         for e in reversed([e for e in events if e.kind in ACTIVITY and not e.redacted][-150:]):
-            detail = _detail(e, asked)
+            detail = activity_detail(e, asked)
             rows.append(
                 f"<tr><td class=muted>{_when(e, console.timezone)}</td>"
                 f"<td>{escape(ACTIVITY[e.kind])}</td><td>{escape(detail)}</td></tr>"
@@ -473,7 +473,7 @@ def console_app(console: Console) -> Starlette:
     )
 
 
-def _detail(event: Event, asked: dict[str, str]) -> str:
+def activity_detail(event: Event, asked: dict[str, str]) -> str:
     p: dict[str, Any] = event.payload
     if event.kind == "initiative.delivered":
         return f"{p.get('why', '')} — {p.get('arbiter', '')}".strip(" —")

@@ -1,0 +1,167 @@
+"""The app's controls (D125): what Orion knows and does, and the few things he changes there."""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+
+from orion.channels.inbox import OwnerInbox
+from orion.core.events import Trust
+from orion.core.journal import SqliteJournal
+from orion.guardian.autonomy import Autonomy
+from orion.initiative.engine import InitiativeSettings
+from orion.memory.model import CommitmentStatus, SettingKey
+from orion.memory.service import MemoryService, Origin
+from orion.memory.store import MemoryStore
+from orion.mobile.channel import MobileChannel
+from orion.mobile.control import Control
+from orion.mobile.devices import Devices, session_key
+from orion.mobile.server import mobile_app
+from orion.modules.base import Planned
+from tests.fake_passkey import FakePasskey
+from tests.fakes import ScriptedProvider
+from tests.test_imessage import make_orion
+from tests.test_mobile_channel import URL, FakePusher, World, pair
+
+NOW = datetime(2026, 10, 26, 10, 0, tzinfo=UTC)
+TOLD = Origin(actor="orion:core", source="app:owner", trust=Trust.OWNER)
+READ = Origin(actor="orion:core", source="web:annonce", trust=Trust.WEB)
+
+
+@dataclass
+class Controlled:
+    world: World
+    memory: MemoryService
+    autonomy: Autonomy
+    journal: SqliteJournal
+
+
+@pytest.fixture
+async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Controlled]:
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    autonomy = Autonomy(journal, ["calendar_add", "mail_send"])
+
+    async def planned(_now: datetime, _until: datetime) -> list[Planned]:
+        return [Planned(NOW + timedelta(hours=3), "te demander comment s'est passé l'entretien")]
+
+    control = Control(
+        journal,
+        memory,
+        InitiativeSettings(timezone="UTC"),
+        autonomy=autonomy,
+        planned=planned,
+        clock=lambda: NOW,
+    )
+    orion = make_orion(journal, ScriptedProvider())
+    devices = Devices(journal, URL, session_key(tmp_path / "m"))
+    channel = MobileChannel(journal, OwnerInbox(orion), devices, tmp_path / "m")
+    await channel.start()
+    app = mobile_app(channel, None, secure_cookie=True, session_days=30, control=control)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url=URL, headers={"origin": URL}
+    ) as http:
+        phone = FakePasskey(URL, "orion.example")
+        world = World(channel, http, phone, ScriptedProvider(), FakePusher(), devices)
+        await pair(world)
+        yield Controlled(world, memory, autonomy, journal)
+    await store.close()
+
+
+async def test_only_signed_in(controlled: Controlled) -> None:
+    http = controlled.world.http
+    http.cookies.clear()
+    assert (await http.get("/app/api/control")).status_code == 401
+    assert (await http.post("/app/api/control/pause", json={"minutes": 60})).status_code == 401
+
+
+async def test_he_pauses_orion_and_resumes_it(controlled: Controlled) -> None:
+    http = controlled.world.http
+    paused = (await http.post("/app/api/control/pause", json={"minutes": 120})).json()
+    assert paused["paused_until"] == (NOW + timedelta(hours=2)).isoformat()
+    overview = (await http.get("/app/api/control")).json()
+    assert overview["paused_until"] == paused["paused_until"]
+    change = (await controlled.memory.store.settings())[SettingKey.PAUSED_UNTIL]
+    assert change.reason == "pause depuis l'app"
+
+    await http.post("/app/api/control/pause", json={"minutes": None})
+    assert (await http.get("/app/api/control")).json()["paused_until"] is None
+    huge = (await http.post("/app/api/control/pause", json={"minutes": 10**7})).json()
+    assert huge["paused_until"] == (NOW + timedelta(days=30)).isoformat()
+
+
+async def test_he_sets_quiet_hours_and_the_budget(controlled: Controlled) -> None:
+    http = controlled.world.http
+    shown = (
+        await http.post(
+            "/app/api/control/settings",
+            json={"quiet_start": "23:00", "quiet_end": "07:30", "daily_budget": 5},
+        )
+    ).json()
+    assert (shown["quiet_start"], shown["quiet_end"], shown["daily_budget"]) == (
+        "23:00",
+        "07:30",
+        5,
+    )
+    bad = await http.post("/app/api/control/settings", json={"daily_budget": 500})
+    assert bad.status_code == 404
+    assert (
+        await http.post("/app/api/control/settings", json={"quiet_end": "tard"})
+    ).status_code == 404
+
+
+async def test_he_reads_and_corrects_what_orion_knows(controlled: Controlled) -> None:
+    http = controlled.world.http
+    memory = controlled.memory
+    loyer = await memory.remember("Son loyer est de 520 € par mois", TOLD)
+    await memory.remember("L'annonce dit 42 m²", READ)
+    await memory.add_commitment("Rappeler la banque", TOLD, debtor="owner", creditor="Banque")
+    await memory.learn_rule("Réponses courtes, sans liste", TOLD)
+
+    facts = (await http.get("/app/api/memory")).json()["facts"]
+    assert [f["statement"] for f in facts] == [
+        "L'annonce dit 42 m²",
+        "Son loyer est de 520 € par mois",
+    ]
+    assert [f["from_owner"] for f in facts] == [False, True]
+    found = (await http.get("/app/api/memory?q=loyer")).json()["facts"]
+    assert [f["id"] for f in found] == [loyer]
+
+    assert (await http.post(f"/app/api/memory/{loyer}/forget")).status_code == 200
+    assert (await http.post(f"/app/api/memory/{loyer}/forget")).status_code == 404
+    assert len((await http.get("/app/api/memory")).json()["facts"]) == 1
+    assert len((await http.get("/app/api/memory?past=1")).json()["facts"]) == 2
+
+    [commitment] = (await http.get("/app/api/commitments")).json()["commitments"]
+    assert (await http.post(f"/app/api/commitments/{commitment['id']}/done")).status_code == 200
+    closed = await memory.store.commitment(commitment["id"])
+    assert closed is not None and closed.status is CommitmentStatus.DONE
+
+    [rule] = (await http.get("/app/api/rules")).json()["rules"]
+    assert (await http.post(f"/app/api/rules/{rule['id']}/retire")).status_code == 200
+    assert (await http.get("/app/api/rules")).json()["rules"] == []
+
+
+async def test_he_takes_autonomy_back_and_sees_what_happened(controlled: Controlled) -> None:
+    http = controlled.world.http
+    await controlled.autonomy.grant("calendar_add", None, None)
+    actions = (await http.get("/app/api/autonomy")).json()["actions"]
+    assert [(a["action"], a["alone"]) for a in actions] == [
+        ("calendar_add", True),
+        ("mail_send", False),
+    ]
+    overview = (await http.get("/app/api/control")).json()
+    assert overview["alone"] == ["ajouter des événements à ton agenda"]
+    assert overview["next"][0]["what"] == "te demander comment s'est passé l'entretien"
+
+    assert (await http.post("/app/api/autonomy/calendar_add/revoke")).status_code == 200
+    assert (await http.post("/app/api/autonomy/call_someone/revoke")).status_code == 404
+    activity = (await http.get("/app/api/activity")).json()["activity"]
+    assert [a["what"] for a in activity] == ["autonomie retirée", "autonomie accordée"]
+    assert (await http.get("/app/api/planned")).json()["planned"][0]["undoable"] is False

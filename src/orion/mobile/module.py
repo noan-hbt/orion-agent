@@ -21,11 +21,15 @@ import httpx
 import uvicorn
 from pydantic import Field
 
+from orion.initiative.engine import InitiativeSettings
+from orion.initiative.planned import everything_planned
 from orion.mobile.channel import MobileChannel
+from orion.mobile.control import Control
 from orion.mobile.devices import Devices, session_key
 from orion.mobile.push import Pusher, Vapid
 from orion.mobile.server import PREFIX, mobile_app
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
+from orion.providers.spending import Spending
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -70,6 +74,7 @@ class MobileModule(Module):
         super().__init__(config)
         self.devices: Devices | None = None
         self.app: MobileChannel | None = None
+        self.control: Control | None = None
         self._http: httpx.AsyncClient | None = None
 
     @property
@@ -89,6 +94,20 @@ class MobileModule(Module):
         settings: MobileSettings = self.settings
         self.devices = Devices(
             plate.journal, self.url(), session_key(self.folder), settings.session_days
+        )
+        config = self.config
+        self.control = Control(
+            plate.journal,
+            plate.memory,
+            InitiativeSettings(
+                timezone=config.agent.timezone,
+                quiet_start=config.initiative.quiet_start,
+                quiet_end=config.initiative.quiet_end,
+                daily_budget=config.initiative.daily_budget,
+            ),
+            autonomy=plate.autonomy,
+            spending=plate.provider if isinstance(plate.provider, Spending) else None,
+            planned=lambda now, until: everything_planned(plate.modules, plate.timers, now, until),
         )
         return []
 
@@ -115,7 +134,11 @@ class MobileModule(Module):
         server = uvicorn.Server(
             uvicorn.Config(
                 mobile_app(
-                    channel, vapid, self.url().startswith("https://"), settings.session_days
+                    channel,
+                    vapid,
+                    self.url().startswith("https://"),
+                    settings.session_days,
+                    self.control,
                 ),
                 host=settings.host,
                 port=settings.port,

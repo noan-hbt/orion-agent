@@ -2739,6 +2739,23 @@ dans une section de la constitution présente quand le module `mobile` est allum
   https. Un appui envoie à Orion le texte de l'option (ou la phrase `undo`), comme s'il l'avait
   écrit : aucune action ne part sans passer par lui ni par ses accords.
 
+## D127 — Piloter Orion depuis l'application : une vraie pause, et la console en mieux
+
+*26/10/2026 · acceptée*
+
+L'application montre ce que la console montre (D101), lu aux mêmes endroits, et ajoute ce qu'on
+veut faire d'un geste depuis son téléphone :
+- **une pause** : « 1 h » ou « jusqu'à demain ». En pause, Orion ne prend plus d'initiative ; ce
+  qui attendait attend (rien n'est jeté), et les rappels qu'il a demandés passent quand même.
+  C'est un réglage du propriétaire (`initiative.paused_until`), journalisé, 30 jours au plus ;
+- **les heures calmes et le nombre de messages par jour**, réglés directement ;
+- **sa mémoire** (chercher, filtrer, oublier ; corriger passe par Orion), **ses engagements**
+  (fait, annulé), **son manuel** (retirer une règle), **son activité** et ses silences, **ce
+  qu'il fera seul**, **ce qu'il coûte**.
+Chaque changement est une correction du propriétaire (confiance OWNER), les mêmes événements
+que la console écrit. **Reprendre une autonomie** se fait d'un geste ; **en donner une** ne se
+fait pas ici : Orion la demande dans la conversation, avec ses limites et Face ID.
+
 ## D128 — Alléger seulement quand le cache est parti ; un constat se lit avec doute
 
 *26/10/2026 · acceptée · reprise de la PR #12 (écrite le 21/10 comme D107)*

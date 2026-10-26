@@ -77,7 +77,7 @@ class Report:
 
 
 ALMOST_KEY = "almost:"
-_NOT_WORTH_REPORTING = {"nothing to say", "quiet hours"}
+_NOT_WORTH_REPORTING = {"nothing to say", "quiet hours", "paused"}
 
 
 class Caller(Protocol):
@@ -145,6 +145,12 @@ class InitiativeSettings:
     quiet_end: time = time(8, 0)
     daily_budget: int = 12
     heads_up: timedelta = timedelta(minutes=60)
+    paused_until: datetime | None = None
+    """He paused Orion (from the app): nothing on its own until then, but the reminders he
+    asked for."""
+
+    def is_paused(self, now: datetime) -> bool:
+        return self.paused_until is not None and now < self.paused_until
 
     def is_quiet(self, moment: time) -> bool:
         if self.quiet_start <= self.quiet_end:
@@ -174,6 +180,8 @@ def effective_settings(
             updates["quiet_end"] = time.fromisoformat(value)
         elif key is SettingKey.DAILY_BUDGET and isinstance(value, int):
             updates["daily_budget"] = value
+        elif key is SettingKey.PAUSED_UNTIL and isinstance(value, str):
+            updates["paused_until"] = datetime.fromisoformat(value) if value else None
         else:
             log.error("initiative.bad_setting", key=key, value=value)
     return replace(base, **updates)
@@ -584,7 +592,7 @@ class InitiativeEngine:
         """The gate, then the arbiter: why it should go now, or None (dropped or waiting)."""
         reason = self._gate(candidate, now)
         if reason is not None:
-            if reason != "quiet hours":
+            if reason not in ("quiet hours", "paused"):  # it waits, it is not dropped
                 self._waiting.pop(candidate.key, None)
                 await self._record(SUPPRESSED, candidate, now, reason=reason)
             return None
@@ -692,6 +700,8 @@ class InitiativeEngine:
             return "nothing to say"
         if candidate.expires_at is not None and now > candidate.expires_at:
             return "missed its window"
+        if self._settings.is_paused(now):
+            return "paused"
         if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
             return "quiet hours"
         if (

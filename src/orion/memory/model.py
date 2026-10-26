@@ -132,6 +132,7 @@ class SettingKey(StrEnum):
     QUIET_START = "initiative.quiet_start"  # "HH:MM"
     QUIET_END = "initiative.quiet_end"  # "HH:MM"
     DAILY_BUDGET = "initiative.daily_budget"  # int
+    PAUSED_UNTIL = "initiative.paused_until"  # ISO datetime; "" when not paused
 
 
 class SettingChanged(BaseModel):
