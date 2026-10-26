@@ -115,6 +115,8 @@ class MobileState:
     )
     """endpoint → (device, subscription)."""
     reactions: set[str] = field(default_factory=set[str])
+    reacted: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    """ref → the emoji he put on that message of Orion's, from the app."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -127,6 +129,7 @@ class MobileState:
         self.sent.clear()
         self.subscriptions.clear()
         self.reactions.clear()
+        self.reacted.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -156,7 +159,12 @@ class MobileState:
         elif event.kind == UNSUBSCRIBED:
             self.subscriptions.pop(str(payload["endpoint"]), None)
         elif event.kind == FEEDBACK_REACTION:
-            self.reactions.add(str(payload.get("reaction_id")))
+            reaction_id = str(payload.get("reaction_id"))
+            self.reactions.add(reaction_id)
+            if reaction_id.startswith("app:"):
+                self.reacted.setdefault(str(payload["remote_id"]), []).append(
+                    str(payload.get("emoji") or "")
+                )
         elif event.kind in ("message.received", APPROVAL_DECIDED):
             self.handled.update(str(ref) for ref in payload.get("refs", []))
 
@@ -165,6 +173,10 @@ class MobileState:
 
     def find(self, ref: str) -> Said | None:
         return next((s for s in reversed(self.said) if s.ref == ref), None)
+
+    def public(self, said: Said) -> dict[str, Any]:
+        """What the app shows of a message: the message, and his reactions on it."""
+        return {**said.public(), "reactions": self.reacted.get(said.ref, [])}
 
 
 class Sender(Protocol):
@@ -202,6 +214,9 @@ class Hub:
 class Asked:
     approval_id: str
     question: str
+    tool: str
+    arguments: dict[str, Any]
+    reason: str
     expires_at: datetime
     future: asyncio.Future[tuple[bool, str]]
 
@@ -241,6 +256,8 @@ class MobileChannel:
         self.state = MobileState()
         self._runner = ProjectionRunner(journal, [self.state])
         self.hub = Hub()
+        self.typing = False
+        """Whether Orion is working on his message right now (an app that opens shows it)."""
         self.asked: dict[str, Asked] = {}
         inbox.register(self)
 
@@ -368,7 +385,7 @@ class MobileChannel:
         )
         said = self.state.find(key)
         assert said is not None
-        self.hub.publish({"type": "message", "message": said.public()})
+        self.hub.publish({"type": "message", "message": self.state.public(said)})
         if not self.hub.listening:
             body = text or (f"📎 {files[0].name}" if files else "")
             await self._notify({"title": "Orion", "body": body[:PUSH_PREVIEW], "tag": key})
@@ -402,10 +419,12 @@ class MobileChannel:
 
     @asynccontextmanager
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
+        self.typing = True
         self.hub.publish({"type": "typing", "on": True})
         try:
             yield
         finally:
+            self.typing = False
             self.hub.publish({"type": "typing", "on": False})
 
     # -- approvals ----------------------------------------------------------------------------
@@ -424,7 +443,15 @@ class MobileChannel:
         )
         future: asyncio.Future[tuple[bool, str]] = asyncio.get_running_loop().create_future()
         expires = datetime.now(UTC).timestamp() + self._timeout
-        asked = Asked(approval_id, question, datetime.fromtimestamp(expires, UTC), future)
+        asked = Asked(
+            approval_id,
+            question,
+            proposal.tool.name,
+            arguments,
+            proposal.ask_reason,
+            datetime.fromtimestamp(expires, UTC),
+            future,
+        )
         self.asked[approval_id] = asked
         self.hub.publish({"type": "approval", "approval": self.public(asked)})
         await self._notify(
@@ -452,8 +479,18 @@ class MobileChannel:
         return {
             "id": asked.approval_id,
             "question": asked.question,
+            "tool": asked.tool,
+            "arguments": asked.arguments,
+            "reason": asked.reason,
             "expires_at": asked.expires_at.isoformat(),
         }
+
+    def refuse(self, approval_id: str, device: str) -> None:
+        """No, from a signed-in app: refusing needs no Face ID, it is what silence does too."""
+        asked = self.asked.get(approval_id)
+        if asked is None or asked.future.done():
+            raise LookupError("no such question pending")
+        asked.future.set_result((False, f"session:{device}"))
 
     async def answer(
         self, approval_id: str, yes: bool, ceremony: str, credential: dict[str, Any]

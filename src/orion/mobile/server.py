@@ -46,6 +46,8 @@ STATIC = {
     "app.js": ("app.js", "text/javascript; charset=utf-8"),
     "app.css": ("app.css", "text/css; charset=utf-8"),
     "icon.svg": ("icon.svg", "image/svg+xml"),
+    "icon-180.png": ("icon-180.png", "image/png"),
+    "icon-512.png": ("icon-512.png", "image/png"),
 }
 API_HEADERS = {"cache-control": "no-store", "referrer-policy": "no-referrer"}
 
@@ -193,11 +195,16 @@ def mobile_app(
         return _ok({"device": device, "push_key": vapid.public_key if vapid else None})
 
     async def messages(request: Request, _device: str) -> Response:
+        """The latest messages after `after`, or the ones just before `before` (scrolling
+        back), `limit` at most; `more` says whether older ones remain."""
         after = int(request.query_params.get("after", "0"))
+        before = int(request.query_params.get("before", "0")) or None
         limit = min(int(request.query_params.get("limit", "100")), 500)
         await channel.sync()
-        said = [s for s in channel.state.said if s.seq > after]
-        return _ok({"messages": [s.public() for s in said[-limit:]]})
+        state = channel.state
+        said = [s for s in state.said if s.seq > after and (before is None or s.seq < before)]
+        shown = said[-limit:]
+        return _ok({"messages": [state.public(s) for s in shown], "more": len(said) > len(shown)})
 
     async def send(request: Request, device: str) -> Response:
         sent = await body(request)
@@ -219,8 +226,12 @@ def mobile_app(
     async def stream(_request: Request, _device: str) -> Response:
         async def events() -> AsyncGenerator[str]:
             async with channel.hub.listen() as queue:
-                pending = [channel.public(a) for a in channel.asked.values()]
-                yield f"data: {json.dumps({'type': 'ready', 'approvals': pending})}\n\n"
+                ready = {
+                    "type": "ready",
+                    "approvals": [channel.public(a) for a in channel.asked.values()],
+                    "typing": channel.typing,
+                }
+                yield f"data: {json.dumps(ready, ensure_ascii=False)}\n\n"
                 while True:
                     try:
                         event = await asyncio.wait_for(queue.get(), HEARTBEAT_SECONDS)
@@ -266,6 +277,14 @@ def mobile_app(
             return _refused("no such question", 404)
         ceremony, options = await devices.signing_options(f"approval:{approval_id}:{answer}")
         return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def approval_refuse(request: Request, device: str) -> Response:
+        try:
+            channel.refuse(str(request.path_params["approval"]), device)
+        except LookupError:
+            return _refused("no such question pending", 404)
+        log.info("mobile.answered", approval=request.path_params["approval"], answer="no")
+        return _ok({})
 
     async def approval_answer(request: Request, _device: str) -> Response:
         approval_id = str(request.path_params["approval"])
@@ -314,6 +333,11 @@ def mobile_app(
             Route(
                 f"{PREFIX}/api/approvals/{{approval}}/options",
                 guarded(approval_options),
+                methods=["POST"],
+            ),
+            Route(
+                f"{PREFIX}/api/approvals/{{approval}}/refuse",
+                guarded(approval_refuse),
                 methods=["POST"],
             ),
             Route(

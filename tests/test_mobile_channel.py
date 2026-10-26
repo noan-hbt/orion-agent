@@ -236,3 +236,61 @@ async def test_a_notification_when_the_app_is_closed_not_when_it_is_open(world: 
     assert len(world.pusher.sent) == 1  # it was open: no notification
     with pytest.raises(ValueError):
         await world.channel.subscribe("iphone", "https://10.0.0.1/x", "k", "a")
+
+
+async def test_he_scrolls_back_and_sees_his_reactions(world: World) -> None:
+    await pair(world)
+    for n in range(5):
+        await world.channel.deliver(f"message {n}", None)
+    latest = (await world.http.get("/app/api/messages?limit=2")).json()
+    assert [m["text"] for m in latest["messages"]] == ["message 3", "message 4"]
+    assert latest["more"]
+    before = latest["messages"][0]["seq"]
+    older = (await world.http.get(f"/app/api/messages?before={before}&limit=10")).json()
+    assert [m["text"] for m in older["messages"]] == [f"message {n}" for n in range(3)]
+    assert not older["more"]
+
+    ref = latest["messages"][1]["ref"]
+    await world.http.post("/app/api/react", json={"ref": ref, "emoji": "❤️"})
+    shown = (await world.http.get("/app/api/messages?limit=1")).json()["messages"][0]
+    assert shown["reactions"] == ["❤️"]
+
+
+async def test_no_needs_no_face_id_and_the_question_comes_readable(world: World) -> None:
+    await pair(world)
+
+    class Mail(Empty):
+        to: str
+
+    tool = Tool(name="send_mail", description="s", input_model=Mail, handler=nothing)
+    proposal = ActionProposal(tool, Mail(to="agence@immo.fr"), Trust.OWNER, "o", "nouvelle agence")
+    asking = asyncio.create_task(world.channel.approve(proposal))
+    await until(lambda: bool(world.channel.asked))
+    [pending] = (await world.http.get("/app/api/approvals")).json()["approvals"]
+    assert pending["tool"] == "send_mail"
+    assert pending["arguments"] == {"to": "agence@immo.fr"}
+    assert pending["reason"] == "nouvelle agence"
+
+    refused = await world.http.post(f"/app/api/approvals/{pending['id']}/refuse")
+    assert refused.status_code == 200
+    approval = await asking
+    assert not approval.granted and approval.reached
+    again = await world.http.post(f"/app/api/approvals/{pending['id']}/refuse")
+    assert again.status_code == 404
+
+
+async def test_an_app_that_opens_sees_orion_at_work(world: World) -> None:
+    world.provider.extend(reply("Fini."))
+    item = world.channel._inbound(  # pyright: ignore[reportPrivateUsage]
+        await world.channel.receive("iphone", "travaille")
+    )
+    async with world.channel.hub.listen() as live, world.channel.working(item):
+        assert world.channel.typing
+        assert (await live.get()) == {"type": "typing", "on": True}
+    assert not world.channel.typing
+
+
+async def test_the_home_screen_icon_is_a_picture(world: World) -> None:
+    icon = await world.http.get("/app/icon-180.png")
+    assert icon.status_code == 200 and icon.content.startswith(b"\x89PNG")
+    assert icon.headers["content-type"] == "image/png"
