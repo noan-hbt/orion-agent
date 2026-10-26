@@ -60,9 +60,9 @@ def handover_app(desk: BrowserDesk, is_owner: OwnerCheck) -> Starlette:
             said = "Merci, je reprends." if do == "done" else "D'accord, je laisse tomber."
             return JSONResponse({"done": said})
         try:
-            size = await desk.on_tab(found.thread, lambda s: _do(s, do, body))
+            size = await desk.on_tab(found.thread, lambda s: act_on(s, do, body))
             if do == "type":  # into a sign-in form: offered to keep once he is done (D120)
-                desk.note_typed(token, await desk.on_tab(found.thread, _focused))
+                desk.note_typed(token, await desk.on_tab(found.thread, focused))
         except (BrowserError, Refused) as exc:
             return JSONResponse({"error": f"Pas pu : {exc}"}, 409)
         tab = desk.tab(found.thread)
@@ -124,11 +124,11 @@ def handover_app(desk: BrowserDesk, is_owner: OwnerCheck) -> Starlette:
     )
 
 
-async def _focused(session: Session) -> dict[str, str] | None:
+async def focused(session: Session) -> dict[str, str] | None:
     return await session.focused_field()
 
 
-async def _do(session: Session, do: str, body: dict[str, Any]) -> dict[str, int]:
+async def act_on(session: Session, do: str, body: dict[str, Any]) -> dict[str, int]:
     """One of his actions on the tab; returns the tab's size, to map his taps onto it."""
     if do == "tap":
         await session.tap(float(body.get("x", 0)), float(body.get("y", 0)))

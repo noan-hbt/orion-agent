@@ -2917,3 +2917,57 @@ afficher une action et en faire signer une autre. Le gardien tient donc maintena
 
 En mode réuni (Railway, un poste), le même processus sert tout, sur les deux ports, pour que
 les mêmes règles de Caddy marchent.
+
+## D135 — L'application en quatre onglets, et le serveur réglé depuis le téléphone
+
+*26/10/2026 · acceptée · étend D125, D127 et D92*
+
+L'application n'était qu'une conversation, avec un panneau Contrôle et un panneau Pour toi
+derrière deux boutons. Il fallait encore le serveur pour lire `orion.toml`, allumer un module ou
+appairer un deuxième téléphone. Désormais :
+- **quatre onglets**, dans une barre flottante en verre (style iOS 26), avec la recherche dans
+  ce qu'Orion sait dans un rond à part :
+  - **Maintenant** : ce qu'Orion fait, puis ce qui attend le propriétaire (les accords à
+    glisser, les questions), les tâches de fond, ce qu'Orion attend des autres et ce qu'il fera
+    bientôt. Le badge compte ce qui l'attend ;
+  - **Conversation** : comme avant ;
+  - **Carnet** : la mémoire, les engagements, le manuel, l'activité, ce qui est prévu, ce
+    qu'Orion fait seul ;
+  - **Réglages** : la pause, les coûts, les heures calmes, puis le serveur et les téléphones ;
+- **le serveur, en lecture** (`GET /app/api/server`) : la version, chaque réglage
+  d'`orion.toml` qui peut changer par message avec le niveau de oui qu'il demande (D92), les
+  modules allumés ou éteints et le catalogue (D105). Les secrets et les chemins n'y figurent
+  pas ;
+- **un changement se demande dans la conversation**. Toucher un réglage, un module ou
+  « Installer » envoie à Orion la demande exacte (« Dans orion.toml, mets `x` à `y` »). Orion la
+  vérifie en entier, et le propriétaire la signe avec Face ID, comme par message. L'application
+  n'écrit donc jamais le fichier : c'est le même chemin, vérifié par le gardien ;
+- **les téléphones** (`/app/devices`, au bord, donc au gardien en mode séparé) : la liste ;
+  un nouveau code d'appairage, ou un téléphone retiré, chacun signé avec Face ID pour ce
+  changement seul (`pair:<nom>`, `revoke:<nom>`). Le téléphone en main ne se retire pas lui-même :
+  il se déconnecte.
+- Orion parle de lui-même à la première personne partout dans l'application.
+
+- **les missions** (D47), dans le Carnet et dans Maintenant : le but, les critères, le rythme,
+  le dernier passage, ce qu'Orion a retenu et ce qui est écarté avec son motif. Depuis l'app, le
+  propriétaire demande un passage tout de suite, change le rythme, écarte un élément avec son
+  motif ou arrête la mission. Chaque geste est journalisé comme venant de lui. Le dernier
+  passage est marqué quand il repose sur des pages lues ;
+- **les machines** (D1) : lesquelles sont en ligne et ce que chacune permet, et en couper une.
+  En appairer une reste sur le serveur (`orion hands pair`) : ce qu'une machine renvoie compte
+  comme venant du propriétaire, donc une session volée ne doit pas pouvoir en ajouter ;
+- **la version** : le commit qui tourne, sa date, et une mise à jour écartée par le serveur
+  (`update.bad`, D94). Il n'y a rien à lancer : le serveur regarde toutes les deux minutes et
+  revient en arrière si ça casse.
+- **le reste du carnet** (`orion.mobile.notebook`) :
+  - les papiers (D131), à chercher et à ouvrir, avec ceux qui expirent ;
+  - les proches, avec ce qu'Orion sait d'eux, leur anniversaire, leur rythme et « Vu
+    aujourd'hui », journalisé comme venant du propriétaire ;
+  - les pages de ses semaines (D52) ;
+- **les points du jour** : leurs heures se règlent dans Réglages, jusqu'à six ;
+- **prendre la main sur le navigateur** (D116) : une passation apparaît dans Maintenant, avec
+  l'onglet en direct (toucher pour cliquer, taper dessous, « J'ai fini »). Elle marche aussi
+  sans Telegram, l'app suffit. Ce qu'il tape va dans la page, jamais dans le journal ni les
+  logs ;
+- **le mode voix** : un rond pour parler, et les réponses d'Orion lues à voix haute (sa propre
+  voix s'il en envoie une, sinon la synthèse de l'iPhone).

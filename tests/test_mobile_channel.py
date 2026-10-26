@@ -294,3 +294,58 @@ async def test_the_home_screen_icon_is_a_picture(world: World) -> None:
     icon = await world.http.get("/app/icon-180.png")
     assert icon.status_code == 200 and icon.content.startswith(b"\x89PNG")
     assert icon.headers["content-type"] == "image/png"
+
+
+async def test_another_phone_is_added_or_let_go_only_with_face_id(world: World) -> None:
+    await pair(world)
+    http = world.http
+    assert (await http.get("/app/devices")).json() == {"devices": ["iphone"], "this": "iphone"}
+
+    # Unsigned, or signed for another change: nothing happens.
+    unsigned = await http.post("/app/devices/pair/ipad", json={"ceremony": "x", "credential": {}})
+    assert unsigned.status_code == 403
+    other = (await http.post("/app/devices/revoke/ipad/options")).json()
+    crossed = await http.post(
+        "/app/devices/pair/ipad",
+        json={
+            "ceremony": other["ceremony"],
+            "credential": world.phone.sign(json.dumps(other["options"])),
+        },
+    )
+    assert crossed.status_code == 403
+    assert (await http.post("/app/devices/revoke/iphone/options")).status_code == 400
+    assert (await http.post("/app/devices/pair/Mon%20iPad/options")).status_code == 400
+
+    opened = (await http.post("/app/devices/pair/ipad/options")).json()
+    added = await http.post(
+        "/app/devices/pair/ipad",
+        json={
+            "ceremony": opened["ceremony"],
+            "credential": world.phone.sign(json.dumps(opened["options"])),
+        },
+    )
+    assert added.status_code == 200, added.text
+    code = added.json()["code"]
+    ipad = FakePasskey(URL, "orion.example")
+    started = (await http.post("/app/pair/options", json={"code": code})).json()
+    paired = await http.post(
+        "/app/pair",
+        json={
+            "ceremony": started["ceremony"],
+            "credential": ipad.create(json.dumps(started["options"])),
+        },
+    )
+    assert paired.status_code == 200
+    assert (await http.get("/app/devices")).json()["devices"] == ["ipad", "iphone"]
+
+    # Signed in as the iPad now (pairing opened its session): it lets the iPhone go.
+    opened = (await http.post("/app/devices/revoke/iphone/options")).json()
+    gone = await http.post(
+        "/app/devices/revoke/iphone",
+        json={
+            "ceremony": opened["ceremony"],
+            "credential": ipad.sign(json.dumps(opened["options"])),
+        },
+    )
+    assert gone.status_code == 200, gone.text
+    assert (await http.get("/app/devices")).json()["devices"] == ["ipad"]

@@ -1,9 +1,10 @@
 """The app's HTTP side (D125), under `/app/`, in two parts.
 
-**The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals and the
-notifications. Run split (D28), the guardian serves it on the public port: the passkeys, the
-text of a question and the signature that answers it never pass through the core, which could
-otherwise show one action and get another signed.
+**The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals, the
+notifications, and the phones (another one added, or one let go, each signed with Face ID).
+Run split (D28), the guardian serves it on the public port: the passkeys, the text of a
+question and the signature that answers it never pass through the core, which could otherwise
+show one action and get another signed.
 
 **The conversation** (`core_routes`, under `/app/api/`): messages, files, the live stream, the
 controls. The core serves it; run split, on its own port, checking each session with the
@@ -21,6 +22,7 @@ import asyncio
 import base64
 import binascii
 import json
+import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from importlib import resources
@@ -35,6 +37,7 @@ from starlette.routing import BaseRoute, Route
 from orion.mobile.channel import MAX_FILE_BYTES, MobileChannel
 from orion.mobile.control import Control, ControlError
 from orion.mobile.devices import DeviceError, Devices
+from orion.mobile.notebook import Notebook
 from orion.mobile.push import Vapid
 
 log = structlog.get_logger(__name__)
@@ -44,6 +47,8 @@ COOKIE = "orion_app"
 HEARTBEAT_SECONDS = 20.0
 MAX_FAILURES = 10
 """Wrong pairing codes before pairing stops until a restart."""
+DEVICE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+"""A phone's name, as `orion app pair <name>` takes it."""
 MAX_BODY = 40 * 1024 * 1024
 """Base64 makes a 25 MB file 34 MB."""
 CSP = (
@@ -283,6 +288,46 @@ def edge_routes(
         log.info("mobile.answered", approval=approval_id, answer=answer, device=device)
         return _ok({})
 
+    # -- the phones: listed, and another one added or let go, each signed with Face ID -------
+
+    async def phones(_request: Request, device: str) -> Response:
+        await devices.sync()
+        return _ok({"devices": sorted(devices.state.devices), "this": device})
+
+    def purpose(request: Request, device: str) -> str:
+        """`pair:<name>` or `revoke:<name>`: a signature answers that one change only."""
+        how, name = str(request.path_params["how"]), str(request.path_params["name"])
+        if how not in ("pair", "revoke") or not DEVICE_NAME.fullmatch(name):
+            raise ValueError("pair or revoke, and a name of lowercase letters and digits")
+        if how == "revoke" and name == device:
+            raise ValueError("this phone: sign out instead")
+        return f"{how}:{name}"
+
+    async def phone_options(request: Request, device: str) -> Response:
+        try:
+            ceremony, options = await devices.signing_options(purpose(request, device))
+        except DeviceError as exc:
+            return _refused(str(exc), 409)
+        return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def phone_change(request: Request, device: str) -> Response:
+        wanted = purpose(request, device)
+        sent = await body(request)
+        try:
+            signer = await devices.verify(str(sent["ceremony"]), wanted, dict(sent["credential"]))
+        except DeviceError as exc:
+            log.warning("mobile.phone_refused", change=wanted, error=str(exc))
+            return _refused(str(exc), 403)
+        how, name = wanted.split(":", 1)
+        log.info("mobile.phone_changed", change=wanted, device=signer)
+        if how == "pair":
+            if name in devices.state.devices:
+                return _refused("a phone has that name already", 409)
+            return _ok({"code": await devices.new_code(name), "device": name})
+        if not await devices.revoke(name):
+            return _refused("no such phone", 404)
+        return _ok({})
+
     async def subscribe(request: Request, device: str) -> Response:
         if vapid is None:
             return _refused("notifications are off", 409)
@@ -313,6 +358,13 @@ def edge_routes(
         ),
         Route(f"{PREFIX}/approvals/{{approval}}", gate.guarded(approval_answer), methods=["POST"]),
         Route(f"{PREFIX}/push/subscribe", gate.guarded(subscribe), methods=["POST"]),
+        Route(f"{PREFIX}/devices", gate.guarded(phones)),
+        Route(
+            f"{PREFIX}/devices/{{how}}/{{name}}/options",
+            gate.guarded(phone_options),
+            methods=["POST"],
+        ),
+        Route(f"{PREFIX}/devices/{{how}}/{{name}}", gate.guarded(phone_change), methods=["POST"]),
         Route(f"{PREFIX}/", static),
         Route(f"{PREFIX}/{{name}}", static),
     ]
@@ -322,7 +374,10 @@ def edge_routes(
 
 
 def core_routes(
-    channel: MobileChannel, gate: Gate, control: Control | None = None
+    channel: MobileChannel,
+    gate: Gate,
+    control: Control | None = None,
+    notebook: Notebook | None = None,
 ) -> list[BaseRoute]:
     async def messages(request: Request, _device: str) -> Response:
         """The latest messages after `after`, or the ones just before `before` (scrolling
@@ -465,6 +520,84 @@ def core_routes(
         await c.drop_wait(str(request.path_params["id"]))
         return {}
 
+    async def server(_request: Request, c: Control) -> object:
+        return await c.server()
+
+    async def missions(_request: Request, c: Control) -> object:
+        return {"missions": await c.mission_list()}
+
+    async def mission_now(request: Request, c: Control) -> object:
+        return {"left": await c.mission_now(str(request.path_params["id"]))}
+
+    async def mission_pace(request: Request, c: Control) -> object:
+        hours = int((await body(request))["every_hours"])
+        await c.mission_pace(str(request.path_params["id"]), hours)
+        return {}
+
+    async def mission_reject(request: Request, c: Control) -> object:
+        sent = await body(request)
+        await c.mission_reject(
+            str(request.path_params["id"]), str(sent["key"]), str(sent.get("why") or "")
+        )
+        return {}
+
+    async def mission_close(request: Request, c: Control) -> object:
+        await c.mission_close(str(request.path_params["id"]))
+        return {}
+
+    async def machines(_request: Request, c: Control) -> object:
+        return {"machines": await c.machines()}
+
+    async def machine_revoke(request: Request, c: Control) -> object:
+        await c.machine_revoke(str(request.path_params["name"]))
+        return {}
+
+    def shelf(handler: Callable[[Request, Notebook], Awaitable[Response | object]]) -> Guarded:
+        async def run(request: Request, _device: str) -> Response:
+            if notebook is None:
+                return _refused("the notebook is not available here", 404)
+            try:
+                done = await handler(request, notebook)
+            except ControlError as exc:
+                return _refused(str(exc), 404)
+            return done if isinstance(done, Response) else _ok(done)
+
+        return run
+
+    async def papers(request: Request, n: Notebook) -> object:
+        return {"papers": await n.paper_list(request.query_params.get("q", ""))}
+
+    async def paper(request: Request, n: Notebook) -> Response:
+        path, content_type, name = await n.paper_file(str(request.path_params["id"]))
+        return FileResponse(
+            path,
+            media_type=content_type or None,
+            filename=name,
+            content_disposition_type="inline",
+            headers=API_HEADERS,
+        )
+
+    async def people(_request: Request, n: Notebook) -> object:
+        return {"people": await n.people()}
+
+    async def saw(request: Request, n: Notebook) -> object:
+        await n.saw(str((await body(request))["name"]))
+        return {}
+
+    async def pages(_request: Request, n: Notebook) -> object:
+        return {"pages": await n.pages()}
+
+    async def handovers(_request: Request, n: Notebook) -> object:
+        return {"handovers": n.handovers()}
+
+    async def browser_shot(request: Request, n: Notebook) -> Response:
+        picture = await n.shot(str(request.path_params["token"]))
+        return Response(picture, media_type="image/png", headers=API_HEADERS)
+
+    async def browser_act(request: Request, n: Notebook) -> object:
+        # What he types goes into the page only: never logged, even on a bad request.
+        return await n.act(str(request.path_params["token"]), await body(request))
+
     def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
             f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
@@ -493,6 +626,22 @@ def core_routes(
         api("for-you", controls(for_you)),
         api("tasks/{id}/stop", controls(stop_task), post=True),
         api("waits/{id}/drop", controls(drop_wait), post=True),
+        api("server", controls(server)),
+        api("missions", controls(missions)),
+        api("missions/{id}/now", controls(mission_now), post=True),
+        api("missions/{id}/pace", controls(mission_pace), post=True),
+        api("missions/{id}/reject", controls(mission_reject), post=True),
+        api("missions/{id}/close", controls(mission_close), post=True),
+        api("machines", controls(machines)),
+        api("machines/{name}/revoke", controls(machine_revoke), post=True),
+        api("papers", shelf(papers)),
+        api("papers/{id}/file", shelf(paper)),
+        api("people", shelf(people)),
+        api("people/saw", shelf(saw), post=True),
+        api("chronicle", shelf(pages)),
+        api("browser", shelf(handovers)),
+        api("browser/{token}/shot", shelf(browser_shot)),
+        api("browser/{token}/act", shelf(browser_act), post=True),
     ]
 
 
@@ -502,6 +651,7 @@ def mobile_app(
     secure_cookie: bool,
     session_days: int,
     control: Control | None = None,
+    notebook: Notebook | None = None,
 ) -> Starlette:
     """The whole app, in one process: the channel is its own desk, its devices its own gate."""
     devices = channel.devices
@@ -510,15 +660,20 @@ def mobile_app(
     gate = Gate(devices.origin, devices.session_device)
     return Starlette(
         routes=[
-            *core_routes(channel, gate, control),
+            *core_routes(channel, gate, control, notebook),
             *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days),
         ]
     )
 
 
-def core_app(channel: MobileChannel, gate: Gate, control: Control | None = None) -> Starlette:
+def core_app(
+    channel: MobileChannel,
+    gate: Gate,
+    control: Control | None = None,
+    notebook: Notebook | None = None,
+) -> Starlette:
     """The conversation alone (run split): sessions are checked with the guardian."""
-    return Starlette(routes=core_routes(channel, gate, control))
+    return Starlette(routes=core_routes(channel, gate, control, notebook))
 
 
 def edge_app(

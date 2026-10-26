@@ -179,6 +179,8 @@ class BrowserDesk:
         """(text, address) → the owner gets a Telegram button opening that address."""
         self.base_url = ""
         """Where the hand-over page is served (the console's public address)."""
+        self.in_app = False
+        """The app shows a hand-over under way in Maintenant, with the live tab (D135)."""
 
     @property
     def session(self) -> Session:
@@ -345,13 +347,15 @@ class BrowserDesk:
         return await self._act(ctx, lambda s: s.fill_secret(element, value, sites, what))
 
     async def hand_over(self, why: str, ctx: ToolContext) -> str:
-        """The owner takes the tab in hand, from Telegram (D116): he signs in, types a code,
-        solves a captcha; Orion picks up where he left it when he says he is done."""
+        """The owner takes the tab in hand, from Telegram or the app (D116, D135): he signs in,
+        types a code, solves a captcha; Orion picks up where he left it when he says he is
+        done."""
         if ctx.thread_id not in self._live:
             raise Refused("Open the page first (browser open): he gets this very tab.")
-        if self.notify is None or not self.base_url:
+        telegram = self.notify is not None and bool(self.base_url)
+        if not telegram and not self.in_app:
             raise Refused(
-                "Handing over needs Telegram and the console's public address "
+                "Handing over needs the app, or Telegram and the console's public address "
                 "([modules.console] public_url)."
             )
         token = tokens.token_urlsafe(24)
@@ -359,15 +363,24 @@ class BrowserDesk:
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(ctx.thread_id, why, now + HANDOVER_SECONDS)
         self.held.add(ctx.thread_id)
-        await self.notify(
-            f"{why}\nTouche le bouton : c'est mon navigateur, sur la page où j'en suis. Fais ce "
-            "qu'il faut (te connecter, un code…), puis « J'ai fini » : je reprends. Ce que tu "
-            "tapes va dans la page, pas dans notre conversation.",
-            f"{self.base_url}/?t={token}",
-        )
+        if telegram and self.notify is not None:
+            await self.notify(
+                f"{why}\nTouche le bouton : c'est mon navigateur, sur la page où j'en suis. Fais "
+                "ce qu'il faut (te connecter, un code…), puis « J'ai fini » : je reprends. Ce que "
+                "tu tapes va dans la page, pas dans notre conversation.",
+                f"{self.base_url}/?t={token}",
+            )
         log.info("browser.handed_over", thread=ctx.thread_id)
+        where = (
+            "Il a reçu un bouton sur Telegram, et « Prendre la main » dans l'onglet Maintenant "
+            "de l'app : les deux lui ouvrent"
+            if telegram and self.in_app
+            else "Il a reçu un bouton qui lui ouvre"
+            if telegram
+            else "Il a « Prendre la main » dans l'onglet Maintenant de l'app, qui lui ouvre"
+        )
         return (
-            "Il a reçu un bouton qui lui ouvre cet onglet de ton navigateur. Dis-lui en une "
+            f"{where} cet onglet de ton navigateur. Dis-lui en une "
             "phrase ce qu'il doit y faire, puis attends : quand il aura fini, tu le sauras et tu "
             "reprendras sur la page où il l'aura laissée. Ne touche pas à cet onglet d'ici là."
         )

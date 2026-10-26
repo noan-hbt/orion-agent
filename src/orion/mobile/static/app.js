@@ -1,4 +1,5 @@
-// Orion's app (D125): pairing, signing in, the conversation, approvals, notifications.
+// Orion's app (D125): pairing, signing in, four tabs (now, the conversation, his notebook,
+// the settings that replace the server), approvals, notifications.
 // No framework and no build: one module, the DOM built by hand, nothing Orion or a page
 // wrote ever parsed as HTML (text goes in as text; links are made from it).
 
@@ -54,6 +55,15 @@ const ICONS = {
   search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  now: '<circle cx="12" cy="12" r="6"/><circle cx="18" cy="6" r="1.6" fill="currentColor" stroke="none"/>',
+  chat: '<path d="M4 11.5C4 7.4 7.6 4.5 12 4.5s8 2.9 8 7-3.6 7-8 7c-1 0-2-.1-2.9-.4L5 19.5l1.2-3.3C4.8 15 4 13.3 4 11.5z"/>',
+  book: '<path d="M6 4h11a2 2 0 0 1 2 2v14H8a2 2 0 0 1-2-2z"/><path d="M6 16a2 2 0 0 1 2-2h11"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  server: '<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  blocks: '<rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><path d="M16.5 13v7M13 16.5h7"/>',
+  phone: '<rect x="7" y="3" width="10" height="18" rx="3"/><path d="M11 18h2"/>',
+  toml: '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h4"/>',
+  chevron: '<path d="M9 5l7 7-7 7"/>',
 };
 
 function icon(name, size = 20, stroke = "currentColor") {
@@ -174,10 +184,12 @@ const state = {
   live: false,
   attached: [], // files picked for the next message
   draft: "",
+  tab: "now",
 };
 
 try {
   state.draft = localStorage.getItem("orion.draft") || "";
+  state.tab = localStorage.getItem("orion.tab") || "now";
 } catch {
   // private mode: no draft kept
 }
@@ -347,7 +359,7 @@ function pairing() {
         h("label", { class: "code" }, input, boxes),
         go,
         status,
-        h("p", { class: "hint" }, "Ta clé reste dans ton iPhone, protégée par Face ID. Orion ne garde que sa partie publique."),
+        h("p", { class: "hint" }, "Ta clé reste dans ton iPhone, protégée par Face ID. Je n'en garde que la partie publique."),
       ),
       h("button", { class: "pill ghost wide", onclick: () => welcome() }, "Retour"),
     ),
@@ -386,6 +398,8 @@ async function conversation() {
       grow();
       sendMode();
     },
+    onfocus: () => document.body.classList.add("typing"),
+    onblur: () => document.body.classList.remove("typing"),
     onkeydown: (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) {
         event.preventDefault();
@@ -408,20 +422,12 @@ async function conversation() {
       h("span", { class: "avatar" }, icon("orion", 22, "none")),
       h("span", {}, h("h1", {}, "Orion"), view.status),
     ),
-    h(
-      "div",
-      { class: "actions" },
-      h(
-        "button",
-        { class: "round glass with-badge", "aria-label": "Pour toi", onclick: forYou },
-        icon("bell", 20),
-        view.badge,
-      ),
-      h("button", { class: "round glass", "aria-label": "Contrôle", onclick: menu }, icon("menu", 20)),
-    ),
+    h("button", { class: "round glass", type: "button", "aria-label": "Me parler", onclick: voiceMode }, icon("mic", 20)),
   );
 
-  app.replaceChildren(
+  view.talk = h(
+    "section",
+    { class: "tab", "aria-label": "Conversation" },
     top,
     view.thread,
     view.attached,
@@ -435,6 +441,7 @@ async function conversation() {
     view.camera,
     view.photos,
   );
+  shell();
   grow();
   sendMode();
 
@@ -456,6 +463,7 @@ async function conversation() {
   bottom(true);
   listen();
   offerNotifications();
+  show(state.tab);
 }
 
 function grow() {
@@ -748,7 +756,7 @@ function first() {
       "div",
       { class: "first" },
       h("h2", {}, "Bonjour."),
-      h("p", {}, "Tu peux tout lui demander ici, comme sur Telegram, et lui répondre d'un geste quand il a besoin de toi."),
+      h("p", {}, "Tu peux tout me demander ici, comme sur Telegram, et me répondre d'un geste quand j'ai besoin de toi."),
       h(
         "div",
         { class: "bento" },
@@ -967,10 +975,13 @@ function listen() {
       setWork(data.work);
       loadApprovals();
       countQuestions();
+      nowChanged();
     } else if (data.type === "message") {
       add(data.message);
+      speak(data.message);
       if (data.message.who === "orion") setTyping(false, true);
       countQuestions();
+      nowChanged();
     } else if (data.type === "typing") {
       setTyping(data.on);
       if (!data.on) setWork(null);
@@ -978,9 +989,11 @@ function listen() {
       setWork(data.work);
     } else if (data.type === "approval") {
       loadApprovals().then(() => bottom(true));
+      nowChanged();
     } else if (data.type === "approval_closed") {
       state.approvals.delete(data.id);
       paintApprovals();
+      nowChanged();
     }
   };
   source.onerror = async () => {
@@ -1036,6 +1049,7 @@ function setWork(work) {
   const shown = work && (work.steps > 0 || work.doing.length);
   view.work.hidden = !shown;
   view.typing.hidden = !state.typing || !!shown;
+  paintNowWork();
   if (!shown) return;
   const since = new Date(work.since);
   const clock = h("span", { class: "clock" });
@@ -1086,7 +1100,7 @@ function setWork(work) {
       "header",
       {},
       h("span", { class: "ico" }, icon("orion", 18, "none")),
-      h("span", {}, h("b", {}, "Il travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
+      h("span", {}, h("b", {}, "Je travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
     ),
     h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
     h("div", { class: "acts" }, later, stop),
@@ -1129,6 +1143,7 @@ function paintBadge() {
   const count = state.approvals.size + (state.questions || 0);
   view.badge.hidden = !count;
   view.badge.textContent = String(count);
+  paintNowWork();
 }
 
 async function countQuestions() {
@@ -1157,7 +1172,7 @@ function askCard(asked) {
       "header",
       {},
       h("span", { class: "ico" }, icon("shield", 18, "#fff")),
-      h("span", {}, h("b", {}, "Il te demande ton accord"), left),
+      h("span", {}, h("b", {}, "J'ai besoin de ton accord"), left),
     ),
     ...details(asked),
     h("div", { class: "row" }, no, slider("Glisse pour accepter", () => accept())),
@@ -1467,118 +1482,1186 @@ function actions() {
   );
 }
 
-// -- Pour toi, the menu -----------------------------------------------------------------------
+// -- the tabs: now, the conversation, his notebook, the settings ------------------------------
 
-function forYou() {
-  panel("Pour toi", async (refresh, close) => {
-    await loadApprovals();
-    let found = { questions: [], waiting_on: [], tasks: [] };
+const TABS = [
+  ["now", "Maintenant", "now"],
+  ["talk", "Conversation", "chat"],
+  ["notebook", "Carnet", "book"],
+  ["settings", "Réglages", "sliders"],
+];
+const DAY_TITLE = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+
+function shell() {
+  view.nowWork = h("section", { class: "hero", "aria-live": "polite" });
+  view.tabs = {
+    now: page("Maintenant", nowFill, () => DAY_TITLE.format(new Date())),
+    talk: view.talk,
+    notebook: page("Carnet", notebookFill, () => "Tout ce que je garde à l'œil pour toi"),
+    settings: page("Réglages", settingsFill),
+  };
+  view.tabButtons = {};
+  const bar = h(
+    "nav",
+    { class: "tabbar glass", "aria-label": "Onglets" },
+    TABS.map(([key, title, name]) =>
+      (view.tabButtons[key] = h(
+        "button",
+        { type: "button", onclick: () => show(key) },
+        icon(name, 24),
+        h("span", {}, title),
+        key === "now" ? view.badge : null,
+      )),
+    ),
+  );
+  const find = h("button", { class: "find glass", type: "button", "aria-label": "Chercher dans ce que je sais", onclick: memoryPanel }, icon("search", 22));
+  app.replaceChildren(...Object.values(view.tabs), h("div", { class: "dock" }, bar, find));
+}
+
+function show(key) {
+  if (!view.tabs[key]) key = "now";
+  state.tab = key;
+  try {
+    localStorage.setItem("orion.tab", key);
+  } catch {
+    // private mode: the app opens on Maintenant next time
+  }
+  for (const [k, el] of Object.entries(view.tabs)) el.hidden = k !== key;
+  for (const [k, b] of Object.entries(view.tabButtons)) b.setAttribute("aria-current", k === key ? "page" : "false");
+  if (key === "talk") bottom(true);
+  else view.tabs[key].refresh();
+}
+
+// A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
+function page(title, fill, subtitle) {
+  const line = h("p");
+  const body = h("div", { class: "page-body" });
+  const el = h("section", { class: "tab page", "aria-label": title }, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
+  let busy = false;
+  el.refresh = async () => {
+    if (busy) return;
+    busy = true;
+    line.textContent = subtitle ? subtitle() : "";
     try {
-      found = await api("api/for-you");
+      body.replaceChildren(...[await fill(el.refresh)].flat(Infinity).filter(Boolean));
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 404)) throw error; // controls off: approvals only
+      if (error instanceof ApiError && error.status === 401) return welcome("Ta session a expiré.");
+      body.replaceChildren(h("p", { class: "empty" }, said(error)));
+    } finally {
+      busy = false;
     }
-    found.approvals = [...state.approvals.values()];
-    state.questions = found.questions.length;
-    paintBadge();
-    const act = (path) => async () => {
-      try {
-        await api(path, {});
-        refresh();
-      } catch (error) {
-        toast(said(error));
-      }
-    };
-    const sections = [];
-    if (found.approvals.length) {
-      sections.push(
-        h("p", { class: "label" }, "Ton accord"),
+  };
+  return el;
+}
+
+// Things changed while he looks at Maintenant: paint it again, a little later, once.
+let nowTimer = null;
+function nowChanged() {
+  clearTimeout(nowTimer);
+  nowTimer = setTimeout(() => state.tab === "now" && view.tabs?.now.refresh(), 500);
+}
+
+function talkAbout(text) {
+  // A change of the server is asked in the conversation: Orion checks it whole, and he signs it.
+  layer.replaceChildren();
+  open.length = 0;
+  show("talk");
+  submit(text);
+}
+
+// -- Maintenant: what I do, what waits on him, what comes ---------------------------------------
+
+function paintNowWork() {
+  if (!view.nowWork) return;
+  const o = state.overview;
+  const work = state.work && (state.work.steps > 0 || state.work.doing.length) ? state.work : null;
+  const waiting = state.approvals.size + (state.questions || 0);
+  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, icon("orion", 36, "none"));
+  let title;
+  let line;
+  let acts = [];
+  if (work) {
+    title = work.doing[0] || "Je travaille.";
+    line = `${plural(work.steps, "étape", "étapes")}${work.cost ? ` · ${money(work.cost)}` : ""}`;
+    acts = [
+      h("button", { class: "pill small", type: "button", onclick: () => show("talk") }, "Suivre"),
+      h("button", { class: "pill small danger", type: "button", disabled: work.stopping, onclick: () => api("api/stop", {}).catch((e) => toast(said(e))) }, work.stopping ? "J'arrête…" : "Arrêter"),
+    ];
+  } else if (o?.paused_until) {
+    title = "Je suis en pause.";
+    line = `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même`;
+    acts = [h("button", { class: "pill small primary", type: "button", onclick: () => api("api/control/pause", { minutes: null }).then(nowChanged, (e) => toast(said(e))) }, "Reprendre")];
+  } else if (waiting) {
+    title = waiting > 1 ? `J'ai besoin de toi pour ${waiting} choses.` : "J'ai besoin de toi pour une chose.";
+    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : "elles sont juste en dessous";
+  } else {
+    title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Rien en cours. Je garde un œil sur tout.";
+    line = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "écris-moi quand tu veux";
+  }
+  view.nowWork.replaceChildren(orb, h("h2", {}, title), h("div", { class: "line" }, h("span", {}, line), acts));
+}
+
+async function nowFill(refresh) {
+  await loadApprovals();
+  let found = { questions: [], waiting_on: [], tasks: [] };
+  try {
+    [found, state.overview] = await Promise.all([api("api/for-you"), api("api/control")]);
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) throw error; // controls off: approvals only
+  }
+  state.questions = found.questions.length;
+  paintBadge();
+  paintNowWork();
+  const act = (path) => async () => {
+    try {
+      await api(path, {});
+      refresh();
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+  const sections = [view.nowWork];
+  const { handovers } = await api("api/browser").catch(() => ({ handovers: [] }));
+  for (const handover of handovers) {
+    sections.push(
+      h(
+        "article",
+        { class: "ask card" },
+        h("header", {}, h("span", { class: "ico" }, icon("face", 18, "#fff")), h("span", {}, h("b", {}, "J'ai besoin de tes mains"), h("small", {}, "une page attend : te connecter, un code…"))),
+        h("p", {}, handover.why),
+        h("button", { class: "pill primary wide", type: "button", onclick: () => browserPanel(handover) }, "Prendre la main"),
+      ),
+    );
+  }
+  const approvals = [...state.approvals.values()];
+  if (approvals.length || found.questions.length) {
+    sections.push(
+      h("h2", { class: "section" }, "À toi de jouer", h("small", {}, String(approvals.length + found.questions.length))),
+      approvals.map(askCard),
+      found.questions.length
+        ? h(
+            "div",
+            { class: "list items" },
+            found.questions.map((q) =>
+              h(
+                "div",
+                { class: "item" },
+                h("span", { class: "ico wait" }, icon("where", 16)),
+                h("span", {}, h("span", { class: "text" }, q.about), h("small", {}, q.auto === "approval" ? "un accord resté sans réponse" : `j'y reviens ${SHORT.format(new Date(q.back_at))}`)),
+                h("span", { class: "acts" }, h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de « ${q.about} » : `) }, "Répondre")),
+              ),
+            ),
+          )
+        : null,
+    );
+  }
+  if (found.tasks.length) {
+    sections.push(
+      h("h2", { class: "section" }, "En tâche de fond"),
+      h(
+        "div",
+        { class: "list items" },
+        found.tasks.map((t) =>
+          h(
+            "div",
+            { class: "item" },
+            h("span", { class: "ico" }, icon("spark", 16)),
+            h(
+              "span",
+              {},
+              h("span", { class: "text" }, t.goal),
+              h("small", {}, [t.waiting ? "attend mon tour" : t.passes ? plural(t.passes, "passage", "passages") : "démarre", `${money(t.spent)} sur ${money(t.budget)}`].join(" · ")),
+              t.budget ? meter(t.spent / t.budget, "") : null,
+              t.last ? h("small", { class: "last" }, excerpt(t.last, 140)) : null,
+            ),
+            h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/tasks/${t.id}/stop`) }, "Arrêter")),
+          ),
+        ),
+      ),
+    );
+  }
+  if (found.waiting_on.length) {
+    sections.push(
+      h("h2", { class: "section" }, "J'attends des autres"),
+      h(
+        "div",
+        { class: "list items" },
+        found.waiting_on.map((w) =>
+          h(
+            "div",
+            { class: "item" },
+            h("span", { class: "ico" }, icon("clock", 16)),
+            h("span", {}, h("span", { class: "text" }, `${w.who} · ${w.about}`), h("small", {}, `${w.round > 1 ? `relance ${w.round - 1} · ` : ""}j'y reviens ${SHORT.format(new Date(w.back_at))}`)),
+            h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/waits/${w.id}/drop`) }, "Laisser")),
+          ),
+        ),
+      ),
+    );
+  }
+  const missions = await api("api/missions")
+    .then((found) => found.missions.filter((m) => !m.closed))
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return [];
+      throw error;
+    });
+  if (missions.length) {
+    sections.push(
+      h("h2", { class: "section" }, "Mes missions", h("small", {}, String(missions.length))),
+      h("div", { class: "list items" }, missions.map((m) => missionRow(m, refresh))),
+    );
+  }
+  const next = state.overview?.next || [];
+  if (next.length) {
+    sections.push(
+      h("h2", { class: "section" }, "Bientôt, de moi-même"),
+      h(
+        "div",
+        { class: "list items" },
+        next.map((p) => h("div", { class: "item" }, h("span", { class: "ico" }, icon("calendar", 16)), h("span", {}, h("span", { class: "text" }, p.what), h("small", {}, SHORT.format(new Date(p.at)))))),
+      ),
+    );
+  }
+  return sections;
+}
+
+// -- Carnet: what I know and do, a bento ---------------------------------------------------------
+
+async function notebookFill() {
+  const o = await api("api/control").catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
+  if (!o) return h("p", { class: "empty" }, "Mon carnet n'est pas ouvert ici.");
+  const missions = await api("api/missions")
+    .then((found) => found.missions.filter((m) => !m.closed))
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null; // missions off
+      throw error;
+    });
+  const go = (name, title, count, open, wide = false) =>
+    h("button", { class: `tile link ${wide ? "wide" : ""}`, type: "button", onclick: open }, h("span", { class: "ico" }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
+  return [
+    h(
+      "div",
+      { class: "grid" },
+      missions ? go("target", "Missions", missions.length ? `${missions.length} en cours · ${plural(missions.reduce((n, m) => n + m.seen.filter((s) => !s.rejected).length, 0), "retenu", "retenus")}` : "aucune en cours", missionsPanel, true) : null,
+      go("spark", "Ce que je sais", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel, true),
+      go("file", "Mes papiers", "pièces, fiches, contrats", papersPanel),
+      go("where", "Mes proches", "anniversaires, nouvelles", peoplePanel),
+      go("book", "Mes semaines", "la page du dimanche", chroniclePanel, true),
+      go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
+      go("file", "Mon manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
+      go("calendar", "À venir", "ce que je ferai seul", plannedPanel),
+      go("clock", "Activité", "et mes silences", activityPanel),
+      go("shield", "Ce que je fais seul", o.alone.length ? `${o.alone.length} permis` : "je demande tout", autonomyPanel, true),
+    ),
+    h("p", { class: "hint" }, "Pour un rappel, dis-le-moi dans la conversation, ou touche + à côté du message."),
+  ];
+}
+
+// -- Réglages: me, and what replaces the server ---------------------------------------------------
+
+function row(name, title, value, onclick, tone = "") {
+  return h(
+    onclick ? "button" : "div",
+    { class: "item", type: onclick ? "button" : undefined, onclick },
+    h("span", { class: `ico ${tone}` }, icon(name, 16)),
+    h("span", {}, h("span", { class: "text" }, title)),
+    value !== null ? h("small", { class: "value" }, value) : null,
+    onclick ? h("span", { class: "chev" }, icon("chevron", 14)) : null,
+  );
+}
+
+async function settingsFill(refresh) {
+  const o = await api("api/control").catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
+  const server = await api("api/server").catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
+  const machines = await api("api/machines")
+    .then((found) => found.machines)
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null; // hands off
+      throw error;
+    });
+  const act = (path, payload) => async () => {
+    try {
+      await api(path, payload);
+      refresh();
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+  const parts = [];
+  if (o) {
+    const paused = !!o.paused_until;
+    parts.push(
+      h(
+        "div",
+        { class: "grid" },
         h(
           "div",
+          { class: `tile hero ${paused ? "paused" : ""}` },
+          h("span", { class: "dot" }),
+          h(
+            "div",
+            {},
+            h("b", {}, paused ? "Je suis en pause" : o.quiet_now ? "Je suis actif · heures calmes" : "Je suis actif"),
+            h("small", {}, paused ? `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même` : "je prends des initiatives, dans les limites ci-dessous"),
+          ),
+          h(
+            "div",
+            { class: "row" },
+            paused
+              ? h("button", { class: "pill small primary", type: "button", onclick: act("api/control/pause", { minutes: null }) }, "Reprendre")
+              : [
+                  h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: 60 }) }, "Pause 1 h"),
+                  h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: minutesUntilTomorrow(8) }) }, "Jusqu'à demain"),
+                ],
+          ),
+        ),
+        o.cost
+          ? [
+              h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), o.cost.daily_cap ? meter(o.cost.today / o.cost.daily_cap, `sur ${money(o.cost.daily_cap)} · ${money(o.cost.alone_today)} de moi-même`) : h("small", {}, `dont ${money(o.cost.alone_today)} de moi-même`)),
+              h("div", { class: "tile" }, h("small", {}, "Ce mois-ci"), h("b", { class: "big" }, money(o.cost.month)), o.cost.monthly_cap ? meter(o.cost.month / o.cost.monthly_cap, `sur ${money(o.cost.monthly_cap)}`) : h("small", {}, "sans plafond")),
+            ]
+          : null,
+        h(
+          "div",
+          { class: "tile" },
+          h("small", {}, "Messages de moi-même / jour"),
+          h(
+            "div",
+            { class: "stepper" },
+            h("button", { type: "button", "aria-label": "Moins", disabled: o.daily_budget <= 0, onclick: act("api/control/settings", { daily_budget: o.daily_budget - 1 }) }, "−"),
+            h("b", { class: "big" }, String(o.daily_budget)),
+            h("button", { type: "button", "aria-label": "Plus", disabled: o.daily_budget >= 50, onclick: act("api/control/settings", { daily_budget: o.daily_budget + 1 }) }, "+"),
+          ),
+        ),
+        h("button", { class: "tile", type: "button", onclick: () => quietHours(o, refresh) }, h("small", {}, "Heures calmes"), h("b", { class: "big" }, `${o.quiet_start}–${o.quiet_end}`), h("small", {}, "je me tais, sauf urgence")),
+        h("button", { class: "tile wide", type: "button", onclick: () => digestsSheet(o, refresh) }, h("small", {}, "Mes points du jour"), h("b", { class: "big" }, o.digests?.length ? o.digests.join(" · ") : "aucun"), h("small", {}, "ce qui compte, en un message")),
+      ),
+    );
+  }
+  if (server) {
+    const on = server.modules.filter((m) => m.on).length;
+    const owner = server.settings.filter((s) => s.tier === "owner").length;
+    parts.push(
+      h("p", { class: "label" }, "Le serveur"),
+      h(
+        "div",
+        { class: "list items" },
+        row("toml", "orion.toml", plural(server.settings.length, "réglage", "réglages"), () => configPanel(server)),
+        row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
+        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
+      ),
+      h("p", { class: "hint" }, `Je change mes réglages quand tu me le demandes, avec ton oui ; les ${owner} qui te protègent, toujours avec Face ID. Les secrets et les chemins ne se changent que sur le serveur.`),
+    );
+  }
+  parts.push(
+    h("p", { class: "label" }, "Machines et téléphones"),
+    h(
+      "div",
+      { class: "list items" },
+      machines ? row("server", "Machines", machines.length ? `${machines.filter((m) => m.online).length} en ligne sur ${machines.length}` : "aucune", machinesPanel) : null,
+      row("phone", "Téléphones", state.device || "", phonesPanel),
+    ),
+    h("p", { class: "label" }, "Cet appareil"),
+    h(
+      "div",
+      { class: "list items" },
+      "Notification" in window && state.pushKey ? row("bell", "Notifications", Notification.permission === "granted" ? "activées" : "désactivées", enableNotifications) : null,
+      h(
+        "button",
+        {
+          type: "button",
+          class: "item danger",
+          onclick: async () => {
+            await api("logout", {}).catch(() => {});
+            source?.close();
+            layer.replaceChildren();
+            open.length = 0;
+            welcome();
+          },
+        },
+        h("span", { class: "ico" }, icon("door", 16)),
+        h("span", {}, h("span", { class: "text" }, "Se déconnecter")),
+      ),
+    ),
+  );
+  return parts;
+}
+
+function shown(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "oui" : "non";
+  if (typeof value === "string") return value || "« »";
+  return excerpt(JSON.stringify(value), 60);
+}
+
+function configPanel(server) {
+  let query = "";
+  const list = h("div");
+  const search = h("input", { type: "search", placeholder: "Chercher un réglage", "aria-label": "Chercher un réglage", oninput: () => ((query = search.value.trim().toLowerCase()), paint()) });
+  function paint() {
+    const groups = new Map();
+    for (const s of server.settings) {
+      if (query && !s.path.toLowerCase().includes(query) && !shown(s.value).toLowerCase().includes(query)) continue;
+      const parts = s.path.split(".");
+      const group = parts[0] === "modules" ? parts.slice(0, 2).join(".") : parts[0];
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(s);
+    }
+    list.replaceChildren(
+      ...(groups.size
+        ? [...groups].map(([group, items]) => [
+            h("p", { class: "label" }, group),
+            h(
+              "div",
+              { class: "list items" },
+              items.map((s) => row(s.tier === "owner" ? "shield" : "sliders", s.path.slice(group.length + 1) || s.path, shown(s.value), () => changeSheet(s), s.tier === "owner" ? "owner" : "")),
+            ),
+          ]).flat()
+        : [h("p", { class: "empty" }, "Aucun réglage de ce nom.")]),
+    );
+  }
+  panel("orion.toml", () => {
+    paint();
+    return [
+      h("label", { class: "search glass" }, icon("search", 18), search),
+      h("p", { class: "hint" }, "Le bouclier marque ce qui te protège : je te le demande toujours avec Face ID. Le reste est à moi : je te demande, sauf si tu m'as laissé faire seul."),
+      list,
+    ];
+  });
+}
+
+function changeSheet(setting) {
+  const kind = setting.value === null ? "json" : typeof setting.value === "object" ? "json" : typeof setting.value;
+  const input =
+    kind === "boolean"
+      ? h("select", { "aria-label": "Valeur" }, h("option", { value: "true", selected: setting.value === true }, "oui"), h("option", { value: "false", selected: setting.value === false }, "non"))
+      : kind === "json"
+        ? h("textarea", { rows: 5, "aria-label": "Valeur", value: JSON.stringify(setting.value, null, 1), spellcheck: false })
+        : h("input", { type: kind === "number" ? "number" : "text", step: "any", "aria-label": "Valeur", value: String(setting.value), spellcheck: false });
+  const status = h("p", { class: "error", role: "alert" });
+  function read() {
+    if (kind === "boolean") return input.value === "true";
+    if (kind === "number") {
+      const n = Number(input.value);
+      if (input.value.trim() === "" || Number.isNaN(n)) throw new Error("Un nombre, s'il te plaît.");
+      return n;
+    }
+    if (kind === "string") return input.value;
+    try {
+      return JSON.parse(input.value);
+    } catch {
+      throw new Error("Ce n'est pas du JSON valide.");
+    }
+  }
+  const close = sheet(
+    h("h2", {}, setting.path),
+    h("p", { class: "quote" }, `Aujourd'hui : ${shown(setting.value)}`),
+    h("label", { class: "field-edit" }, input),
+    h("p", { class: "hint" }, setting.tier === "owner" ? "Ce réglage te protège : je vérifie le fichier entier, puis je te demande ton accord sur ce changement exact, avec Face ID." : "Je vérifie le fichier entier avant d'écrire, puis je redémarre pour l'appliquer."),
+    status,
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: () => {
+          let value;
+          try {
+            value = read();
+          } catch (error) {
+            status.textContent = error.message;
+            return;
+          }
+          if (JSON.stringify(value) === JSON.stringify(setting.value)) return close();
+          close();
+          talkAbout(`Dans orion.toml, mets \`${setting.path}\` à \`${JSON.stringify(value)}\`.`);
+        },
+      },
+      "Me le demander",
+    ),
+  );
+}
+
+function modulesPanel(server) {
+  const switchPath = (name) => (name === "voice" || name === "delegation" ? `${name}.enabled` : `modules.${name}.enabled`);
+  const confirm = (title, text, button, message) => {
+    const close = sheet(
+      h("h2", {}, title),
+      h("p", { class: "quote" }, text),
+      h("button", { class: "pill primary wide", type: "button", onclick: () => (close(), talkAbout(message)) }, button),
+    );
+  };
+  panel("Modules", () => [
+    h("p", { class: "label" }, "Les miens"),
+    h(
+      "div",
+      { class: "list items" },
+      server.modules.map((m) =>
+        h(
+          "button",
+          {
+            type: "button",
+            class: "item",
+            onclick: () =>
+              confirm(
+                m.name,
+                m.on ? "Je l'éteins et je redémarre. Tu pourras le rallumer d'ici." : "Je l'allume et je redémarre. S'il lui manque un réglage, je te le dis avant.",
+                m.on ? "Éteindre" : "Allumer",
+                `Dans orion.toml, mets \`${switchPath(m.name)}\` à \`${!m.on}\`.`,
+              ),
+          },
+          h("span", { class: `ico ${m.on ? "on" : ""}` }, icon("blocks", 16)),
+          h("span", {}, h("span", { class: "text" }, m.name), m.added ? h("small", {}, "installé depuis le catalogue") : null),
+          h("small", { class: `value ${m.on ? "on" : ""}` }, m.on ? "allumé" : "éteint"),
+        ),
+      ),
+    ),
+    server.catalog.length ? h("p", { class: "label" }, "Le catalogue") : null,
+    server.catalog.length
+      ? h(
+          "div",
           { class: "list items" },
-          found.approvals.map((a) =>
+          server.catalog.map((c) =>
             h(
               "button",
               {
                 type: "button",
                 class: "item",
-                onclick: () => {
-                  close();
-                  setTimeout(() => view.asks.querySelector(".ask")?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
-                },
+                onclick: () =>
+                  c.installed
+                    ? confirm(c.name, "Je l'éteins, j'efface son dossier, puis je redémarre.", "Retirer", `Retire le module « ${c.name} ».`)
+                    : confirm(c.name, [c.description, c.accesses && `Ce qu'il atteint : ${c.accesses}`, c.settings && `À régler : ${c.settings}`, "Son code tournera avec mes accès, ma mémoire comprise : je te demande ton oui, avec Face ID."].filter(Boolean).join("\n\n"), "Installer", `Installe le module « ${c.name} » du catalogue.`),
               },
-              h("span", { class: "ico" }, icon("shield", 16)),
-              h("span", {}, h("span", { class: "text" }, askTitle(a)), h("small", {}, "glisse puis Face ID dans la conversation")),
+              h("span", { class: "ico" }, icon("blocks", 16)),
+              h("span", {}, h("span", { class: "text" }, c.name), h("small", {}, c.description)),
+              h("small", { class: "value" }, c.installed ? "installé" : "installer"),
             ),
           ),
-        ),
-      );
-    }
-    if (found.questions.length) {
-      sections.push(
-        h("p", { class: "label" }, "Il attend ta réponse"),
-        h(
-          "div",
-          { class: "list items" },
-          found.questions.map((q) =>
-            h(
-              "div",
-              { class: "item" },
-              h("span", { class: "ico" }, icon("where", 16)),
-              h("span", {}, h("span", { class: "text" }, q.about), h("small", {}, q.auto === "approval" ? "un accord resté sans réponse" : `il y revient ${SHORT.format(new Date(q.back_at))}`)),
-              h("span", { class: "acts" }, h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de « ${q.about} » : `) }, "Répondre")),
-            ),
-          ),
-        ),
-      );
-    }
-    if (found.tasks.length) {
-      sections.push(
-        h("p", { class: "label" }, "En tâche de fond"),
-        h(
-          "div",
-          { class: "list items" },
-          found.tasks.map((t) =>
-            h(
-              "div",
-              { class: "item" },
-              h("span", { class: "ico" }, icon("spark", 16)),
-              h(
-                "span",
-                {},
-                h("span", { class: "text" }, t.goal),
-                h("small", {}, [t.waiting ? "attend Orion" : t.passes ? plural(t.passes, "passage", "passages") : "démarre", `${money(t.spent)} sur ${money(t.budget)}`].join(" · ")),
-                t.last ? h("small", { class: "last" }, excerpt(t.last, 140)) : null,
-              ),
-              h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/tasks/${t.id}/stop`) }, "Arrêter")),
-            ),
-          ),
-        ),
-      );
-    }
-    if (found.waiting_on.length) {
-      sections.push(
-        h("p", { class: "label" }, "Il attend des autres"),
-        h(
-          "div",
-          { class: "list items" },
-          found.waiting_on.map((w) =>
-            h(
-              "div",
-              { class: "item" },
-              h("span", { class: "ico" }, icon("clock", 16)),
-              h("span", {}, h("span", { class: "text" }, `${w.who} · ${w.about}`), h("small", {}, `${w.round > 1 ? `relance ${w.round - 1} · ` : ""}il y revient ${SHORT.format(new Date(w.back_at))}`)),
-              h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/waits/${w.id}/drop`) }, "Laisser")),
-            ),
-          ),
-        ),
-      );
-    }
-    return sections.length ? sections : h("p", { class: "empty" }, "Rien ne t'attend. Quand Orion aura besoin de ton accord ou d'une réponse, ce sera ici.");
+        )
+      : null,
+  ]);
+}
+
+// -- missions: what each looks for, what it kept, what he turned down ---------------------------
+
+const PACES = [6, 12, 24, 48];
+
+function pace(hours) {
+  return hours % 24 === 0 ? (hours === 24 ? "chaque jour" : `tous les ${hours / 24} jours`) : `toutes les ${hours} h`;
+}
+
+function missionRow(m, refresh) {
+  return h(
+    "button",
+    { type: "button", class: `item ${m.closed ? "quiet" : ""}`, onclick: () => missionPanel(m.id, refresh) },
+    h("span", { class: `ico ${m.closed ? "" : "on"}` }, icon("target", 16)),
+    h(
+      "span",
+      {},
+      h("span", { class: "text" }, m.goal),
+      h("small", {}, m.closed ? `close · ${m.closed}` : [plural(m.runs, "passage", "passages"), plural(m.seen.length, "vu", "vus"), m.next_run ? `prochain ${SHORT.format(new Date(m.next_run))}` : ""].filter(Boolean).join(" · ")),
+    ),
+    h("span", { class: "chev" }, icon("chevron", 14)),
+  );
+}
+
+function missionsPanel() {
+  panel("Missions", async (refresh) => {
+    const { missions } = await api("api/missions");
+    const running = missions.filter((m) => !m.closed);
+    const closed = missions.filter((m) => m.closed);
+    return [
+      running.length ? h("div", { class: "list items" }, running.map((m) => missionRow(m, refresh))) : h("p", { class: "empty" }, "Aucune mission en cours."),
+      closed.length ? [h("p", { class: "label" }, "Terminées"), h("div", { class: "list items" }, closed.map((m) => missionRow(m, refresh)))] : null,
+      h("button", { class: "pill primary wide", type: "button", onclick: () => askOrion("Nouvelle mission : ") }, icon("plus", 18), "Nouvelle mission"),
+      h("p", { class: "hint" }, "Une mission, c'est un but sur plusieurs jours : je cherche seul, à mon rythme, et je ne t'écris que s'il y a du neuf."),
+    ];
   });
 }
 
-// -- the controls: a bento of what Orion is doing, and the way into everything else ------------
+function link(key, label) {
+  return /^https?:\/\//.test(key)
+    ? h("a", { href: key, target: "_blank", rel: "noopener noreferrer" }, label || key)
+    : h("span", {}, label || key);
+}
+
+function missionPanel(id, refreshList) {
+  panel("Une mission", async (refresh) => {
+    const { missions } = await api("api/missions");
+    const m = missions.find((each) => each.id === id);
+    if (!m) return h("p", { class: "empty" }, "Cette mission n'existe plus.");
+    const act = (path, payload = {}, done = "") => async () => {
+      try {
+        await api(path, payload);
+        if (done) toast(done);
+        refresh();
+        refreshList?.();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    const kept = m.seen.filter((s) => !s.rejected);
+    const head = h(
+      "div",
+      { class: "tile wide mission-head" },
+      h("b", { class: "goal" }, m.goal),
+      m.criteria ? h("small", {}, m.criteria) : null,
+      h(
+        "div",
+        { class: "stats" },
+        h("span", {}, h("b", {}, String(m.runs)), "passages"),
+        h("span", {}, h("b", {}, String(kept.length)), "retenus"),
+        h("span", {}, h("b", {}, String(m.rejected.length)), "écartés"),
+      ),
+      m.closed
+        ? h("small", {}, `Close : ${m.closed}`)
+        : h("small", {}, `Je passe ${pace(m.every_hours)}${m.next_run ? ` · prochain passage ${SHORT.format(new Date(m.next_run))}` : ""}`),
+    );
+    if (m.closed) return [head, reports(m), seenList(m, kept, null)];
+    return [
+      head,
+      h(
+        "div",
+        { class: "row2" },
+        h("button", { class: "pill primary", type: "button", disabled: !m.rushes_left, onclick: act(`api/missions/${id}/now`, {}, "J'y vais maintenant.") }, icon("spark", 18), "Chercher maintenant"),
+      ),
+      h("p", { class: "label" }, "Mon rythme"),
+      h(
+        "div",
+        { class: "chips" },
+        PACES.map((hours) => h("button", { type: "button", class: "chip", "aria-pressed": String(m.every_hours === hours), onclick: act(`api/missions/${id}/pace`, { every_hours: hours }) }, pace(hours))),
+      ),
+      reports(m),
+      seenList(m, kept, (s) => rejectSheet(m, s, refresh)),
+      m.rejected.length
+        ? [
+            h("p", { class: "label" }, "Écartés, avec ton motif"),
+            h("div", { class: "list items" }, m.rejected.map((r) => h("div", { class: "item past" }, h("span", { class: "ico" }, icon("close", 16)), h("span", {}, h("span", { class: "text" }, r.key), h("small", {}, r.why))))),
+          ]
+        : null,
+      m.notes.length ? [h("p", { class: "label" }, "Mes notes"), h("div", { class: "list items" }, m.notes.map((n) => h("div", { class: "item" }, h("span", {}, h("span", { class: "text" }, n)))))] : null,
+      h("div", { class: "list items" }, h("button", { type: "button", class: "item danger", onclick: () => endMission(m, refresh, refreshList) }, h("span", { class: "ico" }, icon("stop", 16)), h("span", {}, h("span", { class: "text" }, "Arrêter la mission")))),
+    ];
+  });
+}
+
+function reports(m) {
+  if (!m.reports.length) return null;
+  const last = m.reports[m.reports.length - 1];
+  return [
+    h("p", { class: "label" }, `Mon dernier passage · ${SHORT.format(new Date(last.at))}`),
+    h("div", { class: "card report" }, h("p", {}, ...rich(last.said)), last.trusted ? null : h("small", {}, "d'après les pages que j'ai lues : vérifie avant d'agir")),
+  ];
+}
+
+function seenList(m, kept, reject) {
+  if (!kept.length) return null;
+  return [
+    h("p", { class: "label" }, "Ce que j'ai retenu"),
+    h(
+      "div",
+      { class: "list items" },
+      kept.slice(-20).reverse().map((s) =>
+        h(
+          "div",
+          { class: "item" },
+          h("span", { class: "ico" }, icon("check", 16)),
+          h("span", {}, h("span", { class: "text" }, link(s.key, s.label))),
+          reject ? h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: () => reject(s) }, "Écarter")) : null,
+        ),
+      ),
+    ),
+  ];
+}
+
+function rejectSheet(m, item, refresh) {
+  const why = h("input", { type: "text", placeholder: "trop cher, trop loin, déjà vu…", "aria-label": "Pourquoi" });
+  const close = sheet(
+    h("h2", {}, "Écarter"),
+    h("p", { class: "quote" }, item.label || item.key),
+    h("label", { class: "field-edit" }, why),
+    h("p", { class: "hint" }, "Je garde ton motif : les prochains passages en tiennent compte."),
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api(`api/missions/${m.id}/reject`, { key: item.key, why: why.value });
+            close();
+            refresh();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Écarter",
+    ),
+  );
+  why.focus();
+}
+
+function endMission(m, refresh, refreshList) {
+  const close = sheet(
+    h("h2", {}, "Arrêter la mission ?"),
+    h("p", { class: "quote" }, m.goal),
+    h(
+      "button",
+      {
+        class: "pill danger wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api(`api/missions/${m.id}/close`, {});
+            close();
+            refresh();
+            refreshList?.();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Arrêter",
+    ),
+  );
+}
+
+// -- machines and version -----------------------------------------------------------------------
+
+const ACTION_NAMES = { notify: "notifier", open_url: "ouvrir un lien", find_files: "chercher des fichiers", read_file: "lire un fichier", get_file: "m'envoyer un fichier" };
+
+function machinesPanel() {
+  panel("Machines", async (refresh) => {
+    const { machines } = await api("api/machines");
+    return [
+      machines.length
+        ? h(
+            "div",
+            { class: "list items" },
+            machines.map((m) =>
+              h(
+                "div",
+                { class: "item" },
+                h("span", { class: `ico ${m.online ? "on" : ""}` }, icon("server", 16)),
+                h(
+                  "span",
+                  {},
+                  h("span", { class: "text" }, m.name),
+                  h("small", {}, m.online ? `en ligne · ${m.actions.map((a) => ACTION_NAMES[a] || a).join(", ") || "rien de permis"}` : "hors ligne"),
+                  m.roots.length ? h("small", {}, `dossiers : ${m.roots.join(", ")}`) : null,
+                ),
+                h(
+                  "span",
+                  { class: "acts" },
+                  h(
+                    "button",
+                    {
+                      class: "pill small danger",
+                      type: "button",
+                      onclick: async () => {
+                        try {
+                          await api(`api/machines/${encodeURIComponent(m.name)}/revoke`, {});
+                          toast(`${m.name} est coupée.`);
+                          refresh();
+                        } catch (error) {
+                          toast(said(error));
+                        }
+                      },
+                    },
+                    "Couper",
+                  ),
+                ),
+              ),
+            ),
+          )
+        : h("p", { class: "empty" }, "Aucune machine appairée."),
+      h("p", { class: "hint" }, "Une machine, c'est mon accès à ton ordinateur : ce que tu y permets, dans les dossiers que tu choisis. En ajouter une se fait sur le serveur (orion hands pair <nom>), puis orion hand pair sur la machine : ce qu'elle me dit compte comme venant de toi, alors une session volée ne doit pas pouvoir en ajouter."),
+    ];
+  });
+}
+
+function versionPanel(server) {
+  const r = server.release;
+  panel("Version", () => [
+    h(
+      "div",
+      { class: "list items" },
+      row("server", "Orion", server.version, null),
+      r ? row("check", "Ce qui tourne", r.commit, null) : null,
+      r ? row("clock", "Depuis le", r.at ? SHORT.format(new Date(r.at)) : "—", null) : null,
+      row("shield", "Gardien", server.split ? "à part, il protège tes clés" : "dans le même processus", null),
+    ),
+    r && r.subject ? h("p", { class: "quote report" }, r.subject) : null,
+    r && r.set_aside
+      ? h("div", { class: "card report warn" }, h("p", {}, `J'ai écarté une mise à jour (${r.set_aside}) : elle ne démarrait pas, je suis revenu à la version d'avant. Je retenterai au prochain changement.`))
+      : null,
+    h("p", { class: "hint" }, "Je me mets à jour seul : toutes les deux minutes, je regarde si le code a avancé. J'installe, je vérifie que je démarre, et je reviens en arrière si ça casse. Je te préviens dans les deux cas."),
+  ]);
+}
+
+// -- papers, people, the pages of his weeks ------------------------------------------------------
+
+const LONG_DAY = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+
+function papersPanel() {
+  let timer = null;
+  const list = h("div", { class: "list items" });
+  const search = h("input", {
+    type: "search",
+    placeholder: "Chercher : passeport, fiche de paie…",
+    "aria-label": "Chercher un papier",
+    oninput: () => {
+      clearTimeout(timer);
+      timer = setTimeout(paint, 250);
+    },
+  });
+  async function paint() {
+    const { papers } = await api(`api/papers?q=${encodeURIComponent(search.value)}`);
+    list.replaceChildren(
+      ...(papers.length
+        ? papers.map((p) =>
+            h(
+              "a",
+              { class: "item", href: `${BASE}api/papers/${encodeURIComponent(p.id)}/file`, target: "_blank", rel: "noopener" },
+              h("span", { class: `ico ${p.expired ? "owner" : p.expiring ? "wait" : ""}` }, icon(p.type.startsWith("image/") ? "photo" : "file", 16)),
+              h(
+                "span",
+                {},
+                h("span", { class: "text" }, p.label),
+                h("small", { class: p.expired || p.expiring ? "warn" : "" }, [p.holder, p.issued && `du ${LONG_DAY.format(new Date(p.issued))}`, p.valid_until && `${p.expired ? "périmé depuis le" : "valable jusqu'au"} ${LONG_DAY.format(new Date(p.valid_until))}`].filter(Boolean).join(" · ") || p.about),
+              ),
+              h("span", { class: "chev" }, icon("chevron", 14)),
+            ),
+          )
+        : [h("p", { class: "empty" }, search.value ? "Aucun papier de ce genre." : "Aucun papier rangé. Envoie-moi une photo ou un PDF et dis-moi de le ranger.")]),
+    );
+  }
+  panel("Mes papiers", async () => {
+    await paint();
+    return [
+      h("label", { class: "search glass" }, icon("search", 18), search),
+      list,
+      h("p", { class: "hint" }, "Je te préviens trois mois puis un mois avant qu'un papier expire. Pour un dossier (location, banque), demande-le-moi : je l'assemble en un PDF."),
+    ];
+  });
+}
+
+function peoplePanel() {
+  panel("Mes proches", async (refresh) => {
+    const { people } = await api("api/people");
+    if (!people.length) return h("p", { class: "empty" }, "Je ne connais encore personne autour de toi.");
+    return h(
+      "div",
+      { class: "people" },
+      people.map((p) => {
+        const meta = [
+          p.birthday && (p.birthday.in_days === 0 ? "anniversaire aujourd'hui" : `anniversaire dans ${plural(p.birthday.in_days, "jour", "jours")}${p.birthday.age ? ` (${p.birthday.age} ans)` : ""}`),
+          p.every_days && (p.overdue ? `pas vu depuis plus de ${p.every_days} jours` : p.last_seen ? `vu le ${LONG_DAY.format(new Date(p.last_seen))}` : `tous les ${p.every_days} jours`),
+        ].filter(Boolean);
+        return h(
+          "article",
+          { class: `card person ${p.overdue ? "overdue" : ""}` },
+          h("header", {}, h("span", { class: "initial" }, p.name.slice(0, 1).toUpperCase()), h("span", {}, h("b", {}, p.name), meta.length ? h("small", {}, meta.join(" · ")) : null)),
+          p.facts.length ? h("ul", {}, p.facts.slice(-4).map((f) => h("li", {}, f))) : null,
+          p.commitments.length ? h("p", { class: "owe" }, `À faire : ${p.commitments.join(" ; ")}`) : null,
+          h(
+            "div",
+            { class: "acts" },
+            h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de ${p.name} : `) }, "En parler"),
+            h(
+              "button",
+              {
+                class: "pill small primary",
+                type: "button",
+                onclick: async () => {
+                  try {
+                    await api("api/people/saw", { name: p.name });
+                    toast(`Noté : tu as vu ${p.name} aujourd'hui.`);
+                    refresh();
+                  } catch (error) {
+                    toast(said(error));
+                  }
+                },
+              },
+              "Vu aujourd'hui",
+            ),
+          ),
+        );
+      }),
+    );
+  });
+}
+
+function chroniclePanel() {
+  panel("Mes semaines", async () => {
+    const { pages } = await api("api/chronicle");
+    if (!pages.length) return h("p", { class: "empty" }, "Pas encore de page. J'écris celle de ta semaine le dimanche soir.");
+    return pages.map((p, i) =>
+      h(
+        "details",
+        { class: "card page-week", open: i === 0 },
+        h("summary", {}, p.title),
+        h("p", {}, ...rich(p.text)),
+      ),
+    );
+  });
+}
+
+// -- the times of his summaries ------------------------------------------------------------------
+
+function digestsSheet(o, refresh) {
+  const times = [...(o.digests || [])];
+  const rows = h("div", { class: "times-list" });
+  function paint() {
+    rows.replaceChildren(
+      ...times.map((t, i) =>
+        h(
+          "div",
+          { class: "time-row" },
+          h("input", { type: "time", value: t, "aria-label": `Point ${i + 1}`, onchange: (e) => (times[i] = e.target.value) }),
+          h("button", { class: "round", type: "button", "aria-label": "Retirer", onclick: () => (times.splice(i, 1), paint()) }, icon("close", 18)),
+        ),
+      ),
+      times.length < 6 ? h("button", { class: "pill wide", type: "button", onclick: () => (times.push(times.length ? "18:00" : "09:00"), paint()) }, icon("plus", 18), "Ajouter un point") : null,
+    );
+  }
+  paint();
+  const close = sheet(
+    h("h2", {}, "Mes points du jour"),
+    h("p", { class: "quote" }, "À ces heures, je te dis en un message ce qui compte : ce que j'ai fait, ce qui t'attend, ce qui arrive."),
+    rows,
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api("api/control/settings", { digests: times.filter(Boolean) });
+            close();
+            refresh();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Enregistrer",
+    ),
+  );
+}
+
+// -- Orion's browser, in his hands (D116) ---------------------------------------------------------
+
+function browserPanel(handover) {
+  let size = { width: 412, height: 860 };
+  let over = false;
+  let n = 0;
+  const status = h("p", { class: "hint" }, "Ouverture…");
+  const picture = h("img", { class: "live", alt: "L'onglet de mon navigateur" });
+  const shot = () => {
+    if (!over && picture.isConnected) picture.src = `${BASE}api/browser/${handover.token}/shot?n=${n++}`;
+  };
+  let busy = false;
+  async function act(body) {
+    if (busy || over) return;
+    busy = true;
+    try {
+      const data = await api(`api/browser/${handover.token}/act`, body);
+      if (data.done) {
+        over = true;
+        toast(data.done);
+        close();
+        nowChanged();
+      } else {
+        status.textContent = data.url || "";
+        if (data.width) size = { width: data.width, height: data.height };
+      }
+    } catch (error) {
+      status.textContent = said(error);
+    } finally {
+      busy = false;
+      setTimeout(shot, 250);
+    }
+  }
+  picture.addEventListener("click", (event) => {
+    const box = picture.getBoundingClientRect();
+    act({ do: "tap", x: ((event.clientX - box.left) / box.width) * size.width, y: ((event.clientY - box.top) / box.height) * size.height });
+  });
+  picture.addEventListener("load", () => setTimeout(shot, 900));
+  picture.addEventListener("error", () => setTimeout(shot, 2000));
+  const field = h("input", { type: "password", autocomplete: "off", placeholder: "Texte à taper", "aria-label": "Texte à taper" });
+  const typeIt = () => {
+    if (!field.value) return;
+    act({ do: "type", text: field.value });
+    field.value = "";
+  };
+  field.addEventListener("keydown", (event) => event.key === "Enter" && (event.preventDefault(), typeIt()));
+  const key = (label, aria, body) => h("button", { class: "pill small", type: "button", "aria-label": aria, onclick: () => act(body) }, label);
+  const close = panel("Prendre la main", () => [
+    h("p", { class: "quote report" }, handover.why),
+    picture,
+    status,
+    h("div", { class: "type-row" }, h("label", { class: "field-edit" }, field), h("button", { class: "round", type: "button", "aria-label": field.type === "password" ? "Voir" : "Cacher", onclick: () => (field.type = field.type === "password" ? "text" : "password") }, icon("where", 18)), h("button", { class: "pill small primary", type: "button", onclick: typeIt }, "Taper")),
+    h("div", { class: "keys" }, key("⏎", "Entrée", { do: "key", key: "Enter" }), key("⌫", "Effacer", { do: "key", key: "Backspace" }), key("▲", "Monter", { do: "scroll", dy: -500 }), key("▼", "Descendre", { do: "scroll", dy: 500 }), key("←", "Page précédente", { do: "back" })),
+    h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: () => act({ do: "cancel" }) }, "Annuler"), h("button", { class: "pill primary", type: "button", onclick: () => act({ do: "done" }) }, "J'ai fini")),
+    h("p", { class: "hint" }, "Touche l'image pour cliquer, puis tape dessous. C'est mon navigateur, sur ton serveur : ce que tu tapes va dans la page, jamais dans notre conversation."),
+  ]);
+  setTimeout(() => act({ do: "start" }), 50);
+}
+
+// -- talking: a voice mode over the conversation ----------------------------------------------------
+
+const voice = { on: false, el: null, said: null };
+
+function voiceMode() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Le micro n'est pas disponible ici.");
+  voice.on = true;
+  const line = h("p", { class: "voice-line" }, "Touche le rond et parle. Touche encore pour m'envoyer.");
+  const orb = h("button", { class: "orb voice-orb", type: "button", "aria-label": "Parler", onclick: () => {
+        if (recorder.active) {
+          recorder.stop();
+          line.textContent = "J'ai entendu, je réfléchis…";
+        } else {
+          window.speechSynthesis?.cancel();
+          recorder.start();
+          line.textContent = "Je t'écoute… touche encore pour m'envoyer.";
+          orb.classList.add("busy");
+        }
+      } }, icon("mic", 36, "#fff"));
+  voice.line = line;
+  voice.orb = orb;
+  voice.el = h(
+    "section",
+    { class: "voice", role: "dialog", "aria-modal": "true", "aria-label": "Me parler" },
+    h("button", { class: "round glass voice-close", type: "button", "aria-label": "Fermer", onclick: () => stopVoice() }, icon("close", 20)),
+    orb,
+    line,
+    h("p", { class: "hint" }, "Je te réponds à voix haute. Ce qu'on se dit reste dans la conversation."),
+  );
+  stack(stopVoice);
+  layer.append(voice.el);
+}
+
+function stopVoice() {
+  voice.on = false;
+  if (recorder.active) {
+    recorder.cancelled = true;
+    recorder.media?.stop();
+  }
+  window.speechSynthesis?.cancel();
+  voice.el?.remove();
+  unstack(stopVoice);
+}
+
+function speak(message) {
+  // In voice mode, Orion's answers are read aloud (his own audio when he sent one).
+  if (!voice.on || message.who !== "orion") return;
+  voice.orb?.classList.remove("busy");
+  const audio = (message.files || []).find((f) => (f.type || "").startsWith("audio/"));
+  if (audio) {
+    new Audio(fileUrl(audio)).play().catch((error) => console.warn("voice", error));
+  } else if (message.text && window.speechSynthesis) {
+    const utterance = new SpeechSynthesisUtterance(message.text.replace(/\*\*/g, "").replace(/https?:\/\/\S+/g, "le lien"));
+    utterance.lang = "fr-FR";
+    window.speechSynthesis.speak(utterance);
+  }
+  if (voice.line) voice.line.textContent = excerpt(message.text || "…", 220);
+}
+
+async function signed(path, payload = {}) {
+  // A change of the phones answers one Face ID signature, drawn for it alone.
+  const opened = await api(`${path}/options`, {});
+  const credential = await sign(opened.options);
+  return api(path, { ...payload, ceremony: opened.ceremony, credential });
+}
+
+function phonesPanel() {
+  panel("Téléphones", async (refresh) => {
+    const { devices, this: me } = await api("devices");
+    const name = h("input", { type: "text", placeholder: "ipad, telephone-pro…", "aria-label": "Nom du nouveau téléphone", autocapitalize: "none", spellcheck: false });
+    return [
+      h(
+        "div",
+        { class: "list items" },
+        devices.map((d) =>
+          h(
+            "div",
+            { class: "item" },
+            h("span", { class: "ico" }, icon("phone", 16)),
+            h("span", {}, h("span", { class: "text" }, d), d === me ? h("small", {}, "celui-ci") : null),
+            d === me
+              ? null
+              : h(
+                  "span",
+                  { class: "acts" },
+                  h(
+                    "button",
+                    {
+                      class: "pill small danger",
+                      type: "button",
+                      onclick: async () => {
+                        try {
+                          await signed(`devices/revoke/${encodeURIComponent(d)}`);
+                          toast(`${d} ne peut plus entrer.`);
+                          refresh();
+                        } catch (error) {
+                          toast(said(error));
+                        }
+                      },
+                    },
+                    "Retirer",
+                  ),
+                ),
+          ),
+        ),
+      ),
+      h("p", { class: "label" }, "Ajouter un téléphone"),
+      h(
+        "div",
+        { class: "card add-phone" },
+        h("label", { class: "field-edit" }, name),
+        h(
+          "button",
+          {
+            class: "pill primary wide",
+            type: "button",
+            onclick: async () => {
+              const wanted = name.value.trim().toLowerCase();
+              if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(wanted)) return toast("Un nom en minuscules, sans espace.");
+              try {
+                const { code } = await signed(`devices/pair/${encodeURIComponent(wanted)}`);
+                const link = `${location.origin}${BASE}?code=${code}`;
+                sheet(
+                  h("h2", {}, `Appairer ${wanted}`),
+                  h("p", { class: "quote big-code" }, code),
+                  h("p", { class: "hint" }, "Sur l'autre téléphone, ouvre ce lien dans Safari, puis crée sa clé avec Face ID. Le code vaut 10 minutes."),
+                  h("a", { class: "pill wide", href: link }, link.replace(/^https?:\/\//, "")),
+                );
+                refresh();
+              } catch (error) {
+                toast(said(error));
+              }
+            },
+          },
+          icon("face", 20),
+          "Créer un code",
+        ),
+      ),
+      h("p", { class: "hint" }, "Ajouter ou retirer un téléphone se signe avec Face ID. Pour ce téléphone-ci, déconnecte-toi plutôt."),
+    ];
+  });
+}
+
+// -- panels: full screen, over the tabs ----------------------------------------------------------
 
 function panel(title, fill) {
   const body = h("div", { class: "panel-body" });
@@ -1632,134 +2715,6 @@ function minutesUntilTomorrow(hour) {
   return Math.round((then - now) / 60000);
 }
 
-function menu() {
-  panel("Contrôle", async (refresh) => {
-    const o = await api("api/control");
-    const act = (path, payload) => async () => {
-      try {
-        await api(path, payload);
-        refresh();
-      } catch (error) {
-        toast(said(error));
-      }
-    };
-    const paused = !!o.paused_until;
-    const status = h(
-      "div",
-      { class: `tile hero ${paused ? "paused" : ""}` },
-      h("span", { class: "dot" }),
-      h(
-        "div",
-        {},
-        h("b", {}, paused ? "En pause" : o.quiet_now ? "Actif · heures calmes" : "Actif"),
-        h(
-          "small",
-          {},
-          paused
-            ? `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même`
-            : "il prend des initiatives, dans les limites ci-dessous",
-        ),
-      ),
-      h(
-        "div",
-        { class: "row" },
-        paused
-          ? h("button", { class: "pill small dark", type: "button", onclick: act("api/control/pause", { minutes: null }) }, "Reprendre")
-          : [
-              h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: 60 }) }, "1 h"),
-              h("button", { class: "pill small", type: "button", onclick: act("api/control/pause", { minutes: minutesUntilTomorrow(8) }) }, "Jusqu'à demain"),
-            ],
-      ),
-    );
-    const cost = o.cost
-      ? [
-          h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), h("small", {}, `dont ${money(o.cost.alone_today)} de lui-même`)),
-          h(
-            "div",
-            { class: "tile" },
-            h("small", {}, "Ce mois-ci"),
-            h("b", { class: "big" }, money(o.cost.month)),
-            o.cost.monthly_cap ? meter(o.cost.month / o.cost.monthly_cap, `sur ${money(o.cost.monthly_cap)}`) : h("small", {}, "sans plafond"),
-          ),
-        ]
-      : null;
-    const budget = h(
-      "div",
-      { class: "tile" },
-      h("small", {}, "Messages de lui-même / jour"),
-      h(
-        "div",
-        { class: "stepper" },
-        h("button", { type: "button", "aria-label": "Moins", disabled: o.daily_budget <= 0, onclick: act("api/control/settings", { daily_budget: o.daily_budget - 1 }) }, "−"),
-        h("b", { class: "big" }, String(o.daily_budget)),
-        h("button", { type: "button", "aria-label": "Plus", disabled: o.daily_budget >= 50, onclick: act("api/control/settings", { daily_budget: o.daily_budget + 1 }) }, "+"),
-      ),
-    );
-    const quiet = h(
-      "button",
-      { class: "tile", type: "button", onclick: () => quietHours(o, refresh) },
-      h("small", {}, "Heures calmes"),
-      h("b", { class: "big" }, `${o.quiet_start}–${o.quiet_end}`),
-      h("small", {}, "il se tait, sauf urgence"),
-    );
-    const go = (name, title, count, open) =>
-      h("button", { class: "tile link", type: "button", onclick: open }, h("span", { class: "ico" }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
-    const next = o.next.length
-      ? h(
-          "div",
-          { class: "tile wide" },
-          h("small", {}, "Bientôt, de lui-même"),
-          o.next.map((p) => h("p", { class: "next" }, h("span", {}, SHORT.format(new Date(p.at))), p.what)),
-        )
-      : null;
-    return [
-      h("div", { class: "grid" }, status, cost, budget, quiet, next),
-      h("p", { class: "label" }, "Ce qu'il sait et fait"),
-      h(
-        "div",
-        { class: "grid" },
-        go("spark", "Mémoire", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel),
-        go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
-        go("shield", "Autonomie", o.alone.length ? `${o.alone.length} seul` : "il demande tout", autonomyPanel),
-        go("clock", "Activité", "et ses silences", activityPanel),
-        go("file", "Son manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
-        go("calendar", "À venir", "ce qu'il fera seul", plannedPanel),
-      ),
-      h("p", { class: "label" }, "Cet appareil"),
-      h(
-        "div",
-        { class: "list" },
-        "Notification" in window && state.pushKey
-          ? h(
-              "button",
-              { type: "button", onclick: enableNotifications },
-              icon("bell", 20),
-              "Notifications",
-              h("small", {}, Notification.permission === "granted" ? "activées" : "désactivées"),
-            )
-          : null,
-        h(
-          "button",
-          {
-            type: "button",
-            class: "danger",
-            onclick: async () => {
-              await api("logout", {}).catch(() => {});
-              source?.close();
-              layer.replaceChildren();
-              open.length = 0;
-              welcome();
-            },
-          },
-          icon("door", 20),
-          "Se déconnecter",
-          h("small", {}, state.device || ""),
-        ),
-      ),
-    ];
-  });
-}
-
 function meter(ratio, caption) {
   const bar = h("span", { class: "fill" });
   bar.style.width = `${Math.max(2, Math.min(100, Math.round(ratio * 100)))}%`;
@@ -1772,7 +2727,7 @@ function quietHours(o, refresh) {
   const end = h("input", { type: "time", value: o.quiet_end, "aria-label": "Fin" });
   const close = sheet(
     h("h2", {}, "Heures calmes"),
-    h("p", { class: "quote" }, "Entre ces heures, il ne t'écrit pas de lui-même, sauf un rappel que tu as demandé. Si tu lui écris, il te répond."),
+    h("p", { class: "quote" }, "Entre ces heures, je ne t'écris pas de moi-même, sauf un rappel que tu as demandé. Si tu m'écris, je te réponds."),
     h("div", { class: "times" }, h("label", {}, "De", start), h("label", {}, "à", end)),
     h(
       "button",
@@ -1797,6 +2752,7 @@ function quietHours(o, refresh) {
 function askOrion(text) {
   layer.replaceChildren();
   open.length = 0;
+  show("talk");
   view.text.value = text;
   keepDraft(text);
   grow();
@@ -1845,10 +2801,10 @@ function memoryPanel() {
               h("span", {}, h("span", { class: "text" }, f.statement), h("small", { class: f.trusted ? "" : "warn" }, f.current ? `${CATEGORY[f.category] || f.category} · ${f.from_owner ? "tu le lui as dit" : f.source}` : f.why_not || "remplacé")),
             ),
           )
-        : [h("p", { class: "empty" }, query ? "Rien de tel." : "Il ne sait encore rien de toi.")]),
+        : [h("p", { class: "empty" }, query ? "Rien de tel." : "Je ne sais encore rien de toi.")]),
     );
   }
-  panel("Ce qu'il sait de toi", async () => {
+  panel("Ce que je sais de toi", async () => {
     await refreshList();
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
@@ -1926,7 +2882,7 @@ function rulesPanel() {
   panel("Son manuel", async (refresh) => {
     const { rules } = await api("api/rules");
     return [
-      h("p", { class: "hint" }, "Ce qu'il a appris de ta façon de travailler. Retire ce qui n'est plus vrai."),
+      h("p", { class: "hint" }, "Ce que j'ai appris de ta façon de travailler. Retire ce qui n'est plus vrai."),
       rules.length
         ? h(
             "div",
@@ -1961,10 +2917,10 @@ function rulesPanel() {
 }
 
 function autonomyPanel() {
-  panel("Ce qu'il fait seul", async (refresh) => {
+  panel("Ce que je fais seul", async (refresh) => {
     const { actions } = await api("api/autonomy");
     return [
-      h("p", { class: "hint" }, "Tu peux lui reprendre une autonomie d'un geste. Pour lui en donner, dis-le-lui : il te le demandera avec Face ID, limites comprises."),
+      h("p", { class: "hint" }, "Tu peux me reprendre une autonomie d'un geste. Pour m'en donner, dis-le-moi : je te le demanderai avec Face ID, limites comprises."),
       h(
         "div",
         { class: "list items" },
@@ -1972,7 +2928,7 @@ function autonomyPanel() {
           h(
             "div",
             { class: "item" },
-            h("span", {}, h("span", { class: "text" }, a.label), h("small", {}, a.alone ? "seul, dans ses limites" : a.streak ? `il demande · oui ${a.streak} fois de suite` : "il demande")),
+            h("span", {}, h("span", { class: "text" }, a.label), h("small", {}, a.alone ? "seul, dans mes limites" : a.streak ? `je demande · oui ${a.streak} fois de suite` : "je demande")),
             h(
               "span",
               { class: "acts" },
@@ -2000,7 +2956,7 @@ function autonomyPanel() {
 
 function activityPanel() {
   let filter = "all";
-  panel("Ce qu'il a fait", async (refresh) => {
+  panel("Ce que j'ai fait", async (refresh) => {
     const { activity } = await api("api/activity");
     const shown = activity.filter((a) => filter === "all" || (filter === "silences" ? a.silence : !a.silence));
     const tab = (key, text) => h("button", { type: "button", role: "tab", "aria-selected": String(filter === key), onclick: () => ((filter = key), refresh()) }, text);
@@ -2029,7 +2985,7 @@ function plannedPanel() {
   panel("À venir", async () => {
     const { planned } = await api("api/planned");
     return [
-      h("p", { class: "hint" }, "Ce qu'il fera de lui-même ces deux prochaines semaines. Pour en annuler un, touche-le."),
+      h("p", { class: "hint" }, "Ce que je ferai de moi-même ces deux prochaines semaines. Pour en annuler un, touche-le."),
       planned.length
         ? h(
             "div",
@@ -2067,7 +3023,7 @@ function offerNotifications() {
       "header",
       {},
       h("span", { class: "ico" }, icon("bell", 18, "#fff")),
-      h("span", {}, h("b", {}, "Être prévenu quand l'app est fermée"), h("small", {}, "ses messages et ses demandes d'accord")),
+      h("span", {}, h("b", {}, "Être prévenu quand l'app est fermée"), h("small", {}, "mes messages et mes demandes d'accord")),
     ),
     h(
       "div",

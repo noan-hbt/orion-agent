@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -12,15 +13,18 @@ import pytest
 
 from orion.awaiting.module import Awaiting, AwaitingSettings
 from orion.channels.inbox import OwnerInbox
+from orion.config import load_config
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy
+from orion.hands.desk import HandsDesk
 from orion.initiative.engine import InitiativeSettings
 from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
+from orion.missions.service import Missions
 from orion.mobile.channel import MobileChannel
-from orion.mobile.control import Control
+from orion.mobile.control import Control, release
 from orion.mobile.devices import Devices, session_key
 from orion.mobile.server import mobile_app
 from orion.modules.base import Planned
@@ -43,6 +47,7 @@ class Controlled:
     journal: SqliteJournal
     tasks: Tasks
     awaiting: Awaiting
+    control: Control
 
 
 @pytest.fixture
@@ -78,7 +83,7 @@ async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Co
         phone = FakePasskey(URL, "orion.example")
         world = World(channel, http, phone, ScriptedProvider(), FakePusher(), devices)
         await pair(world)
-        yield Controlled(world, memory, autonomy, journal, tasks, awaiting)
+        yield Controlled(world, memory, autonomy, journal, tasks, awaiting, control)
     await store.close()
 
 
@@ -117,6 +122,11 @@ async def test_he_sets_quiet_hours_and_the_budget(controlled: Controlled) -> Non
         "07:30",
         5,
     )
+    timed = await http.post("/app/api/control/settings", json={"digests": ["18:00", "09:00"]})
+    assert timed.json()["digests"] == ["09:00", "18:00"]
+    assert (
+        await http.post("/app/api/control/settings", json={"digests": ["midi"]})
+    ).status_code == 404
     bad = await http.post("/app/api/control/settings", json={"daily_budget": 500})
     assert bad.status_code == 404
     assert (
@@ -201,3 +211,107 @@ async def test_for_you_gathers_what_waits_on_him(controlled: Controlled) -> None
     after = (await http.get("/app/api/for-you")).json()
     assert after["waiting_on"] == [] and after["tasks"] == []
     assert [q["id"] for q in after["questions"]] == [asked.id]
+
+
+async def test_the_server_part_shows_settings_with_whose_yes_and_the_modules(
+    controlled: Controlled, tmp_path: Path
+) -> None:
+    http = controlled.world.http
+    assert (await http.get("/app/api/server")).status_code == 404  # no config: not here
+
+    source = tmp_path / "orion.toml"
+    source.write_text(
+        'instance = "orion-main"\ndata_dir = "data"\n\n[initiative]\nquiet_start = "22:30:00"\n'
+        "\n[modules.web]\nenabled = false\n",
+        "utf-8",
+    )
+    controlled.control.config = load_config(source)
+    shown = (await http.get("/app/api/server")).json()
+    by_path = {s["path"]: s for s in shown["settings"]}
+    assert by_path["initiative.quiet_start"] == {
+        "path": "initiative.quiet_start",
+        "value": "22:30:00",
+        "tier": "orion",
+    }
+    assert by_path["modules.web.enabled"]["tier"] == "orion"
+    assert all(s["tier"] == "owner" for s in shown["settings"] if s["path"].startswith("budget."))
+    assert not any(s["path"].endswith(("api_key", "base_url", "_dir")) for s in shown["settings"])
+    web = next(m for m in shown["modules"] if m["name"] == "web")
+    assert web == {"name": "web", "on": False, "added": False}
+    assert shown["version"] and shown["split"] is False
+    assert all("description" in entry for entry in shown["catalog"])
+
+
+async def test_he_follows_and_steers_his_missions(controlled: Controlled) -> None:
+    http = controlled.world.http
+    assert (await http.get("/app/api/missions")).status_code == 404  # missions off
+    missions = Missions(controlled.journal)
+    controlled.control.missions = lambda: missions
+    origin = Provenance(source="thread:owner", actor="orion:core")
+    flat = await missions.start("Un T2 à Lyon", "moins de 900 €", 24, NOW, origin, None)
+    await missions.see(
+        flat,
+        [("https://a/1", "T2 Croix-Rousse"), ("https://a/2", "T2 Part-Dieu")],
+        origin,
+        Trust.WEB,
+        None,
+    )
+    mission = await missions.get(flat)
+    assert mission is not None
+    await missions.ran(mission, NOW, "Deux annonces : Croix-Rousse et Part-Dieu.", Trust.WEB)
+
+    shown = (await http.get("/app/api/missions")).json()["missions"]
+    assert [m["goal"] for m in shown] == ["Un T2 à Lyon"]
+    one = shown[0]
+    assert one["runs"] == 1 and len(one["seen"]) == 2
+    assert one["reports"][0]["trusted"] is False  # what pages said, not him
+    assert one["next_run"] == (NOW + timedelta(hours=24)).isoformat()
+
+    turned = await http.post(
+        f"/app/api/missions/{flat}/reject", json={"key": "https://a/2", "why": "trop bruyant"}
+    )
+    assert turned.status_code == 200
+    unknown = await http.post(f"/app/api/missions/{flat}/reject", json={"key": "https://x"})
+    assert unknown.status_code == 404
+    assert (
+        await http.post(f"/app/api/missions/{flat}/pace", json={"every_hours": 6})
+    ).status_code == 200
+    assert (await http.post(f"/app/api/missions/{flat}/now")).json()["left"] == 7
+    one = (await http.get("/app/api/missions")).json()["missions"][0]
+    assert one["every_hours"] == 6
+    assert one["rejected"] == [{"key": "https://a/2", "why": "trop bruyant"}]
+    kept = await missions.get(flat)
+    assert kept is not None and kept.rejected == {"https://a/2": "trop bruyant"}
+
+    assert (await http.post(f"/app/api/missions/{flat}/close")).status_code == 200
+    assert (await http.post(f"/app/api/missions/{flat}/now")).status_code == 404
+    assert (await http.get("/app/api/missions")).json()["missions"][0]["closed"]
+
+
+async def test_he_sees_his_machines_and_cuts_one_off(controlled: Controlled) -> None:
+    http = controlled.world.http
+    desk = HandsDesk(controlled.journal)
+    controlled.control.hands = lambda: desk
+    code = await desk.new_code("mac")
+    assert await desk.pair(code) is not None
+    assert (await http.get("/app/api/machines")).json() == {
+        "machines": [{"name": "mac", "online": False, "actions": [], "roots": []}]
+    }
+    assert (await http.post("/app/api/machines/pc/revoke")).status_code == 404
+    assert (await http.post("/app/api/machines/mac/revoke")).status_code == 200
+    assert (await http.get("/app/api/machines")).json() == {"machines": []}
+
+
+def test_the_running_commit_and_a_set_aside_update_are_read(tmp_path: Path) -> None:
+    code = tmp_path / "app"
+    assert release(code) is None  # not a checkout
+    code.mkdir()
+    git = ["git", "-C", str(code), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "Les onglets"], check=True)
+    found = release(code)
+    assert found is not None
+    assert found["subject"] == "Les onglets" and found["set_aside"] is None and found["commit"]
+    (tmp_path / "update.bad").write_text("0123456789abcdef\n", "utf-8")
+    found = release(code)
+    assert found is not None and found["set_aside"] == "0123456789ab"
