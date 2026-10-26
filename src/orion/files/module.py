@@ -87,6 +87,8 @@ class Made:
     content_type: str
     size: int
     event_id: str
+    trust: Trust = Trust.SYSTEM
+    """The trust of what it came from: a picture downloaded from a page is worth that page."""
 
 
 class _Kept:
@@ -115,6 +117,7 @@ class _Kept:
                 str(payload["content_type"]),
                 int(payload["size"]),
                 event.id,
+                event.trust,
             )
             self.files[made.id] = made
         elif event.kind == REDACTED_KIND:
@@ -382,7 +385,10 @@ def file_tool(
     web: Callable[[], WebDesk | None] = lambda: None,
     hands: Callable[[], HandsDesk | None] = lambda: None,
     closed: tuple[Path, ...] = (),
+    looks: bool = False,
 ) -> Tool:
+    """`looks`: `attachment_look` can look at a picture (the photos module is on)."""
+
     async def image(args: Any, ctx: ToolContext) -> ToolResult:
         try:
             response = await provider.complete(
@@ -413,9 +419,14 @@ def file_tool(
         )
 
     def ready(made: Made) -> ToolResult:
+        look = (
+            f" Tu ne la vois pas : `attachment_look` ({made.id}) te dit ce qu'elle montre."
+            if looks and made.content_type.startswith("image/")
+            else ""
+        )
         return ToolResult(
             f"Fichier prêt ({made.id}, {made.name}, {max(made.size // 1024, 1)} Ko). "
-            "Envoie-le avec `file` (send)."
+            f"Envoie-le avec `file` (send).{look}"
         )
 
     async def downloading(args: Any, ctx: ToolContext) -> ToolResult:
@@ -553,6 +564,7 @@ class FilesModule(Module):
                 hands=lambda: hands.desk if hands is not None else None,
                 # Orion's own data too: its journal, its memory, its ChatGPT tokens.
                 closed=(self.config.data_dir, guardian.data_dir, guardian.socket.parent),
+                looks=plate.has("photos"),
             )
         ]
 

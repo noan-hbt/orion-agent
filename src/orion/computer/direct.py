@@ -744,7 +744,9 @@ Keep = Callable[[str, bytes, str, ToolContext], Awaitable[str]]
 """(name, data, content type, ctx) → the id of the file kept (`orion.files`)."""
 
 
-def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
+def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = False) -> list[Tool]:
+    """`looks`: `attachment_look` can look at a screenshot (the photos module is on)."""
+
     def run(act: Callable[[Any, ToolContext], Any]) -> Any:
         async def handler(args: Any, ctx: ToolContext) -> ToolResult:
             try:
@@ -763,7 +765,12 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None) -> list[Tool]:
             return ToolResult(str(exc), is_error=True)
         kind = "image/jpeg" if args.full else "image/png"
         file_id = await keep("capture", data, kind, ctx)
-        return ToolResult(f"Capture prête ({file_id}). Envoie-la avec `file` (send).")
+        look = (
+            f" Tu ne la vois pas : `attachment_look` ({file_id}) te dit ce qu'elle montre."
+            if looks
+            else ""
+        )
+        return ToolResult(f"Capture prête ({file_id}). Envoie-la avec `file` (send).{look}")
 
     async def close(_args: Any, ctx: ToolContext) -> ToolResult:
         closed = await desk.close(ctx.thread_id)
