@@ -6,19 +6,29 @@ costs; and the few things he changes from here: a pause, quiet hours, the daily 
 budget. Every change is his own correction, journaled with trust OWNER, as the console does.
 Giving Orion more room (autonomy) is not here: that is asked and signed in the conversation.
 
-The server, read from here (`server`): the version, every setting of orion.toml that can be
-changed by message with whose yes it takes (D92), the modules and the catalog (D105). Nothing is
-written from here: a change is asked in the conversation, where Orion checks it whole and the
-owner signs it, the same way as by message.
+The server, read from here (`server`): the version and the last update (D94), every setting of
+orion.toml that can be changed by message with whose yes it takes (D92), the modules and the
+catalog (D105). Nothing is written from here: a change is asked in the conversation, where
+Orion checks it whole and the owner signs it, the same way as by message.
+
+His missions (D47): what each looks for, what it kept and what he turned down; from here he
+asks for a pass now, changes its pace, turns an item down or ends it. His machines (D1): which
+are online and what each allows; one is cut off from here. Pairing one stays on the server: a
+hand's answers are trusted as his own, so a stolen session must not add one.
 """
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
+
+import structlog
 
 from orion import __version__
 from orion.awaiting.module import Awaiting
@@ -27,15 +37,19 @@ from orion.console.dashboard import moment
 from orion.core.events import Provenance, Trust
 from orion.core.journal import EventStore
 from orion.guardian.autonomy import Autonomy, label
+from orion.hands.desk import HandsDesk
 from orion.initiative.engine import InitiativeSettings, effective_settings
 from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.service import MemoryService, Origin
+from orion.missions.service import Mission, Missions
 from orion.modules.base import Planned
 from orion.providers.spending import Spending
 from orion.tasks.service import Tasks
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+
+log = structlog.get_logger(__name__)
 
 OWNER = Origin(actor="owner:app", source="app", trust=Trust.OWNER)
 FROM_APP = Provenance(source="app", actor="owner:main")
@@ -63,6 +77,12 @@ class Control:
     """The answers Orion waits for, once their module is assembled."""
     config: OrionConfig | None = None
     """The file Orion started with: what the server part shows."""
+    missions: Callable[[], Missions | None] = lambda: None
+    """His missions, once their module is assembled."""
+    hands: Callable[[], HandsDesk | None] = lambda: None
+    """His machines (Orion's hands), once their module is assembled."""
+    code: Path | None = None
+    """Where Orion's code is checked out (the server updates it there, D94)."""
 
     @property
     def zone(self) -> ZoneInfo:
@@ -324,7 +344,83 @@ class Control:
     async def server(self) -> dict[str, Any]:
         if self.config is None:
             raise ControlError("the server part is not available here")
-        return server_view(self.config)
+        shown = server_view(self.config)
+        shown["release"] = await asyncio.to_thread(release, self.code) if self.code else None
+        return shown
+
+    # -- his missions -------------------------------------------------------------------------
+
+    async def _missions(self) -> Missions:
+        missions = self.missions()
+        if missions is None:
+            raise ControlError("missions are off")
+        await missions.sync()
+        return missions
+
+    async def mission_list(self) -> list[dict[str, Any]]:
+        missions = await self._missions()
+        found = sorted(
+            missions.state.missions.values(),
+            key=lambda m: (m.closed is not None, -m.started_at.timestamp()),
+        )
+        return [mission_view(m, self.now()) for m in found[:30]]
+
+    async def _open_mission(self, mission_id: str) -> tuple[Missions, Mission]:
+        missions = await self._missions()
+        mission = await missions.get(mission_id)
+        if mission is None or mission.closed is not None:
+            raise ControlError("no such mission running")
+        return missions, mission
+
+    async def mission_now(self, mission_id: str) -> int:
+        missions, mission = await self._open_mission(mission_id)
+        now = self.now()
+        if not mission.rushes_left(now):
+            raise ControlError("no more passes right away today")
+        return await missions.rush(mission_id, now, FROM_APP, Trust.OWNER, None)
+
+    async def mission_pace(self, mission_id: str, every_hours: int) -> None:
+        missions, _ = await self._open_mission(mission_id)
+        if not 1 <= every_hours <= 24 * 14:
+            raise ControlError("every_hours: between 1 and 336")
+        await missions.update(mission_id, FROM_APP, Trust.OWNER, None, every_hours=every_hours)
+
+    async def mission_reject(self, mission_id: str, key: str, why: str) -> None:
+        missions, mission = await self._open_mission(mission_id)
+        if key not in mission.seen:
+            raise ControlError("the mission did not see that")
+        why = why.strip()[:300] or "écarté depuis l'app"
+        await missions.reject(mission_id, key, why, FROM_APP, None)
+
+    async def mission_close(self, mission_id: str) -> None:
+        missions, _ = await self._open_mission(mission_id)
+        await missions.close(mission_id, "arrêtée par toi depuis l'app", FROM_APP, None)
+
+    # -- his machines ---------------------------------------------------------------------------
+
+    async def machines(self) -> list[dict[str, Any]]:
+        desk = self.hands()
+        if desk is None:
+            raise ControlError("hands are off")
+        await desk.start()
+        return [
+            {
+                "name": name,
+                "online": name in desk.connected,
+                "actions": list(desk.connected[name].actions) if name in desk.connected else [],
+                "roots": list(desk.connected[name].roots) if name in desk.connected else [],
+            }
+            for name in sorted(desk.state.devices)
+        ]
+
+    async def machine_revoke(self, name: str) -> None:
+        desk = self.hands()
+        if desk is None:
+            raise ControlError("hands are off")
+        await desk.start()
+        if name not in desk.state.devices:
+            raise ControlError("no such machine")
+        await desk.revoke(name)
 
 
 def server_view(config: OrionConfig) -> dict[str, Any]:
@@ -374,3 +470,60 @@ def server_view(config: OrionConfig) -> dict[str, Any]:
             for entry in catalog.values()
         ],
     }
+
+
+def mission_view(mission: Mission, now: datetime) -> dict[str, Any]:
+    nxt = (mission.last_run or mission.started_at) + timedelta(hours=mission.every_hours)
+    return {
+        "id": mission.id,
+        "goal": mission.goal,
+        "criteria": mission.criteria,
+        "every_hours": mission.every_hours,
+        "started_at": mission.started_at.isoformat(),
+        "runs": mission.runs,
+        "last_run": mission.last_run.isoformat() if mission.last_run else None,
+        "next_run": None if mission.closed else max(nxt, now).isoformat(),
+        "rushes_left": mission.rushes_left(now),
+        "seen": [
+            {"key": k, "label": label, "rejected": mission.rejected.get(k)}
+            for k, label in list(mission.seen.items())[-60:]
+        ],
+        "rejected": [{"key": k, "why": why} for k, why in mission.rejected.items()],
+        "notes": mission.notes[-6:],
+        "reports": [
+            {
+                "run": run,
+                "at": at.isoformat(),
+                "said": said[:1200],
+                "trusted": trust >= Trust.SYSTEM,
+            }
+            for run, at, said, trust in mission.reports[-5:]
+        ],
+        "closed": mission.closed,
+    }
+
+
+def release(code: Path) -> dict[str, Any] | None:
+    """The commit Orion runs and, when the server updates itself (D94), a commit it set aside:
+    `update.bad` beside the checkout. None when the code is not a git checkout."""
+    if not (code / ".git").exists():
+        return None
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(code), "log", "-1", "--format=%h%x00%cI%x00%s"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("control.release_unreadable", error=str(exc))
+        return None
+    commit, at, subject = [*done.stdout.strip().split("\0"), "", "", ""][:3]
+    bad = code.parent / "update.bad"
+    try:
+        set_aside = bad.read_text("utf-8").strip()[:12] if bad.is_file() else None
+    except OSError as exc:
+        log.warning("control.update_bad_unreadable", error=str(exc))
+        set_aside = None
+    return {"commit": commit, "at": at, "subject": subject, "set_aside": set_aside}

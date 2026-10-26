@@ -27,10 +27,13 @@ import structlog
 import uvicorn
 from pydantic import Field
 
+import orion
 from orion.awaiting.module import AwaitingModule
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
+from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
+from orion.missions.module import MissionsModule
 from orion.mobile.channel import MobileChannel
 from orion.mobile.control import Control
 from orion.mobile.devices import Devices, session_key
@@ -41,6 +44,9 @@ from orion.providers.spending import Spending
 from orion.tasks.module import TasksModule
 
 log = structlog.get_logger(__name__)
+
+CODE = Path(orion.__file__).resolve().parents[2]
+"""Orion's checkout (`/srv/orion/app` on the server): what the settings show as running."""
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -146,6 +152,8 @@ class MobileModule(Module):
         config = self.config
         tasks = plate.module(TasksModule)
         waits = plate.module(AwaitingModule)
+        missions = plate.module(MissionsModule)
+        hands = plate.module(HandsModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -161,6 +169,9 @@ class MobileModule(Module):
             tasks=lambda: tasks.tasks if tasks is not None else None,
             awaiting=lambda: waits.awaiting if waits is not None else None,
             config=config,
+            missions=lambda: missions.missions if missions is not None else None,
+            hands=lambda: hands.desk if hands is not None else None,
+            code=CODE,
         )
         return []
 

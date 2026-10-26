@@ -1684,6 +1684,18 @@ async function nowFill(refresh) {
       ),
     );
   }
+  const missions = await api("api/missions")
+    .then((found) => found.missions.filter((m) => !m.closed))
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return [];
+      throw error;
+    });
+  if (missions.length) {
+    sections.push(
+      h("h2", { class: "section" }, "Mes missions", h("small", {}, String(missions.length))),
+      h("div", { class: "list items" }, missions.map((m) => missionRow(m, refresh))),
+    );
+  }
   const next = state.overview?.next || [];
   if (next.length) {
     sections.push(
@@ -1706,12 +1718,19 @@ async function notebookFill() {
     throw error;
   });
   if (!o) return h("p", { class: "empty" }, "Mon carnet n'est pas ouvert ici.");
+  const missions = await api("api/missions")
+    .then((found) => found.missions.filter((m) => !m.closed))
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null; // missions off
+      throw error;
+    });
   const go = (name, title, count, open, wide = false) =>
     h("button", { class: `tile link ${wide ? "wide" : ""}`, type: "button", onclick: open }, h("span", { class: "ico" }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
   return [
     h(
       "div",
       { class: "grid" },
+      missions ? go("target", "Missions", missions.length ? `${missions.length} en cours · ${plural(missions.reduce((n, m) => n + m.seen.filter((s) => !s.rejected).length, 0), "retenu", "retenus")}` : "aucune en cours", missionsPanel, true) : null,
       go("spark", "Ce que je sais", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel, true),
       go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
       go("file", "Mon manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
@@ -1719,7 +1738,7 @@ async function notebookFill() {
       go("clock", "Activité", "et mes silences", activityPanel),
       go("shield", "Ce que je fais seul", o.alone.length ? `${o.alone.length} permis` : "je demande tout", autonomyPanel, true),
     ),
-    h("p", { class: "hint" }, "Pour une nouvelle mission ou un rappel, dis-le-moi dans la conversation, ou touche + à côté du message."),
+    h("p", { class: "hint" }, "Pour un rappel, dis-le-moi dans la conversation, ou touche + à côté du message."),
   ];
 }
 
@@ -1745,6 +1764,12 @@ async function settingsFill(refresh) {
     if (error instanceof ApiError && error.status === 404) return null;
     throw error;
   });
+  const machines = await api("api/machines")
+    .then((found) => found.machines)
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null; // hands off
+      throw error;
+    });
   const act = (path, payload) => async () => {
     try {
       await api(path, payload);
@@ -1813,14 +1838,19 @@ async function settingsFill(refresh) {
         { class: "list items" },
         row("toml", "orion.toml", plural(server.settings.length, "réglage", "réglages"), () => configPanel(server)),
         row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
-        row("server", "Version", `orion ${server.version}${server.split ? " · gardien à part" : ""}`, null),
+        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
       ),
       h("p", { class: "hint" }, `Je change mes réglages quand tu me le demandes, avec ton oui ; les ${owner} qui te protègent, toujours avec Face ID. Les secrets et les chemins ne se changent que sur le serveur.`),
     );
   }
   parts.push(
-    h("p", { class: "label" }, "Téléphones"),
-    h("div", { class: "list items" }, row("phone", "Téléphones appairés", state.device || "", phonesPanel)),
+    h("p", { class: "label" }, "Machines et téléphones"),
+    h(
+      "div",
+      { class: "list items" },
+      machines ? row("server", "Machines", machines.length ? `${machines.filter((m) => m.online).length} en ligne sur ${machines.length}` : "aucune", machinesPanel) : null,
+      row("phone", "Téléphones", state.device || "", phonesPanel),
+    ),
     h("p", { class: "label" }, "Cet appareil"),
     h(
       "div",
@@ -1999,6 +2029,264 @@ function modulesPanel(server) {
           ),
         )
       : null,
+  ]);
+}
+
+// -- missions: what each looks for, what it kept, what he turned down ---------------------------
+
+const PACES = [6, 12, 24, 48];
+
+function pace(hours) {
+  return hours % 24 === 0 ? (hours === 24 ? "chaque jour" : `tous les ${hours / 24} jours`) : `toutes les ${hours} h`;
+}
+
+function missionRow(m, refresh) {
+  return h(
+    "button",
+    { type: "button", class: `item ${m.closed ? "quiet" : ""}`, onclick: () => missionPanel(m.id, refresh) },
+    h("span", { class: `ico ${m.closed ? "" : "on"}` }, icon("target", 16)),
+    h(
+      "span",
+      {},
+      h("span", { class: "text" }, m.goal),
+      h("small", {}, m.closed ? `close · ${m.closed}` : [plural(m.runs, "passage", "passages"), plural(m.seen.length, "vu", "vus"), m.next_run ? `prochain ${SHORT.format(new Date(m.next_run))}` : ""].filter(Boolean).join(" · ")),
+    ),
+    h("span", { class: "chev" }, icon("chevron", 14)),
+  );
+}
+
+function missionsPanel() {
+  panel("Missions", async (refresh) => {
+    const { missions } = await api("api/missions");
+    const running = missions.filter((m) => !m.closed);
+    const closed = missions.filter((m) => m.closed);
+    return [
+      running.length ? h("div", { class: "list items" }, running.map((m) => missionRow(m, refresh))) : h("p", { class: "empty" }, "Aucune mission en cours."),
+      closed.length ? [h("p", { class: "label" }, "Terminées"), h("div", { class: "list items" }, closed.map((m) => missionRow(m, refresh)))] : null,
+      h("button", { class: "pill primary wide", type: "button", onclick: () => askOrion("Nouvelle mission : ") }, icon("plus", 18), "Nouvelle mission"),
+      h("p", { class: "hint" }, "Une mission, c'est un but sur plusieurs jours : je cherche seul, à mon rythme, et je ne t'écris que s'il y a du neuf."),
+    ];
+  });
+}
+
+function link(key, label) {
+  return /^https?:\/\//.test(key)
+    ? h("a", { href: key, target: "_blank", rel: "noopener noreferrer" }, label || key)
+    : h("span", {}, label || key);
+}
+
+function missionPanel(id, refreshList) {
+  panel("Une mission", async (refresh) => {
+    const { missions } = await api("api/missions");
+    const m = missions.find((each) => each.id === id);
+    if (!m) return h("p", { class: "empty" }, "Cette mission n'existe plus.");
+    const act = (path, payload = {}, done = "") => async () => {
+      try {
+        await api(path, payload);
+        if (done) toast(done);
+        refresh();
+        refreshList?.();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    const kept = m.seen.filter((s) => !s.rejected);
+    const head = h(
+      "div",
+      { class: "tile wide mission-head" },
+      h("b", { class: "goal" }, m.goal),
+      m.criteria ? h("small", {}, m.criteria) : null,
+      h(
+        "div",
+        { class: "stats" },
+        h("span", {}, h("b", {}, String(m.runs)), "passages"),
+        h("span", {}, h("b", {}, String(kept.length)), "retenus"),
+        h("span", {}, h("b", {}, String(m.rejected.length)), "écartés"),
+      ),
+      m.closed
+        ? h("small", {}, `Close : ${m.closed}`)
+        : h("small", {}, `Je passe ${pace(m.every_hours)}${m.next_run ? ` · prochain passage ${SHORT.format(new Date(m.next_run))}` : ""}`),
+    );
+    if (m.closed) return [head, reports(m), seenList(m, kept, null)];
+    return [
+      head,
+      h(
+        "div",
+        { class: "row2" },
+        h("button", { class: "pill primary", type: "button", disabled: !m.rushes_left, onclick: act(`api/missions/${id}/now`, {}, "J'y vais maintenant.") }, icon("spark", 18), "Chercher maintenant"),
+      ),
+      h("p", { class: "label" }, "Mon rythme"),
+      h(
+        "div",
+        { class: "chips" },
+        PACES.map((hours) => h("button", { type: "button", class: "chip", "aria-pressed": String(m.every_hours === hours), onclick: act(`api/missions/${id}/pace`, { every_hours: hours }) }, pace(hours))),
+      ),
+      reports(m),
+      seenList(m, kept, (s) => rejectSheet(m, s, refresh)),
+      m.rejected.length
+        ? [
+            h("p", { class: "label" }, "Écartés, avec ton motif"),
+            h("div", { class: "list items" }, m.rejected.map((r) => h("div", { class: "item past" }, h("span", { class: "ico" }, icon("close", 16)), h("span", {}, h("span", { class: "text" }, r.key), h("small", {}, r.why))))),
+          ]
+        : null,
+      m.notes.length ? [h("p", { class: "label" }, "Mes notes"), h("div", { class: "list items" }, m.notes.map((n) => h("div", { class: "item" }, h("span", {}, h("span", { class: "text" }, n)))))] : null,
+      h("div", { class: "list items" }, h("button", { type: "button", class: "item danger", onclick: () => endMission(m, refresh, refreshList) }, h("span", { class: "ico" }, icon("stop", 16)), h("span", {}, h("span", { class: "text" }, "Arrêter la mission")))),
+    ];
+  });
+}
+
+function reports(m) {
+  if (!m.reports.length) return null;
+  const last = m.reports[m.reports.length - 1];
+  return [
+    h("p", { class: "label" }, `Mon dernier passage · ${SHORT.format(new Date(last.at))}`),
+    h("div", { class: "card report" }, h("p", {}, ...rich(last.said)), last.trusted ? null : h("small", {}, "d'après les pages que j'ai lues : vérifie avant d'agir")),
+  ];
+}
+
+function seenList(m, kept, reject) {
+  if (!kept.length) return null;
+  return [
+    h("p", { class: "label" }, "Ce que j'ai retenu"),
+    h(
+      "div",
+      { class: "list items" },
+      kept.slice(-20).reverse().map((s) =>
+        h(
+          "div",
+          { class: "item" },
+          h("span", { class: "ico" }, icon("check", 16)),
+          h("span", {}, h("span", { class: "text" }, link(s.key, s.label))),
+          reject ? h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: () => reject(s) }, "Écarter")) : null,
+        ),
+      ),
+    ),
+  ];
+}
+
+function rejectSheet(m, item, refresh) {
+  const why = h("input", { type: "text", placeholder: "trop cher, trop loin, déjà vu…", "aria-label": "Pourquoi" });
+  const close = sheet(
+    h("h2", {}, "Écarter"),
+    h("p", { class: "quote" }, item.label || item.key),
+    h("label", { class: "field-edit" }, why),
+    h("p", { class: "hint" }, "Je garde ton motif : les prochains passages en tiennent compte."),
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api(`api/missions/${m.id}/reject`, { key: item.key, why: why.value });
+            close();
+            refresh();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Écarter",
+    ),
+  );
+  why.focus();
+}
+
+function endMission(m, refresh, refreshList) {
+  const close = sheet(
+    h("h2", {}, "Arrêter la mission ?"),
+    h("p", { class: "quote" }, m.goal),
+    h(
+      "button",
+      {
+        class: "pill danger wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            await api(`api/missions/${m.id}/close`, {});
+            close();
+            refresh();
+            refreshList?.();
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Arrêter",
+    ),
+  );
+}
+
+// -- machines and version -----------------------------------------------------------------------
+
+const ACTION_NAMES = { notify: "notifier", open_url: "ouvrir un lien", find_files: "chercher des fichiers", read_file: "lire un fichier", get_file: "m'envoyer un fichier" };
+
+function machinesPanel() {
+  panel("Machines", async (refresh) => {
+    const { machines } = await api("api/machines");
+    return [
+      machines.length
+        ? h(
+            "div",
+            { class: "list items" },
+            machines.map((m) =>
+              h(
+                "div",
+                { class: "item" },
+                h("span", { class: `ico ${m.online ? "on" : ""}` }, icon("server", 16)),
+                h(
+                  "span",
+                  {},
+                  h("span", { class: "text" }, m.name),
+                  h("small", {}, m.online ? `en ligne · ${m.actions.map((a) => ACTION_NAMES[a] || a).join(", ") || "rien de permis"}` : "hors ligne"),
+                  m.roots.length ? h("small", {}, `dossiers : ${m.roots.join(", ")}`) : null,
+                ),
+                h(
+                  "span",
+                  { class: "acts" },
+                  h(
+                    "button",
+                    {
+                      class: "pill small danger",
+                      type: "button",
+                      onclick: async () => {
+                        try {
+                          await api(`api/machines/${encodeURIComponent(m.name)}/revoke`, {});
+                          toast(`${m.name} est coupée.`);
+                          refresh();
+                        } catch (error) {
+                          toast(said(error));
+                        }
+                      },
+                    },
+                    "Couper",
+                  ),
+                ),
+              ),
+            ),
+          )
+        : h("p", { class: "empty" }, "Aucune machine appairée."),
+      h("p", { class: "hint" }, "Une machine, c'est mon accès à ton ordinateur : ce que tu y permets, dans les dossiers que tu choisis. En ajouter une se fait sur le serveur (orion hands pair <nom>), puis orion hand pair sur la machine : ce qu'elle me dit compte comme venant de toi, alors une session volée ne doit pas pouvoir en ajouter."),
+    ];
+  });
+}
+
+function versionPanel(server) {
+  const r = server.release;
+  panel("Version", () => [
+    h(
+      "div",
+      { class: "list items" },
+      row("server", "Orion", server.version, null),
+      r ? row("check", "Ce qui tourne", r.commit, null) : null,
+      r ? row("clock", "Depuis le", r.at ? SHORT.format(new Date(r.at)) : "—", null) : null,
+      row("shield", "Gardien", server.split ? "à part, il protège tes clés" : "dans le même processus", null),
+    ),
+    r && r.subject ? h("p", { class: "quote report" }, r.subject) : null,
+    r && r.set_aside
+      ? h("div", { class: "card report warn" }, h("p", {}, `J'ai écarté une mise à jour (${r.set_aside}) : elle ne démarrait pas, je suis revenu à la version d'avant. Je retenterai au prochain changement.`))
+      : null,
+    h("p", { class: "hint" }, "Je me mets à jour seul : toutes les deux minutes, je regarde si le code a avancé. J'installe, je vérifie que je démarre, et je reviens en arrière si ça casse. Je te préviens dans les deux cas."),
   ]);
 }
 

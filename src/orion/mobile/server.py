@@ -519,6 +519,35 @@ def core_routes(
     async def server(_request: Request, c: Control) -> object:
         return await c.server()
 
+    async def missions(_request: Request, c: Control) -> object:
+        return {"missions": await c.mission_list()}
+
+    async def mission_now(request: Request, c: Control) -> object:
+        return {"left": await c.mission_now(str(request.path_params["id"]))}
+
+    async def mission_pace(request: Request, c: Control) -> object:
+        hours = int((await body(request))["every_hours"])
+        await c.mission_pace(str(request.path_params["id"]), hours)
+        return {}
+
+    async def mission_reject(request: Request, c: Control) -> object:
+        sent = await body(request)
+        await c.mission_reject(
+            str(request.path_params["id"]), str(sent["key"]), str(sent.get("why") or "")
+        )
+        return {}
+
+    async def mission_close(request: Request, c: Control) -> object:
+        await c.mission_close(str(request.path_params["id"]))
+        return {}
+
+    async def machines(_request: Request, c: Control) -> object:
+        return {"machines": await c.machines()}
+
+    async def machine_revoke(request: Request, c: Control) -> object:
+        await c.machine_revoke(str(request.path_params["name"]))
+        return {}
+
     def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
             f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
@@ -548,6 +577,13 @@ def core_routes(
         api("tasks/{id}/stop", controls(stop_task), post=True),
         api("waits/{id}/drop", controls(drop_wait), post=True),
         api("server", controls(server)),
+        api("missions", controls(missions)),
+        api("missions/{id}/now", controls(mission_now), post=True),
+        api("missions/{id}/pace", controls(mission_pace), post=True),
+        api("missions/{id}/reject", controls(mission_reject), post=True),
+        api("missions/{id}/close", controls(mission_close), post=True),
+        api("machines", controls(machines)),
+        api("machines/{name}/revoke", controls(machine_revoke), post=True),
     ]
 
 

@@ -600,3 +600,19 @@ body.typing .tab .composer { padding-bottom: calc(var(--bottom) + 10px); }
 .sheet .error { margin: 0 4px; color: var(--danger); font-size: 14px; font-weight: 600; }
 .sheet .hint { margin: 0 4px; font-size: 13px; color: var(--muted); line-height: 1.45; }
 .list .item > span.chev:not(.ico):not(.acts) { flex: 0 0 auto; }
+
+/* -- a mission -------------------------------------------------------------------------------- */
+
+.mission-head { gap: 8px; min-height: 0; }
+.mission-head .goal { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.2; }
+.mission-head .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; width: 100%; margin: 6px 0 2px; }
+.mission-head .stats span { display: flex; flex-direction: column; padding: 10px 12px; border-radius: 16px; background: var(--tile); font-size: 12px; font-weight: 600; color: var(--muted); }
+.mission-head .stats b { font-size: 22px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
+.row2 { display: flex; gap: 8px; }
+.row2 .pill { flex: 1; }
+.report { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.report p { margin: 0; font-size: 15px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.report small { font-size: 12px; color: var(--wait-ink); font-weight: 600; }
+.report.warn { background: linear-gradient(155deg, rgba(255, 236, 205, 0.9), rgba(255, 246, 230, 0.7)); }
+p.quote.report { margin: 0 4px; font-size: 14px; color: var(--muted); }
+.list .item .text a { color: var(--accent-ink); text-decoration: none; overflow-wrap: anywhere; }

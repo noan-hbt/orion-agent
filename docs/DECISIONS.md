@@ -2948,5 +2948,14 @@ appairer un deuxième téléphone. Désormais :
   il se déconnecte.
 - Orion parle de lui-même à la première personne partout dans l'application.
 
-Pas encore : lancer une mise à jour depuis l'app (le serveur se met déjà à jour seul, D94), ni
-de vue dédiée aux missions.
+- **les missions** (D47), dans le Carnet et dans Maintenant : le but, les critères, le rythme,
+  le dernier passage, ce qu'Orion a retenu et ce qui est écarté avec son motif. Depuis l'app, le
+  propriétaire demande un passage tout de suite, change le rythme, écarte un élément avec son
+  motif ou arrête la mission. Chaque geste est journalisé comme venant de lui. Le dernier
+  passage est marqué quand il repose sur des pages lues ;
+- **les machines** (D1) : lesquelles sont en ligne et ce que chacune permet, et en couper une.
+  En appairer une reste sur le serveur (`orion hands pair`) : ce qu'une machine renvoie compte
+  comme venant du propriétaire, donc une session volée ne doit pas pouvoir en ajouter ;
+- **la version** : le commit qui tourne, sa date, et une mise à jour écartée par le serveur
+  (`update.bad`, D94). Il n'y a rien à lancer : le serveur regarde toutes les deux minutes et
+  revient en arrière si ça casse.
