@@ -383,6 +383,20 @@ def mobile_app(
     async def activity(_request: Request, c: Control) -> object:
         return {"activity": await c.activity()}
 
+    async def for_you(_request: Request, c: Control) -> object:
+        return {
+            "approvals": [channel.public(a) for a in channel.asked.values()],
+            **await c.for_you(),
+        }
+
+    async def stop_task(request: Request, c: Control) -> object:
+        await c.stop_task(str(request.path_params["id"]))
+        return {}
+
+    async def drop_wait(request: Request, c: Control) -> object:
+        await c.drop_wait(str(request.path_params["id"]))
+        return {}
+
     async def upcoming(_request: Request, c: Control) -> object:
         return {"planned": await c.upcoming()}
 
@@ -410,6 +424,9 @@ def mobile_app(
             api("autonomy/{action}/revoke", take_back, post=True),
             api("activity", activity),
             api("planned", upcoming),
+            api("for-you", for_you),
+            api("tasks/{id}/stop", stop_task, post=True),
+            api("waits/{id}/drop", drop_wait, post=True),
             Route(f"{PREFIX}/pair/options", public(pair_options), methods=["POST"]),
             Route(f"{PREFIX}/pair", public(pair), methods=["POST"]),
             Route(f"{PREFIX}/login/options", public(login_options), methods=["POST"]),

@@ -968,9 +968,11 @@ function listen() {
       state.approvals.clear();
       for (const a of data.approvals) state.approvals.set(a.id, a);
       paintApprovals();
+      countQuestions();
     } else if (data.type === "message") {
       add(data.message);
       if (data.message.who === "orion") setTyping(false, true);
+      countQuestions();
     } else if (data.type === "typing") {
       setTyping(data.on);
       if (!data.on) setWork(null);
@@ -1091,10 +1093,24 @@ function paintStatus() {
 const ASK_TIME = new Intl.RelativeTimeFormat("fr-FR", { numeric: "auto" });
 
 function paintApprovals() {
-  const count = state.approvals.size;
+  paintBadge();
+  view.asks.replaceChildren(...[...state.approvals.values()].map(askCard));
+}
+
+function paintBadge() {
+  // What waits on him: approvals, and the questions Orion waits on him for.
+  const count = state.approvals.size + (state.questions || 0);
   view.badge.hidden = !count;
   view.badge.textContent = String(count);
-  view.asks.replaceChildren(...[...state.approvals.values()].map(askCard));
+}
+
+async function countQuestions() {
+  try {
+    state.questions = (await api("api/for-you")).questions.length;
+    paintBadge();
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) console.warn("for you", error);
+  }
 }
 
 function askCard(asked) {
@@ -1156,6 +1172,15 @@ const KEYS = {
   title: "Titre", when: "Quand", start: "Début", end: "Fin", url: "Lien", amount: "Montant",
   name: "Nom", path: "Fichier", query: "Recherche", address: "Adresse", phone: "Téléphone",
 };
+
+function askTitle(asked) {
+  // One line for a list: the action, and what it is about.
+  const args = asked.arguments || {};
+  const about = [args.subject, args.to, args.title, args.text, args.name].find((v) => typeof v === "string" && v);
+  if (!asked.tool) return excerpt(asked.question.replace(/^Avant que je le fasse : /, ""), 90);
+  const tool = asked.tool.replace(/_/g, " ");
+  return excerpt(about ? `${tool[0].toUpperCase()}${tool.slice(1)} · ${about}` : `${tool[0].toUpperCase()}${tool.slice(1)}`, 90);
+}
 
 function details(asked) {
   // The action and its arguments, readable; the raw question when there is nothing to show.
@@ -1418,30 +1443,110 @@ function actions() {
 // -- Pour toi, the menu -----------------------------------------------------------------------
 
 function forYou() {
-  const items = [...state.approvals.values()];
-  const close = sheet(
-    h("h2", {}, "Pour toi"),
-    items.length
-      ? h(
+  panel("Pour toi", async (refresh, close) => {
+    let found = { approvals: [...state.approvals.values()], questions: [], waiting_on: [], tasks: [] };
+    try {
+      found = await api("api/for-you");
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 404)) throw error; // controls off: approvals only
+    }
+    state.questions = found.questions.length;
+    paintBadge();
+    const act = (path) => async () => {
+      try {
+        await api(path, {});
+        refresh();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    const sections = [];
+    if (found.approvals.length) {
+      sections.push(
+        h("p", { class: "label" }, "Ton accord"),
+        h(
           "div",
-          { class: "list" },
-          items.map((a) =>
+          { class: "list items" },
+          found.approvals.map((a) =>
             h(
               "button",
               {
                 type: "button",
+                class: "item",
                 onclick: () => {
                   close();
-                  view.asks.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  setTimeout(() => view.asks.querySelector(".ask")?.scrollIntoView({ behavior: "smooth", block: "center" }), 200);
                 },
               },
-              icon("shield", 20),
-              excerpt(a.question.replace(/^Avant que je le fasse : /, ""), 60),
+              h("span", { class: "ico" }, icon("shield", 16)),
+              h("span", {}, h("span", { class: "text" }, askTitle(a)), h("small", {}, "glisse puis Face ID dans la conversation")),
             ),
           ),
-        )
-      : h("p", { class: "quote" }, "Rien ne t'attend. Quand Orion aura besoin de ton accord ou d'une réponse, ce sera ici."),
-  );
+        ),
+      );
+    }
+    if (found.questions.length) {
+      sections.push(
+        h("p", { class: "label" }, "Il attend ta réponse"),
+        h(
+          "div",
+          { class: "list items" },
+          found.questions.map((q) =>
+            h(
+              "div",
+              { class: "item" },
+              h("span", { class: "ico" }, icon("where", 16)),
+              h("span", {}, h("span", { class: "text" }, q.about), h("small", {}, q.auto === "approval" ? "un accord resté sans réponse" : `il y revient ${SHORT.format(new Date(q.back_at))}`)),
+              h("span", { class: "acts" }, h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de « ${q.about} » : `) }, "Répondre")),
+            ),
+          ),
+        ),
+      );
+    }
+    if (found.tasks.length) {
+      sections.push(
+        h("p", { class: "label" }, "En tâche de fond"),
+        h(
+          "div",
+          { class: "list items" },
+          found.tasks.map((t) =>
+            h(
+              "div",
+              { class: "item" },
+              h("span", { class: "ico" }, icon("spark", 16)),
+              h(
+                "span",
+                {},
+                h("span", { class: "text" }, t.goal),
+                h("small", {}, [t.waiting ? "attend Orion" : t.passes ? plural(t.passes, "passage", "passages") : "démarre", `${money(t.spent)} sur ${money(t.budget)}`].join(" · ")),
+                t.last ? h("small", { class: "last" }, excerpt(t.last, 140)) : null,
+              ),
+              h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/tasks/${t.id}/stop`) }, "Arrêter")),
+            ),
+          ),
+        ),
+      );
+    }
+    if (found.waiting_on.length) {
+      sections.push(
+        h("p", { class: "label" }, "Il attend des autres"),
+        h(
+          "div",
+          { class: "list items" },
+          found.waiting_on.map((w) =>
+            h(
+              "div",
+              { class: "item" },
+              h("span", { class: "ico" }, icon("clock", 16)),
+              h("span", {}, h("span", { class: "text" }, `${w.who} · ${w.about}`), h("small", {}, `${w.round > 1 ? `relance ${w.round - 1} · ` : ""}il y revient ${SHORT.format(new Date(w.back_at))}`)),
+              h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/waits/${w.id}/drop`) }, "Laisser")),
+            ),
+          ),
+        ),
+      );
+    }
+    return sections.length ? sections : h("p", { class: "empty" }, "Rien ne t'attend. Quand Orion aura besoin de ton accord ou d'une réponse, ce sera ici.");
+  });
 }
 
 // -- the controls: a bento of what Orion is doing, and the way into everything else ------------

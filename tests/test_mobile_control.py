@@ -10,8 +10,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from orion.awaiting.module import Awaiting, AwaitingSettings
 from orion.channels.inbox import OwnerInbox
-from orion.core.events import Trust
+from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy
 from orion.initiative.engine import InitiativeSettings
@@ -23,6 +24,7 @@ from orion.mobile.control import Control
 from orion.mobile.devices import Devices, session_key
 from orion.mobile.server import mobile_app
 from orion.modules.base import Planned
+from orion.tasks.service import Tasks
 from tests.fake_passkey import FakePasskey
 from tests.fakes import ScriptedProvider
 from tests.test_imessage import make_orion
@@ -39,6 +41,8 @@ class Controlled:
     memory: MemoryService
     autonomy: Autonomy
     journal: SqliteJournal
+    tasks: Tasks
+    awaiting: Awaiting
 
 
 @pytest.fixture
@@ -51,6 +55,8 @@ async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Co
     async def planned(_now: datetime, _until: datetime) -> list[Planned]:
         return [Planned(NOW + timedelta(hours=3), "te demander comment s'est passé l'entretien")]
 
+    tasks = Tasks(journal)
+    awaiting = Awaiting(journal, AwaitingSettings(), "UTC", clock=lambda: NOW)
     control = Control(
         journal,
         memory,
@@ -58,6 +64,8 @@ async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Co
         autonomy=autonomy,
         planned=planned,
         clock=lambda: NOW,
+        tasks=lambda: tasks,
+        awaiting=lambda: awaiting,
     )
     orion = make_orion(journal, ScriptedProvider())
     devices = Devices(journal, URL, session_key(tmp_path / "m"))
@@ -70,7 +78,7 @@ async def controlled(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[Co
         phone = FakePasskey(URL, "orion.example")
         world = World(channel, http, phone, ScriptedProvider(), FakePusher(), devices)
         await pair(world)
-        yield Controlled(world, memory, autonomy, journal)
+        yield Controlled(world, memory, autonomy, journal, tasks, awaiting)
     await store.close()
 
 
@@ -165,3 +173,32 @@ async def test_he_takes_autonomy_back_and_sees_what_happened(controlled: Control
     activity = (await http.get("/app/api/activity")).json()["activity"]
     assert [a["what"] for a in activity] == ["autonomie retirée", "autonomie accordée"]
     assert (await http.get("/app/api/planned")).json()["planned"][0]["undoable"] is False
+
+
+async def test_for_you_gathers_what_waits_on_him(controlled: Controlled) -> None:
+    http = controlled.world.http
+    orion = Provenance(source="orion", actor="orion:core")
+    later = NOW + timedelta(hours=4)
+    asked = await controlled.awaiting.wait(
+        "owner", "", "le jour de la visite", later, "", orion, Trust.SYSTEM, None
+    )
+    paul = await controlled.awaiting.wait(
+        "contact", "Paul", "le dîner de samedi", later, "", orion, Trust.SYSTEM, None
+    )
+    task = await controlled.tasks.start("Trouver un T2 à Dreux", "brief", 0.5, 60, NOW, orion, None)
+
+    shown = (await http.get("/app/api/for-you")).json()
+    assert shown["approvals"] == []
+    assert [(q["about"], q["who"]) for q in shown["questions"]] == [("le jour de la visite", "lui")]
+    assert [(w["about"], w["who"]) for w in shown["waiting_on"]] == [("le dîner de samedi", "Paul")]
+    assert [t["goal"] for t in shown["tasks"]] == ["Trouver un T2 à Dreux"]
+
+    assert (await http.post(f"/app/api/waits/{paul.id}/drop")).status_code == 200
+    assert (await http.post(f"/app/api/waits/{paul.id}/drop")).status_code == 404
+    assert (await http.post(f"/app/api/tasks/{task}/stop")).status_code == 200
+    assert (await http.post(f"/app/api/tasks/{task}/stop")).status_code == 404
+    stopped = await controlled.tasks.get(task)
+    assert stopped is not None and stopped.finished == "stopped"
+    after = (await http.get("/app/api/for-you")).json()
+    assert after["waiting_on"] == [] and after["tasks"] == []
+    assert [q["id"] for q in after["questions"]] == [asked.id]
