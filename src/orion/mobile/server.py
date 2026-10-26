@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import json
 import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -91,6 +92,25 @@ class Desk(Protocol):
         ...
 
     async def refuse(self, approval_id: str, device: str) -> None: ...
+
+
+class Settings(Protocol):
+    """Who writes orion.toml for a change he signed in the app (D135): the guardian run
+    split, the configure module in one process. The model is never in between."""
+
+    async def check(self, changes: list[dict[str, Any]]) -> str | None:
+        """What is wrong with these changes (the whole file checked), before he signs."""
+        ...
+
+    async def write(self, changes: list[dict[str, Any]], device: str) -> bool:
+        """Write them; whether anything changed. Raises ValueError when it cannot."""
+        ...
+
+
+def settings_purpose(changes: list[dict[str, Any]]) -> str:
+    """The signature answers these exact changes, and nothing else."""
+    canonical = json.dumps(changes, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return "config:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class Subscriber(Protocol):
@@ -166,6 +186,7 @@ def edge_routes(
     vapid: Vapid | None,
     secure_cookie: bool,
     session_days: int,
+    settings: Settings | None = None,
 ) -> list[BaseRoute]:
     gate = Gate(devices.origin, devices.session_device)
     failures = [0]
@@ -328,6 +349,49 @@ def edge_routes(
             return _refused("no such phone", 404)
         return _ok({})
 
+    # -- orion.toml, changed by him from the app, signed with Face ID ------------------------
+
+    def changes_of(sent: dict[str, Any]) -> list[dict[str, Any]]:
+        changes = cast(list[dict[str, Any]], sent["changes"])
+        if not isinstance(changes, list) or not 1 <= len(changes) <= 10:  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise ValueError("one to ten changes")
+        return [
+            {"path": str(c["path"]), "value": c.get("value"), "op": str(c.get("op") or "set")}
+            for c in changes
+        ]
+
+    async def settings_options(request: Request, _device: str) -> Response:
+        if settings is None:
+            return _refused("settings are changed by message here", 404)
+        changes = changes_of(await body(request))
+        wrong = await settings.check(changes)
+        if wrong is not None:
+            return _refused(wrong, 422)
+        try:
+            ceremony, options = await devices.signing_options(settings_purpose(changes))
+        except DeviceError as exc:
+            return _refused(str(exc), 409)
+        return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def settings_write(request: Request, _device: str) -> Response:
+        if settings is None:
+            return _refused("settings are changed by message here", 404)
+        sent = await body(request)
+        changes = changes_of(sent)
+        try:
+            signer = await devices.verify(
+                str(sent["ceremony"]), settings_purpose(changes), dict(sent["credential"])
+            )
+        except DeviceError as exc:
+            log.warning("mobile.settings_refused", error=str(exc))
+            return _refused(str(exc), 403)
+        try:
+            changed = await settings.write(changes, signer)
+        except ValueError as exc:
+            return _refused(str(exc), 422)
+        log.info("mobile.settings_written", paths=[c["path"] for c in changes], device=signer)
+        return _ok({"changed": changed})
+
     async def subscribe(request: Request, device: str) -> Response:
         if vapid is None:
             return _refused("notifications are off", 409)
@@ -358,6 +422,8 @@ def edge_routes(
         ),
         Route(f"{PREFIX}/approvals/{{approval}}", gate.guarded(approval_answer), methods=["POST"]),
         Route(f"{PREFIX}/push/subscribe", gate.guarded(subscribe), methods=["POST"]),
+        Route(f"{PREFIX}/settings/options", gate.guarded(settings_options), methods=["POST"]),
+        Route(f"{PREFIX}/settings", gate.guarded(settings_write), methods=["POST"]),
         Route(f"{PREFIX}/devices", gate.guarded(phones)),
         Route(
             f"{PREFIX}/devices/{{how}}/{{name}}/options",
@@ -652,6 +718,7 @@ def mobile_app(
     session_days: int,
     control: Control | None = None,
     notebook: Notebook | None = None,
+    settings: Settings | None = None,
 ) -> Starlette:
     """The whole app, in one process: the channel is its own desk, its devices its own gate."""
     devices = channel.devices
@@ -661,7 +728,7 @@ def mobile_app(
     return Starlette(
         routes=[
             *core_routes(channel, gate, control, notebook),
-            *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days),
+            *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days, settings),
         ]
     )
 
@@ -683,8 +750,9 @@ def edge_app(
     vapid: Vapid | None,
     secure_cookie: bool,
     session_days: int,
+    settings: Settings | None = None,
 ) -> Starlette:
     """The edge alone (run split, served by the guardian)."""
     return Starlette(
-        routes=edge_routes(devices, desk, subscriber, vapid, secure_cookie, session_days)
+        routes=edge_routes(devices, desk, subscriber, vapid, secure_cookie, session_days, settings)
     )

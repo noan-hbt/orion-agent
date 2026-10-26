@@ -20,12 +20,14 @@ the core's (`[modules.mobile] core_port`).
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
+from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
@@ -137,12 +139,48 @@ class AppEdge:
             self.vapid,
             self.url.startswith("https://"),
             self.settings.session_days,
+            self,
         )
         self.service.listeners.append(("app", app, self.settings.host, self.settings.port))
 
     async def sync(self) -> None:
         await self._runner.catch_up()
         await self.service.ledger.catch_up()
+
+    # -- orion.toml, as he changed it in the app (D135) ----------------------------------------
+
+    async def check(self, changes: list[dict[str, Any]]) -> str | None:
+        from orion.configure.module import Change, rewrite
+        from orion.configure.paths import ConfigureError
+
+        source = self.service.config.source
+        if source is None:
+            return "Orion runs without an orion.toml"
+        try:
+            await asyncio.to_thread(rewrite, source, [Change.model_validate(c) for c in changes])
+        except (ConfigureError, ValidationError) as exc:
+            return str(exc)
+        return None
+
+    async def write(self, changes: list[dict[str, Any]], device: str) -> bool:
+        """His own change, signed with his passkey for these exact changes: written as he
+        asked, his settings included (the signature is his yes to this change)."""
+        from orion.configure.module import Change
+        from orion.configure.paths import ConfigureError
+
+        try:
+            parsed = [Change.model_validate(c) for c in changes]
+            done = await self.service.write_config(
+                parsed,
+                {
+                    "changes": [c.described() for c in parsed],
+                    "why": "changé dans l'app",
+                    "signed_by": f"passkey:{device}",
+                },
+            )
+        except (ConfigureError, ValidationError) as exc:
+            raise ValueError(str(exc)) from exc
+        return bool(done["changed"])
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:

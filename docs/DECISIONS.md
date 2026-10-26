@@ -2971,3 +2971,24 @@ appairer un deuxième téléphone. Désormais :
   logs ;
 - **le mode voix** : un rond pour parler, et les réponses d'Orion lues à voix haute (sa propre
   voix s'il en envoie une, sinon la synthèse de l'iPhone).
+
+Constaté en vrai le jour même :
+- **un réglage demandé depuis l'app était refusé**. En mode `prudent`, `configure_change` ne
+  part jamais d'une conversation qui contient une page ou un mail, et celle de l'app en contient
+  presque toujours. Un changement fait dans Réglages ne passe donc plus par le modèle : le
+  propriétaire signe avec Face ID **ces changements exacts** (`config:<empreinte>`), le bord
+  vérifie la signature et écrit le fichier, vérifié en entier, sous sa trace (`signed_by`).
+  Le bord, c'est le gardien en mode séparé, le module `configure` dans un seul processus. Le
+  cœur voit le fichier changer et redémarre (`configure.watch`), comme après une modification
+  faite à la main sur le serveur. Les secrets et les chemins restent refusés, comme par
+  message. Installer ou retirer un module passe encore par la conversation : c'est le cœur
+  qui l'installe ;
+- **« Mes proches » montrait le propriétaire, des villes et son assureur**. Les noms de
+  `about` ne sont pas tous des gens. N'y figure plus que quelqu'un dont la mémoire parle comme
+  d'une personne, ou qu'Orion suit (anniversaire, rythme, rencontre), et jamais le
+  propriétaire ;
+- **le haut et le bas de l'écran** : un bandeau sous la barre d'état, des halos trop forts
+  derrière des boutons blancs, et un clavier qui décalait l'écran. Les halos sont plus doux
+  et ne montent plus jusqu'en haut. Les bords flous remplacent les bandes. Les boutons sont
+  teintés, les listes ont la forme des Réglages d'iOS, avec leurs icônes de couleur. L'app
+  suit la zone visible quand le clavier monte.

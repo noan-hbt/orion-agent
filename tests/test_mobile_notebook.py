@@ -73,6 +73,13 @@ async def shelf(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[tuple[W
         await memory.remember(
             "Paul Martin cherche du travail.", TOLD, about=["Paul Martin"], category=Category.PERSON
         )
+        # Not people in his life: himself, a town, his insurer.
+        await memory.remember(
+            "Noan habite à Lyon.", TOLD, about=["Noan", "Lyon"], category=Category.PROFILE
+        )
+        await memory.remember(
+            "Son assurance habitation est chez MAAF.", TOLD, about=["MAAF"], category=Category.OTHER
+        )
         yield world, notebook
     await store.close()
 

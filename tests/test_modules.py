@@ -169,6 +169,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
             "tasks.work",
             "thinking.night",
             "chronicle.week",
+            "configure.watch",
             "weather.watch",
             "autonomy.ritual",
             "initiative",
