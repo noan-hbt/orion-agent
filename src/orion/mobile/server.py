@@ -232,6 +232,7 @@ def mobile_app(
                     "type": "ready",
                     "approvals": [channel.public(a) for a in channel.asked.values()],
                     "typing": channel.typing,
+                    "work": channel.work,
                 }
                 yield f"data: {json.dumps(ready, ensure_ascii=False)}\n\n"
                 while True:
@@ -261,6 +262,9 @@ def mobile_app(
         return FileResponse(
             path, media_type=kept.content_type or None, filename=kept.name, headers=API_HEADERS
         )
+
+    async def stop(_request: Request, _device: str) -> Response:
+        return _ok({"stopping": channel.stop()})
 
     async def react(request: Request, device: str) -> Response:
         sent = await body(request)
@@ -417,6 +421,7 @@ def mobile_app(
             Route(f"{PREFIX}/api/stream", guarded(stream)),
             Route(f"{PREFIX}/api/files/{{ref}}/{{index:int}}", guarded(file)),
             Route(f"{PREFIX}/api/react", guarded(react), methods=["POST"]),
+            Route(f"{PREFIX}/api/stop", guarded(stop), methods=["POST"]),
             Route(f"{PREFIX}/api/approvals", guarded(approvals)),
             Route(
                 f"{PREFIX}/api/approvals/{{approval}}/options",

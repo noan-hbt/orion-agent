@@ -371,7 +371,8 @@ async function conversation() {
   view.typing = h("div", { class: "typing", hidden: true, "aria-label": "Orion écrit" }, h("i"), h("i"), h("i"));
   view.offline = h("p", { class: "offline", hidden: true }, "Hors ligne : je me reconnecte…");
   view.older = h("button", { class: "pill small older", hidden: true, onclick: older }, "Messages plus anciens");
-  view.thread.append(view.older, view.list, view.offline, view.typing, view.asks);
+  view.work = h("article", { class: "work card", hidden: true, "aria-live": "polite", "aria-label": "Orion au travail" });
+  view.thread.append(view.older, view.list, view.offline, view.typing, view.work, view.asks);
 
   view.attached = h("div", { class: "attached", hidden: true });
   view.text = h("textarea", {
@@ -963,6 +964,7 @@ function listen() {
     const data = JSON.parse(event.data);
     if (data.type === "ready") {
       setTyping(data.typing);
+      setWork(data.work);
       state.approvals.clear();
       for (const a of data.approvals) state.approvals.set(a.id, a);
       paintApprovals();
@@ -971,6 +973,9 @@ function listen() {
       if (data.message.who === "orion") setTyping(false, true);
     } else if (data.type === "typing") {
       setTyping(data.on);
+      if (!data.on) setWork(null);
+    } else if (data.type === "work") {
+      setWork(data.work);
     } else if (data.type === "approval") {
       state.approvals.set(data.approval.id, data.approval);
       paintApprovals();
@@ -1018,9 +1023,61 @@ function setTyping(on, keep = false) {
   // Orion may keep working after a message (a progress line): the server says when it stops.
   if (keep && state.typing) return;
   state.typing = on;
-  view.typing.hidden = !on;
+  view.typing.hidden = !on || !view.work.hidden;
   paintStatus();
   if (on) bottom();
+}
+
+// -- Orion at work: what it does as it goes, and a way to stop it (D133) ------------------------
+
+let workClock = null;
+
+function setWork(work) {
+  state.work = work;
+  clearInterval(workClock);
+  const shown = work && (work.steps > 0 || work.doing.length);
+  view.work.hidden = !shown;
+  view.typing.hidden = !state.typing || !!shown;
+  if (!shown) return;
+  const since = new Date(work.since);
+  const clock = h("span", { class: "clock" });
+  const tick = () => {
+    const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
+    clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  tick();
+  workClock = setInterval(tick, 1000);
+  const stop = h(
+    "button",
+    {
+      type: "button",
+      class: "pill small",
+      disabled: work.stopping,
+      onclick: async () => {
+        stop.disabled = true;
+        try {
+          await api("api/stop", {});
+        } catch (error) {
+          stop.disabled = false;
+          toast(said(error));
+        }
+      },
+    },
+    work.stopping ? "J'arrête…" : "Arrêter",
+  );
+  const step = (text, current) =>
+    h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? h("i") : icon("check", 13)), text);
+  view.work.replaceChildren(
+    h(
+      "header",
+      {},
+      h("span", { class: "ico" }, icon("orion", 18, "none")),
+      h("span", {}, h("b", {}, "Il travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
+      stop,
+    ),
+    h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
+  );
+  bottom();
 }
 
 function paintStatus() {
