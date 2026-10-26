@@ -21,6 +21,7 @@ import httpx
 import uvicorn
 from pydantic import Field
 
+from orion.awaiting.module import AwaitingModule
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
 from orion.mobile.channel import MobileChannel
@@ -30,6 +31,7 @@ from orion.mobile.push import Pusher, Vapid
 from orion.mobile.server import PREFIX, mobile_app
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
 from orion.providers.spending import Spending
+from orion.tasks.module import TasksModule
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -96,6 +98,8 @@ class MobileModule(Module):
             plate.journal, self.url(), session_key(self.folder), settings.session_days
         )
         config = self.config
+        tasks = plate.module(TasksModule)
+        waits = plate.module(AwaitingModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -108,6 +112,8 @@ class MobileModule(Module):
             autonomy=plate.autonomy,
             spending=plate.provider if isinstance(plate.provider, Spending) else None,
             planned=lambda now, until: everything_planned(plate.modules, plate.timers, now, until),
+            tasks=lambda: tasks.tasks if tasks is not None else None,
+            awaiting=lambda: waits.awaiting if waits is not None else None,
         )
         return []
 

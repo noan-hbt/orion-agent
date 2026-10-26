@@ -2887,3 +2887,9 @@ ce qu'il fait (le `doing` de chaque outil, dans ses mots), les étapes déjà fa
   déjà lancé finit, le suivant ne part pas, et Orion répond « D'accord, j'arrête là. ».
 - Pas encore : basculer le travail en cours en tâche de fond ; pour l'instant, il faut le lui
   demander.
+
+« Pour toi » (la cloche) rassemble ce qui l'attend et ce qu'Orion a en cours : les accords, les
+questions qu'Orion attend de lui (D129), ses tâches de fond (D110, avec leur dernier compte rendu,
+et Arrêter), et les réponses qu'il attend des autres (Laisser tomber). La pastille compte les
+accords et les questions. Arrêter une tâche ou laisser tomber une attente est journalisé comme
+venant de lui.

@@ -15,9 +15,10 @@ from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from orion.awaiting.module import Awaiting
 from orion.console.app import ACTIVITY, activity_detail
 from orion.console.dashboard import moment
-from orion.core.events import Trust
+from orion.core.events import Provenance, Trust
 from orion.core.journal import EventStore
 from orion.guardian.autonomy import Autonomy, label
 from orion.initiative.engine import InitiativeSettings, effective_settings
@@ -25,8 +26,10 @@ from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Planned
 from orion.providers.spending import Spending
+from orion.tasks.service import Tasks
 
 OWNER = Origin(actor="owner:app", source="app", trust=Trust.OWNER)
+FROM_APP = Provenance(source="app", actor="owner:main")
 MAX_PAUSE = timedelta(days=30)
 ACTIVITY_WINDOW = 3000
 
@@ -45,6 +48,10 @@ class Control:
     spending: Spending | None = None
     planned: Callable[[datetime, datetime], Awaitable[list[Planned]]] | None = None
     clock: Callable[[], datetime] | None = None
+    tasks: Callable[[], Tasks | None] = lambda: None
+    """Background tasks, once their module is assembled (after this one)."""
+    awaiting: Callable[[], Awaiting | None] = lambda: None
+    """The answers Orion waits for, once their module is assembled."""
 
     @property
     def zone(self) -> ZoneInfo:
@@ -246,3 +253,57 @@ class Control:
             {"at": p.at.astimezone(self.zone).isoformat(), "what": p.what, "undoable": bool(p.undo)}
             for p in await self.planned(now, now + timedelta(days=days))
         ]
+
+    # -- for him: what waits on him, and what Orion has going -----------------------------------
+
+    async def for_you(self) -> dict[str, Any]:
+        """The questions Orion waits on him for, the answers it waits for from others, and
+        its background tasks (approvals come from the channel itself)."""
+        questions: list[dict[str, Any]] = []
+        others: list[dict[str, Any]] = []
+        awaiting = self.awaiting()
+        if awaiting is not None:
+            await awaiting.sync()
+            for wait in sorted(awaiting.state.pending(), key=lambda w: w.since, reverse=True):
+                shown = {
+                    "id": wait.id,
+                    "about": wait.about,
+                    "who": awaiting.describe(wait),
+                    "since": wait.since.isoformat(),
+                    "back_at": wait.at.isoformat(),
+                    "round": wait.round,
+                    "auto": wait.auto,
+                }
+                (questions if wait.who == "owner" else others).append(shown)
+        running: list[dict[str, Any]] = []
+        tasks = self.tasks()
+        if tasks is not None:
+            for task in await tasks.running():
+                running.append(
+                    {
+                        "id": task.id,
+                        "goal": task.goal,
+                        "passes": task.passes,
+                        "spent": round(task.spent, 4),
+                        "budget": task.budget_usd,
+                        "minutes": task.minutes,
+                        "started_at": task.started_at.isoformat(),
+                        "waiting": task.waiting,
+                        "last": task.reports[-1][2][:280] if task.reports else "",
+                    }
+                )
+        return {"questions": questions, "waiting_on": others, "tasks": running}
+
+    async def stop_task(self, task_id: str) -> None:
+        tasks = self.tasks()
+        task = await tasks.get(task_id) if tasks is not None else None
+        if tasks is None or task is None or task.finished is not None:
+            raise ControlError("no such running task")
+        await tasks.finish(
+            task_id, "stopped", "arrêtée par toi depuis l'app", FROM_APP, Trust.OWNER
+        )
+
+    async def drop_wait(self, wait_id: str) -> None:
+        awaiting = self.awaiting()
+        if awaiting is None or not await awaiting.cancel(wait_id, FROM_APP, None):
+            raise ControlError("no such wait")
