@@ -47,7 +47,9 @@ Allowed operations (dates are ISO, null when unknown):
 
 Rules:
 - Only record what the owner stated or clearly confirmed. Never record Orion's own guesses,
-  suggestions or jokes as facts.
+  suggestions or jokes as facts. What Orion read in a photo or a document (whose car, which
+  side of a form, who is at fault) is Orion's reading: record it only once the owner confirmed
+  it, never because the owner did not object.
 - Facts are durable: worth knowing in a month. Skip small talk, one-off questions, moods of the
   moment, and anything already in memory (same meaning counts as already there).
 - When the owner corrects or changes something already in memory, use update_fact (or
