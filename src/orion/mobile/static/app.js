@@ -88,6 +88,29 @@ function toast(text, ms = 2400) {
   }, ms);
 }
 
+function spinner() {
+  return h("span", { class: "spinner", "aria-hidden": "true" }, Array.from({ length: 12 }, (_, i) => {
+    const spoke = h("i");
+    spoke.style.setProperty("--i", i);
+    return spoke;
+  }));
+}
+
+function dialogFocus(el) {
+  const before = document.activeElement;
+  el.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const targets = [...el.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), textarea, select, [tabindex="0"]')].filter((target) => target.getClientRects().length);
+    if (!targets.length) return event.preventDefault();
+    const first = targets[0];
+    const last = targets[targets.length - 1];
+    if (event.shiftKey && document.activeElement === first) (event.preventDefault(), last.focus());
+    else if (!event.shiftKey && document.activeElement === last) (event.preventDefault(), first.focus());
+  });
+  el.querySelector("button, input, textarea, select, a[href]")?.focus({ preventScroll: true });
+  return () => before?.isConnected && before.focus({ preventScroll: true });
+}
+
 class ApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -265,6 +288,7 @@ function offlineStart() {
 // -- welcome: sign in, or pair this phone ----------------------------------------------------
 
 function welcome(error = "") {
+  clearLayers();
   const pairFirst = new URLSearchParams(location.search).has("code");
   const status = h("p", { class: "error", role: "alert" }, error);
   const signIn = h(
@@ -394,6 +418,11 @@ async function conversation() {
   view.older = h("button", { class: "pill small older", hidden: true, onclick: older }, "Messages plus anciens");
   view.work = h("article", { class: "work card", hidden: true, "aria-live": "polite", "aria-label": "Orion au travail" });
   view.thread.append(view.older, view.list, view.offline, view.typing, view.work, view.asks);
+  view.scrollBottom = h("button", {
+    class: "scroll-bottom glass", type: "button", hidden: true, "aria-label": "Derniers messages",
+    onpointerdown: (event) => event.preventDefault(),
+    onclick: () => bottom(true, true),
+  }, icon("up", 20));
 
   view.attached = h("div", { class: "attached", hidden: true });
   view.text = h("textarea", {
@@ -416,7 +445,11 @@ async function conversation() {
       }
     },
   });
-  view.send = h("button", { class: "send", type: "button", onclick: sendOrRecord });
+  view.send = h("button", {
+    class: "send", type: "button", onclick: sendOrRecord,
+    // Keep the keyboard and composer still until the send click lands (D139).
+    onpointerdown: (event) => event.preventDefault(),
+  });
   view.field = h("div", { class: "field glass" }, view.text, view.send);
   view.files = h("input", { type: "file", multiple: true, hidden: true, onchange: () => pick(view.files) });
   view.camera = h("input", { type: "file", accept: "image/*", capture: "environment", hidden: true, onchange: () => pick(view.camera) });
@@ -425,25 +458,28 @@ async function conversation() {
   const top = h(
     "header",
     { class: "top" },
+    h("button", { class: "round glass top-back", type: "button", "aria-label": "Maintenant", onclick: () => show("now") }, icon("back", 20)),
     h(
       "div",
-      { class: "who glass" },
-      h("span", { class: "avatar" }, icon("orion", 22, "none")),
-      h("span", {}, h("h1", {}, "Orion"), view.status),
+      { class: "who" },
+      (view.avatar = h("span", { class: "avatar" }, h("img", { src: `${BASE}orion-avatar.svg`, alt: "" }))),
+      h("span", { class: "who-name glass" }, h("h1", {}, "Orion"), h("span", { class: "who-chevron" }, icon("chevron", 10))),
+      view.status,
     ),
     h("button", { class: "round glass", type: "button", "aria-label": "Mode voix", onclick: voiceMode }, icon("wave", 20)),
   );
 
   view.talk = h(
     "section",
-    { class: "tab", "aria-label": "Conversation" },
+    { class: "tab talk-tab", "aria-label": "Conversation" },
     top,
     view.thread,
+    view.scrollBottom,
     view.attached,
     h(
       "form",
       { class: "composer", onsubmit: (event) => (event.preventDefault(), submit()) },
-      h("button", { class: "round glass", type: "button", "aria-label": "Joindre", onclick: actions }, icon("plus", 20)),
+      h("button", { class: "round attach", type: "button", "aria-label": "Joindre", onpointerdown: (event) => event.preventDefault(), onclick: actions }, icon("plus", 20)),
       view.field,
     ),
     view.files,
@@ -454,9 +490,16 @@ async function conversation() {
   grow();
   sendMode();
 
+  let scrollFrame = 0;
   view.thread.addEventListener("scroll", () => {
-    if (view.thread.scrollTop < 60 && state.more && !view.loadingOlder) older();
-  });
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      if (view.thread.scrollTop < 60 && state.more && !view.loadingOlder) older();
+      scrollButton();
+    });
+  }, { passive: true });
+  swipeTimes();
 
   state.messages = [];
   state.refs.clear();
@@ -477,15 +520,19 @@ async function conversation() {
 
 function grow() {
   view.text.style.height = "auto";
-  view.text.style.height = `${Math.min(view.text.scrollHeight, 132)}px`;
+  view.text.style.height = `${Math.min(view.text.scrollHeight, 118)}px`;
 }
 
 function sendMode() {
   const empty = !view.text.value.trim() && !state.attached.length;
   if (recorder.active) return;
-  view.send.className = empty ? "send mic" : "send";
-  view.send.replaceChildren(icon(empty ? "mic" : "up", 18));
-  view.send.setAttribute("aria-label", empty ? "Message vocal" : "Envoyer");
+  const stop = empty && !!state.work;
+  view.send.className = `send${stop ? " stopping" : empty ? " mic" : ""}`;
+  if (!view.send.querySelector(".send-icon")) {
+    view.send.replaceChildren(...[["mic", "mic"], ["send", "up"], ["stop", "stop"]].map(([mode, name]) => h("span", { class: `send-icon mode-${mode}` }, icon(name, 18))));
+  }
+  view.send.disabled = stop && !!state.work.stopping;
+  view.send.setAttribute("aria-label", stop ? "Arrêter Orion" : empty ? "Message vocal" : "Envoyer");
 }
 
 function nearBottom() {
@@ -493,12 +540,66 @@ function nearBottom() {
   return t.scrollHeight - t.scrollTop - t.clientHeight < 140;
 }
 
-function bottom(force = false) {
+function bottom(force = false, smooth = false) {
   if (force || nearBottom()) {
     requestAnimationFrame(() => {
-      view.thread.scrollTop = view.thread.scrollHeight;
+      view.thread.scrollTo({ top: view.thread.scrollHeight, behavior: smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
+      view.unread = false;
+      scrollButton();
     });
   }
+}
+
+function scrollButton() {
+  const near = nearBottom();
+  view.scrollBottom.hidden = near;
+  if (near) view.unread = false;
+  view.scrollBottom.classList.toggle("unread", !!view.unread);
+}
+
+function swipeTimes() {
+  let start = null;
+  let axis = "";
+  let x = 0;
+  let frame = 0;
+  const paint = () => {
+    frame = 0;
+    view.thread.style.setProperty("--swipe-x", `${x}px`);
+    view.thread.style.setProperty("--swipe-progress", String(-x / 64));
+  };
+  const reset = () => {
+    start = null;
+    axis = "";
+    x = 0;
+    view.thread.classList.remove("dragging");
+    if (frame) cancelAnimationFrame(frame);
+    paint();
+  };
+  view.thread.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.target.closest("button, input, audio, video")) return;
+    start = { x: event.clientX, y: event.clientY };
+    axis = "";
+  });
+  view.thread.addEventListener("pointermove", (event) => {
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (!axis && Math.max(Math.abs(dx), Math.abs(dy)) >= 8) {
+      axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      if (axis === "x") {
+        view.thread.setPointerCapture(event.pointerId);
+        view.thread.classList.add("dragging");
+      }
+    }
+    if (axis !== "x") return;
+    event.preventDefault();
+    // Resistance keeps a wide drag inside the 64px time gutter (D139).
+    x = -64 * (1 - Math.exp(-Math.max(0, -dx) / 64));
+    if (!frame) frame = requestAnimationFrame(paint);
+  });
+  view.thread.addEventListener("pointerup", reset);
+  view.thread.addEventListener("pointercancel", reset);
+  view.thread.addEventListener("lostpointercapture", reset);
 }
 
 // -- messages ---------------------------------------------------------------------------------
@@ -530,7 +631,11 @@ function add(message, live = true) {
   if (live) for (const el of els) el.classList?.add("new");
   view.list.append(...els);
   retail();
-  if (live && (wasNear || message.who === "owner")) bottom(true);
+  if (live && (wasNear || message.who === "owner")) bottom(true, true);
+  else if (live) {
+    view.unread = true;
+    scrollButton();
+  }
 }
 
 function prepend(messages) {
@@ -542,11 +647,6 @@ function prepend(messages) {
     state.refs.add(message.ref);
     nodes.push(...render(message, messages[i - 1]));
   });
-  // The first message already shown may now share its day with the ones above it.
-  const firstDay = view.list.querySelector(".day");
-  if (firstDay && messages.length && dayLabel(new Date(messages[messages.length - 1].at)) === firstDay.textContent) {
-    firstDay.remove();
-  }
   state.messages = [...messages, ...state.messages];
   view.list.prepend(...nodes);
   retail();
@@ -569,16 +669,30 @@ async function older() {
 }
 
 function retail() {
-  // The last message of a run from the same side gets the tail and the time.
+  // Two-minute groups and fifteen-minute separators follow Messages (D139).
   const items = [...view.list.querySelectorAll(".msg")];
+  const latestOwner = items.findLast((el) => el.dataset.who === "owner");
   items.forEach((el, i) => {
     const next = items[i + 1];
-    const last = !next || next.dataset.who !== el.dataset.who || next.previousElementSibling?.classList.contains("day");
-    el.classList.toggle("tail", last);
-    const meta = el.querySelector(".meta.time");
-    if (meta) meta.hidden = !last;
     const prev = items[i - 1];
+    const gap = prev ? Number(el.dataset.at) - Number(prev.dataset.at) : Infinity;
+    const grouped = prev && prev.dataset.who === el.dataset.who && gap <= 120000 && gap >= 0;
+    const last = !next || next.dataset.who !== el.dataset.who || Number(next.dataset.at) - Number(el.dataset.at) > 120000;
+    el.classList.toggle("tail", last);
+    el.classList.toggle("group-start", !grouped);
     el.classList.toggle("other-side", !!prev && prev.dataset.who !== el.dataset.who);
+    const bubbles = [...el.children].filter((child) => child.classList.contains("bubble"));
+    bubbles.forEach((bubble, index) => bubble.classList.toggle("bubble-tail", index === bubbles.length - 1));
+    const date = new Date(Number(el.dataset.at));
+    const separator = !prev || gap > 900000 || new Date(Number(prev.dataset.at)).toDateString() !== date.toDateString();
+    const day = el.previousElementSibling?.classList.contains("day") ? el.previousElementSibling : null;
+    if (separator && !day) el.before(timestamp(date));
+    else if (!separator && day) day.remove();
+    const receipt = el.querySelector(".delivery");
+    if (receipt) {
+      receipt.hidden = el !== latestOwner;
+      receipt.textContent = items.slice(i + 1).some((later) => later.dataset.who === "orion") ? "Lu" : "Distribué";
+    }
     if (el.dataset.who === "orion" && items.slice(i + 1).some((later) => later.dataset.who === "owner")) {
       for (const group of el.querySelectorAll(".quick:not(.answered), .checklist:not(.answered)")) answered(group, []);
     }
@@ -586,17 +700,30 @@ function retail() {
   view.older.hidden = !state.more;
 }
 
+function timestamp(date) {
+  return h("p", { class: "day" }, h("b", {}, dayLabel(date)), " ", TIME.format(date));
+}
+
+const GRAPHEMES = new Intl.Segmenter("fr", { granularity: "grapheme" });
+function emojiOnly(text) {
+  const parts = [...GRAPHEMES.segment(text.replace(/\s/g, ""))].map((part) => part.segment);
+  return parts.length >= 1 && parts.length <= 3 && parts.every((part) => /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\uFE0F?\u20E3)/u.test(part));
+}
+
 function render(message, previous) {
   const nodes = [];
   const date = new Date(message.at);
-  if (!previous || new Date(previous.at).toDateString() !== date.toDateString()) {
-    nodes.push(h("p", { class: "day" }, dayLabel(date)));
+  if (!previous || date - new Date(previous.at) > 900000 || new Date(previous.at).toDateString() !== date.toDateString()) {
+    nodes.push(timestamp(date));
   }
-  const el = h("div", { class: `msg ${message.who}`, "data-who": message.who, "data-ref": message.ref });
+  const el = h("div", { class: `msg ${message.who}`, "data-who": message.who, "data-ref": message.ref, "data-at": date.getTime() });
   for (const [index, file] of message.files.entries()) el.append(attachment(message, file, index));
   if (message.blocks && message.blocks.length) el.append(...message.blocks.map(block));
   else if (message.text) el.append(h("div", { class: "bubble" }, ...rich(message.text)));
-  el.append(h("span", { class: "meta time" }, TIME.format(date)));
+  el.classList.toggle("emoji-only", !message.files.length && !message.blocks?.some((piece) => piece.type !== "text") && emojiOnly(message.text || ""));
+  el.classList.toggle("rich", !!message.blocks?.some((piece) => piece.type !== "text") || /\n/.test(message.text || ""));
+  el.append(h("time", { class: "msg-time", dateTime: date.toISOString() }, TIME.format(date)));
+  if (message.who === "owner") el.append(h("span", { class: "delivery", hidden: true }, "Distribué"));
   if (message.reactions && message.reactions.length) showReactions(el, message.reactions);
   press(el, message);
   nodes.push(el);
@@ -613,9 +740,14 @@ function block(piece) {
 }
 
 function answered(group, chosen) {
+  if (group.classList.contains("answered")) return;
   group.classList.add("answered");
   for (const b of group.querySelectorAll("button, input")) b.disabled = true;
   for (const b of chosen) b.classList.add("chosen");
+  if (group.classList.contains("quick")) setTimeout(() => {
+    for (const b of group.querySelectorAll("button:not(.chosen)")) b.hidden = true;
+    group.classList.add("collapsed");
+  }, 220);
 }
 
 function quick(piece) {
@@ -654,7 +786,7 @@ function checklist(piece) {
         boxes[i].closest("label").classList.toggle("on", boxes[i].checked);
         count();
       });
-      return h("label", {}, h("span", {}, option), boxes[i]);
+      return h("label", {}, h("span", {}, option), boxes[i], h("span", { class: "checkmark", "aria-hidden": "true" }, icon("check", 16)));
     }),
     go,
   );
@@ -702,8 +834,8 @@ function done(piece) {
 
 function showReactions(el, emoji) {
   el.querySelector(".reactions")?.remove();
+  el.classList.toggle("has-reactions", !!emoji.length);
   if (!emoji.length) return;
-  el.classList.add("has-reactions");
   (el.querySelector(".bubble") || el).append(h("span", { class: "reactions", "aria-label": `Réactions : ${emoji.join(" ")}` }, [...new Set(emoji)].join("")));
 }
 
@@ -786,6 +918,10 @@ function first() {
 
 function sendOrRecord() {
   if (recorder.active) return recorder.stop();
+  if (!view.text.value.trim() && !state.attached.length && state.work) {
+    view.send.disabled = true;
+    return api("api/stop", {}).catch((error) => (view.send.disabled = false, toast(said(error))));
+  }
   if (!view.text.value.trim() && !state.attached.length) return recorder.start();
   submit();
 }
@@ -805,7 +941,7 @@ async function submit(textOverride) {
 }
 
 async function send(text, files) {
-  const el = h("div", { class: "msg owner pending tail", "data-who": "owner" });
+  const el = h("div", { class: "msg owner pending tail sending", "data-who": "owner", "data-at": Date.now() });
   for (const f of files) {
     el.append(
       f.preview
@@ -813,14 +949,18 @@ async function send(text, files) {
         : h("span", { class: "file" }, h("span", { class: "tile" }, icon(f.type.startsWith("audio/") ? "mic" : "file", 18)), h("span", {}, h("b", {}, f.name), h("small", {}, size(f.size)))),
     );
   }
-  if (text) el.append(h("div", { class: "bubble" }, ...rich(text)));
+  if (text) el.append(h("div", { class: "bubble bubble-tail" }, ...rich(text)));
+  el.classList.toggle("emoji-only", !files.length && emojiOnly(text));
   const meta = h("span", { class: "meta" }, "envoi…");
   el.append(meta);
   view.list.querySelector(".first")?.remove();
   view.list.append(el);
+  retail();
+  view.field.classList.remove("pulse");
+  requestAnimationFrame(() => view.field.classList.add("pulse"));
   const entry = { ref: `local-${Date.now()}`, el };
   state.pending.push(entry);
-  bottom(true);
+  bottom(true, true);
   try {
     const payload = { text, files: await Promise.all(files.map(encode)) };
     const { message } = await api("api/send", payload);
@@ -1046,11 +1186,25 @@ function setLive(on) {
 
 function setTyping(on, keep = false) {
   // Orion may keep working after a message (a progress line): the server says when it stops.
-  if (keep && state.typing) return;
+  if (keep && state.typing) return typingBubble(false);
   state.typing = on;
-  view.typing.hidden = !on || !view.work.hidden;
+  typingBubble(on && view.work.hidden);
   paintStatus();
   if (on) bottom();
+}
+
+function typingBubble(on) {
+  clearTimeout(view.typingExit);
+  if (on) {
+    view.typing.classList.remove("leaving");
+    view.typing.hidden = false;
+  } else if (!view.typing.hidden) {
+    view.typing.classList.add("leaving");
+    view.typingExit = setTimeout(() => {
+      view.typing.hidden = true;
+      view.typing.classList.remove("leaving");
+    }, 180);
+  }
 }
 
 // -- Orion at work: what it does as it goes, and a way to stop it (D133) ------------------------
@@ -1062,7 +1216,9 @@ function setWork(work) {
   clearInterval(workClock);
   const shown = work && (work.steps > 0 || work.doing.length);
   view.work.hidden = !shown;
-  view.typing.hidden = !state.typing || !!shown;
+  typingBubble(state.typing && !shown);
+  view.avatar.classList.toggle("busy", state.typing || !!work);
+  sendMode();
   paintNowWork();
   if (!shown) return;
   const since = new Date(work.since);
@@ -1108,7 +1264,7 @@ function setWork(work) {
     "En fond",
   );
   const step = (text, current) =>
-    h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? h("i") : icon("check", 13)), text);
+    h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? spinner() : icon("check", 13)), text);
   view.work.replaceChildren(
     h(
       "header",
@@ -1126,6 +1282,7 @@ function paintStatus() {
   const [text, kind] = !state.live ? ["hors ligne", ""] : state.typing ? ["écrit…", "busy"] : ["en ligne", "live"];
   view.status.textContent = text;
   view.status.className = `status ${kind}`;
+  view.avatar.classList.toggle("busy", state.typing || !!state.work);
 }
 
 // -- approvals: yes takes Face ID, no does not ------------------------------------------------
@@ -1293,7 +1450,7 @@ function slider(label, done) {
         if (event.detail === 0 || !moved) finish();
       },
     },
-    h("span", { class: "label" }, label),
+    h("span", { class: "label", "data-label": label }, label),
     knob,
   );
   let startX = 0;
@@ -1334,9 +1491,13 @@ function slider(label, done) {
     knob.style.transform = `translateX(${max()}px)`;
     el.style.setProperty("--p", "1");
     el.classList.add("ok");
+    knob.replaceChildren(icon("check", 20));
     const ok = await done();
     busy = false;
-    if (!ok) reset();
+    if (!ok) {
+      knob.replaceChildren(icon("arrow", 20));
+      reset();
+    }
     setTimeout(() => (moved = false), 0);
   }
   return el;
@@ -1373,6 +1534,13 @@ function press(el, message) {
     cancel();
     messageMenu(el, message);
   });
+  el.tabIndex = 0;
+  el.addEventListener("keydown", (event) => {
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      messageMenu(el, message);
+    }
+  });
 }
 
 // Sheets and panels pile up: Escape closes the one on top.
@@ -1385,41 +1553,100 @@ function unstack(close) {
   if (at >= 0) open.splice(at, 1);
 }
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && open.length) open[open.length - 1]();
+  if (event.key === "Escape" && open.length) {
+    event.preventDefault();
+    open[open.length - 1]();
+  }
 });
+
+function overlayState() {
+  const panels = [...layer.querySelectorAll(".panel:not(.leaving)")];
+  const sheets = [...layer.querySelectorAll(".scrim:not(.leaving)")];
+  document.body.classList.toggle("panel-open", !!panels.length);
+  document.body.classList.toggle("sheet-open", !!sheets.length);
+  app.inert = !!(panels.length || sheets.length || layer.querySelector(".tapback-overlay:not(.leaving)"));
+  for (const scrim of layer.querySelectorAll(".scrim")) scrim.inert = scrim !== sheets[sheets.length - 1];
+  for (const el of [...Object.values(view.tabs || {}), ...layer.querySelectorAll(".panel")]) {
+    el.classList.toggle("panel-behind", panels.length > 0 && el !== panels[panels.length - 1]);
+    el.classList.toggle("sheet-behind", sheets.length > 0 && (panels.length ? el === panels[panels.length - 1] : el === view.tabs?.[state.tab]));
+    if (el.classList.contains("panel")) el.inert = el !== panels[panels.length - 1] || sheets.length > 0;
+  }
+}
+
+function clearLayers() {
+  layer.replaceChildren();
+  view.list?.querySelectorAll(".menu-source").forEach((el) => el.classList.remove("menu-source"));
+  open.length = 0;
+  overlayState();
+}
 
 function sheet(...children) {
   const scrim = h("div", { class: "scrim", onclick: (event) => event.target === scrim && close() });
   const body = h("div", { class: "sheet", role: "dialog", "aria-modal": "true" }, h("span", { class: "grab" }), ...children);
+  body.setAttribute("aria-label", body.querySelector("h2")?.textContent || "Actions");
   scrim.append(body);
   let closed = false;
+  let restoreFocus = () => {};
   function close() {
     if (closed) return;
     closed = true;
     scrim.classList.add("leaving");
-    setTimeout(() => scrim.remove(), 220);
+    body.classList.remove("dragging");
+    body.style.transform = "";
+    setTimeout(() => scrim.remove(), 450);
     unstack(close);
+    overlayState();
+    restoreFocus();
   }
   stack(close);
   // Swipe down to close.
   let startY = null;
+  let startX = 0;
+  let dragY = 0;
+  let dragFrame = 0;
+  const follow = () => {
+    dragFrame = 0;
+    body.style.setProperty("--sheet-y", `${dragY}px`);
+    body.style.transform = `translateY(${dragY}px)`;
+  };
   body.addEventListener("touchstart", (event) => {
-    if (body.scrollTop <= 0) startY = event.touches[0].clientY;
+    startY = null;
+    dragY = 0;
+    if (body.scrollTop <= 0 && !event.target.closest("input, textarea, select, button, a, audio, video")) {
+      startY = event.touches[0].clientY;
+      startX = event.touches[0].clientX;
+    }
   }, { passive: true });
   body.addEventListener("touchmove", (event) => {
     if (startY === null) return;
     const dy = event.touches[0].clientY - startY;
-    if (dy > 0) body.style.transform = `translateY(${dy}px)`;
-  }, { passive: true });
-  body.addEventListener("touchend", (event) => {
+    if (Math.abs(event.touches[0].clientX - startX) > Math.abs(dy)) return;
+    if (dy > 0) {
+      event.preventDefault();
+      body.classList.add("settled", "dragging");
+      dragY = dy;
+      if (!dragFrame) dragFrame = requestAnimationFrame(follow);
+    }
+  }, { passive: false });
+  const release = (event) => {
     if (startY === null) return;
-    const dy = event.changedTouches[0].clientY - startY;
+    const dy = (event.changedTouches[0]?.clientY ?? startY) - startY;
     startY = null;
-    if (dy > 90) close();
-    else body.style.transform = "";
-  });
+    if (dragFrame) cancelAnimationFrame(dragFrame);
+    dragFrame = 0;
+    body.classList.remove("dragging");
+    if (event.type !== "touchcancel" && dy > 90 && dragY) close();
+    else {
+      body.style.transform = "";
+      body.style.setProperty("--sheet-y", "0px");
+    }
+    dragY = 0;
+  };
+  body.addEventListener("touchend", release);
+  body.addEventListener("touchcancel", release);
   layer.append(scrim);
-  body.querySelector("button")?.focus({ preventScroll: true });
+  overlayState();
+  restoreFocus = dialogFocus(body);
   return close;
 }
 
@@ -1429,6 +1656,7 @@ function excerpt(text, max = 160) {
 }
 
 function messageMenu(el, message) {
+  if (layer.querySelector(".tapback-overlay:not(.leaving)")) return;
   const orion = message.who === "orion";
   const quoted = message.text ? `« ${excerpt(message.text)} »\n` : "";
   const ask = (text) => () => {
@@ -1440,15 +1668,17 @@ function messageMenu(el, message) {
   const reactions = orion
     ? h(
         "div",
-        { class: "emoji", role: "group", "aria-label": "Réagir" },
-        ["👍", "❤️", "😂", "👎", "❓"].map((emoji) =>
-          h(
+        { class: "emoji tapback-picker", role: "group", "aria-label": "Réagir" },
+        ["❤️", "👍", "👎", "😂", "‼️", "❓"].map((emoji, i) => {
+          const button = h(
             "button",
             {
               type: "button",
               "aria-label": emoji,
               "aria-pressed": String((message.reactions || []).includes(emoji)),
+              class: (message.reactions || []).includes(emoji) ? "selected" : "",
               onclick: async () => {
+                navigator.vibrate?.(8);
                 close();
                 try {
                   await api("api/react", { ref: message.ref, emoji });
@@ -1460,16 +1690,15 @@ function messageMenu(el, message) {
               },
             },
             emoji,
-          ),
-        ),
+          );
+          button.style.setProperty("--i", i);
+          return button;
+        }),
       )
     : null;
-  const close = sheet(
-    message.text ? h("p", { class: "quote" }, ...rich(excerpt(message.text, 400))) : null,
-    reactions,
-    h(
+  const menu = h(
       "div",
-      { class: "list" },
+      { class: "list tapback-menu" },
       message.text
         ? item("copy", "Copier", async () => {
             close();
@@ -1493,8 +1722,60 @@ function messageMenu(el, message) {
       orion ? item("wrong", "C'est faux, corrige", ask("C'est faux. Corrige et retiens-le.")) : null,
       item("clock", "En faire un rappel", ask("Fais-en un rappel : propose-moi un moment.")),
       item("forget", "Oublie ça", ask("Oublie ça : ne le garde pas en mémoire."), true),
-    ),
-  );
+    );
+  const clone = el.cloneNode(true);
+  clone.classList.remove("new", "sending", "pressed");
+  clone.removeAttribute("tabindex");
+  clone.removeAttribute("data-ref");
+  clone.inert = true;
+  clone.querySelectorAll(".delivery, .meta, .msg-time").forEach((node) => node.remove());
+  const lift = h("div", { class: "tapback-lift", "aria-hidden": "true" }, clone);
+  const overlay = h("div", {
+    class: "tapback-overlay", role: "dialog", "aria-modal": "true", "aria-label": "Actions du message",
+    onclick: (event) => event.target === overlay && close(),
+  }, lift, reactions, menu);
+  const bounds = el.getBoundingClientRect();
+  const surface = app.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  const offsetTop = viewport?.offsetTop || 0;
+  const height = viewport?.height || window.innerHeight;
+  const width = Math.min(330, surface.width - 32);
+  const menuHeight = menu.children.length * 44;
+  const liftHeight = Math.min(bounds.height, Math.max(24, height - menuHeight - (orion ? 120 : 40)));
+  const top = Math.max(orion ? 86 : 16, Math.min(bounds.top - offsetTop, height - liftHeight - menuHeight - 26));
+  const left = orion ? Math.max(16, bounds.left - surface.left) : Math.max(16, surface.width - 266);
+  overlay.style.top = `${offsetTop}px`;
+  overlay.style.height = `${height}px`;
+  overlay.style.bottom = "auto";
+  lift.style.left = `${bounds.left - surface.left}px`;
+  lift.style.top = `${top}px`;
+  lift.style.width = `${bounds.width}px`;
+  lift.style.maxHeight = `${liftHeight}px`;
+  if (reactions) {
+    reactions.style.left = `${Math.min(left, surface.width - width - 16)}px`;
+    reactions.style.top = `${top - 72}px`;
+    reactions.style.width = `${width}px`;
+  }
+  menu.style.left = `${Math.min(left, surface.width - 266)}px`;
+  menu.style.top = `${top + liftHeight + 12}px`;
+  let closed = false;
+  let restoreFocus = () => {};
+  function close() {
+    if (closed) return;
+    closed = true;
+    overlay.classList.add("leaving");
+    el.classList.remove("menu-source");
+    setTimeout(() => overlay.remove(), 250);
+    unstack(close);
+    overlayState();
+    restoreFocus();
+  }
+  el.classList.add("menu-source");
+  stack(close);
+  layer.append(overlay);
+  overlayState();
+  restoreFocus = dialogFocus(overlay);
+  navigator.vibrate?.(8);
 }
 
 // -- the + sheet ------------------------------------------------------------------------------
@@ -1584,6 +1865,9 @@ function show(key) {
   }
   for (const [k, el] of Object.entries(view.tabs)) el.hidden = k !== key;
   for (const [k, b] of Object.entries(view.tabButtons)) b.setAttribute("aria-current", k === key ? "page" : "false");
+  const selected = view.tabButtons[key];
+  selected.classList.remove("selected-pop");
+  requestAnimationFrame(() => selected.classList.add("selected-pop"));
   placeLens();
   if (key === "talk") bottom(true);
   else view.tabs[key].refresh();
@@ -1601,7 +1885,16 @@ addEventListener("resize", placeLens);
 function page(title, fill, subtitle) {
   const line = h("p", { hidden: !subtitle });
   const body = h("div", { class: "page-body" });
-  const el = h("section", { class: "tab page", "aria-label": title }, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
+  const pull = title === "Maintenant" ? h("div", { class: "pull-refresh", "aria-hidden": "true" }, spinner()) : null;
+  const el = h("section", { class: "tab page", "aria-label": title }, h("div", { class: "page-inline-title", "aria-hidden": "true" }, title), pull, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
+  let scrollFrame = 0;
+  el.addEventListener("scroll", () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      el.classList.toggle("scrolled", el.scrollTop > 52);
+    });
+  }, { passive: true });
   let busy = false;
   el.refresh = async () => {
     if (busy) return;
@@ -1616,6 +1909,57 @@ function page(title, fill, subtitle) {
       busy = false;
     }
   };
+  if (pull) {
+    let start = null;
+    let distance = 0;
+    let frame = 0;
+    const paint = () => {
+      frame = 0;
+      pull.style.setProperty("--pull-y", `${distance}px`);
+      pull.classList.toggle("pulling", distance > 0);
+    };
+    el.addEventListener("touchstart", (event) => {
+      start = null;
+      distance = 0;
+      if (el.scrollTop <= 0 && !busy && !event.target.closest("button, input, textarea, a, .slide")) start = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+    }, { passive: true });
+    el.addEventListener("touchmove", (event) => {
+      if (!start) return;
+      const dx = event.touches[0].clientX - start.x;
+      const dy = event.touches[0].clientY - start.y;
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+        start = null;
+        distance = 0;
+        paint();
+        return;
+      }
+      if (dy <= 0) {
+        distance = 0;
+        paint();
+        return;
+      }
+      event.preventDefault();
+      distance = Math.min(90, dy * .45);
+      if (!frame) frame = requestAnimationFrame(paint);
+    }, { passive: false });
+    const release = async (event) => {
+      if (!start) return;
+      start = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      if (distance >= 58 && event.type !== "touchcancel") {
+        distance = 52;
+        paint();
+        pull.classList.add("refreshing");
+        await el.refresh();
+        pull.classList.remove("refreshing");
+      }
+      distance = 0;
+      paint();
+    };
+    el.addEventListener("touchend", release);
+    el.addEventListener("touchcancel", release);
+  }
   return el;
 }
 
@@ -1628,8 +1972,7 @@ function nowChanged() {
 
 function talkAbout(text) {
   // A change of the server is asked in the conversation: Orion checks it whole, and he signs it.
-  layer.replaceChildren();
-  open.length = 0;
+  clearLayers();
   show("talk");
   submit(text);
 }
@@ -1641,7 +1984,7 @@ function paintNowWork() {
   const o = state.overview;
   const work = state.work && (state.work.steps > 0 || state.work.doing.length) ? state.work : null;
   const waiting = state.approvals.size + (state.questions || 0);
-  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, icon("orion", 24, "none"));
+  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, h("img", { class: "orb-avatar", src: `${BASE}orion-avatar.svg`, alt: "" }));
   let title;
   let line;
   let acts = [];
@@ -1981,8 +2324,7 @@ async function settingsFill(refresh) {
           onclick: async () => {
             await api("logout", {}).catch(() => {});
             source?.close();
-            layer.replaceChildren();
-            open.length = 0;
+            clearLayers();
             welcome();
           },
         },
@@ -2156,6 +2498,7 @@ function modulesPanel(server) {
           h("span", { class: `ico ${m.on ? "on" : ""}` }, icon("blocks", 16)),
           h("span", {}, h("span", { class: "text" }, m.name), m.added ? h("small", {}, "installé depuis le catalogue") : null),
           h("small", { class: `value ${m.on ? "on" : ""}` }, m.on ? "allumé" : "éteint"),
+          h("span", { class: `switch ${m.on ? "on" : ""}`, "aria-hidden": "true" }),
         ),
       ),
     ),
@@ -2799,7 +3142,8 @@ function phonesPanel() {
 // -- panels: full screen, over the tabs ----------------------------------------------------------
 
 function panel(title, fill) {
-  const body = h("div", { class: "panel-body" });
+  const content = h("div", { class: "panel-content" });
+  const body = h("div", { class: "panel-body" }, h("h1", { class: "panel-title" }, title), content);
   const el = h(
     "section",
     { class: "panel", role: "dialog", "aria-modal": "true", "aria-label": title },
@@ -2811,22 +3155,39 @@ function panel(title, fill) {
     ),
     body,
   );
+  let closed = false;
+  let restoreFocus = () => {};
   function close() {
+    if (closed) return;
+    closed = true;
     el.classList.add("leaving");
-    setTimeout(() => el.remove(), 180);
+    setTimeout(() => el.remove(), 500);
     unstack(close);
+    overlayState();
+    restoreFocus();
   }
   stack(close);
   layer.append(el);
+  overlayState();
+  restoreFocus = dialogFocus(el);
+  let scrollFrame = 0;
+  el.addEventListener("scroll", () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      el.classList.toggle("scrolled", el.scrollTop > 52);
+    });
+  }, { passive: true });
   const refresh = async () => {
     try {
-      body.replaceChildren(...[await fill(refresh, close)].flat(Infinity).filter(Boolean));
+      const children = await fill(refresh, close);
+      if (!closed) content.replaceChildren(...[children].flat(Infinity).filter(Boolean));
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return welcome("Ta session a expiré.");
-      body.replaceChildren(h("p", { class: "empty" }, said(error)));
+      if (!closed) content.replaceChildren(h("p", { class: "empty" }, said(error)));
     }
   };
-  body.replaceChildren(h("p", { class: "empty" }, "…"));
+  content.replaceChildren(h("div", { class: "skeleton", role: "status", "aria-label": "Chargement" }, Array.from({ length: 3 }, () => h("div", { class: "skeleton-row" }))));
   refresh();
   return close;
 }
@@ -2885,8 +3246,7 @@ function quietHours(o, refresh) {
 }
 
 function askOrion(text) {
-  layer.replaceChildren();
-  open.length = 0;
+  clearLayers();
   show("talk");
   view.text.value = text;
   keepDraft(text);

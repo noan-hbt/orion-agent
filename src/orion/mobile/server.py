@@ -64,6 +64,7 @@ STATIC = {
     "app.js": ("app.js", "text/javascript; charset=utf-8"),
     "app.css": ("app.css", "text/css; charset=utf-8"),
     "icon.svg": ("icon.svg", "image/svg+xml"),
+    "orion-avatar.svg": ("orion-avatar.svg", "image/svg+xml"),
     "icon-180.png": ("icon-180.png", "image/png"),
     "icon-512.png": ("icon-512.png", "image/png"),
 }
