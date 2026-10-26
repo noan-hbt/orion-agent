@@ -347,7 +347,7 @@ function pairing() {
         h("label", { class: "code" }, input, boxes),
         go,
         status,
-        h("p", { class: "hint" }, "Ta clé reste dans ton iPhone, protégée par Face ID. Orion ne garde que sa partie publique."),
+        h("p", { class: "hint" }, "Ta clé reste dans ton iPhone, protégée par Face ID. Je n'en garde que la partie publique."),
       ),
       h("button", { class: "pill ghost wide", onclick: () => welcome() }, "Retour"),
     ),
@@ -748,7 +748,7 @@ function first() {
       "div",
       { class: "first" },
       h("h2", {}, "Bonjour."),
-      h("p", {}, "Tu peux tout lui demander ici, comme sur Telegram, et lui répondre d'un geste quand il a besoin de toi."),
+      h("p", {}, "Tu peux tout me demander ici, comme sur Telegram, et me répondre d'un geste quand j'ai besoin de toi."),
       h(
         "div",
         { class: "bento" },
@@ -1086,7 +1086,7 @@ function setWork(work) {
       "header",
       {},
       h("span", { class: "ico" }, icon("orion", 18, "none")),
-      h("span", {}, h("b", {}, "Il travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
+      h("span", {}, h("b", {}, "Je travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
     ),
     h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
     h("div", { class: "acts" }, later, stop),
@@ -1157,7 +1157,7 @@ function askCard(asked) {
       "header",
       {},
       h("span", { class: "ico" }, icon("shield", 18, "#fff")),
-      h("span", {}, h("b", {}, "Il te demande ton accord"), left),
+      h("span", {}, h("b", {}, "J'ai besoin de ton accord"), left),
     ),
     ...details(asked),
     h("div", { class: "row" }, no, slider("Glisse pour accepter", () => accept())),
@@ -1516,7 +1516,7 @@ function forYou() {
     }
     if (found.questions.length) {
       sections.push(
-        h("p", { class: "label" }, "Il attend ta réponse"),
+        h("p", { class: "label" }, "J'attends ta réponse"),
         h(
           "div",
           { class: "list items" },
@@ -1525,7 +1525,7 @@ function forYou() {
               "div",
               { class: "item" },
               h("span", { class: "ico" }, icon("where", 16)),
-              h("span", {}, h("span", { class: "text" }, q.about), h("small", {}, q.auto === "approval" ? "un accord resté sans réponse" : `il y revient ${SHORT.format(new Date(q.back_at))}`)),
+              h("span", {}, h("span", { class: "text" }, q.about), h("small", {}, q.auto === "approval" ? "un accord resté sans réponse" : `j'y reviens ${SHORT.format(new Date(q.back_at))}`)),
               h("span", { class: "acts" }, h("button", { class: "pill small", type: "button", onclick: () => askOrion(`À propos de « ${q.about} » : `) }, "Répondre")),
             ),
           ),
@@ -1558,7 +1558,7 @@ function forYou() {
     }
     if (found.waiting_on.length) {
       sections.push(
-        h("p", { class: "label" }, "Il attend des autres"),
+        h("p", { class: "label" }, "J'attends des autres"),
         h(
           "div",
           { class: "list items" },
@@ -1657,7 +1657,7 @@ function menu() {
           {},
           paused
             ? `jusqu'à ${UNTIL.format(new Date(o.paused_until))} · tes rappels passent quand même`
-            : "il prend des initiatives, dans les limites ci-dessous",
+            : "je prends des initiatives, dans les limites ci-dessous",
         ),
       ),
       h(
@@ -1673,7 +1673,7 @@ function menu() {
     );
     const cost = o.cost
       ? [
-          h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), h("small", {}, `dont ${money(o.cost.alone_today)} de lui-même`)),
+          h("div", { class: "tile" }, h("small", {}, "Aujourd'hui"), h("b", { class: "big" }, money(o.cost.today)), h("small", {}, `dont ${money(o.cost.alone_today)} de moi-même`)),
           h(
             "div",
             { class: "tile" },
@@ -1686,7 +1686,7 @@ function menu() {
     const budget = h(
       "div",
       { class: "tile" },
-      h("small", {}, "Messages de lui-même / jour"),
+      h("small", {}, "Messages de moi-même / jour"),
       h(
         "div",
         { class: "stepper" },
@@ -1700,7 +1700,7 @@ function menu() {
       { class: "tile", type: "button", onclick: () => quietHours(o, refresh) },
       h("small", {}, "Heures calmes"),
       h("b", { class: "big" }, `${o.quiet_start}–${o.quiet_end}`),
-      h("small", {}, "il se tait, sauf urgence"),
+      h("small", {}, "je me tais, sauf urgence"),
     );
     const go = (name, title, count, open) =>
       h("button", { class: "tile link", type: "button", onclick: open }, h("span", { class: "ico" }, icon(name, 18)), h("b", {}, title), count !== null ? h("small", {}, count) : null);
@@ -1708,22 +1708,22 @@ function menu() {
       ? h(
           "div",
           { class: "tile wide" },
-          h("small", {}, "Bientôt, de lui-même"),
+          h("small", {}, "Bientôt, de moi-même"),
           o.next.map((p) => h("p", { class: "next" }, h("span", {}, SHORT.format(new Date(p.at))), p.what)),
         )
       : null;
     return [
       h("div", { class: "grid" }, status, cost, budget, quiet, next),
-      h("p", { class: "label" }, "Ce qu'il sait et fait"),
+      h("p", { class: "label" }, "Ce que je sais et fais"),
       h(
         "div",
         { class: "grid" },
         go("spark", "Mémoire", plural(o.counts.facts, "souvenir", "souvenirs"), memoryPanel),
         go("check", "Engagements", plural(o.counts.commitments, "ouvert", "ouverts"), commitmentsPanel),
-        go("shield", "Autonomie", o.alone.length ? `${o.alone.length} seul` : "il demande tout", autonomyPanel),
-        go("clock", "Activité", "et ses silences", activityPanel),
+        go("shield", "Autonomie", o.alone.length ? `${o.alone.length} seul` : "je demande tout", autonomyPanel),
+        go("clock", "Activité", "et mes silences", activityPanel),
         go("file", "Son manuel", plural(o.counts.rules, "règle", "règles"), rulesPanel),
-        go("calendar", "À venir", "ce qu'il fera seul", plannedPanel),
+        go("calendar", "À venir", "ce que je ferai seul", plannedPanel),
       ),
       h("p", { class: "label" }, "Cet appareil"),
       h(
@@ -1772,7 +1772,7 @@ function quietHours(o, refresh) {
   const end = h("input", { type: "time", value: o.quiet_end, "aria-label": "Fin" });
   const close = sheet(
     h("h2", {}, "Heures calmes"),
-    h("p", { class: "quote" }, "Entre ces heures, il ne t'écrit pas de lui-même, sauf un rappel que tu as demandé. Si tu lui écris, il te répond."),
+    h("p", { class: "quote" }, "Entre ces heures, je ne t'écris pas de moi-même, sauf un rappel que tu as demandé. Si tu m'écris, je te réponds."),
     h("div", { class: "times" }, h("label", {}, "De", start), h("label", {}, "à", end)),
     h(
       "button",
@@ -1845,10 +1845,10 @@ function memoryPanel() {
               h("span", {}, h("span", { class: "text" }, f.statement), h("small", { class: f.trusted ? "" : "warn" }, f.current ? `${CATEGORY[f.category] || f.category} · ${f.from_owner ? "tu le lui as dit" : f.source}` : f.why_not || "remplacé")),
             ),
           )
-        : [h("p", { class: "empty" }, query ? "Rien de tel." : "Il ne sait encore rien de toi.")]),
+        : [h("p", { class: "empty" }, query ? "Rien de tel." : "Je ne sais encore rien de toi.")]),
     );
   }
-  panel("Ce qu'il sait de toi", async () => {
+  panel("Ce que je sais de toi", async () => {
     await refreshList();
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
@@ -1926,7 +1926,7 @@ function rulesPanel() {
   panel("Son manuel", async (refresh) => {
     const { rules } = await api("api/rules");
     return [
-      h("p", { class: "hint" }, "Ce qu'il a appris de ta façon de travailler. Retire ce qui n'est plus vrai."),
+      h("p", { class: "hint" }, "Ce que j'ai appris de ta façon de travailler. Retire ce qui n'est plus vrai."),
       rules.length
         ? h(
             "div",
@@ -1961,10 +1961,10 @@ function rulesPanel() {
 }
 
 function autonomyPanel() {
-  panel("Ce qu'il fait seul", async (refresh) => {
+  panel("Ce que je fais seul", async (refresh) => {
     const { actions } = await api("api/autonomy");
     return [
-      h("p", { class: "hint" }, "Tu peux lui reprendre une autonomie d'un geste. Pour lui en donner, dis-le-lui : il te le demandera avec Face ID, limites comprises."),
+      h("p", { class: "hint" }, "Tu peux me reprendre une autonomie d'un geste. Pour m'en donner, dis-le-moi : je te le demanderai avec Face ID, limites comprises."),
       h(
         "div",
         { class: "list items" },
@@ -1972,7 +1972,7 @@ function autonomyPanel() {
           h(
             "div",
             { class: "item" },
-            h("span", {}, h("span", { class: "text" }, a.label), h("small", {}, a.alone ? "seul, dans ses limites" : a.streak ? `il demande · oui ${a.streak} fois de suite` : "il demande")),
+            h("span", {}, h("span", { class: "text" }, a.label), h("small", {}, a.alone ? "seul, dans mes limites" : a.streak ? `je demande · oui ${a.streak} fois de suite` : "je demande")),
             h(
               "span",
               { class: "acts" },
@@ -2000,7 +2000,7 @@ function autonomyPanel() {
 
 function activityPanel() {
   let filter = "all";
-  panel("Ce qu'il a fait", async (refresh) => {
+  panel("Ce que j'ai fait", async (refresh) => {
     const { activity } = await api("api/activity");
     const shown = activity.filter((a) => filter === "all" || (filter === "silences" ? a.silence : !a.silence));
     const tab = (key, text) => h("button", { type: "button", role: "tab", "aria-selected": String(filter === key), onclick: () => ((filter = key), refresh()) }, text);
@@ -2029,7 +2029,7 @@ function plannedPanel() {
   panel("À venir", async () => {
     const { planned } = await api("api/planned");
     return [
-      h("p", { class: "hint" }, "Ce qu'il fera de lui-même ces deux prochaines semaines. Pour en annuler un, touche-le."),
+      h("p", { class: "hint" }, "Ce que je ferai de moi-même ces deux prochaines semaines. Pour en annuler un, touche-le."),
       planned.length
         ? h(
             "div",
@@ -2067,7 +2067,7 @@ function offerNotifications() {
       "header",
       {},
       h("span", { class: "ico" }, icon("bell", 18, "#fff")),
-      h("span", {}, h("b", {}, "Être prévenu quand l'app est fermée"), h("small", {}, "ses messages et ses demandes d'accord")),
+      h("span", {}, h("b", {}, "Être prévenu quand l'app est fermée"), h("small", {}, "mes messages et mes demandes d'accord")),
     ),
     h(
       "div",
