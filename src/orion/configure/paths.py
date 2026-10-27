@@ -72,7 +72,7 @@ def check_path(path: str) -> list[str]:
     if any(p in FORBIDDEN_KEYS or p.endswith("_dir") for p in parts):
         raise ConfigureError(
             f"{path!r}: never changed by message (a secret, or what runs on the server): it is "
-            "set on the server, with `orion setup`"
+            "a secret is typed in the app (Réglages > Secrets)"
         )
     return parts
 

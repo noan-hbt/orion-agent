@@ -21,9 +21,12 @@ the core's (`[modules.mobile] core_port`).
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import os
 import secrets
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 import structlog
@@ -36,15 +39,27 @@ from orion.core.events import Event, Trust
 from orion.core.projections import ProjectionRunner
 from orion.guardian.federation import ADMIN_HEADER, admin_token
 from orion.guardian.ledger import APP_ANSWER, APPROVAL_REQUESTED
-from orion.guardian.logins import keep_login, listing, remove_login
+from orion.guardian.logins import import_logins, keep_login, listing, remove_login
 from orion.guardian.service import APP_CONVERSATION
+from orion.guardian.vault import (
+    CORE_SECRETS,
+    Vault,
+    core_vault_path,
+    vault_path,
+)
+from orion.guardian.vault import (
+    NAME as SECRET_NAME,
+)
 from orion.mobile.channel import SUBSCRIBED, UNSUBSCRIBED
-from orion.mobile.devices import Devices, session_key
+from orion.mobile.devices import DeviceError, Devices, session_key
 from orion.mobile.module import MobileSettings, check_url
 from orion.mobile.push import Pusher, PushError, Subscription, Vapid, allowed_endpoint
 from orion.mobile.server import edge_app
+from orion.mobile.upkeep import CORE_PURPOSE
 
 if TYPE_CHECKING:
+    from orion.config import OrionConfig
+    from orion.guardian.federation import FederationEdge
     from orion.guardian.ledger import PendingApproval
     from orion.guardian.service import GuardianService
 
@@ -119,6 +134,10 @@ class AppEdge:
         self.state = EdgeState()
         self._runner = ProjectionRunner(journal, [self.state])
         self.admin_token = admin_token(config.guardian.data_dir)
+        self.vault: Vault | None = None
+        """His secrets (D94), set from the app too (D154)."""
+        self.federation: FederationEdge | None = None
+        """The Orions he is paired with (D29), when federation is on."""
 
     def install(self) -> None:
         self.service.app_edge = self
@@ -131,6 +150,8 @@ class AppEdge:
                 Route("/v1/app/pair-code", self._pair_code, methods=["POST"]),
                 Route("/v1/app/devices", self._devices, methods=["GET"]),
                 Route("/v1/app/revoke", self._revoke, methods=["POST"]),
+                Route("/v1/app/sign", self._sign, methods=["POST"]),
+                Route("/v1/app/signed", self._signed, methods=["POST"]),
             ]
         )
         app = edge_app(
@@ -142,6 +163,7 @@ class AppEdge:
             self.settings.session_days,
             self,
             lambda: self,
+            self,
         )
         self.service.listeners.append(("app", app, self.settings.host, self.settings.port))
 
@@ -202,6 +224,12 @@ class AppEdge:
     async def remove(self, name: str) -> bool:
         await self.service.ledger.catch_up()
         return await remove_login(self.service.config, self.service.ledger, name)
+
+    async def import_export(self, text: str) -> dict[str, Any]:
+        await self.service.ledger.catch_up()
+        done = await import_logins(self.service.config, self.service.ledger, text)
+        log.info("guardian.logins_imported", kept=len(done["kept"]), how="app")
+        return done
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
@@ -392,3 +420,182 @@ class AppEdge:
             return await self.service.deny("app revoke", "only the guardian's own user")
         device = str((await request.json()).get("device") or "")
         return JSONResponse({"revoked": await self.devices.revoke(device)})
+
+    # -- what used to need the guardian's shell (D154): his secrets, his paired Orions -------
+
+    async def kept(self) -> dict[str, Any]:
+        from orion.setup import read_env
+
+        config = self.service.config
+        in_vault = set(read_env(vault_path(config)))
+        core_path = core_vault_path(config)
+        in_core: set[str] = set(read_env(core_path)) if core_path is not None else set()
+        asked = self.vault.asked_now() if self.vault is not None else []
+        names = secret_names(config) | in_vault | {a["name"] for a in asked}
+        secrets_shown: list[dict[str, str]] = []
+        for name in sorted(names):
+            if name in CORE_SECRETS:
+                where = "app" if name in in_core else "server"
+            elif name in in_vault:
+                where = "app"
+            else:
+                where = "server" if os.environ.get(name) else "missing"
+            secrets_shown.append({"name": name, "where": where})
+        peers: dict[str, Any] | None = None
+        if self.federation is not None:
+            await self.service.ledger.catch_up()
+            peers = {
+                "instance": self.federation.card.instance,
+                "fingerprint": self.federation.identity.fingerprint,
+                "peers": [
+                    {"label": p.label, "instance": p.instance}
+                    for p in self.federation.state.peers.values()
+                    if p.active
+                ],
+            }
+        return {
+            "secrets": secrets_shown,
+            "asked": asked,
+            "vault": self.vault is not None,
+            "federation": peers,
+            "federation_key": bool(os.environ.get(config.federation.key.env)),
+        }
+
+    def purpose(self, what: str, args: dict[str, Any]) -> str:
+        """What his signature answers: this very change, nothing else."""
+        if what == "secret":
+            value = str(args.get("value") or "").strip()
+            return f"secret:{args.get('name')}:{_sha(value)}"
+        if what == "invite":
+            return f"invite:{_label(args)}"
+        if what == "accept":
+            return f"accept:{_sha(str(args.get('code') or '').strip())}:{_label(args)}"
+        if what == "unpair":
+            return f"unpair:{str(args.get('peer') or '').strip()[:80]}"
+        if what == "federation":
+            return "federation:on"
+        raise ValueError("unknown change")
+
+    async def keep(self, what: str, args: dict[str, Any], device: str) -> dict[str, Any]:
+        if what == "secret":
+            if self.vault is None:
+                raise LookupError("no vault here")
+            name = str(args.get("name") or "")
+            where = await self.vault.set_from_app(name, str(args.get("value") or ""), device)
+            return {"set": name, "where": where}
+        if what == "federation":
+            return await self._federation_on(device)
+        if self.federation is None:
+            raise LookupError("federation is off")
+        if what == "invite":
+            done = await self._federation_admin("/v1/federation/invites", {"label": _label(args)})
+        elif what == "accept":
+            done = await self._federation_admin(
+                "/v1/federation/accept",
+                {"code": str(args.get("code") or "").strip(), "label": _label(args)},
+            )
+        else:
+            done = await self._federation_admin(
+                "/v1/federation/revoke", {"peer": str(args.get("peer") or "").strip()}
+            )
+        log.info("guardian.federation_from_app", what=what, device=device)
+        return done
+
+    async def _federation_admin(self, path: str, sent: dict[str, Any]) -> dict[str, Any]:
+        """The same admin routes `orion federation` uses, called in this process."""
+        transport = httpx.ASGITransport(app=self.service.app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://guardian") as http:
+            response = await http.post(path, json=sent, headers={ADMIN_HEADER: self.admin_token})
+        found: dict[str, Any] = response.json()
+        if response.status_code != 200:
+            raise ValueError(str(found.get("error") or f"refused ({response.status_code})"))
+        return found
+
+    async def _federation_on(self, device: str) -> dict[str, Any]:
+        """His Orion's key, kept in the vault, then federation turned on: the guardian
+        restarts with it."""
+        from orion.configure.module import Change
+        from orion.configure.paths import ConfigureError
+        from orion.federation.crypto import Identity, generate_secret
+
+        config = self.service.config
+        if self.vault is None:
+            raise LookupError("no vault here")
+        name = config.federation.key.env
+        if not os.environ.get(name):
+            secret = generate_secret()
+            await self.vault.set_from_app(name, secret, device)
+        fingerprint = Identity(os.environ[name]).fingerprint
+        changes = [Change(path="federation.enabled", value=True)]
+        if not config.federation.public_url:
+            changes.append(Change(path="federation.public_url", value=self.url))
+        try:
+            await self.service.write_config(
+                changes,
+                {
+                    "changes": [c.described() for c in changes],
+                    "why": "relier d'autres Orions, depuis l'app",
+                    "signed_by": f"passkey:{device}",
+                },
+            )
+        except ConfigureError as exc:
+            raise ValueError(str(exc)) from exc
+        return {"fingerprint": fingerprint}
+
+    # -- signatures for the core's own changes (D154): `core:` purposes only ----------------
+
+    async def _sign(self, request: Request) -> Response:
+        purpose = str((await request.json()).get("purpose") or "")
+        if not purpose.startswith(CORE_PURPOSE):
+            return await self.service.deny(f"app signature {purpose[:60]}", "not the core's")
+        try:
+            ceremony, options = await self.devices.signing_options(purpose)
+        except DeviceError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        return JSONResponse({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def _signed(self, request: Request) -> Response:
+        sent: dict[str, Any] = await request.json()
+        purpose = str(sent.get("purpose") or "")
+        if not purpose.startswith(CORE_PURPOSE):
+            return await self.service.deny(f"app signature {purpose[:60]}", "not the core's")
+        try:
+            device = await self.devices.verify(
+                str(sent.get("ceremony") or ""), purpose, dict(sent.get("credential") or {})
+            )
+        except DeviceError as exc:
+            log.warning("guardian.app_signature_refused", purpose=purpose, error=str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=403)
+        log.info("guardian.app_signed", purpose=purpose, device=device)
+        return JSONResponse({"device": device})
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _label(args: dict[str, Any]) -> str:
+    label = str(args.get("label") or "").strip()
+    if not 1 <= len(label) <= 60:
+        raise ValueError("a name for the person, 60 characters at most")
+    return label
+
+
+def secret_names(config: OrionConfig) -> set[str]:
+    """Every variable orion.toml names for a secret (`{ env = "…" }`), with its defaults."""
+    found: set[str] = set()
+
+    def walk(value: object) -> None:
+        if isinstance(value, dict):
+            table = cast(dict[str, object], value)
+            env = table.get("env")
+            if isinstance(env, str) and len(table) == 1 and SECRET_NAME.fullmatch(env):
+                found.add(env)
+            for item in table.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in cast(list[object], value):
+                walk(item)
+
+    walk(config.model_dump(mode="json"))
+    return found

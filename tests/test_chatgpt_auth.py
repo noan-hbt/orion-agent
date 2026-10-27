@@ -71,6 +71,8 @@ def _params(url: str) -> dict[str, str]:
 async def test_sign_in_registers_then_stores_private_credentials(tmp_path: Path) -> None:
     server = _TokenServer()
     auth = _auth(tmp_path, server)
+    running = ChatGPTAuth(tmp_path / "chatgpt")  # the provider's, Orion running (D154)
+    assert running.load() is None
     params = _params(auth.start())
     assert params["client_id"] == FIRST_CLIENT
     assert params["agent_name_hint"] == "Orion"
@@ -91,6 +93,8 @@ async def test_sign_in_registers_then_stores_private_credentials(tmp_path: Path)
     mode = stat.S_IMODE(auth.credentials_path.stat().st_mode)
     assert mode == 0o600
     assert await auth.access_token() == "access-1"
+    loaded = running.load()  # signed in from the app: seen without a restart
+    assert loaded is not None and loaded.client_id == "issued-1"
 
     # A second sign-in reuses the issued client, never the registration placeholder.
     again = _params(auth.start())

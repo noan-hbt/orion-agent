@@ -13,8 +13,8 @@ Orion checks it whole and the owner signs it, the same way as by message.
 
 His missions (D47): what each looks for, what it kept and what he turned down; from here he
 asks for a pass now, changes its pace, turns an item down or ends it. His machines (D1): which
-are online and what each allows; one is cut off from here. Pairing one stays on the server: a
-hand's answers are trusted as his own, so a stolen session must not add one.
+are online and what each allows; one is cut off from here, and one is added signed with Face ID
+(`orion.mobile.upkeep`, D154), as is everything else that used to need the server's shell.
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ from orion.tasks.service import Tasks
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+    from orion.mobile.upkeep import Upkeep
 
 log = structlog.get_logger(__name__)
 
@@ -85,6 +86,8 @@ class Control:
     """His machines (Orion's hands), once their module is assembled."""
     code: Path | None = None
     """Where Orion's code is checked out (the server updates it there, D94)."""
+    upkeep: Upkeep | None = None
+    """What used to need a shell on the server (D154), once the app is served."""
     _portrait: Portrait = field(default_factory=Portrait, init=False)
     _portrait_runner: ProjectionRunner | None = field(default=None, init=False)
 

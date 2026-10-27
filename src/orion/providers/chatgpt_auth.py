@@ -117,6 +117,7 @@ class ChatGPTAuth:
         self._http = http
         self._lock = asyncio.Lock()
         self._current: Credentials | None = None
+        self._stamp: int | None = None
 
     @property
     def credentials_path(self) -> Path:
@@ -127,13 +128,20 @@ class ChatGPTAuth:
         return self._folder / "pending.json"
 
     def load(self) -> Credentials | None:
-        if self._current is None and self.credentials_path.exists():
+        """Read again when the file changed: he signs in from the app while Orion runs (D154)."""
+        try:
+            stamp = self.credentials_path.stat().st_mtime_ns
+        except FileNotFoundError:
+            self._current, self._stamp = None, None
+            return None
+        if self._current is None or stamp != self._stamp:
             try:
                 self._current = Credentials.model_validate_json(
                     self.credentials_path.read_text("utf-8")
                 )
             except ValidationError as exc:
                 raise ChatGPTAuthError(f"unreadable {self.credentials_path}: {exc}") from exc
+            self._stamp = stamp
         return self._current
 
     def start(self) -> str:
@@ -170,7 +178,9 @@ class ChatGPTAuth:
     async def finish(self, redirected: str) -> Credentials:
         """From the address the browser was sent back to."""
         if not self._pending_path.exists():
-            raise ChatGPTAuthError("no sign-in in progress: run `orion chatgpt login` first")
+            raise ChatGPTAuthError(
+                "no sign-in in progress: start it from the app (Réglages > ChatGPT)"
+            )
         pending = Pending.model_validate_json(self._pending_path.read_text("utf-8"))
         params = httpx.URL(redirected.strip()).params
         if params.get("state") != pending.state:
@@ -210,10 +220,10 @@ class ChatGPTAuth:
         async with self._lock:
             current = self.load()
             if current is None:
-                raise ChatGPTAuthError("not signed in: run `orion chatgpt login`")
+                raise ChatGPTAuthError("not signed in: sign in from the app (Réglages > ChatGPT)")
             if not current.can_use_plan:
                 raise ChatGPTAuthError(
-                    "ChatGPT plan use was not granted: run `orion chatgpt login` and accept it"
+                    "ChatGPT plan use was not granted: sign in again from the app and accept it"
                 )
             if current.expires_at - time.time() > REFRESH_MARGIN_SECONDS:
                 return current.access_token
@@ -319,3 +329,4 @@ class ChatGPTAuth:
     def _save(self, credentials: Credentials) -> None:
         _write_private(self.credentials_path, credentials.model_dump_json())
         self._current = credentials
+        self._stamp = self.credentials_path.stat().st_mtime_ns

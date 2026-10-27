@@ -461,7 +461,10 @@ def file_tool(
 
         desk = hands()
         if desk is None:
-            return ToolResult("No hand is set up (`orion hand`).", is_error=True)
+            return ToolResult(
+                "No hand is set up (he adds a machine in the app: Réglages > Machines).",
+                is_error=True,
+            )
         try:
             got = await desk.call(args.device, "get_file", {"path": args.path})
             data = base64.b64decode(str(got["data"]), validate=True)

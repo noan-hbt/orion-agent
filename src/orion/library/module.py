@@ -12,7 +12,8 @@ searchable by words and by meaning:
   recall), instead of piling up in a to-read list nobody opens.
 
 A document is content, not orders: its passages come back below full trust, like a file read
-from the owner's machine. `orion library import <folder>` adds a folder of notes at once.
+from the owner's machine. Notes are added at once from the app (Réglages > Bibliothèque, D154)
+or with `orion library import <folder>`.
 """
 
 from __future__ import annotations

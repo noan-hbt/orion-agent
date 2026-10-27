@@ -225,8 +225,8 @@ class Snapshot:
         where = (
             f"même en passant par sa connexion ({self.through}), il refuse : dis-le-lui"
             if self.through
-            else "propose-lui une fois de relier son ordinateur comme sortie (`orion hand pair "
-            "… --exit`) : tu navigueras depuis sa connexion à lui"
+            else "propose-lui une fois de relier son ordinateur comme sortie (app : Réglages > "
+            "Machines, puis --exit) : tu navigueras depuis sa connexion à lui"
         )
         return (
             f"[Ce site refuse ce navigateur ({by}) : c'est l'adresse du serveur qu'il bloque, "

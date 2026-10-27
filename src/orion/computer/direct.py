@@ -91,7 +91,7 @@ class _Live:
 
 
 MASK = "••••••"
-NO_VAULT = "No vault: the browser module has none (`orion logins add` fills it on the server)."
+NO_VAULT = "No vault: the browser module has none (he fills it in the app: Mots de passe)."
 HANDOVER_SECONDS = 30 * 60.0
 BROWSING = frozenset(
     {
@@ -543,8 +543,7 @@ class BrowserDesk:
         if not in_app and (self.notify is None or not self.base_url):
             raise Refused(
                 "Keeping a login from his phone needs the app, or Telegram and the console's "
-                "public address ([modules.console] public_url); on the server: "
-                "`orion logins add`."
+                "public address ([modules.console] public_url)."
             )
         token = tokens.token_urlsafe(24)
         now = time.monotonic()

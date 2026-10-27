@@ -244,8 +244,8 @@ def editable_view(config: OrionConfig) -> str:
     lines.append(
         f"Sont à lui ({', '.join(OWNER_SECTIONS)}, les comptes, "
         f"{', '.join(OWNER_PATHS)}) : il dit oui à chaque changement, tu ne le fais jamais "
-        "seul. Les secrets et les chemins ne se changent jamais par message (`orion setup`, "
-        "sur le serveur)."
+        "seul. Les secrets ne passent jamais par message : il les saisit dans l'app (Réglages > "
+        "Secrets) ou tu les demandes avec `secret_ask`."
     )
     return "\n".join(lines)
 
@@ -341,22 +341,33 @@ class Configurator:
 
     async def watch(self, every: float = 10.0) -> None:
         """Restart when orion.toml changed under Orion: written by the guardian for a change
-        he signed in the app (D135), or by hand on the server. Its own changes restart it
-        already."""
+        he signed in the app (D135), or by hand on the server; or when the guardian wrote the
+        core's key he set in the app (D154). Its own changes restart it already."""
         if self.source is None or self.restart is None:
             return
         source = self.source
-        seen = digest(await asyncio.to_thread(source.read_text, "utf-8"))
+        seen = await asyncio.to_thread(_on_disk, source)
         while self._restarting is None:
             await asyncio.sleep(every)
             try:
-                now = digest(await asyncio.to_thread(source.read_text, "utf-8"))
+                now = await asyncio.to_thread(_on_disk, source)
             except OSError as exc:
                 log.warning("config.unreadable", error=str(exc))
                 continue
             if now != seen and self._restarting is None:
                 log.info("config.changed_on_disk")
                 self._restarting = asyncio.get_running_loop().create_task(self.restart())
+
+
+def _on_disk(source: Path) -> str:
+    """orion.toml, and the core's key beside it (D154): a change to either restarts."""
+    from orion.guardian.vault import CORE_VAULT
+
+    key = source.parent / CORE_VAULT
+    text = source.read_text("utf-8")
+    if key.is_file():
+        text += "\0" + key.read_text("utf-8")
+    return digest(text)
 
 
 class SignedSettings:
@@ -481,8 +492,8 @@ def configure_tools(configurator: Configurator, config: OrionConfig) -> list[Too
             description="Change your own settings (orion.toml) when the owner asks: turn a "
             "module on or off, a time, a model, who may write to you "
             "(`modules.secretary.contacts`, op add / remove), the guardian's limits. Checked "
-            "whole before he is asked; then you restart. Never a secret: those are set on the "
-            "server with `orion setup`.",
+            "whole before he is asked; then you restart. Never a secret: `secret_ask`, or the "
+            "app's Secrets screen.",
             input_model=ChangeInput,
             handler=change,
             effect=Effect.EXTERNAL,

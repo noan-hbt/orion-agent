@@ -103,6 +103,19 @@ def load_env_files(folder: Path, command: str) -> list[str]:
     return read
 
 
+def load_core_vault(folder: Path) -> list[str]:
+    """The core's own key as he set it in the app (D154): written by the guardian beside
+    orion.toml, it wins over the server's file. Returns the names it set."""
+    from orion.guardian.vault import CORE_SECRETS, CORE_VAULT
+
+    loaded: list[str] = []
+    for name, value in read_env(folder / CORE_VAULT).items():
+        if value and name in CORE_SECRETS:
+            os.environ[name] = value
+            loaded.append(name)
+    return loaded
+
+
 Ask = Callable[[str], str]
 Say = Callable[[str], None]
 

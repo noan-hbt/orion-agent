@@ -121,4 +121,14 @@ MSG
 else
     systemctl restart orion-guardian orion-core
     echo "==> Orion restarted on https://$DOMAIN"
+    # The first phone's code, shown here: after it, everything is done from the app (D154).
+    for _ in $(seq 1 30); do
+        if devices=$("$HERE/orion-admin" app devices 2>/dev/null); then
+            case "$devices" in
+                Aucun*) echo "==> your phone"; "$HERE/orion-admin" app pair iphone ;;
+            esac
+            break
+        fi
+        sleep 1
+    done
 fi

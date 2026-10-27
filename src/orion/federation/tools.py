@@ -52,8 +52,8 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
             return ToolResult(f"The guardian did not answer: {exc}", is_error=True)
         if not found:
             return ToolResult(
-                "Aucun Orion relié. Pour en relier un : `orion federation invite --name <nom>` "
-                "sur le serveur, puis l'autre accepte le code."
+                "Aucun Orion relié. Pour en relier un : dans l'app, Réglages > Autres Orions, il "
+                "crée une invitation, et l'autre accepte le code dans la sienne."
             )
         return ToolResult("\n".join(f"- {p['label']} ({p['instance']})" for p in found))
 

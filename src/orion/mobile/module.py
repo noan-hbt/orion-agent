@@ -4,9 +4,8 @@ Orion's own app on the owner's iPhone, a web app added to his home screen: the c
 approvals signed with Face ID, notifications. Served on localhost, behind the HTTPS proxy at
 `public_url` (a domain: a passkey belongs to a domain, never to an address).
 
-    orion app pair iphone     a one-time code, to type in the app
-    orion app devices         the paired devices
-    orion app revoke iphone   cut one off
+    orion app pair iphone     the first phone's one-time code, to type in the app
+    (then everything is in the app: another phone, signed with Face ID; D154)
 
 Run as one process, the core serves all of it on `port` (and on `core_port` too, so the same
 proxy rules work). Run split (D28), the guardian serves the app's files, the passkeys, the
@@ -38,6 +37,7 @@ from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
+from orion.library.module import LibraryModule
 from orion.mail.module import MailModule
 from orion.missions.module import MissionsModule
 from orion.mobile.channel import MobileChannel
@@ -46,8 +46,10 @@ from orion.mobile.devices import Devices, session_key
 from orion.mobile.notebook import Notebook
 from orion.mobile.push import Pusher, Vapid
 from orion.mobile.server import PREFIX, Gate, core_app, mobile_app
+from orion.mobile.upkeep import GuardianSigner, LocalSigner, Upkeep
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
 from orion.papers.module import PapersModule
+from orion.places.module import PlacesModule
 from orion.providers.spending import Spending
 from orion.relations.module import RelationsModule
 from orion.tasks.module import TasksModule
@@ -129,7 +131,8 @@ class MobileModule(Module):
     offer = (
         "Une application à toi sur son iPhone (écran d'accueil), qui remplace Telegram : "
         "conversation, accords signés avec Face ID, notifications. `[modules.mobile] enabled = "
-        "true` et `public_url` (son domaine en https), puis `orion app pair iphone`."
+        "true` et `public_url` (son domaine en https) ; le code du premier téléphone "
+        "s'affiche à l'installation."
     )
     settings_model = MobileSettings
 
@@ -172,6 +175,8 @@ class MobileModule(Module):
         calendar = plate.module(CalendarModule)
         mail = plate.module(MailModule)
         thinking = plate.module(ThinkingModule)
+        places = plate.module(PlacesModule)
+        library = plate.module(LibraryModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -191,6 +196,15 @@ class MobileModule(Module):
             hands=lambda: hands.desk if hands is not None else None,
             code=CODE,
         )
+        self.control.upkeep = Upkeep(
+            plate.journal,
+            config,
+            self.url(),
+            hands=lambda: hands.desk if hands is not None else None,
+            places=lambda: places.places if places is not None else None,
+            library=lambda: library.library if library is not None else None,
+            signer=LocalSigner(self.devices) if self.devices is not None else None,
+        )
         self.notebook = Notebook(
             plate.journal,
             self.control.now,
@@ -207,6 +221,8 @@ class MobileModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         settings: MobileSettings = self.settings
         if self._guardian is not None:
+            if self.control is not None and self.control.upkeep is not None:
+                self.control.upkeep.signer = GuardianSigner(self._guardian)
             channel = MobileChannel(
                 daemon.plate.journal,
                 daemon.inbox,

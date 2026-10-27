@@ -386,7 +386,7 @@ function pairing() {
       { class: "welcome" },
       h("img", { class: "mark", src: `${BASE}icon-180.png`, alt: "" }),
       h("h1", {}, "Appairer cet iPhone"),
-      h("p", { class: "lead" }, "Sur le serveur : orion app pair iphone. Tape le code qu'il affiche, il vaut 10 minutes."),
+      h("p", { class: "lead" }, "Tape le code affiché à la fin de l'installation, ou créé depuis un téléphone déjà appairé (Réglages > Téléphones). Il vaut 10 minutes."),
       h(
         "div",
         { class: "card" },
@@ -2597,6 +2597,10 @@ async function settingsFill(refresh) {
       if (error instanceof ApiError && error.status === 404) return null; // no vault here
       throw error;
     });
+  const kept = await api("keep").catch((error) => {
+    if (error instanceof ApiError && error.status === 404) return null; // one process: no guardian
+    throw error;
+  });
   const machines = await api("api/machines")
     .then((found) => found.machines)
     .catch((error) => {
@@ -2681,6 +2685,12 @@ async function settingsFill(refresh) {
         row("toml", "orion.toml", plural(server.settings.length, "réglage", "réglages"), () => configPanel(server)),
         row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
         row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
+        kept?.vault ? row("key", "Secrets", kept.asked.length ? plural(kept.asked.length, "demandé", "demandés") : plural(kept.secrets.length, "clé", "clés"), () => secretsPanel(refresh), kept.asked.length ? "wait" : "", "tes clés d'accès, jamais montrées") : null,
+        row("spark", "ChatGPT", "", chatgptPanel, "", "ton forfait pour mes modèles"),
+        row("where", "Raccourcis du téléphone", "", phoneTokenPanel, "", "lieux, sommeil, concentration"),
+        kept ? row("people", "Autres Orions", kept.federation ? plural(kept.federation.peers.length, "relié", "reliés") : "éteint", () => peersPanel(refresh), "", "caler des rendez-vous entre nous") : null,
+        row("wrong", "Mes ratés", "", missesPanel, "", "tes 👎 et tes corrections"),
+        row("book", "Bibliothèque", "", importNotes, "", "ajouter tes notes (.md, .txt)"),
       ),
       h("p", { class: "hint" }, `Tu changes un réglage ici en le signant avec Face ID, sans passer par la conversation. ${plural(owner, "réglage te protège", "réglages te protègent")} : eux ne changent jamais sans ta signature.`),
     );
@@ -2761,7 +2771,7 @@ function configPanel(server) {
     paint();
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
-      h("p", { class: "hint" }, "Touche un réglage pour le changer : tu signes avec Face ID, mon gardien l'écrit. Le bouclier marque ce qui te protège. Les secrets et les chemins ne se changent que sur le serveur."),
+      h("p", { class: "hint" }, "Touche un réglage pour le changer : tu signes avec Face ID, mon gardien l'écrit. Le bouclier marque ce qui te protège. Les secrets se changent dans Réglages > Secrets."),
       list,
     ];
   });
@@ -3108,6 +3118,23 @@ const ACTION_NAMES = { notify: "notifier", open_url: "ouvrir un lien", find_file
 function machinesPanel() {
   panel("Machines", async (refresh) => {
     const { machines } = await api("api/machines");
+    const name = h("input", { type: "text", placeholder: "mac, pc-bureau…", "aria-label": "Nom de la machine", autocapitalize: "none", spellcheck: false });
+    const pair = async () => {
+      const wanted = name.value.trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(wanted)) return toast("Un nom en minuscules, sans espace.");
+      try {
+        const { code, command } = await signed(`api/machines/${encodeURIComponent(wanted)}/pair`);
+        sheet(
+          h("h2", {}, `Relier ${wanted}`),
+          h("p", { class: "quote big-code" }, code),
+          h("p", { class: "hint" }, "Sur la machine, dans un terminal (Orion installé dessus), lance cette commande, puis « orion hand run ». Le code vaut 10 minutes. Ajoute --allow-open pour que j'ouvre des pages, --exit pour que je navigue par sa connexion."),
+          copyable(command),
+        );
+        refresh();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
     return [
       machines.length
         ? h(
@@ -3150,7 +3177,9 @@ function machinesPanel() {
             ),
           )
         : h("p", { class: "empty" }, "Aucune machine appairée."),
-      h("p", { class: "hint" }, "Une machine, c'est mon accès à ton ordinateur : ce que tu y permets, dans les dossiers que tu choisis. En ajouter une se fait sur le serveur (orion hands pair <nom>), puis orion hand pair sur la machine : ce qu'elle me dit compte comme venant de toi, alors une session volée ne doit pas pouvoir en ajouter."),
+      h("p", { class: "label" }, "Ajouter une machine"),
+      h("div", { class: "card add-phone" }, h("label", { class: "field-edit" }, name), h("button", { class: "pill primary wide", type: "button", onclick: pair }, icon("face", 20), "Créer un code")),
+      h("p", { class: "hint" }, "Une machine, c'est mon accès à ton ordinateur : ce que tu y permets, dans les dossiers que tu choisis. Ce qu'elle me dit compte comme venant de toi : tu signes son code avec Face ID, une session volée ne peut pas en ajouter."),
     ];
   });
 }
@@ -3528,8 +3557,335 @@ function vaultPanel() {
     return [
       logins.length > 5 ? h("label", { class: "search glass" }, icon("search", 18), search) : null,
       h("button", { class: "pill primary wide", type: "button", onclick: () => loginSheet({ onSaved: refresh }) }, icon("plus", 20), "Ajouter un accès"),
+      h("button", { class: "pill wide", type: "button", onclick: () => importLogins(refresh) }, icon("file", 20), "Importer un export (CSV)"),
       list,
       h("p", { class: "hint" }, "Ton coffre est sur ton serveur. Je tape un mot de passe pour toi, seulement sur son site et dans un champ mot de passe : ni moi ni notre conversation ne le voyons, et cette app ne le réaffiche jamais."),
+    ];
+  });
+}
+
+function importLogins(refresh) {
+  // KeePass, Bitwarden, Chrome, Firefox, 1Password: their CSV export, read here and sent to my
+  // guardian's vault; the conversation never sees it.
+  const input = h("input", { type: "file", accept: ".csv,text/csv", hidden: true });
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      const done = await api("logins/import", { text: await file.text() });
+      sheet(
+        h("h2", {}, plural(done.kept.length, "accès gardé", "accès gardés")),
+        done.kept.length ? h("div", { class: "list items" }, done.kept.map((l) => row("key", l.sites[0] || l.name, null, null, "", l.name))) : null,
+        done.skipped.length ? h("p", { class: "label" }, "Laissés de côté") : null,
+        ...done.skipped.slice(0, 30).map((why) => h("p", { class: "hint" }, why)),
+        h("p", { class: "hint" }, "Efface maintenant le fichier exporté : il contient tes mots de passe en clair."),
+      );
+      refresh();
+    } catch (error) {
+      toast(said(error));
+    }
+  });
+  document.body.append(input);
+  input.click();
+  setTimeout(() => input.remove(), 60_000);
+}
+
+function copyable(text) {
+  return h(
+    "button",
+    {
+      class: "pill wide",
+      type: "button",
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          toast("Copié.");
+        } catch {
+          toast("Copie impossible : sélectionne le texte.");
+        }
+      },
+    },
+    icon("copy", 18),
+    h("code", {}, text),
+  );
+}
+
+// -- what used to need the server's shell (D154) ----------------------------------------------
+
+function secretsPanel(refreshSettings) {
+  const WHERE = { app: "réglé depuis l'app", server: "réglé sur le serveur", missing: "manquant" };
+  panel("Secrets", async (refresh) => {
+    const kept = await api("keep");
+    const asked = new Map(kept.asked.map((a) => [a.name, a.why]));
+    const done = () => (refresh(), refreshSettings());
+    return [
+      kept.asked.length ? h("p", { class: "label" }, "Je te les demande") : null,
+      kept.asked.length ? h("div", { class: "list items" }, kept.asked.map((a) => row("key", a.name, "à saisir", () => secretSheet(a.name, a.why, done), "wait", a.why))) : null,
+      h("p", { class: "label" }, "Tes clés"),
+      h("div", { class: "list items" }, kept.secrets.filter((x) => !asked.has(x.name)).map((x) => row("key", x.name, WHERE[x.where] || x.where, () => secretSheet(x.name, "", done), x.where === "missing" ? "wait" : ""))),
+      h("button", { class: "pill wide", type: "button", onclick: () => secretSheet("", "", done) }, icon("plus", 20), "Une autre clé"),
+      h("p", { class: "hint" }, "Une clé va droit à mon gardien, signée avec Face ID pour cette valeur exacte : ni la conversation ni le modèle ne la voient, et l'app ne la réaffiche jamais. Elle remplace celle du serveur ; je redémarre pour la prendre."),
+    ];
+  });
+}
+
+function secretSheet(name, why, done) {
+  const named = h("input", { type: "text", value: name, placeholder: "MAIL_PERSO_PASSWORD", "aria-label": "Nom de la variable", autocapitalize: "characters", spellcheck: false });
+  const value = h("input", { type: "password", placeholder: "La valeur", "aria-label": "Valeur", autocomplete: "off", spellcheck: false });
+  const status = h("p", { class: "error", role: "alert" });
+  const close = sheet(
+    h("h2", {}, name || "Une clé"),
+    why ? h("p", { class: "quote" }, why) : null,
+    name ? null : h("label", { class: "field-edit" }, named),
+    h("label", { class: "field-edit" }, value),
+    status,
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async (event) => {
+          const args = { name: named.value.trim().toUpperCase(), value: value.value };
+          if (!/^[A-Z][A-Z0-9_]{2,63}$/.test(args.name)) return (status.textContent = "Un nom en capitales, comme MAIL_PERSO_PASSWORD.");
+          if (!args.value.trim()) return (status.textContent = "La valeur est vide.");
+          event.currentTarget.disabled = true;
+          try {
+            const done_ = await signed("keep/secret", { args }, { args });
+            value.value = "";
+            close();
+            toast(done_.where === "core" ? "C'est gardé. Je redémarre pour la prendre." : "C'est gardé par mon gardien. Il redémarre quelques secondes.", 3600);
+            done();
+          } catch (error) {
+            status.textContent = said(error);
+            event.currentTarget.disabled = false;
+          }
+        },
+      },
+      icon("face", 20),
+      "Garder avec Face ID",
+    ),
+  );
+}
+
+function chatgptPanel() {
+  panel("ChatGPT", async (refresh) => {
+    const c = await api("api/chatgpt");
+    const address = h("input", { type: "url", placeholder: "http://127.0.0.1:…/auth/callback?code=…", "aria-label": "Adresse de retour", autocapitalize: "none", spellcheck: false });
+    const start = async () => {
+      try {
+        const { url } = await api("api/chatgpt/start", {});
+        window.open(url, "_blank", "noopener");
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    const finish = async () => {
+      try {
+        await api("api/chatgpt/finish", { address: address.value.trim() });
+        toast("Connecté.");
+        refresh();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    return [
+      h(
+        "div",
+        { class: "list items" },
+        row("spark", "Compte", c.signed_in ? c.who : "pas connecté", null, c.signed_in ? "" : "wait"),
+        c.signed_in ? row("check", "Usage du forfait", c.plan ? "accordé" : "pas accordé", null, c.plan ? "" : "wait") : null,
+        row("sliders", "Modèles chatgpt:…", c.enabled ? "allumés" : "éteints (providers.chatgpt.enabled)", null),
+      ),
+      c.error ? h("p", { class: "error" }, c.error) : null,
+      h("p", { class: "label" }, c.signed_in ? "Se reconnecter" : "Se connecter"),
+      h("button", { class: "pill primary wide", type: "button", onclick: start }, "1. Ouvrir la connexion ChatGPT"),
+      h("p", { class: "hint" }, "Connecte-toi et accepte. Tu arrives sur une page 127.0.0.1 qui ne s'affiche pas : c'est normal. Copie son adresse (barre d'adresse) et colle-la ici."),
+      h("label", { class: "field-edit" }, address),
+      h("button", { class: "pill wide", type: "button", onclick: finish }, "2. Terminer"),
+      c.signed_in
+        ? h(
+            "button",
+            {
+              class: "pill wide danger",
+              type: "button",
+              onclick: async () => {
+                await api("api/chatgpt/logout", {}).catch((error) => toast(said(error)));
+                refresh();
+              },
+            },
+            "Se déconnecter",
+          )
+        : null,
+    ];
+  });
+}
+
+function phoneTokenPanel() {
+  panel("Raccourcis du téléphone", () => [
+    h("p", { class: "hint" }, "Tes automatisations Raccourcis me disent où tu arrives, comment tu as dormi, quand tu te concentres. Elles s'authentifient avec un jeton : en créer un nouveau coupe l'ancien."),
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: async () => {
+          try {
+            const t = await api("api/phone/token", {});
+            sheet(
+              h("h2", {}, "Nouveau jeton"),
+              copyable(t.token),
+              h("p", { class: "label" }, "Arrivées et départs"),
+              h("p", { class: "hint" }, "Automatisation > Arrivée (ou Départ) > le lieu > « Obtenir le contenu de l'URL », méthode POST, en-tête Authorization : Bearer <jeton>, corps JSON {\"place\": \"boulangerie\", \"event\": \"arrive\"}."),
+              copyable(t.event_url),
+              h("p", { class: "label" }, "Ce que sait le téléphone"),
+              h("p", { class: "hint" }, "Même chose, corps {\"kind\": \"sleep\", \"value\": \"6 h 10, réveillé 2 fois\"}. kind : sleep (au réveil), focus (quand une concentration s'active), battery, workout, health, music, other."),
+              copyable(t.sense_url),
+            );
+          } catch (error) {
+            toast(said(error));
+          }
+        },
+      },
+      "Créer un jeton",
+    ),
+  ]);
+}
+
+function peersPanel(refreshSettings) {
+  panel("Autres Orions", async (refresh) => {
+    const kept = await api("keep");
+    const f = kept.federation;
+    const done = () => (refresh(), refreshSettings());
+    if (!f) {
+      return [
+        h("p", { class: "hint" }, "Relié à l'Orion d'un proche, je cale des rendez-vous avec lui : chacun garde son agenda, nous n'échangeons que des créneaux. Pour commencer, je crée la clé de cet Orion et j'allume la fonction ; je redémarre ensuite."),
+        h(
+          "button",
+          {
+            class: "pill primary wide",
+            type: "button",
+            onclick: async () => {
+              try {
+                const { fingerprint } = await signed("keep/federation", { args: {} }, { args: {} });
+                toast(`C'est allumé. Mon empreinte : ${fingerprint}`, 5000);
+                done();
+              } catch (error) {
+                toast(said(error));
+              }
+            },
+          },
+          icon("face", 20),
+          "Allumer avec Face ID",
+        ),
+      ];
+    }
+    const label = h("input", { type: "text", placeholder: "Paul", "aria-label": "Son prénom" });
+    const code = h("textarea", { rows: 3, placeholder: "Le code qu'il t'a donné", "aria-label": "Code d'invitation", spellcheck: false });
+    const act = (what, args, says) => async () => {
+      try {
+        const got = await signed(`keep/${what}`, { args }, { args });
+        says(got);
+        done();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    return [
+      h("div", { class: "list items" }, row("shield", "Mon empreinte", f.fingerprint, null)),
+      f.peers.length
+        ? h(
+            "div",
+            { class: "list items" },
+            f.peers.map((p) =>
+              h(
+                "div",
+                { class: "item" },
+                h("span", { class: "ico" }, icon("people", 16)),
+                h("span", {}, h("span", { class: "text" }, p.label), h("small", {}, p.instance)),
+                h("span", { class: "acts" }, h("button", { class: "pill small danger", type: "button", onclick: act("unpair", { peer: p.instance }, () => toast(`${p.label} n'est plus relié.`)) }, "Délier")),
+              ),
+            ),
+          )
+        : h("p", { class: "empty" }, "Aucun Orion relié."),
+      h("p", { class: "label" }, "Inviter ou accepter"),
+      h("label", { class: "field-edit" }, label),
+      h(
+        "button",
+        {
+          class: "pill primary wide",
+          type: "button",
+          onclick: () =>
+            act("invite", { label: label.value.trim() }, (got) =>
+              sheet(h("h2", {}, `Invitation pour ${label.value.trim()}`), copyable(got.code), h("p", { class: "hint" }, `Donne-lui ce code ; il l'accepte dans son app. Valable jusqu'au ${got.expires_at.slice(0, 10)}.`)),
+            )(),
+        },
+        icon("face", 20),
+        "Créer une invitation",
+      ),
+      h("label", { class: "field-edit" }, code),
+      h(
+        "button",
+        {
+          class: "pill wide",
+          type: "button",
+          onclick: () => act("accept", { label: label.value.trim(), code: code.value.trim() }, (got) => toast(`Relié. Son empreinte : ${got.fingerprint} — vérifie-la avec lui.`, 6000))(),
+        },
+        icon("face", 20),
+        "Accepter son code",
+      ),
+    ];
+  });
+}
+
+function importNotes() {
+  // Notes picked here go whole into my library: I search them when they can help.
+  const input = h("input", { type: "file", accept: ".md,.txt,.markdown,text/plain,text/markdown", multiple: true, hidden: true });
+  input.addEventListener("change", async () => {
+    const files = [...(input.files || [])].slice(0, 200);
+    if (!files.length) return;
+    try {
+      const notes = await Promise.all(files.map(async (f) => ({ name: f.name.replace(/\.(md|txt|markdown)$/i, ""), text: await f.text() })));
+      const done = await api("api/library/import", { notes });
+      sheet(
+        h("h2", {}, plural(done.added.length, "note ajoutée", "notes ajoutées")),
+        ...done.skipped.slice(0, 30).map((why) => h("p", { class: "hint" }, why)),
+        h("p", { class: "hint" }, "Je les cherche quand elles peuvent t'aider. Ce sont des contenus, jamais des ordres."),
+      );
+    } catch (error) {
+      toast(said(error));
+    }
+  });
+  document.body.append(input);
+  input.click();
+  setTimeout(() => input.remove(), 60_000);
+}
+
+function missesPanel() {
+  panel("Mes ratés", async () => {
+    const { misses } = await api("api/misses");
+    return [
+      h("p", { class: "hint" }, "Chaque fois que tu mets 👎 ou que tu me corriges, c'est noté ici, avec ce que j'avais répondu. C'est ce qui sert à me corriger pour de bon."),
+      misses.length
+        ? h(
+            "div",
+            { class: "list items" },
+            misses.map((m) =>
+              h(
+                "div",
+                { class: "item" },
+                h("span", { class: "ico" }, icon("wrong", 16)),
+                h(
+                  "span",
+                  {},
+                  h("small", {}, `${MAIL_WHEN.format(new Date(m.at))} · ${m.how}`),
+                  m.asked ? h("span", { class: "text" }, `Toi : ${excerpt(m.asked, 160)}`) : null,
+                  h("small", {}, `Moi : ${excerpt(m.answered, 220)}`),
+                  m.said ? h("small", {}, `Puis toi : ${excerpt(m.said, 160)}`) : null,
+                ),
+              ),
+            ),
+          )
+        : h("p", { class: "empty" }, "Aucun raté repéré."),
     ];
   });
 }
@@ -3719,9 +4075,9 @@ function speak(message) {
   if (voice.line) voice.line.textContent = excerpt(message.text || "…", 220);
 }
 
-async function signed(path, payload = {}) {
-  // A change of the phones answers one Face ID signature, drawn for it alone.
-  const opened = await api(`${path}/options`, {});
+async function signed(path, payload = {}, asked = {}) {
+  // A change answers one Face ID signature, drawn for it alone (`asked`: what it is about).
+  const opened = await api(`${path}/options`, asked);
   const credential = await sign(opened.options);
   return api(path, { ...payload, ceremony: opened.ceremony, credential });
 }

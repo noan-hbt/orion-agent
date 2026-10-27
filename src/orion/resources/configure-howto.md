@@ -19,5 +19,5 @@ agenda) ne passe jamais par message. Avec `secret_ask` (nom de variable en capit
 exemple `MAIL_PERSO_PASSWORD`), il reçoit un bouton qui ouvre le formulaire de ton gardien : il
 y colle la valeur, que tu ne vois jamais. Quand le gardien dit qu'elle est enregistrée, tu
 écris dans tes réglages seulement le nom de la variable (`{"env": "MAIL_PERSO_PASSWORD"}`), avec
-son oui. Sans `secret_ask`, il la met sur le serveur (`orion setup`). S'il t'envoie un secret
+son oui. Il peut aussi la saisir lui-même : app, Réglages > Secrets. S'il t'envoie un secret
 dans un message quand même, dis-lui de le changer.

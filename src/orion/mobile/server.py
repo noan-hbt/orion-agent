@@ -28,7 +28,7 @@ import re
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from importlib import resources
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import structlog
 from starlette.applications import Starlette
@@ -41,6 +41,9 @@ from orion.mobile.control import Control, ControlError
 from orion.mobile.devices import DeviceError, Devices
 from orion.mobile.notebook import Notebook
 from orion.mobile.push import Vapid
+
+if TYPE_CHECKING:
+    from orion.mobile.upkeep import Upkeep
 
 log = structlog.get_logger(__name__)
 
@@ -132,6 +135,27 @@ class Logins(Protocol):
 
     async def remove(self, name: str) -> bool: ...
 
+    async def import_export(self, text: str) -> dict[str, Any]:
+        """A password manager's CSV export: `kept` (names, sites) and `skipped` (why)."""
+        ...
+
+
+class Keeper(Protocol):
+    """What used to need the guardian's shell (D154): his secrets and the Orions he is paired
+    with. Each change is signed with his passkey for that very change (`purpose`)."""
+
+    async def kept(self) -> dict[str, Any]:
+        """The secrets' names and where each is set, those Orion asked for, the paired Orions."""
+        ...
+
+    def purpose(self, what: str, args: dict[str, Any]) -> str:
+        """ValueError for an unknown change or wrong arguments."""
+        ...
+
+    async def keep(self, what: str, args: dict[str, Any], device: str) -> dict[str, Any]:
+        """Done; ValueError or LookupError when it cannot be."""
+        ...
+
 
 class Subscriber(Protocol):
     """Where a phone's push subscription is kept: beside the key that signs the pushes."""
@@ -208,6 +232,7 @@ def edge_routes(
     session_days: int,
     settings: Settings | None = None,
     logins: Callable[[], Logins | None] = lambda: None,
+    keeper: Keeper | None = None,
 ) -> list[BaseRoute]:
     gate = Gate(devices.origin, devices.session_device)
     failures = [0]
@@ -447,6 +472,59 @@ def edge_routes(
         log.info("mobile.login_removed", name=name, device=device)
         return _ok({})
 
+    async def vault_import(request: Request, device: str) -> Response:
+        vault = logins()
+        if vault is None:
+            return _refused("the vault is off", 404)
+        text = str((await body(request)).get("text") or "")
+        if not text.strip() or len(text) > 5_000_000:
+            return _refused("an export, 5 MB at most")
+        done = await vault.import_export(text)
+        log.info("mobile.logins_imported", kept=len(done["kept"]), device=device)
+        return _ok(done)
+
+    # -- his secrets and his paired Orions, signed with Face ID (D154) -----------------------
+
+    async def keep_list(_request: Request, _device: str) -> Response:
+        if keeper is None:
+            return _refused("not available here", 404)
+        return _ok(await keeper.kept())
+
+    async def keep_options(request: Request, _device: str) -> Response:
+        if keeper is None:
+            return _refused("not available here", 404)
+        sent = await body(request)
+        try:
+            wanted = keeper.purpose(str(request.path_params["what"]), dict(sent.get("args") or {}))
+            ceremony, options = await devices.signing_options(wanted)
+        except (ValueError, DeviceError) as exc:  # DeviceError is a ValueError too
+            return _refused(str(exc), 422)
+        return _ok({"ceremony": ceremony, "options": json.loads(options)})
+
+    async def keep_change(request: Request, _device: str) -> Response:
+        if keeper is None:
+            return _refused("not available here", 404)
+        what = str(request.path_params["what"])
+        sent = await body(request)
+        args = dict(sent.get("args") or {})
+        try:
+            wanted = keeper.purpose(what, args)
+        except ValueError as exc:
+            return _refused(str(exc), 422)
+        try:
+            signer = await devices.verify(str(sent["ceremony"]), wanted, dict(sent["credential"]))
+        except DeviceError as exc:
+            log.warning("mobile.keep_refused", what=what, error=str(exc))
+            return _refused(str(exc), 403)
+        try:
+            done = await keeper.keep(what, args, signer)
+        except LookupError as exc:
+            return _refused(str(exc), 404)
+        except ValueError as exc:
+            return _refused(str(exc), 422)
+        log.info("mobile.kept", what=what, device=signer)  # never the arguments: a secret
+        return _ok(done)
+
     async def subscribe(request: Request, device: str) -> Response:
         if vapid is None:
             return _refused("notifications are off", 409)
@@ -489,6 +567,10 @@ def edge_routes(
         Route(f"{PREFIX}/logins", gate.guarded(vault_list)),
         Route(f"{PREFIX}/logins", gate.guarded(vault_save), methods=["POST"]),
         Route(f"{PREFIX}/logins/{{name}}/remove", gate.guarded(vault_remove), methods=["POST"]),
+        Route(f"{PREFIX}/logins/import", gate.guarded(vault_import), methods=["POST"]),
+        Route(f"{PREFIX}/keep", gate.guarded(keep_list)),
+        Route(f"{PREFIX}/keep/{{what}}/options", gate.guarded(keep_options), methods=["POST"]),
+        Route(f"{PREFIX}/keep/{{what}}", gate.guarded(keep_change), methods=["POST"]),
         Route(f"{PREFIX}/", static),
         Route(f"{PREFIX}/{{name}}", static),
     ]
@@ -682,6 +764,47 @@ def core_routes(
         await c.machine_revoke(str(request.path_params["name"]))
         return {}
 
+    # -- what used to need the server's shell (D154) -------------------------------------------
+
+    def kept(c: Control) -> Upkeep:
+        if c.upkeep is None:
+            raise ControlError("not available here")
+        return c.upkeep
+
+    async def missed(_request: Request, c: Control) -> object:
+        return {"misses": await kept(c).misses()}
+
+    async def phone_token(_request: Request, c: Control) -> object:
+        return await kept(c).phone_token()
+
+    async def chatgpt(_request: Request, c: Control) -> object:
+        return kept(c).chatgpt()
+
+    async def chatgpt_start(_request: Request, c: Control) -> object:
+        return {"url": kept(c).chatgpt_start()}
+
+    async def chatgpt_finish(request: Request, c: Control) -> object:
+        return await kept(c).chatgpt_finish(str((await body(request))["address"]))
+
+    async def chatgpt_logout(_request: Request, c: Control) -> object:
+        return {"signed_out": kept(c).chatgpt_logout()}
+
+    async def library_import(request: Request, c: Control) -> object:
+        sent = cast(list[dict[str, Any]], (await body(request)).get("notes") or [])
+        if not 1 <= len(sent) <= 200:
+            raise ControlError("one to two hundred notes")
+        return await kept(c).library_import([(str(n["name"])[:200], str(n["text"])) for n in sent])
+
+    async def machine_options(request: Request, c: Control) -> object:
+        ceremony, options = await kept(c).machine_options(str(request.path_params["name"]))
+        return {"ceremony": ceremony, "options": options}
+
+    async def machine_pair(request: Request, c: Control) -> object:
+        sent = await body(request)
+        return await kept(c).machine_pair(
+            str(request.path_params["name"]), str(sent["ceremony"]), dict(sent["credential"])
+        )
+
     def shelf(handler: Callable[[Request, Notebook], Awaitable[Response | object]]) -> Guarded:
         async def run(request: Request, _device: str) -> Response:
             if notebook is None:
@@ -782,6 +905,15 @@ def core_routes(
         api("missions/{id}/close", controls(mission_close), post=True),
         api("machines", controls(machines)),
         api("machines/{name}/revoke", controls(machine_revoke), post=True),
+        api("machines/{name}/pair/options", controls(machine_options), post=True),
+        api("machines/{name}/pair", controls(machine_pair), post=True),
+        api("misses", controls(missed)),
+        api("library/import", controls(library_import), post=True),
+        api("phone/token", controls(phone_token), post=True),
+        api("chatgpt", controls(chatgpt)),
+        api("chatgpt/start", controls(chatgpt_start), post=True),
+        api("chatgpt/finish", controls(chatgpt_finish), post=True),
+        api("chatgpt/logout", controls(chatgpt_logout), post=True),
         api("papers", shelf(papers)),
         api("papers/{id}/file", shelf(paper)),
         api("people", shelf(people)),
@@ -842,10 +974,11 @@ def edge_app(
     session_days: int,
     settings: Settings | None = None,
     logins: Callable[[], Logins | None] = lambda: None,
+    keeper: Keeper | None = None,
 ) -> Starlette:
     """The edge alone (run split, served by the guardian)."""
     return Starlette(
         routes=edge_routes(
-            devices, desk, subscriber, vapid, secure_cookie, session_days, settings, logins
+            devices, desk, subscriber, vapid, secure_cookie, session_days, settings, logins, keeper
         )
     )

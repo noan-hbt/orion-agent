@@ -14,7 +14,7 @@ from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.memory.store import MemoryStore
 from orion.observability.logging import configure_logging
-from orion.setup import load_env_files
+from orion.setup import CORE_COMMANDS, load_core_vault, load_env_files
 
 if TYPE_CHECKING:
     from orion.channels.inkbox import InkboxClient
@@ -45,9 +45,8 @@ def _provider(config: OrionConfig) -> Router | None:
         from orion.providers.chatgpt_auth import ChatGPTAuth
 
         auth = ChatGPTAuth(config.chatgpt_path)
-        if auth.load() is None:
-            print("Impossible de démarrer : pas connecté à ChatGPT (orion chatgpt login).")
-            return None
+        if auth.load() is None:  # he signs in from the app, Orion running (D154)
+            print("Pas encore connecté à ChatGPT : connecte-toi dans l'app (Réglages > ChatGPT).")
         providers["chatgpt"] = ChatGPTProvider(
             auth, default_effort=config.providers.chatgpt.reasoning_effort
         )
@@ -565,9 +564,8 @@ async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.guardian.logins import (
         LoginError,
         add_login,
+        import_logins,
         make_login,
-        read_export,
-        read_login,
         remove_login,
     )
 
@@ -593,20 +591,14 @@ async def _logins(config: OrionConfig, args: argparse.Namespace) -> int:
                     text = await asyncio.to_thread(sys.stdin.read)
                 else:
                     text = await asyncio.to_thread(args.file.read_text, "utf-8")
-                found, skipped = read_export(text)
-                kept_before = [login for login in found if read_login(config, login.name)]
-                found = [login for login in found if login not in kept_before]
-                skipped += [
-                    f"{login.name} (déjà gardé ; retire-le d'abord)" for login in kept_before
-                ]
-                for login in found:
-                    await add_login(config, ledger, login)
-                    print(f"- {login.name} : {', '.join(login.sites)}")
-                for why in skipped:
+                done = await import_logins(config, ledger, text)
+                for login in done["kept"]:
+                    print(f"- {login['name']} : {', '.join(login['sites'])}")
+                for why in done["skipped"]:
                     print(f"  laissé de côté : {why}")
                 print(
-                    f"{len(found)} identifiant(s) gardé(s). Efface maintenant ton export : il "
-                    "contient tes mots de passe en clair."
+                    f"{len(done['kept'])} identifiant(s) gardé(s). Efface maintenant ton export : "
+                    "il contient tes mots de passe en clair."
                 )
             elif args.logins_command == "remove":
                 gone = await remove_login(config, ledger, args.name)
@@ -1112,7 +1104,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "setup":
         return _setup(args.config, args.secrets, args.server)
 
-    load_env_files((args.config or DEFAULT_CONFIG_PATH).resolve().parent, args.command)
+    folder = (args.config or DEFAULT_CONFIG_PATH).resolve().parent
+    load_env_files(folder, args.command)
+    if args.command in CORE_COMMANDS:
+        load_core_vault(folder)
     config = load_config(args.config)
     configure_logging(config.logging.level, config.logging.json_output)
     if args.command == "doctor":

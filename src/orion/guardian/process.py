@@ -151,10 +151,16 @@ async def run(config: OrionConfig) -> None:
         gate = telegram_gate(service) if config.channels.telegram.enabled else None
         mobile = app_edge(service) if config.modules.get("mobile", {}).get("enabled") else None
         LoginDesk(service).install()
+        vault: Vault | None = None
         if gate is not None and config.guardian.secrets_url:
             vault = Vault(service, gate, from_vault)
             LoginForm(service, gate, vault.base).install(vault)
             vault.install()
+        elif mobile is not None:  # his secrets from the app only (D154)
+            vault = Vault(service, None, from_vault)
+            vault.install()
+        if mobile is not None:
+            mobile.vault, mobile.federation = vault, edge
         try:
             await service.start()
             async with asyncio.TaskGroup() as group:

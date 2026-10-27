@@ -274,6 +274,20 @@ def read_export(text: str) -> tuple[list[Login], list[str]]:
     return logins, skipped
 
 
+async def import_logins(config: OrionConfig, ledger: Ledger, text: str) -> dict[str, Any]:
+    """A CSV export kept (`orion logins import`, or the app's vault, D154): what was kept, and
+    why the rest was not. A login already kept is left alone: remove it first."""
+    found, skipped = read_export(text)
+    kept: list[dict[str, Any]] = []
+    for login in found:
+        if read_login(config, login.name) is not None:
+            skipped.append(f"{login.name} (déjà gardé ; retire-le d'abord)")
+            continue
+        await add_login(config, ledger, login)
+        kept.append({"name": login.name, "sites": login.sites})
+    return {"kept": kept, "skipped": skipped}
+
+
 def _slug(text: str) -> str:
     plain = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return plain[:40].strip("-")
