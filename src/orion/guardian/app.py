@@ -195,6 +195,7 @@ class AppEdge:
                 "title": "Orion demande ton accord",
                 "body": question[:PUSH_PREVIEW],
                 "tag": approval_id,
+                "kind": "approval",
             }
         )
         return approval_id
@@ -332,6 +333,8 @@ class AppEdge:
             "title": str(sent.get("title") or "Orion")[:80],
             "body": str(sent.get("body") or "")[:PUSH_PREVIEW],
             "tag": str(sent.get("tag") or "")[:80],
+            # What the tap opens in the app (D140); anything else is a plain message.
+            "kind": "approval" if sent.get("kind") == "approval" else "message",
         }
         return JSONResponse({"sent": await self.push(message)})
 

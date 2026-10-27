@@ -3076,3 +3076,39 @@ styles remplace les couches précédentes ; les appels au serveur et les actions
 - **Le mouvement** : ressorts à l'envoi et à la réception, indicateurs de travail, retour
   d'appui, coches et badges animés, actualisation en tirant et retour au dernier message.
   La préférence de mouvement réduit désactive ces animations.
+
+## D140 — Orion et son application, mieux joints
+
+*27/10/2026 · acceptée · complète D125, D126, D133*
+
+L'application montrait la conversation et quelques écrans, mais Orion en savait peu sur elle,
+les notifications menaient au dernier onglet ouvert, rien ne bougeait hors des messages, et une
+bonne part de ce qu'Orion suit pour le propriétaire n'y avait pas d'écran. Quatre ajouts :
+
+- **Orion connaît son application** (`app.md` réécrit) : les quatre onglets, sa carte de
+  travail avec Arrêter et En fond, la pause, les notifications, les réglages signés avec
+  Face ID, et la liste exacte des pièces. L'analyseur applique les limites que le texte donne
+  (deux à cinq réponses rapides, huit options à cocher, trois cartes, huit pièces par message ;
+  au-delà, la balise reste du texte).
+- **Quatre pièces de plus**, dessinées comme iOS : `<event>` (une carte de Calendrier, avec
+  « Ajouter à l'agenda », qui le lui demande dans la conversation : l'ajout reste son outil et
+  son accord), `<mail>` (l'expéditeur, l'objet et ce qu'Orion en retient, jamais le mail),
+  `<open screen>` (un bouton vers un écran de l'app, sur une liste fermée) et `<progress>`.
+  Ailleurs qu'à l'app, elles deviennent du texte ; `<open>` disparaît.
+- **Des notifications qui mènent quelque part** : chacune dit ce qu'elle concerne (`message`
+  ou `approval`) et un appui ouvre ce message, surligné, ou cette demande dans Maintenant, que
+  l'app soit fermée ou déjà ouverte. Là où le système montre des actions (pas iOS), on peut
+  « Refuser » une demande depuis la notification ; dire oui passe toujours par l'app et Face ID.
+- **L'app suit ce qui change** : un service suit le journal et dit à l'app ouverte quelle
+  partie a changé (tâches, missions, attentes, agenda, mails, nuit, carnet, réglages, dépenses),
+  jamais le contenu ; une rafale fait une seule mise à jour, les dépenses suivent avec cinq
+  secondes de retard. L'onglet ou le panneau visible se repeint en fondu.
+- **Ce qu'Orion suit pour lui a ses écrans**, en lecture : son agenda (deux semaines, et
+  « Aujourd'hui » dans Maintenant), ses mails qui comptent (le résumé d'Orion, les échéances,
+  les réponses attendues), et les nuits d'Orion (D117 : ce que chacune a lu et coûté contre son
+  budget, ses notes ; la note du matin en tête de Maintenant jusqu'à midi). La nuit enregistre
+  désormais son coût.
+
+Pas encore : pas de notification de plus pour une tâche, une mission ou la nuit finies,
+puisqu'Orion en écrit déjà un message (qui, lui, est notifié) ; pas de réponse écrite depuis la
+notification (le web ne le permet pas) : « Répondre » ouvre la conversation, prête à écrire.

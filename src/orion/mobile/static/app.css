@@ -524,3 +524,73 @@ img.live { display:block; width:100%; min-height:200px; border-radius:20px; back
 @media (prefers-reduced-motion:reduce) {
   *,*::before,*::after { animation:none !important; transition:none !important; scroll-behavior:auto !important; }
 }
+
+/* -- D140: what Orion follows for him, drawn as iOS does ---------------------------------------- */
+
+/* an event, as a Calendar card: the date block, the title, the time, the place */
+.piece.event { flex-direction:row; align-items:flex-start; gap:12px; background:#fff; box-shadow:inset 0 0 0 .5px var(--separator), 0 2px 10px rgba(0,0,0,.05); }
+.piece.event .date { flex:0 0 46px; display:flex; flex-direction:column; align-items:center; padding:5px 0 6px; border-radius:11px; background:var(--grouped); }
+.piece.event .date small { font-size:11px; line-height:13px; font-weight:600; color:var(--red); text-transform:uppercase; letter-spacing:.3px; }
+.piece.event .date b { font-size:24px; line-height:27px; font-weight:400; letter-spacing:-.4px; }
+.piece.event .about { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.piece.event .subtitle::first-letter { text-transform:uppercase; }
+.piece.event .where { display:inline-flex; align-items:center; gap:4px; font-size:13px; line-height:18px; color:var(--label-2); }
+.piece.event .pill { align-self:flex-start; margin-top:8px; }
+
+/* a mail, as a Mail row */
+.piece.mail { flex-direction:row; align-items:flex-start; gap:10px; }
+.piece.mail .initial, .mail-row .initial { flex:0 0 34px; height:34px; display:grid; place-items:center; border-radius:50%; background:linear-gradient(180deg,#A5ABB8,#858B98); color:#fff; font-size:15px; font-weight:600; }
+.piece.mail .about { display:flex; flex-direction:column; gap:1px; min-width:0; }
+.piece.mail .subject { font-size:15px; line-height:20px; }
+.piece.mail .snippet { font-size:13px; line-height:18px; color:var(--label-2); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+
+/* a screen to open: a row that leads somewhere */
+.piece.open { flex-direction:row; align-items:center; justify-content:space-between; gap:8px; min-height:44px; padding:10px 14px; background:#fff; color:var(--blue); font-size:16px; font-weight:600; box-shadow:inset 0 0 0 .5px var(--separator); transition:transform .35s var(--bounce), background-color .2s ease; }
+.piece.open:active { transform:scale(.97); background:#f4f4f7; transition-duration:.08s; }
+
+/* a progress, as an iOS progress view; the bar fills once on screen */
+.piece.progress { gap:8px; }
+.piece.progress .head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.piece.progress .head b { font-size:15px; font-weight:600; }
+.piece.progress .head small { font-size:13px; color:var(--label-2); font-variant-numeric:tabular-nums; }
+.piece.progress .track { height:4px; border-radius:2px; background:rgba(120,120,128,.2); overflow:hidden; }
+.piece.progress .fill { display:block; height:100%; border-radius:2px; background:var(--blue); transform-origin:left; transform:scaleX(var(--value, 0)); transition:transform .9s var(--spring); }
+
+/* the agenda: time on the left, a coloured bar, the event */
+.event-row { align-items:stretch !important; }
+.event-row .when { flex:0 0 46px; display:flex; flex-direction:column; justify-content:center; font-variant-numeric:tabular-nums; }
+.event-row .when b { font-size:15px; font-weight:600; }
+.event-row .when small { font-size:13px; color:var(--label-2); }
+.event-row .bar { flex:0 0 4px; border-radius:2px; background:var(--blue); }
+.day-head::first-letter { text-transform:uppercase; }
+
+/* mails: who and when on one line, the subject, Orion's summary, tags */
+.mail-row { align-items:flex-start !important; }
+.mail-row .line { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.mail-row .subject { display:block; font-size:15px; line-height:20px; }
+.mail-row.important .initial { background:linear-gradient(180deg,#4DA3FF,#0A7AFF); }
+.mail-row .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.tag { font-style:normal; font-size:12px; line-height:16px; font-weight:600; padding:2px 8px; border-radius:999px; background:var(--fill); color:var(--label-2); }
+.tag.blue { background:rgba(0,122,255,.12); color:var(--blue); }
+.tag.orange { background:rgba(255,149,0,.14); color:#C76A00; }
+
+/* the night's note in Maintenant, and the past notes */
+.night.card { display:flex; flex-direction:column; gap:10px; padding:16px; border-radius:22px; background:linear-gradient(160deg,#1C1B3A,#2E2A63); color:#fff; box-shadow:0 10px 30px -12px rgba(30,25,90,.45); }
+.night.card header { display:flex; align-items:center; gap:10px; }
+.night.card header .ico { display:grid; place-items:center; width:32px; height:32px; border-radius:50%; background:rgba(255,255,255,.14); }
+.night.card header span { display:flex; flex-direction:column; }
+.night.card small { color:rgba(255,255,255,.6); font-size:13px; }
+.night.card p { margin:0; font-size:15px; line-height:21px; color:rgba(255,255,255,.92); }
+.night.card .pill { align-self:flex-start; background:rgba(255,255,255,.16); color:#fff; }
+.night-note { display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-radius:20px; background:#fff; }
+.night-note small { font-size:12px; color:var(--label-2); }
+.night-note small::first-letter { text-transform:uppercase; }
+.night-note p { margin:0; font-size:15px; line-height:21px; }
+
+/* a message or a request a notification opened: a short glow, then nothing */
+.msg.flash .bubble, .ask.flash { animation:flash 1.4s var(--spring); }
+@keyframes flash { 0%, 30% { box-shadow:0 0 0 4px rgba(0,122,255,.35); transform:scale(1.02); } 100% { box-shadow:0 0 0 0 rgba(0,122,255,0); transform:none; } }
+
+/* a repaint because something changed elsewhere: a quiet cross-fade, not the entrance cascade */
+body.live-refresh .page-body > *, body.live-refresh .panel-content > * { animation:live-fade .35s ease !important; }
+@keyframes live-fade { from { opacity:.55; } }

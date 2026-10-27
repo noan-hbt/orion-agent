@@ -654,6 +654,15 @@ def core_routes(
     async def pages(_request: Request, n: Notebook) -> object:
         return {"pages": await n.pages()}
 
+    async def agenda(_request: Request, n: Notebook) -> object:
+        return {"events": n.agenda()}
+
+    async def mails(_request: Request, n: Notebook) -> object:
+        return {"mails": n.mails()}
+
+    async def nights(_request: Request, n: Notebook) -> object:
+        return await n.nights()
+
     async def handovers(_request: Request, n: Notebook) -> object:
         return {"handovers": n.handovers()}
 
@@ -706,6 +715,9 @@ def core_routes(
         api("people", shelf(people)),
         api("people/saw", shelf(saw), post=True),
         api("chronicle", shelf(pages)),
+        api("agenda", shelf(agenda)),
+        api("mails", shelf(mails)),
+        api("nights", shelf(nights)),
         api("browser", shelf(handovers)),
         api("browser/{token}/shot", shelf(browser_shot)),
         api("browser/{token}/act", shelf(browser_act), post=True),

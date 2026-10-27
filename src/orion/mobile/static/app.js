@@ -516,7 +516,50 @@ async function conversation() {
   listen();
   offerNotifications();
   show(state.tab);
+  if (location.hash.length > 1) goTo(location.hash.slice(1));
 }
+
+// A tap on a notification opens what it was about (D140): `message:<ref>`, `approval:<id>`, or
+// `reply` (the composer). The service worker says it by postMessage when the app is already open.
+function goTo(where) {
+  history.replaceState(null, "", location.pathname);
+  const [kind, ...rest] = decodeURIComponent(where).split(":");
+  const id = rest.join(":");
+  clearLayers();
+  if (kind === "reply") {
+    show("talk");
+    view.text?.focus();
+  } else if (kind === "approval") {
+    show("now");
+    flash(() => document.querySelector(`.ask[data-id="${CSS.escape(id)}"]`));
+  } else {
+    show("talk");
+    const ref = kind === "message" ? id : where;
+    flash(() => view.list?.querySelector(`.msg[data-ref="${CSS.escape(ref)}"]`));
+  }
+}
+
+function flash(find, tries = 12) {
+  const el = find();
+  if (!el) {
+    if (tries > 0) setTimeout(() => flash(find, tries - 1), 150);
+    return;
+  }
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash");
+  void el.offsetWidth;
+  el.classList.add("flash");
+}
+
+navigator.serviceWorker?.addEventListener("message", (event) => {
+  const open = event.data?.open;
+  if (!open || !view.thread) return;
+  if (open.reply) goTo("reply");
+  else if (open.tag) goTo(`${open.kind}:${open.tag}`);
+});
+addEventListener("hashchange", () => {
+  if (view.thread && location.hash.length > 1) goTo(location.hash.slice(1));
+});
 
 function grow() {
   view.text.style.height = "auto";
@@ -612,6 +655,7 @@ function dayLabel(date) {
   const yesterday = new Date(Date.now() - 86400000);
   if (date.toDateString() === today.toDateString()) return "Aujourd'hui";
   if (date.toDateString() === yesterday.toDateString()) return "Hier";
+  if (date.toDateString() === new Date(Date.now() + 86400000).toDateString()) return "Demain";
   return DAY.format(date);
 }
 
@@ -736,6 +780,10 @@ function block(piece) {
   if (piece.type === "choices") return piece.multiple ? checklist(piece) : quick(piece);
   if (piece.type === "card") return card(piece);
   if (piece.type === "done") return done(piece);
+  if (piece.type === "event") return eventPiece(piece);
+  if (piece.type === "mail") return mailPiece(piece);
+  if (piece.type === "open") return openPiece(piece);
+  if (piece.type === "progress") return progressPiece(piece);
   return h("div", { class: "bubble" }, ...rich(piece.text));
 }
 
@@ -830,6 +878,96 @@ function done(piece) {
       )
     : null;
   return h("div", { class: "done card" }, h("span", { class: "ico" }, icon("check", 16, "#fff")), h("span", { class: "what" }, piece.text), undo);
+}
+
+// -- records drawn as iOS does (D140): an event, a mail, a screen to open, a progress ------------
+
+const MONTH = new Intl.DateTimeFormat("fr-FR", { month: "short" });
+const WEEKDAY = new Intl.DateTimeFormat("fr-FR", { weekday: "long" });
+const HOUR = new Intl.DateTimeFormat("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+function eventPiece(piece) {
+  const when = new Date(piece.when);
+  const end = piece.end ? new Date(piece.end) : null;
+  const time = piece.all_day ? "toute la journée" : end ? `${HOUR.format(when)} – ${HOUR.format(end)}` : HOUR.format(when);
+  const add = h(
+    "button",
+    {
+      type: "button",
+      class: "pill small tinted",
+      onclick: (event) => {
+        event.currentTarget.disabled = true;
+        event.currentTarget.textContent = "Demandé";
+        submit(`Ajoute à mon agenda : ${piece.title} — ${piece.all_day ? dayLabel(when) : `${dayLabel(when)} ${HOUR.format(when)}`}${piece.where ? ` — ${piece.where}` : ""}`);
+      },
+    },
+    "Ajouter à l'agenda",
+  );
+  return h(
+    "div",
+    { class: "piece event" },
+    h("span", { class: "date", "aria-hidden": "true" }, h("small", {}, MONTH.format(when).replace(".", "")), h("b", {}, String(when.getDate()))),
+    h(
+      "span",
+      { class: "about" },
+      h("b", { class: "title" }, piece.title),
+      h("span", { class: "subtitle" }, `${WEEKDAY.format(when)} · ${time}`),
+      piece.where ? h("span", { class: "where" }, icon("where", 13), piece.where) : null,
+      add,
+    ),
+  );
+}
+
+function mailPiece(piece) {
+  const initial = (piece.from || piece.subject || "?").trim().charAt(0).toUpperCase();
+  return h(
+    "div",
+    { class: "piece mail" },
+    h("span", { class: "initial", "aria-hidden": "true" }, initial),
+    h(
+      "span",
+      { class: "about" },
+      h("b", { class: "title" }, piece.from || "Mail"),
+      piece.subject ? h("span", { class: "subject" }, piece.subject) : null,
+      piece.snippet ? h("span", { class: "snippet" }, piece.snippet) : null,
+    ),
+  );
+}
+
+const SCREENS = {
+  missions: () => missionsPanel(),
+  planned: () => plannedPanel(),
+  activity: () => activityPanel(),
+  autonomy: () => autonomyPanel(),
+  memory: () => memoryPanel(),
+  people: () => peoplePanel(),
+  papers: () => papersPanel(),
+  weeks: () => chroniclePanel(),
+  commitments: () => commitmentsPanel(),
+  rules: () => rulesPanel(),
+  agenda: () => agendaPanel(),
+  mail: () => mailPanel(),
+  night: () => nightsPanel(),
+  settings: () => show("settings"),
+};
+
+function openPiece(piece) {
+  const go = SCREENS[piece.screen];
+  if (!go) return null;
+  return h("button", { type: "button", class: "piece open", onclick: go }, h("span", {}, piece.label), icon("chevron", 14));
+}
+
+function progressPiece(piece) {
+  const fill = h("i", { class: "fill" });
+  const el = h(
+    "div",
+    { class: "piece progress", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(piece.value * 100)), "aria-label": piece.label },
+    h("span", { class: "head" }, h("b", {}, piece.label), h("small", {}, `${Math.round(piece.value * 100)} %`)),
+    h("span", { class: "track" }, fill),
+  );
+  // The bar fills once it is on screen, as iOS does.
+  requestAnimationFrame(() => requestAnimationFrame(() => fill.style.setProperty("--value", String(piece.value))));
+  return el;
 }
 
 function showReactions(el, emoji) {
@@ -1148,6 +1286,8 @@ function listen() {
       state.approvals.delete(data.id);
       paintApprovals();
       nowChanged();
+    } else if (data.type === "changed") {
+      changed(data.what || []);
     }
   };
   source.onerror = async () => {
@@ -1161,6 +1301,33 @@ function listen() {
     setTimeout(listen, retry);
     retry = Math.min(retry * 2, 30000);
   };
+}
+
+// What each tab shows, by the parts the server names when they change (D140).
+const TAB_PARTS = {
+  now: ["tasks", "missions", "waits", "planned", "night", "agenda"],
+  notebook: ["missions", "notebook", "mail", "agenda", "night", "planned"],
+  settings: ["cost", "settings", "tasks"],
+};
+const livePanels = new Set();
+const changedParts = new Set();
+let changeTimer = null;
+
+function changed(parts) {
+  for (const part of parts) changedParts.add(part);
+  clearTimeout(changeTimer);
+  changeTimer = setTimeout(repaintChanged, 250);
+}
+
+function repaintChanged() {
+  const parts = [...changedParts];
+  changedParts.clear();
+  const hit = (watched) => watched.some((part) => parts.includes(part));
+  // A quiet cross-fade, not the entrance cascade: the page is already there.
+  document.body.classList.add("live-refresh");
+  setTimeout(() => document.body.classList.remove("live-refresh"), 700);
+  if (TAB_PARTS[state.tab] && hit(TAB_PARTS[state.tab])) view.tabs?.[state.tab]?.refresh();
+  for (const live of livePanels) if (hit(live.parts)) live.refresh();
 }
 
 async function catchUp() {
@@ -1344,7 +1511,7 @@ function askCard(asked) {
   const no = h("button", { class: "pill", type: "button", onclick: () => refuse() }, "Non");
   const card = h(
     "article",
-    { class: "ask card", "aria-label": "Orion demande ton accord" },
+    { class: "ask card", "aria-label": "Orion demande ton accord", "data-id": asked.id },
     h(
       "header",
       {},
@@ -2031,7 +2198,8 @@ async function nowFill(refresh) {
       toast(said(error));
     }
   };
-  const sections = [view.nowWork];
+  const extras = await nowExtras();
+  const sections = [view.nowWork, extras.night];
   const { handovers } = await api("api/browser").catch(() => ({ handovers: [] }));
   for (const handover of handovers) {
     sections.push(
@@ -2121,6 +2289,7 @@ async function nowFill(refresh) {
       h("div", { class: "list items" }, missions.map((m) => missionRow(m, refresh))),
     );
   }
+  sections.push(...extras.today);
   const next = state.overview?.next || [];
   if (next.length) {
     sections.push(
@@ -2133,6 +2302,140 @@ async function nowFill(refresh) {
     );
   }
   return sections;
+}
+
+// Today's agenda and, in the morning, the note of the night (D140): each only when its module
+// is on, quietly absent otherwise.
+async function nowExtras() {
+  const off = (error) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  };
+  const [agenda, nights] = await Promise.all([api("api/agenda").catch(off), api("api/nights").catch(off)]);
+  const out = { night: null, today: [] };
+  const note = nights?.notes?.[0];
+  const now = new Date();
+  if (note && now.getHours() < 12 && new Date(note.at).toDateString() === now.toDateString()) {
+    out.night = (
+      h(
+        "article",
+        { class: "night card" },
+        h("header", {}, h("span", { class: "ico" }, icon("moon", 18, "#fff")), h("span", {}, h("b", {}, "Cette nuit"), h("small", {}, "ma note pour ce matin"))),
+        h("p", {}, ...rich(excerpt(note.note, 360))),
+        h("button", { class: "pill small tinted", type: "button", onclick: nightsPanel }, "Tout voir"),
+      )
+    );
+  }
+  const today = (agenda?.events || []).filter((e) => new Date(e.start).toDateString() === now.toDateString() || (e.all_day && new Date(e.start) <= now && new Date(e.end) > now));
+  if (today.length) {
+    out.today.push(
+      h("h2", { class: "section" }, "Aujourd'hui", h("small", {}, String(today.length))),
+      h("div", { class: "list items agenda" }, today.slice(0, 3).map(eventRow), today.length > 3 ? row("calendar", "Tout l'agenda", `+${today.length - 3}`, agendaPanel) : null),
+    );
+  }
+  return out;
+}
+
+function eventRow(e) {
+  const start = new Date(e.start);
+  const end = new Date(e.end);
+  return h(
+    "div",
+    { class: "item event-row" },
+    h("span", { class: "when" }, e.all_day ? h("b", {}, "journée") : [h("b", {}, HOUR.format(start)), h("small", {}, HOUR.format(end))]),
+    h("span", { class: "bar", "aria-hidden": "true" }),
+    h("span", {}, h("span", { class: "text" }, e.title), e.location ? h("small", {}, e.location) : null),
+  );
+}
+
+function agendaPanel() {
+  panel(
+    "Ton agenda",
+    async () => {
+      const { events } = await api("api/agenda");
+      if (!events.length) return h("p", { class: "empty" }, "Rien dans les deux semaines qui viennent.");
+      const days = new Map();
+      for (const e of events) {
+        const key = new Date(e.start).toDateString();
+        if (!days.has(key)) days.set(key, []);
+        days.get(key).push(e);
+      }
+      return [...days].map(([key, list]) => [
+        h("p", { class: "label day-head" }, dayLabel(new Date(key))),
+        h("div", { class: "list items agenda" }, list.map(eventRow)),
+      ]);
+    },
+    ["agenda"],
+  );
+}
+
+const MAIL_WHEN = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
+
+function mailPanel() {
+  panel(
+    "Tes mails",
+    async () => {
+      const { mails } = await api("api/mails");
+      if (!mails.length) return h("p", { class: "empty" }, "Rien qui compte ces deux dernières semaines.");
+      return h(
+        "div",
+        { class: "list items mails" },
+        mails.map((m) =>
+          h(
+            "div",
+            { class: `item mail-row${m.important ? " important" : ""}` },
+            h("span", { class: "initial", "aria-hidden": "true" }, (m.sender || "?").trim().charAt(0).toUpperCase()),
+            h(
+              "span",
+              {},
+              h("span", { class: "line" }, h("span", { class: "text" }, m.sender), h("small", { class: "value" }, MAIL_WHEN.format(new Date(m.at)))),
+              h("span", { class: "subject" }, m.subject),
+              m.summary ? h("small", {}, m.summary) : null,
+              m.needs_reply || m.due || m.amount !== null
+                ? h(
+                    "span",
+                    { class: "tags" },
+                    m.needs_reply ? h("i", { class: "tag blue" }, "réponse attendue") : null,
+                    m.due ? h("i", { class: "tag orange" }, `échéance ${MAIL_WHEN.format(new Date(m.due))}`) : null,
+                    m.amount !== null ? h("i", { class: "tag" }, `${String(m.amount).replace(".", ",")} ${m.currency}`) : null,
+                  )
+                : null,
+            ),
+          ),
+        ),
+      );
+    },
+    ["mail"],
+  );
+}
+
+function nightsPanel() {
+  panel(
+    "Mes nuits",
+    async () => {
+      const { notes, nights, budget_usd: budget } = await api("api/nights");
+      if (!notes.length && !nights.length) return h("p", { class: "empty" }, "Pas encore de nuit. Je travaille quand tu dors, une fois par nuit.");
+      return [
+        nights.length
+          ? h(
+              "div",
+              { class: "list items" },
+              nights.slice(0, 7).map((n) =>
+                h(
+                  "div",
+                  { class: "item" },
+                  h("span", { class: `ico ${n.failed ? "c-red" : "c-indigo"}` }, icon("moon", 16)),
+                  h("span", {}, h("span", { class: "text" }, dayLabel(new Date(n.day))), h("small", {}, n.failed ? "interrompue" : `${plural(n.read || 0, "message relu", "messages relus")}${n.noted ? " · une note" : ""}`)),
+                  n.cost_usd !== undefined ? h("small", { class: "value" }, `${money(n.cost_usd)} / ${money(budget)}`) : null,
+                ),
+              ),
+            )
+          : null,
+        notes.map((n) => h("article", { class: "card night-note" }, h("small", {}, `${dayLabel(new Date(n.at))} · ${HOUR.format(new Date(n.at))}`), h("p", {}, ...rich(n.note)))),
+      ];
+    },
+    ["night"],
+  );
 }
 
 // -- Carnet: what I know and do, a bento ---------------------------------------------------------
@@ -2169,6 +2472,14 @@ async function notebookFill() {
       row("people", "Mes proches", null, peoplePanel, "", "anniversaires, nouvelles"),
       row("file", "Mes papiers", null, papersPanel, "", "pièces, fiches, contrats"),
       row("book", "Mes semaines", null, chroniclePanel, "", "la page du dimanche"),
+    ),
+    h("p", { class: "label" }, "Ce que je suis pour toi"),
+    h(
+      "div",
+      { class: "list items" },
+      row("calendar", "Ton agenda", null, agendaPanel, "", "les deux semaines qui viennent"),
+      row("mail", "Tes mails", null, mailPanel, "", "ceux qui comptent, résumés"),
+      row("moon", "Mes nuits", null, nightsPanel, "", "ce que j'ai fait pendant que tu dormais"),
     ),
     h("p", { class: "label" }, "Ce que tu m'as confié"),
     h(
@@ -3141,7 +3452,7 @@ function phonesPanel() {
 
 // -- panels: full screen, over the tabs ----------------------------------------------------------
 
-function panel(title, fill) {
+function panel(title, fill, parts = []) {
   const content = h("div", { class: "panel-content" });
   const body = h("div", { class: "panel-body" }, h("h1", { class: "panel-title" }, title), content);
   const el = h(
@@ -3160,6 +3471,7 @@ function panel(title, fill) {
   function close() {
     if (closed) return;
     closed = true;
+    livePanels.delete(live);
     el.classList.add("leaving");
     setTimeout(() => el.remove(), 500);
     unstack(close);
@@ -3188,6 +3500,8 @@ function panel(title, fill) {
     }
   };
   content.replaceChildren(h("div", { class: "skeleton", role: "status", "aria-label": "Chargement" }, Array.from({ length: 3 }, () => h("div", { class: "skeleton-row" }))));
+  const live = { parts, refresh };
+  if (parts.length) livePanels.add(live);
   refresh();
   return close;
 }

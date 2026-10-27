@@ -60,6 +60,38 @@ MAX_FILE_BYTES = 25 * 1024 * 1024
 APPROVAL_POLL_SECONDS = 1.5
 """Run split, how often the core asks the guardian whether he answered."""
 PUSH_PREVIEW = 180
+CHANGES: tuple[tuple[str, str], ...] = (
+    ("task.", "tasks"),
+    ("mission.", "missions"),
+    ("awaiting.", "waits"),
+    ("timer.", "planned"),
+    ("thinking.night.", "night"),
+    ("calendar.event.", "agenda"),
+    ("mail.card", "mail"),
+    ("mail.drafted", "mail"),
+    ("mail.sent", "mail"),
+    ("paper.", "notebook"),
+    ("relation.", "notebook"),
+    ("chronicle.", "notebook"),
+    ("commitment.", "notebook"),
+    ("playbook.rule.", "notebook"),
+    ("memory.fact.", "notebook"),
+    ("config.changed", "settings"),
+    ("settings.changed", "settings"),
+    ("spend.recorded", "cost"),
+)
+"""Which journal events change which part of the app (D140): the open app repaints that part.
+Only the part is named, never what changed in it."""
+CHANGE_WAIT = 0.3
+"""A burst of events (a task's steps, a sync) is one repaint."""
+COST_WAIT = 5.0
+"""Spending is written at every model call: the figures follow, a little behind."""
+
+
+def changed_part(kind: str) -> str | None:
+    return next((part for prefix, part in CHANGES if kind.startswith(prefix)), None)
+
+
 REACTIONS = {"👍": "like", "❤️": "love", "👎": "dislike", "😂": "laugh", "❓": "question"}
 
 
@@ -275,6 +307,7 @@ class MobileChannel:
         """What it is doing right now, as the app shows it."""
         self._stop = False
         self.asked: dict[str, Asked] = {}
+        self._changed: set[str] = set()
         inbox.register(self)
 
     async def start(self) -> None:
@@ -287,6 +320,26 @@ class MobileChannel:
 
     async def sync(self) -> None:
         await self._runner.catch_up()
+
+    async def changes(self) -> None:
+        """Tell the open app what changed elsewhere in Orion (D140): its tasks, missions,
+        agenda, costs… A service: follows the journal from now on, for as long as Orion runs."""
+        follow = getattr(self._journal, "follow", None)
+        if follow is None:  # a journal that cannot be followed: the app refreshes on its own
+            return
+        loop = asyncio.get_running_loop()
+        async for event in follow(await self._journal.last_seq()):
+            part = changed_part(event.kind)
+            if part is None or not self.hub.listening:
+                continue
+            if not self._changed:
+                loop.call_later(COST_WAIT if part == "cost" else CHANGE_WAIT, self._flush)
+            self._changed.add(part)
+
+    def _flush(self) -> None:
+        if self._changed:
+            self.hub.publish({"type": "changed", "what": sorted(self._changed)})
+            self._changed.clear()
 
     def path(self, kept: Kept) -> Path:
         return self.folder / kept.path
@@ -404,7 +457,9 @@ class MobileChannel:
         self.hub.publish({"type": "message", "message": self.state.public(said)})
         if not self.hub.listening:
             body = plain(text) or (f"📎 {files[0].name}" if files else "")
-            await self._notify({"title": "Orion", "body": body[:PUSH_PREVIEW], "tag": key})
+            await self._notify(
+                {"title": "Orion", "body": body[:PUSH_PREVIEW], "tag": key, "kind": "message"}
+            )
         return key
 
     async def _notify(self, message: dict[str, object]) -> None:
@@ -521,6 +576,7 @@ class MobileChannel:
                 "title": "Orion demande ton accord",
                 "body": question[:PUSH_PREVIEW],
                 "tag": approval_id,
+                "kind": "approval",
             }
         )
         try:
