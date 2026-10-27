@@ -3319,3 +3319,28 @@ version de l'intuition (il récitait ce qu'il savait), puis 4/4 une fois précis
 appelle un salut. La relecture finale renvoie aussi « je te programme un rappel » quand aucun
 rappel n'est posé, et une dernière phrase qui commence par « Je peux… », même sans point
 d'interrogation.
+
+## D147 — Sur un forfait, le travail de fond suit le modèle principal
+
+*27/10/2026 · acceptée*
+
+Le propriétaire avait mis `model = "chatgpt:…"`. Ses conversations passaient bien par son
+forfait, mais OpenRouter continuait d'être débité quand Orion travaillait seul. Chaque rôle a son
+propre modèle, et seuls ceux qu'il n'avait pas nommés restaient aux valeurs par défaut, toutes
+sur OpenRouter : l'extraction de la mémoire et la réflexion de la nuit (`extractor_model`), la
+curiosité, la pensée de la nuit, la chronique et l'expert (`strong_model`), le regard sur les
+photos et les documents (`vision_model`).
+
+Désormais, quand `model` est sur un forfait, ces rôles suivent le modèle principal s'il ne les a
+pas nommés :
+- ChatGPT (D62) : `extractor_model`, `strong_model` et `vision_model` (le forfait voit les
+  images et lit les documents) ;
+- Claude Code (D100) : `extractor_model` et `strong_model` (il ne prend pas d'images).
+
+Un rôle nommé dans orion.toml garde son modèle. Restent ailleurs : ce que les forfaits ne font
+pas (fabriquer une image, la voix, la transcription, les embeddings) et le vérificateur, qui
+doit venir d'une autre famille que le modèle principal (`verifier_model`, un court appel par
+message spontané). Les modèles de secours (`fallback_models`) ne servent que si le forfait
+échoue, quota épuisé compris. Pour ne plus rien envoyer à OpenRouter, il faut nommer
+`verifier_model` (un autre modèle du forfait, `orion chatgpt models`) et `fallback_models`, et
+couper `embedding_model`.
