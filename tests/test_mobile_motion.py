@@ -23,6 +23,7 @@ view.typing.hidden = true;
 document.body.append(view.typing);
 function paintStatus() {}
 function bottom() {}
+function still() { return false; }
 """
 
 
