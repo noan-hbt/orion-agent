@@ -181,7 +181,29 @@ Le journal en ajout seul, les projections reconstruites, la provenance et la con
 gardien, l'outbox, le contrat du cache de prompt. La refonte change ce qu'Orion pense et
 voit, pas les garanties qui le rendent sûr.
 
-## 5. Mesure de départ
+## 5. Où on en est (27/10/2026)
 
-Évaluations complètes sur Haiku 5.5 (le modèle de production d'avant le forfait), un passage
-par cas, le 27/10/2026 : voir la décision de chaque chantier pour l'avant et l'après.
+| Chantier | État | Décision |
+|---|---|---|
+| 1. Les situations | fait | D149 |
+| 2. La veille | fait (heures fixes ; pas encore déclenchée par un événement) | D150 |
+| 3. Moins d'outils | tiroir et « faire maintenant » faits ; un seul « plus tard » et constitution courte pas faits | D151 |
+| 4. La fiabilité mesurée | `orion misses` fait ; relevé de la semaine pas fait | D152 |
+| 5. Le format par canal | déjà l'architecture (D126) : rien changé | — |
+| 6. Ce qu'il voit de sa vie | son téléphone fait ; contacts, trajets, colis, banque, maison, flux à faire | D153 |
+
+## 6. Mesure
+
+Évaluations complètes sur Haiku 5.5, un passage par cas : 47/54 avant la refonte, 49/57
+après les chantiers 1 à 3 (les trois cas ajoutés passent). Deux cas réparés
+(`la_nuit_reprend_ce_qui_reste`, `va_au_bout_au_lieu_de_proposer`), deux nouveaux échecs
+(`un_lien_sans_un_mot`, `relance_le`) qui, rejoués trois fois, passent 2/3 ici comme sur
+`main` (1/3 et 2/3) : du bruit, pas une régression. `appart_a_dreux` dépend du web réel,
+bloqué dans l'environnement de mesure. Le reste des échecs est le même qu'avant
+(`demain_a_1h_du_matin`, `il_etait_coupe`, `veille_de_partiel`, `un_resto_ce_soir`,
+`il_a_deja_repondu`). Les cas propres à la refonte : `un_voyage_est_une_situation` 3/3,
+`la_veille_voit_le_passeport` 2/2, `la_veille_se_tait_sans_raison` 2/2.
+
+Ce que ces chiffres ne mesurent pas : la refonte change surtout ce qu'Orion fait entre les
+conversations (veille, situations, tri de la mémoire), que les cas existants ne couvrent pas.
+Le vrai juge sera une semaine d'usage, et `orion misses`.
