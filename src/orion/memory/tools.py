@@ -15,7 +15,7 @@ from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService, Origin
 from orion.memory.situations import Ending
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult, quoted
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 
 def origin_of(ctx: ToolContext) -> Origin:
@@ -57,10 +57,6 @@ class RecallInput(BaseModel):
 
     query: str
     include_history: bool = Field(default=False, description="Also return facts no longer true")
-
-
-def _recalling(args: Any, trusted: bool) -> str:
-    return f"je cherche ce que je sais de {quoted(args.query)}" if trusted else ""
 
 
 class CommitmentAddInput(BaseModel):
@@ -227,8 +223,6 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         Tool(
             name="recall",
             description="Search memory for facts about a person, topic or project.",
-            doing="je fouille ma mémoire",
-            doing_of=_recalling,
             input_model=RecallInput,
             handler=recall,
             **read,

@@ -19,7 +19,7 @@ from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService
 from orion.memory.store import Commitment, Fact, name_key
 from orion.memory.tools import origin_of
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult, quoted
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 _NOT_PEOPLE = {"owner", "orion"}
 
@@ -124,10 +124,6 @@ class PersonInput(BaseModel):
     name: str = Field(description="A name or first name, e.g. 'Paul'")
 
 
-def _looking(args: Any, trusted: bool) -> str:
-    return f"je regarde ce que je sais de {quoted(args.name, 30)}" if trusted else ""
-
-
 class PeopleInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -192,8 +188,6 @@ def people_tools(memory: MemoryService, owner_names: list[str]) -> list[Tool]:
     return [
         Tool(
             name="person",
-            doing="je regarde ce que je sais d'un proche",
-            doing_of=_looking,
             description="Everything known about someone in the owner's life: facts, "
             "commitments, who they are linked to. Use it before talking about someone.",
             input_model=PersonInput,

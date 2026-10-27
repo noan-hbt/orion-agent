@@ -224,3 +224,25 @@ async def test_a_word_after_the_answer_is_an_ordinary_message() -> None:
     approvals[2] = waiting
     assert resolve(channel, "ok", "r2")
     assert waiting.result() == (True, "word", ["r2"])
+
+
+async def test_a_quiet_message_does_not_ring() -> None:
+    """What Orion says while still working goes without a notification (D169)."""
+    import json
+
+    import httpx
+
+    import orion.channels.telegram as telegram
+
+    bodies: list[dict[str, Any]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 9}})
+
+    client = telegram.TelegramClient("t", transport=httpx.MockTransport(handle))
+    await client.send_message(1, "Ton jeudi est pris.", quiet=True)
+    await client.send_message(1, "Tu es libre vendredi.")
+    await client.aclose()
+    assert bodies[0]["disable_notification"] is True
+    assert "disable_notification" not in bodies[1]

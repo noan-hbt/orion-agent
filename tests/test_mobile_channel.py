@@ -234,6 +234,8 @@ async def test_a_notification_when_the_app_is_closed_not_when_it_is_open(world: 
         await world.channel.deliver("Et il pleut.", None)
         assert (await live.get())["message"]["text"] == "Et il pleut."
     assert len(world.pusher.sent) == 1  # it was open: no notification
+    await world.channel.deliver("Je regarde.", None, quiet=True)
+    assert len(world.pusher.sent) == 1  # said while he works: it does not ring (D169)
     with pytest.raises(ValueError):
         await world.channel.subscribe("iphone", "https://10.0.0.1/x", "k", "a")
 
@@ -353,7 +355,7 @@ async def test_another_phone_is_added_or_let_go_only_with_face_id(world: World) 
 
 async def test_what_orion_says_as_he_works_is_a_message_of_its_own(world: World) -> None:
     """In the app, his own words beside a tool call are something he tells the owner: a
-    message, before the answer (D162). What the work is doing stays in the live bubble."""
+    message, before the answer (D162, D169)."""
     await pair(world)
     world.provider.extend(
         call_tools(("lookup", {}), text="Ton jeudi est pris par le dentiste."),
@@ -364,12 +366,10 @@ async def test_what_orion_says_as_he_works_is_a_message_of_its_own(world: World)
     said, answer = [s for s in world.channel.state.said if s.who == "orion"]
     assert said.text == "Ton jeudi est pris par le dentiste."
     assert answer.text == "Tu es libre vendredi."
-    assert answer.trace is not None and answer.trace["said"] == []
-    assert answer.trace["steps"] >= 1
 
 
-async def test_an_answer_in_two_messages_keeps_its_work_above_the_first(world: World) -> None:
-    """Two things to say are two bubbles in the app (D163); the work folds above the first."""
+async def test_an_answer_in_two_messages_is_two_bubbles(world: World) -> None:
+    """Two things to say are two bubbles in the app (D163)."""
     await pair(world)
     world.provider.extend(
         call_tools(("lookup", {})), reply("Tu es libre jeudi.<suite/>Tu y vas avec Léa ?")
@@ -378,4 +378,3 @@ async def test_an_answer_in_two_messages_keeps_its_work_above_the_first(world: W
     await until(lambda: len([s for s in world.channel.state.said if s.who == "orion"]) == 2)
     first, second = [s for s in world.channel.state.said if s.who == "orion"]
     assert (first.text, second.text) == ("Tu es libre jeudi.", "Tu y vas avec Léa ?")
-    assert first.trace is not None and second.trace is None

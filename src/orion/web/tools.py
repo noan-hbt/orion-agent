@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Trust
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult, quoted
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import FetchError
 from orion.web.search import SearchError
 from orion.web.service import NotAllowedError, WebDesk
@@ -36,25 +35,6 @@ class ReadInput(BaseModel):
     url: str = Field(description="Any web address (http or https)")
     part: int = Field(default=0, ge=0, description="Which part of the page's text (0: the top)")
     find: str = Field(default="", max_length=80, description="Or: where this text appears")
-
-
-def domain(url: str) -> str:
-    """The site an address points to (« lemonde.fr »), "" when it has none."""
-    try:
-        host = urlsplit(url.strip()).hostname or ""
-    except ValueError:
-        return ""
-    return host.removeprefix("www.")
-
-
-def reading(args: Any, _trusted: bool) -> str:
-    # A domain is only a site's name, whoever chose it: it may show in any context.
-    site = domain(args.url)
-    return f"je lis {site}" if site else ""
-
-
-def searching(args: Any, trusted: bool) -> str:
-    return f"je cherche {quoted(args.query)}" if trusted else ""
 
 
 def web_tools(desk: WebDesk) -> list[Tool]:
@@ -105,8 +85,6 @@ def web_tools(desk: WebDesk) -> list[Tool]:
     return [
         Tool(
             name="web_read",
-            doing="je lis la page",
-            doing_of=reading,
             description="Read a web page yourself: its text (part after part, or where a word "
             "appears), its links and pictures. Any web address.",
             input_model=ReadInput,
@@ -118,8 +96,6 @@ def web_tools(desk: WebDesk) -> list[Tool]:
         ),
         Tool(
             name="web_search",
-            doing="je cherche sur le web",
-            doing_of=searching,
             description="Search the web: the pages found (title, address). Read them with "
             "web_read.",
             input_model=SearchInput,

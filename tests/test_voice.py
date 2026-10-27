@@ -43,7 +43,7 @@ class IMessageOutlet:
     async def available(self) -> bool:
         return True
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
         self.sent.append(text)
 
     @asynccontextmanager

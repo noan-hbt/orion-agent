@@ -877,8 +877,9 @@ CASES: tuple[Case, ...] = (
     ),
     Case(
         name="il_dit_ce_quil_trouve_pas_ce_quil_fait",
-        origin="27/10 : la barre montre ce qu'il fait ; ses mots en chemin sont des messages "
-        "(D162). Une recherche de plusieurs étapes : rien d'annoncé, seulement du trouvé.",
+        origin="27/10 : ses mots en chemin sont des messages (D162), et plus aucune barre ne "
+        "montre ce qu'il fait (D169). Une recherche de plusieurs étapes : rien d'annoncé, "
+        "seulement du trouvé.",
         at=paris(2026, 10, 27, 18, 0),
         facts=OWNER,
         steps=(Say("Compare les forfaits mobile à moins de 15 € chez Free, Sosh et Red"),),

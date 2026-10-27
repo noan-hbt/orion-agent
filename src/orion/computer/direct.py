@@ -893,7 +893,6 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             if effect is not Effect.EXTERNAL
             else Reversibility.IRREVERSIBLE,
             accepts_untrusted_context=effect is not Effect.EXTERNAL,
-            doing="je navigue sur le site" if name in BROWSING else "",
         )
 
     async def accounts(_args: Any, _ctx: ToolContext) -> ToolResult:

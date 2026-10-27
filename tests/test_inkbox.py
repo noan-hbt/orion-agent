@@ -153,9 +153,11 @@ class FlakyTransport:
     def __init__(self, failures: list[SendError]) -> None:
         self.failures = failures
         self.keys: list[str] = []
+        self.quiet: list[bool] = []
 
-    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
+    async def transmit(self, to: str, text: str, idempotency_key: str, quiet: bool = False) -> str:
         self.keys.append(idempotency_key)
+        self.quiet.append(quiet)
         if self.failures:
             raise self.failures.pop(0)
         return f"remote-{len(self.keys)}"
@@ -165,13 +167,14 @@ async def test_outbox_journals_and_resumes_with_the_same_key(journal: SqliteJour
     transport = FlakyTransport([SendError("network down", retryable=True)])
     outbox = Outbox(journal, {"imessage": transport})
     with pytest.raises(SendError):
-        await outbox.send("imessage", CONVERSATION, "hello")
+        await outbox.send("imessage", CONVERSATION, "hello", quiet=True)
     assert len(outbox.projection.pending) == 1
 
     # A fresh process (same journal) finishes the send with the original key.
     restarted = Outbox(journal, {"imessage": transport})
     assert await restarted.resume() == 1
     assert transport.keys[0] == transport.keys[1]
+    assert transport.quiet == [True, True]  # resumed as it was sent: still without ringing
     kinds = [e.kind for e in await journal.read()]
     assert kinds == [QUEUED, DELIVERED]
     assert await Outbox(journal, {"imessage": transport}).resume() == 0

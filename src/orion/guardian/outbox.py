@@ -35,8 +35,9 @@ class SendError(RuntimeError):
 class Transport(Protocol):
     """A channel's sending side. Must honour the idempotency key."""
 
-    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
-        """Send `text` to `to`; return the provider's message id."""
+    async def transmit(self, to: str, text: str, idempotency_key: str, quiet: bool = False) -> str:
+        """Send `text` to `to`; return the provider's message id. `quiet`: without ringing,
+        where the channel can."""
         ...
 
 
@@ -56,6 +57,8 @@ class Pending:
     correlation_id: str | None
     media: str = ""
     """A file to send with the text (its path under the data directory), if any."""
+    quiet: bool = False
+    """Sent without ringing (D169)."""
 
 
 class PendingProjection:
@@ -88,6 +91,7 @@ class PendingProjection:
                 str(payload["text"]),
                 event.correlation_id,
                 str(payload.get("media", "")),
+                bool(payload.get("quiet", False)),
             )
         elif event.kind in (DELIVERED, FAILED):
             self.pending.pop(str(payload["outbox_id"]), None)
@@ -109,16 +113,22 @@ class Outbox:
         correlation_id: str | None = None,
         causation_id: str | None = None,
         media: str = "",
+        quiet: bool = False,
     ) -> str:
         """Queue, send, record the outcome. Returns the provider's message id. `media` is a
-        file sent with the text: only its path is journaled, never its content."""
+        file sent with the text: only its path is journaled, never its content. `quiet` sends
+        it without ringing, where the channel can."""
         outbox_id = f"o_{new_id()}"
         payload: dict[str, object] = {"outbox_id": outbox_id, "channel": channel, "to": to}
         payload["text"] = text
         if media:
             payload["media"] = media
+        if quiet:
+            payload["quiet"] = True
         await self._append(QUEUED, payload, correlation_id, causation_id)
-        return await self._deliver(Pending(outbox_id, channel, to, text, correlation_id, media))
+        return await self._deliver(
+            Pending(outbox_id, channel, to, text, correlation_id, media, quiet)
+        )
 
     async def resume(self) -> int:
         """Retry sends left unsettled by a crash, with their original idempotency keys. Each
@@ -150,7 +160,10 @@ class Outbox:
                     item.to, item.text, item.media, item.outbox_id
                 )
             else:
-                remote_id = await transport.transmit(item.to, item.text, item.outbox_id)
+                remote_id = await transport.transmit(
+                    item.to, item.text, item.outbox_id, quiet=item.quiet
+                )
+
         except SendError as exc:
             if not exc.retryable:
                 await self._settle(FAILED, item, error=str(exc))

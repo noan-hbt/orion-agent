@@ -12,11 +12,10 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -34,7 +33,6 @@ from orion.cognition.loop import (
     Told,
     ToolExecuted,
     Waiting,
-    Working,
     run_agent,
 )
 from orion.config import AgentConfig
@@ -137,21 +135,9 @@ def photo_block(photo: Photo) -> str:
     return f"<{photo.tag}{head}>\n{photo.description}\n</{photo.tag}>"
 
 
-Progress = Callable[[str, str, bool], Awaitable[None]]
-"""Said mid-turn: the text, the turn's correlation id, and whether the model wrote it (its own
-words to the owner) rather than Orion saying what the work is doing (D162)."""
-
-
-@dataclass(frozen=True)
-class Activity:
-    """Orion at work on his message, for a channel that shows it live (the app)."""
-
-    doing: tuple[str, ...]
-    """What the tools about to run do, in his words; empty between steps."""
-    cost_usd: float
-    steps: int
-    plan: tuple[tuple[str, str], ...] = ()
-    """Orion's plan for this turn, if it keeps one: (step, todo | doing | done)."""
+Progress = Callable[[str, str], Awaitable[None]]
+"""(text, correlation id) → delivered to the owner now, mid-turn: what Orion writes beside a
+tool call, a message of its own (D162, D169)."""
 
 
 class SituationSource(Protocol):
@@ -165,10 +151,6 @@ SITUATION_DAYS = 3
 SITUATION_LINES = 20
 SITUATIONS_SHOWN = 6
 """His open situations shown in `<maintenant>` (D149), the latest touched first."""
-
-Watch = Callable[[Activity], Awaitable[None]]
-"""(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
-mid-turn, instead of holding everything for the final answer."""
 
 
 class Orion:
@@ -232,7 +214,6 @@ class Orion:
         waiting: Waiting | None = None,
         photos: Sequence[Photo] = (),
         sent_at: datetime | None = None,
-        watch: Watch | None = None,
         halted: Halted | None = None,
     ) -> TurnResult:
         """A message from the owner, on any channel. All owner channels share one thread.
@@ -242,7 +223,7 @@ class Orion:
         `photos` came with the message: their content lowers the turn's trust (`PHOTO_TRUST`),
         and their words never count as the owner's (`owner_text`). `sent_at`, when the channel
         knows it: a message that waited (Orion was down) says so, so the answer can too.
-        `watch` sees the work as it goes; `halted` lets him call it off between two steps."""
+        `halted` lets him call it off between two steps."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         self.owner_wrote_at = now or datetime.now(UTC)
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
@@ -272,7 +253,6 @@ class Orion:
                 progress=progress,
                 waiting=waiting,
                 halted=halted,
-                watch=watch,
             )
 
     async def handle_initiative(
@@ -406,7 +386,6 @@ class Orion:
         halted: Halted | None = None,
         model: str | None = None,
         max_cost_usd: float | None = None,
-        watch: Watch | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -427,7 +406,6 @@ class Orion:
                 halted,
                 model=model,
                 max_cost_usd=max_cost_usd,
-                watch=watch,
             )
 
     async def _turn_locked(
@@ -450,7 +428,6 @@ class Orion:
         *,
         model: str | None = None,
         max_cost_usd: float | None = None,
-        watch: Watch | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -569,10 +546,6 @@ class Orion:
             finish_check=finish_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
-            progress_model=self._summary_model
-            if kind == "message.received" and progress is not None
-            else None,
-            progress_about=body if kind == "message.received" else "",
             budget=Budget(
                 max_steps=self._agent.max_steps,
                 max_tool_calls=self._agent.max_tool_calls,
@@ -633,9 +606,6 @@ class Orion:
             return message, Trust.OWNER
 
         result: TurnResult | None = None
-        spent = 0.0
-        steps_made = 0
-        plan: tuple[tuple[str, str], ...] = ()
         async for event in run_agent(
             self._provider,
             self._registry,
@@ -656,11 +626,9 @@ class Orion:
                         ]
                     )
                 case ModelCalled(response=response):
-                    spent += response.usage.cost_usd
-                    steps_made += 1
                     said = (response.text or "").strip()
                     if progress is not None and response.tool_calls and said:
-                        await progress(said, correlation_id, True)
+                        await progress(said, correlation_id)
                     await self._journal.append(
                         [
                             self._event(
@@ -679,16 +647,10 @@ class Orion:
                             )
                         ]
                     )
-                case Told(text=told, plan=planned):
-                    if progress is not None and not (planned and watch is not None):
-                        await progress(told, correlation_id, False)
-                case Working(doing=doing):
-                    if watch is not None:
-                        await watch(Activity(doing, round(spent, 5), steps_made, plan))
+                case Told(text=told):
+                    if progress is not None:
+                        await progress(told, correlation_id)
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
-                    if call.name == "plan" and not tool_result.is_error and watch is not None:
-                        plan = _plan_of(call.arguments)
-                        await watch(Activity((), round(spent, 5), steps_made, plan))
                     await self._journal.append(
                         [
                             self._event(
@@ -976,19 +938,3 @@ def is_silence(text: str) -> bool:
 
 def _attr(value: str) -> str:
     return value.replace("&", "&amp;").replace('"', "&quot;").replace("\n", " ")
-
-
-def _plan_of(arguments: str) -> tuple[tuple[str, str], ...]:
-    """The steps of a `plan` call, as the app draws them."""
-    try:
-        steps: object = json.loads(arguments).get("steps", [])
-    except (ValueError, AttributeError):
-        return ()
-    if not isinstance(steps, list):
-        return ()
-    found: list[tuple[str, str]] = []
-    for step in cast(list[object], steps):
-        if isinstance(step, dict):
-            known = cast(dict[str, Any], step)
-            found.append((str(known.get("text", ""))[:160], str(known.get("status", "todo"))))
-    return tuple(found)

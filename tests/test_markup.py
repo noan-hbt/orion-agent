@@ -86,7 +86,7 @@ async def test_the_app_draws_them_telegram_reads_text(
         async def available(self) -> bool:
             return True
 
-        async def deliver(self, text: str, correlation_id: str | None) -> None:
+        async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
             self.said.append(text)
 
         def working(self, item: Inbound) -> AbstractAsyncContextManager[None]:

@@ -28,13 +28,15 @@ class Outlet:
         self.name = name
         self.up = up
         self.sent: list[str] = []
+        self.quiet: list[bool] = []
         self.shown: list[str] = []
 
     async def available(self) -> bool:
         return self.up
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
         self.sent.append(text)
+        self.quiet.append(quiet)
 
     @asynccontextmanager
     async def working(self, item: Inbound) -> AsyncGenerator[None]:
@@ -236,7 +238,8 @@ async def test_a_message_sent_while_orion_works_joins_the_running_turn(
 async def test_orion_can_say_a_word_before_it_has_finished(
     journal: SqliteJournal, provider: ScriptedProvider
 ) -> None:
-    """What Orion writes beside a tool call goes out at once; the answer follows."""
+    """What Orion writes beside a tool call goes out at once, without ringing; the answer
+    follows, and rings (D169)."""
     from orion.tools.builtin import builtin_tools
 
     orion = Orion(
@@ -262,6 +265,7 @@ async def test_orion_can_say_a_word_before_it_has_finished(
     with pytest.raises(asyncio.CancelledError):
         await worker
     assert imessage.sent == ["Je regarde l'heure.", "Il est 17h."]
+    assert imessage.quiet == [True, False]
     # Sent once, kept once: the conversation replays it as the model wrote it.
     assert_prefix_stable(provider)
 

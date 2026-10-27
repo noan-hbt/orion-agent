@@ -3813,3 +3813,24 @@ laissée. Avec le shell, ça veut dire des commandes root, la lecture des secret
   contenu extérieur (`NEVER_ALONE`, `NEVER_FROM_UNTRUSTED`). Accorder une autonomie
   (`autonomy_grant`) reste une action qu'il approuve lui-même.
 - Revenir en arrière : retirer l'autonomie (`autonomy_revoke`, l'app, la console).
+
+## D169 — Plus de barre : il parle par messages, et dit ce qu'il a trouvé
+
+*27/10/2026 · acceptée · revient sur D143 et sur la barre de D162*
+
+Le propriétaire veut avoir l'impression d'écrire à quelqu'un, pas de regarder une machine
+travailler. Une personne ne montre pas une barre de progression : elle écrit quand elle a
+quelque chose à dire, et on voit qu'elle tape.
+
+- **Plus rien ne montre ce qu'il fait.** Plus de bulle de travail dans l'app, plus de trace
+  repliée au-dessus de la réponse, plus de ligne écrite par un petit modèle quand il se tait,
+  plus de plan montré (`plan` n'a plus `show`). Les outils n'ont plus de `doing`.
+- **Pendant le travail, on voit seulement qu'il tape** : les trois points dans l'app,
+  l'indicateur de frappe sur Telegram et iMessage. Le bouton pour arrêter reste dans l'app.
+- **Ses mots écrits avec un appel d'outil restent des messages (D162).** La règle change : il
+  ne dit jamais ce qu'il va faire. Il dit ce qu'il vient de trouver ou de faire, quand ça
+  compte pour le propriétaire. Sinon, il ne dit rien.
+- **Seul le dernier message d'un tour sonne.** Ceux écrits en chemin partent sans
+  notification (`quiet`, journalisé dans l'outbox et repris tel quel après un crash). C'est
+  `disable_notification` sur Telegram, et pas de push dans l'app. iMessage n'a pas d'envoi
+  silencieux : ses messages sonnent.

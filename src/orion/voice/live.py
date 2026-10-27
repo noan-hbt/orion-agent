@@ -76,7 +76,7 @@ class LiveVoice:
         """Only for answers to what was said on the call: proactive messages stay on iMessage."""
         return False
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
         await self.say(text)
 
     @asynccontextmanager

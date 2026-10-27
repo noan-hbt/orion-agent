@@ -77,13 +77,7 @@ class Tool:
     check: Callable[[BaseModel], str | None] | None = None
     """For a tool with several actions: what is wrong with this call's arguments, if anything.
     Run by `parse`, so a bad call is refused before the owner is asked to approve it."""
-    doing: str = ""
-    """What a call does, in the owner's words (« je cherche sur le web »): said when a turn
-    runs long and the model said nothing (`LoopSettings.progress_after`)."""
-    doing_of: Callable[[BaseModel, bool], str] | None = None
-    """What this call does, from its arguments (« je lis lemonde.fr »), shown live while it
-    runs; "" falls back to `doing`. The flag says whether the context is trusted: when it is
-    not, only what an argument's shape guarantees (a domain) may show, never its free text."""
+
     route: Callable[[BaseModel], tuple[str, dict[str, Any]]] | None = None
     """A tool that stands for others (`later`, D157): the tool and arguments a call becomes,
     before it runs (`ToolRegistry.resolve`); ValueError when it cannot. Its handler runs only
@@ -114,12 +108,6 @@ class Tool:
         if wrong is not None:
             raise ToolInputError(wrong)
         return parsed
-
-
-def quoted(text: str, limit: int = 40) -> str:
-    """Words from a call's arguments as a label shows them: « on one line, cut short »."""
-    words = " ".join(text.split())
-    return f"« {words if len(words) <= limit else words[: limit - 1].rstrip() + '…'} »"
 
 
 _SCHEMA_MAPS = ("properties", "$defs", "patternProperties")
