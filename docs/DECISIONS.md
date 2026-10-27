@@ -3737,3 +3737,20 @@ qu'il ait les droits root, et il connaît les risques.
   guardian (`/etc/orion/guardian.env`, `/srv/orion/guardian`). Le guardian reste le seul
   chemin normal vers le monde (outbox, politiques), mais ce n'est plus une frontière de
   sécurité face au core.
+
+## D165 — Un redémarrage réveille Orion
+
+*27/10/2026 · acceptée*
+
+Quand Orion redémarrait après un changement (un réglage, `systemctl restart` par sudo, une mise
+à jour), personne ne l'appelait ensuite : ce qu'il avait prévu de faire après le redémarrage
+(vérifier qu'un réglage a pris, reprendre une tâche, dire où il en est) restait en plan.
+
+- **Au premier tour du moteur d'initiative après le démarrage**, Orion est réveillé s'il a parlé
+  dans le fil du propriétaire moins de 15 minutes avant l'arrêt (`WOKEN_WITHIN`). Un Orion
+  inactif depuis longtemps n'est pas réveillé : il n'avait rien en cours.
+- **C'est une initiative comme une autre** (clé `restart:<seq>`), journalisée, qui passe même
+  aux heures calmes (comme un rappel demandé), mais il peut répondre `SILENCE` : rien ne part
+  alors.
+- **Pas de boucle :** après 3 réveils de suite sans message du propriétaire entre eux
+  (`WOKEN_AT_MOST`), un redémarrage ne le réveille plus.

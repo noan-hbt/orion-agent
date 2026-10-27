@@ -14,6 +14,7 @@ from orion.guardian.policy import Guardian
 from orion.initiative.engine import (
     DELIVERED,
     SUPPRESSED,
+    WOKEN_AT_MOST,
     Alert,
     InitiativeEngine,
     InitiativeSettings,
@@ -133,6 +134,43 @@ async def test_reminder_round_trip_fires_once_even_across_restarts(world: World)
     world.clock.now = at(20, 9, 1)
     assert await world.engine().tick() == []  # a fresh engine (restart) does not repeat it
     assert_prefix_stable(world.provider)
+
+
+async def test_a_restart_wakes_orion_when_he_was_working(world: World) -> None:
+    world.clock.now = datetime.now(PARIS)
+    world.provider.extend(reply("Je redémarre pour que le réglage prenne."))
+    await world.orion.handle_owner_message("owner", "active le shell", "terminal")
+    world.clock.now += timedelta(minutes=1)
+
+    world.provider.extend(reply("C'est fait, le shell est actif."))
+    [key] = await world.engine().tick()  # a fresh engine: Orion just started
+    assert key.startswith("restart:")
+    assert world.inbox.messages == ["C'est fait, le shell est actif."]
+    notice = str(world.provider.requests[-1].messages[-1]["content"])
+    assert "Tu viens de redémarrer" in notice
+    assert await world.engine().tick() == []  # once per restart
+
+    # Nothing to do after it: he stays silent, it is no reminder.
+    world.provider.extend(reply("SILENCE"))
+    assert await world.engine().tick() == []
+    assert world.inbox.messages == ["C'est fait, le shell est actif."]
+    assert str((await kinds(world.journal, SUPPRESSED))[-1]["key"]).startswith("restart:")
+
+
+async def test_a_restart_does_not_wake_an_idle_orion_nor_loop(world: World) -> None:
+    world.clock.now = datetime.now(PARIS)
+    world.provider.extend(reply("Ok."))
+    await world.orion.handle_owner_message("owner", "salut", "terminal")
+    world.clock.now += timedelta(hours=1)
+    assert await world.engine().tick() == []  # idle for an hour: nothing planned
+
+    world.clock.now -= timedelta(minutes=59)
+    for _ in range(WOKEN_AT_MOST):
+        world.provider.extend(reply("Je redémarre encore."))
+        assert len(await world.engine().tick()) == 1
+    asked = len(world.provider.requests)
+    assert await world.engine().tick() == []  # a restart loop: no more waking
+    assert len(world.provider.requests) == asked
 
 
 async def test_remind_me_refuses_the_past(world: World) -> None:
