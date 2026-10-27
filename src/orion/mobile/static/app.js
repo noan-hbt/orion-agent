@@ -1007,21 +1007,40 @@ function size(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1).replace(".", ",")} Mo`;
 }
 
-const LINK = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/g;
-const BOLD = /\*\*([^*\n]+)\*\*/g;
+// An address may hold one level of parentheses (Wikipedia's `Paris_(France)`), never a space.
+const URL_BODY = String.raw`https?:\/\/(?:[^\s()<>"]|\([^\s()<>"]*\))+`;
+// [label](address), <address>, a bare address, **bold**: the only markup the app reads.
+const RICH = new RegExp(String.raw`\[([^\]\n]+)\]\((${URL_BODY})\)|<(${URL_BODY})>|(${URL_BODY})|\*\*([^*\n]+)\*\*`, "g");
+// What closes a sentence is not part of the address it ends on.
+const URL_TAIL = /[.,;:!?'’"»\]*_]+$/;
+
+function anchor(href, label) {
+  return h("a", { href, target: "_blank", rel: "noopener noreferrer" }, label);
+}
+
+function shortUrl(url) {
+  const bare = url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+  return bare.length > 48 ? `${bare.slice(0, 47)}…` : bare;
+}
 
 function rich(text) {
   // Links and **bold**, nothing else: the text is never parsed as HTML.
   const out = [];
-  for (const [i, part] of text.split(LINK).entries()) {
-    if (i % 2 === 1) {
-      out.push(h("a", { href: part, target: "_blank", rel: "noopener noreferrer" }, part.replace(/^https?:\/\//, "")));
-      continue;
-    }
-    for (const [j, piece] of part.split(BOLD).entries()) {
-      if (piece) out.push(j % 2 === 1 ? h("b", {}, piece) : piece);
-    }
+  let at = 0;
+  const plain = (piece) => piece && out.push(piece);
+  for (const match of text.matchAll(RICH)) {
+    const [whole, label, labelled, angled, bare, bold] = match;
+    plain(text.slice(at, match.index));
+    at = match.index + whole.length;
+    if (labelled) out.push(anchor(labelled, label.replace(/\*\*/g, "")));
+    else if (angled) out.push(anchor(angled, shortUrl(angled)));
+    else if (bare) {
+      const url = bare.replace(URL_TAIL, "");
+      at -= bare.length - url.length;
+      out.push(anchor(url, shortUrl(url)));
+    } else out.push(h("b", {}, ...rich(bold)));
   }
+  plain(text.slice(at));
   return out;
 }
 
