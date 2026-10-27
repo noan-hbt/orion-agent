@@ -160,7 +160,9 @@ class SituationSource(Protocol):
 
 SITUATION_DAYS = 3
 """Commitments due within this many days are shown as he writes."""
-SITUATION_LINES = 14
+SITUATION_LINES = 20
+SITUATIONS_SHOWN = 6
+"""His open situations shown in `<maintenant>` (D149), the latest touched first."""
 
 Watch = Callable[[Activity], Awaitable[None]]
 """(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
@@ -869,6 +871,8 @@ class Orion:
         it, so Orion can link what he says to it without being asked."""
         lines: list[str] = []
         if self._memory is not None:
+            current = [s for s in self._memory.situations.current() if s.trust >= TRUSTED_FLOOR]
+            lines += [f"- en cours{s.line()[1:]}" for s in current[:SITUATIONS_SHOWN]]
             soon = when.date() + timedelta(days=SITUATION_DAYS)
             for c in await self._memory.store.commitments():
                 due = (c.due or "")[:10]

@@ -125,9 +125,22 @@ def core_tools(plate: Plate) -> list[Tool]:
     reminders = reminder_tools(plate.timers, calls=plate.module(VoiceModule) is not None)
     adaptation = adaptation_tools(plate.memory)
     commitments = {"commitment_add": "add", "commitment_close": "close", "commitments_list": "list"}
+    situations = {
+        "situation_open": "open",
+        "situation_update": "update",
+        "situation_close": "close",
+        "situations_list": "list",
+    }
     return [
         *builtin_tools(),
-        *[t for t in memory if t.name not in commitments],
+        *[t for t in memory if t.name not in commitments and t.name not in situations],
+        grouped(
+            "situation",
+            "What is going on in his life right now (D149): open one as soon as he mentions it, "
+            "add what is new, close it when it is over.",
+            [t for t in memory if t.name in situations],
+            situations,
+        ),
         grouped(
             "commitments",
             "The commitments ledger: what the owner owes, and what is owed to him (or to you).",

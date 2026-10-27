@@ -200,6 +200,20 @@ class Control:
         portrait = self._portrait
         return {"text": portrait.text, "day": portrait.day} if portrait.text else None
 
+    async def situations(self) -> list[dict[str, Any]]:
+        """What is going on in his life, as Orion follows it (D149)."""
+        await self.memory.sync()
+        return [
+            {
+                "id": s.id,
+                "title": s.title,
+                "summary": s.summary,
+                "until": s.until.isoformat() if s.until else None,
+                "news": s.notes[-1] if s.notes else None,
+            }
+            for s in self.memory.situations.current()
+        ]
+
     async def facts(self, query: str = "", past: bool = False) -> list[dict[str, Any]]:
         """Newest first; matching `query` (best first) when he searches."""
         store = self.memory.store

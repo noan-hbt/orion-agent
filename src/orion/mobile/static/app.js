@@ -3968,6 +3968,26 @@ function memoryPanel() {
             ),
           ]
         : []),
+      ...(seen && found.situations.length
+        ? [
+            h(
+              "article",
+              { class: "card situations" },
+              h("small", {}, "En ce moment"),
+              ...found.situations.map((s) =>
+                h(
+                  "p",
+                  {},
+                  h("strong", {}, s.title),
+                  s.until ? ` · jusqu'au ${new Date(s.until).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}` : "",
+                  h("br"),
+                  s.news || s.summary,
+                ),
+              ),
+              h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ce que tu suis en ce moment, ") }, "Ce n'est plus d'actualité"),
+            ),
+          ]
+        : []),
     );
     list.replaceChildren(
       ...(facts.length

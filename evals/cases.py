@@ -793,4 +793,13 @@ CASES: tuple[Case, ...] = (
         steps=(Say("faut que je renouvelle mon passeport un de ces jours, la flemme"),),
         checks=(uses("remind_me", "commitments", "task", "mission", "papers"),),
     ),
+    Case(
+        name="un_voyage_est_une_situation",
+        origin="D149 : un voyage gardé comme fait durable ne mourait jamais ; c'est une "
+        "situation, avec sa fin.",
+        at=paris(2026, 10, 27, 19, 45),
+        facts=OWNER,
+        steps=(Say("je pars à Lisbonne vendredi avec Léa, retour lundi"),),
+        checks=(called_with("situation", "Lisbonne"),),
+    ),
 )

@@ -3360,3 +3360,35 @@ copie comme pour orion.toml. Le dossier `config/` étant le sien, un fichier lai
 remplacé quand même. `install.sh` rend aussi tout le dossier au gardien après `orion setup`.
 Rejoué avec un utilisateur ordinaire : l'ancien code échoue sur `orion.toml.previous`, le
 nouveau passe. Le serveur se répare à sa prochaine mise à jour automatique, sans rien relancer.
+
+## D149 — Les situations : ce qui se passe dans sa vie en ce moment (chantier 1 de la refonte)
+
+*27/10/2026 · acceptée*
+
+Premier chantier de la refonte (`architecture/05-refonte.md`). La mémoire n'avait que des
+faits, censés rester vrais. Ce qui dure un temps (un voyage, une maladie, une recherche
+d'appart, un examen à préparer, un souci, un projet qui finira) devenait un fait qui ne
+mourait jamais, ou n'était pas gardé du tout parce qu'il ne « vaudrait plus rien dans un mois ».
+Le propriétaire le voyait : Orion garde du temporaire et rate l'important.
+
+Une **situation** a un titre, ce qu'on en sait, les gens qu'elle touche, un horizon (la date
+où elle devrait être finie, si on la connaît), des nouvelles (les six dernières), et une fin :
+réglée, abandonnée, ou passée son horizon. Événements `situation.opened`, `situation.updated`,
+`situation.closed` ; projection `Situations`, tenue par `MemoryService` à côté des faits.
+- **Orion** les tient en conversation avec l'outil `situation` (open, update, close, list) ;
+  `remember` ne garde plus que ce qui reste vrai.
+- **L'extracteur** voit les situations ouvertes et sépare désormais fait durable, situation et
+  engagement ; ce qui ressort d'une situation et qui dure (sa nouvelle adresse) devient un fait.
+- **La nuit**, le code ferme une situation deux jours après son horizon. Un tri relit les faits
+  notés depuis la dernière nuit (120 par nuit, du plus ancien au plus récent : une grande
+  mémoire est triée en quelques nuits) ; ceux qui n'étaient pas durables sont clos comme faits
+  et rouverts en situation s'ils durent encore. La situation garde la source du fait : oublier
+  cette source l'oublie aussi.
+- **`<maintenant>`** les montre d'abord (« en cours », six au plus, les dernières touchées),
+  seulement celles qui viennent de lui ou d'Orion. Le **portrait** de la nuit s'écrit à partir
+  d'elles et de celles qui viennent de finir. Le **Carnet** de l'application les montre sous
+  son portrait, « En ce moment ».
+
+Évaluation `un_voyage_est_une_situation` (« je pars à Lisbonne vendredi avec Léa, retour
+lundi ») : 3/3 sur Haiku 5.5. Pas encore vérifié en vrai : le tri de sa mémoire réelle la
+première nuit.
