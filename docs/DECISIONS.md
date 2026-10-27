@@ -3834,3 +3834,22 @@ quelque chose à dire, et on voit qu'elle tape.
   notification (`quiet`, journalisé dans l'outbox et repris tel quel après un crash). C'est
   `disable_notification` sur Telegram, et pas de push dans l'app. iMessage n'a pas d'envoi
   silencieux : ses messages sonnent.
+
+## D170 — L'app bouge comme une app : saisie, clavier, onglets
+
+*27/10/2026 · acceptée · complète D139*
+
+Le propriétaire trouvait la saisie d'Orion moche, le clavier qui casse la mise en page, les
+changements d'onglet brutaux, et l'app loin des belles animations demandées.
+
+- **Les trois points cèdent leur place au message dans la même image**, au lieu de s'effacer
+  sous lui puis de faire sauter le fil. S'il continue à travailler, ils reviennent dessous un
+  instant après. L'avatar a un halo et « écrit… » scintille pendant qu'il tape.
+- **Le clavier pilote la mise en page, pas le focus.** Le composeur ne rend la place du dock
+  qu'une fois le clavier là (`body.keyboard`, déduit du viewport visible) ; le dernier message
+  reste en vue ; panneaux, feuilles et voix suivent eux aussi le viewport visible.
+- **Les onglets se croisent** : l'ancien glisse et s'efface sous le nouveau, la lentille de la
+  barre s'étire en chemin.
+- **Des micro-interactions partout** : arrivée des bulles et des pièces, réponses rapides en
+  cascade, accueil, champ du composeur, surbrillance des lignes, grand titre qui s'efface au
+  défilement. Toujours transform et opacité ; rien quand le système réduit les animations.
