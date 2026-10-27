@@ -190,7 +190,7 @@ voit, pas les garanties qui le rendent sûr.
 | 3. Moins d'outils | fait : tiroir, « faire maintenant », un seul « plus tard », constitution courte (24,4 k) | D151, D157, D158 |
 | 4. La fiabilité mesurée | `orion misses` et `orion week` faits | D152, D156 |
 | 5. Le format par canal | déjà l'architecture (D126) : rien changé | — |
-| 6. Ce qu'il voit de sa vie | son téléphone fait ; contacts, trajets, colis, banque, maison, flux à faire | D153 |
+| 6. Ce qu'il voit de sa vie | son téléphone, ses contacts, ses lectures, ses colis et abonnements, sa maison faits ; trajets et banque à faire | D153, D159–D161 |
 
 ## 6. Mesure
 

@@ -3642,3 +3642,22 @@ côté de ce que ses recherches ont trouvé, et peut en garder un pour lui. La p
 toujours choisie à partir de sa mémoire seule : rien de ce que dit un flux ne peut orienter ce
 qu'Orion cherche, et le juge ne voit jamais sa mémoire. `feeds` (list) dit ce qu'il y a de
 neuf dans ses lectures.
+
+## D161 — Ses colis, ses abonnements, sa maison (chantier 6, suite)
+
+*27/10/2026 · acceptée*
+
+**Colis et abonnements.** Pas d'extracteur de plus : Orion lit déjà chaque mail lui-même
+(D114). La consigne qui accompagne un mail nouveau (`mail_notice`) lui dit désormais quoi en
+faire : un colis en route devient une situation jusqu'au jour de livraison (D149) ; un essai
+gratuit qui deviendra payant, un abonnement qui se renouvelle ou augmente, un engagement dû
+la veille, pour qu'il puisse résilier à temps. Les deux apparaissent dans `<maintenant>` et
+dans la veille, qui les voient venir. Évaluations sur Haiku 5.5, trois passages :
+`un_colis_en_route` 0/3 avec l'ancienne consigne, 3/3 avec la nouvelle ;
+`un_essai_gratuit_devient_payant` 3/3 dans les deux cas.
+
+**Sa maison.** Le module MCP (D95) branche déjà Home Assistant, qui expose un serveur MCP. Il
+manquait la marche à suivre : la skill `maison-home-assistant` du catalogue la donne
+(l'intégration à ajouter, le jeton par le formulaire du gardien, le serveur `maison` avec ses
+outils de lecture en `read_only`) et dit comment s'en servir : lire l'état sans demander, agir
+avec son accord, ne pas réciter la maison sans raison.

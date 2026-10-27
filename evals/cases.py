@@ -29,6 +29,7 @@ from evals.harness import (
     works_at_night,
 )
 from orion.core.events import Trust
+from orion.mail.service import mail_notice
 
 ASSISTANT_TICS = r"bien sûr ?!|excellente question|n'hésite pas|voici (?:les|la|le|ce)"
 OWNER = (
@@ -827,5 +828,48 @@ CASES: tuple[Case, ...] = (
             Watch(at=paris(2026, 10, 27, 12, 30)),
         ),
         checks=(never_says(r"MAINTENANT", "nothing urgent: nothing goes now"),),
+    ),
+    Case(
+        name="un_essai_gratuit_devient_payant",
+        origin="D161 : un essai gratuit qui devient payant se lisait dans un mail et s'oubliait ; "
+        "noté comme un engagement daté, la veille et `<maintenant>` le voient venir.",
+        at=paris(2026, 10, 27, 10, 0),
+        facts=OWNER,
+        steps=(
+            Notice(
+                mail_notice(
+                    "[mail] Canal+ <noreply@canalplus.com> : « Votre essai gratuit se termine »",
+                    "Bonjour Noan, votre essai gratuit de 7 jours se termine le 3 novembre "
+                    "2026. Sans résiliation de votre part, votre abonnement Canal+ sera "
+                    "automatiquement reconduit au tarif de 27,99 € par mois.",
+                ),
+                "un mail de Canal+ vient d'arriver",
+            ),
+        ),
+        checks=(
+            uses("commitments:add"),
+            judged(
+                "La réponse lui dit-elle que l'essai Canal+ devient payant (27,99 € par mois) "
+                "début novembre, pour qu'il puisse résilier à temps ?"
+            ),
+        ),
+    ),
+    Case(
+        name="un_colis_en_route",
+        origin="D161 : un colis annoncé par mail devient une situation jusqu'à sa livraison.",
+        at=paris(2026, 10, 27, 10, 0),
+        facts=OWNER,
+        steps=(
+            Notice(
+                mail_notice(
+                    "[delivery] Zalando <info@zalando.fr> : « Votre colis est en route »",
+                    "Bonne nouvelle ! Votre commande n° 10-4471 (Veste Levi's) a été expédiée. "
+                    "Livraison prévue le jeudi 29 octobre 2026 par Colissimo, numéro de suivi "
+                    "6A12345678901.",
+                ),
+                "un mail de Zalando vient d'arriver",
+            ),
+        ),
+        checks=(uses("situation:open"),),
     ),
 )
