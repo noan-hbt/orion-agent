@@ -289,6 +289,37 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _misses(config: OrionConfig, case: int | None) -> int:
+    """What went wrong for real (D152): his 👎 and his corrections, with what Orion answered."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from orion.adaptation.misses import as_case, misses
+
+    zone = ZoneInfo(config.agent.timezone)
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        events = await journal.read(0, 10_000_000)
+    found = misses(events, zone, datetime.now(zone))
+    if case is not None:
+        if not 1 <= case <= len(found):
+            print(f"Pas de raté n°{case} ({len(found)} en tout).")
+            return 1
+        print(as_case(found[case - 1], f"rate_du_{found[case - 1].at:%d_%m}"))
+        return 0
+    if not found:
+        print("Aucun raté repéré (ni 👎, ni correction de sa part).")
+        return 0
+    for index, miss in enumerate(found, 1):
+        print(f"{index}. {miss.at:%d/%m %H:%M} · {miss.how}")
+        if miss.asked:
+            print(f"   lui : {miss.asked[:200]}")
+        print(f"   Orion : {miss.answered[:300]}")
+        if miss.said:
+            print(f"   puis lui : {miss.said[:200]}")
+    print("\norion misses --case N : le début d'un cas d'évaluation (evals/cases.py).")
+    return 0
+
+
 async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.hands.desk import HandsDesk
 
@@ -392,7 +423,7 @@ async def _app_through_guardian(
 
 
 async def _places_token(config: OrionConfig) -> int:
-    from orion.places.module import PATH, Places
+    from orion.places.module import PATH, SENSE_PATH, Places
 
     async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
         places = Places(journal)
@@ -403,6 +434,13 @@ async def _places_token(config: OrionConfig) -> int:
         "Dans Raccourcis : Automatisation > Arrivée (ou Départ) > le lieu > « Obtenir le contenu "
         f"de l'URL », POST vers https://<ton domaine>{PATH}, en-tête Authorization: Bearer "
         '<jeton>, corps JSON {"place": "boulangerie", "event": "arrive"}.'
+    )
+    print(
+        f"Ce que le téléphone sait (D153) : même chose vers https://<ton domaine>{SENSE_PATH}, "
+        'corps {"kind": "sleep", "value": "6 h 10, réveillé 2 fois"}. kind : sleep (automation '
+        "« Au réveil » + échantillons de santé), focus (« Quand Travail s'active »), battery "
+        "(« Quand la batterie passe sous 20 % »), workout (« Quand je termine un entraînement »), "
+        "health, music, other."
     )
     return 0
 
@@ -958,6 +996,8 @@ def main(argv: list[str] | None = None) -> int:
     revoke = federation_sub.add_parser("revoke", help="End a pairing")
     revoke.add_argument("peer", help="Name or instance")
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
+    missed = sub.add_parser("misses", help="What went wrong for real: his 👎 and corrections")
+    missed.add_argument("--case", type=int, help="Write miss N as an evaluation case")
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
     forget.add_argument("--reason", default="owner request")
@@ -1081,6 +1121,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_notify(config, args.text))
     if args.command == "memory":
         return asyncio.run(_memory(config))
+    if args.command == "misses":
+        return asyncio.run(_misses(config, args.case))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
     if args.command == "hands":

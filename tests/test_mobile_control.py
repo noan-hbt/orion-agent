@@ -141,8 +141,11 @@ async def test_he_reads_and_corrects_what_orion_knows(controlled: Controlled) ->
     await memory.remember("L'annonce dit 42 m²", READ)
     await memory.add_commitment("Rappeler la banque", TOLD, debtor="owner", creditor="Banque")
     await memory.learn_rule("Réponses courtes, sans liste", TOLD)
+    await memory.open_situation("Cherche un appart", "À Lyon, 700 € max.", TOLD, until="2027-01-15")
 
-    facts = (await http.get("/app/api/memory")).json()["facts"]
+    shown = (await http.get("/app/api/memory")).json()
+    assert [s["title"] for s in shown["situations"]] == ["Cherche un appart"]  # D149
+    facts = shown["facts"]
     assert [f["statement"] for f in facts] == [
         "L'annonce dit 42 m²",
         "Son loyer est de 520 € par mois",

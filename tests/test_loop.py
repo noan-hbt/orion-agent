@@ -656,3 +656,25 @@ async def test_a_line_that_cannot_be_written_falls_back_and_three_at_most() -> N
         "Je cherche sur le web…",
     ]
     assert len(provider.asked) == 3  # then no more, however long it runs
+
+
+async def test_a_tool_in_the_drawer_is_called_under_its_own_name() -> None:
+    """D151: rare tools leave the menu; `orion` calls them, and from there on (guardian,
+    journal, approvals) the call is the drawer tool's own."""
+    registry = ToolRegistry(builtin_tools(), drawer=[echo_tool()])
+    assert "echo" not in [s.name for s in registry.specs()]
+    (drawer,) = [s for s in registry.specs() if s.name == "orion"]
+    assert "- echo:" in drawer.description
+    provider = ScriptedProvider(
+        call_tools(
+            ("orion", {"tool": "echo", "args": {"text": "42"}}),
+            ("orion", {"tool": "echo", "args": {}}),
+            ("orion", {"tool": "nope"}),
+        ),
+        reply("42."),
+    )
+    events, _ = await collect(provider, registry)
+    done, bad, unknown = [e for e in events if isinstance(e, ToolExecuted)]
+    assert (done.call.name, done.result.content) == ("echo", "42")
+    assert bad.result.is_error and "echo takes:" in bad.result.content  # its schema, to retry
+    assert unknown.result.is_error and "it holds: echo" in unknown.result.content

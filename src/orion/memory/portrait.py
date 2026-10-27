@@ -51,7 +51,7 @@ de vouloir être aidé) et ses derniers messages. Écris en français, à la tro
 1. qui il est : sa situation, son travail ou ses études, où il vit, son rythme, ses goûts, sa
    façon d'écrire et ce qu'il attend d'Orion ;
 2. en ce moment : ce qui l'occupe ces jours-ci, ce qui approche, ce qui le préoccupe ou le
-   réjouit ;
+   réjouit (« ce qui se passe en ce moment » d'abord) ;
 3. ses proches : les gens qui comptent, une demi-ligne chacun sur ce qu'il faut savoir.
 
 N'invente rien : seulement ce qui est écrit. Ce qui date de plusieurs mois et a pu changer,
@@ -131,6 +131,13 @@ async def write_portrait(
            if any(a != "owner" for a in f.about) else "")
         for f in facts
     ]  # fmt: skip
+    situations = [s for s in memory.situations.current() if s.trust >= TRUSTED_FLOOR]
+    if situations:
+        lines += ["", "CE QUI SE PASSE EN CE MOMENT :", *(s.line() for s in situations)]
+    ended = [s for s in memory.situations.recent_ends(now) if s.trust >= TRUSTED_FLOOR]
+    if ended:
+        lines += ["", "CE QUI VIENT DE SE TERMINER :"]
+        lines += [f"- {s.title} : {s.outcome or s.ending}" for s in ended]
     if commitments:
         lines += ["", "À FAIRE OU ATTENDU :"]
         lines += [f"- {c.debtor} → {c.creditor} : {c.what}" + (f", pour le {c.due}" if c.due

@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
@@ -32,6 +33,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -51,7 +53,12 @@ REMINDER = "place.reminder"
 CANCELLED = "place.reminder.cancelled"
 ARRIVED = "place.event"
 FIRED = "place.fired"
+SENSED = "phone.sensed"
 PATH = "/places/event"
+SENSE_PATH = "/places/sense"
+SENSE_KEPT = timedelta(hours=18)
+"""What the phone said is shown this long: last night's sleep, not last week's."""
+Sense = Literal["sleep", "focus", "battery", "workout", "health", "music", "other"]
 SIGNAL_TRUST = Trust.OWNER_INSTANCE
 """The owner's phone, saying where they are: theirs, but a signal, not their words."""
 
@@ -90,6 +97,10 @@ class PlaceState:
     fired: list[tuple[str, PlaceReminder]] = field(default_factory=list[tuple[str, PlaceReminder]])
     known: dict[str, str] = field(default_factory=dict[str, str])
     """Places the phone has reported: key → name as set up."""
+    last_place: tuple[str, str, datetime] | None = None
+    """Where the phone last said he arrived or left, and when (D153)."""
+    sensed: dict[str, tuple[str, datetime]] = field(default_factory=dict[str, tuple[str, datetime]])
+    """What the phone said last, by kind (D153): his sleep, his focus mode, his battery…"""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -100,6 +111,8 @@ class PlaceState:
         self.reminders.clear()
         self.fired.clear()
         self.known.clear()
+        self.last_place = None
+        self.sensed.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -123,10 +136,17 @@ class PlaceState:
         elif event.kind == ARRIVED:
             place = str(payload["place"])
             self.known[name_key(place)] = place
+            self.last_place = (place, str(payload.get("event") or "arrive"), _at(event))
+        elif event.kind == SENSED:
+            self.sensed[str(payload["kind"])] = (str(payload["value"]), _at(event))
         elif event.kind == FIRED:
             reminder = self.reminders.pop(str(payload["reminder_id"]), None)
             if reminder is not None:
                 self.fired.append((event.id, reminder))
+
+
+def _at(event: Event) -> datetime:
+    return datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
 
 
 def digest(token: str) -> str:
@@ -138,6 +158,24 @@ class PlaceEvent(BaseModel):
 
     place: str = Field(min_length=1, max_length=80)
     event: Moment = "arrive"
+
+
+class SenseEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Sense
+    value: str = Field(min_length=1, max_length=200)
+
+
+_SENSE_FR = {
+    "sleep": "sommeil",
+    "focus": "mode concentration",
+    "battery": "batterie",
+    "workout": "sport",
+    "health": "santé",
+    "music": "écoute",
+    "other": "téléphone",
+}
 
 
 class Places:
@@ -203,6 +241,33 @@ class Places:
         log.info("places.event", moment=moment, reminders=len(due))
         return [r.id for r in due]
 
+    async def sense(self, token: str, kind: str, value: str) -> None:
+        """The phone says what it knows (D153): only what his automations send."""
+        await self.sync()
+        if not self.state.token or not hmac.compare_digest(digest(token), self.state.token):
+            raise PermissionError("bad token")
+        source = Provenance(source="phone:senses", actor="owner:phone")
+        await self.append(SENSED, {"kind": kind, "value": value}, source, SIGNAL_TRUST)
+        log.info("places.sensed", kind=kind)
+
+    async def situation(self, now: datetime) -> list[str]:
+        """For `<maintenant>` and the watch: what his phone said lately."""
+        await self.sync()
+        lines: list[str] = []
+        zone = now.tzinfo
+        if self.state.last_place is not None:
+            place, moment, at = self.state.last_place
+            if now - at <= SENSE_KEPT:
+                verb = "arrivé à" if moment == "arrive" else "parti de"
+                lines.append(f"- son téléphone : {verb} « {place} » à {at.astimezone(zone):%H:%M}")
+        for kind, (value, at) in sorted(self.state.sensed.items()):
+            if now - at <= SENSE_KEPT:
+                lines.append(
+                    f"- son téléphone, {_SENSE_FR.get(kind, kind)} : {value} "
+                    f"({at.astimezone(zone):%H:%M})"
+                )
+        return lines
+
     async def reports(self) -> list[Report]:
         await self.sync()
         return [
@@ -232,7 +297,25 @@ class Places:
                 return JSONResponse({"error": "bad token"}, status_code=401)
             return JSONResponse({"ok": True, "reminders": len(fired)})
 
-        return Starlette(routes=[Route(PATH, event, methods=["POST"])])
+        async def sensed(request: Request) -> JSONResponse:
+            token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            try:
+                told = SenseEvent.model_validate_json(await request.body())
+            except ValidationError:
+                return JSONResponse({"error": "expected {kind, value}"}, status_code=400)
+            try:
+                await self.sense(token, told.kind, told.value)
+            except PermissionError:
+                log.warning("places.refused")
+                return JSONResponse({"error": "bad token"}, status_code=401)
+            return JSONResponse({"ok": True})
+
+        return Starlette(
+            routes=[
+                Route(PATH, event, methods=["POST"]),
+                Route(SENSE_PATH, sensed, methods=["POST"]),
+            ]
+        )
 
 
 class RemindInput(BaseModel):
@@ -380,6 +463,7 @@ class PlacesModule(Module):
             return
         settings: PlaceSettings = self.settings
         daemon.reports.append(self.places)
+        daemon.orion.situation.append(self.places)
         server = uvicorn.Server(
             uvicorn.Config(
                 self.places.app(),
@@ -393,4 +477,6 @@ class PlacesModule(Module):
 
     def doctor(self) -> list[str]:
         settings: PlaceSettings = self.settings
-        return [f"phone events on {settings.host}:{settings.port}{PATH}"]
+        return [
+            f"phone events on {settings.host}:{settings.port}{PATH}, what it knows on {SENSE_PATH}"
+        ]

@@ -40,6 +40,16 @@ from orion.memory.model import (
     SettingChanged,
     SettingKey,
 )
+from orion.memory.situations import (
+    CLOSED,
+    OPENED,
+    UPDATED,
+    Ending,
+    SituationClosed,
+    SituationOpened,
+    Situations,
+    SituationUpdated,
+)
 from orion.memory.store import Fact, MemoryStore
 
 if TYPE_CHECKING:
@@ -74,7 +84,8 @@ class MemoryService:
         self._journal = journal
         self.store = store
         self.semantic = semantic
-        self._runner = ProjectionRunner(journal, [store])
+        self.situations = Situations()
+        self._runner = ProjectionRunner(journal, [store, self.situations])
 
     async def search(self, text: str, limit: int = 8, include_past: bool = False) -> list[Fact]:
         """By meaning and by words when semantic search is set up, by words otherwise."""
@@ -140,6 +151,42 @@ class MemoryService:
     ) -> None:
         payload = CommitmentClosed(commitment_id=commitment_id, status=status, evidence=evidence)
         await self._write(COMMITMENT_CLOSED, payload, origin)
+
+    async def open_situation(
+        self,
+        title: str,
+        summary: str,
+        origin: Origin,
+        *,
+        about: list[str] | None = None,
+        until: str | None = None,
+    ) -> str:
+        situation_id = f"si_{new_id()}"
+        payload = SituationOpened(
+            situation_id=situation_id, title=title, summary=summary, about=about or [], until=until
+        )
+        await self._write(OPENED, payload, origin)
+        return situation_id
+
+    async def update_situation(
+        self,
+        situation_id: str,
+        note: str,
+        origin: Origin,
+        *,
+        summary: str | None = None,
+        until: str | None = None,
+    ) -> None:
+        payload = SituationUpdated(
+            situation_id=situation_id, note=note, summary=summary, until=until
+        )
+        await self._write(UPDATED, payload, origin)
+
+    async def close_situation(
+        self, situation_id: str, origin: Origin, ending: Ending = Ending.SETTLED, outcome: str = ""
+    ) -> None:
+        payload = SituationClosed(situation_id=situation_id, ending=ending, outcome=outcome)
+        await self._write(CLOSED, payload, origin)
 
     async def learn_rule(
         self,

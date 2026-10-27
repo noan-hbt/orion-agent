@@ -93,3 +93,30 @@ async def test_the_phone_posting_twice_at_once_fires_a_reminder_once(
         places.signal(token, "pharmacie", "arrive"), places.signal(token, "pharmacie", "arrive")
     )
     assert sorted(len(fired) for fired in both) == [0, 1]
+
+
+async def test_what_the_phone_knows_is_shown_where_orion_looks(journal: SqliteJournal) -> None:
+    """D153: his Shortcuts automations tell Orion his sleep, his focus mode, where he is; it
+    is in `<maintenant>` and in the watch, for a while."""
+    from datetime import datetime, timedelta
+
+    from orion.places.module import SENSE_PATH
+
+    places = Places(journal)
+    token = await places.new_token()
+    auth = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=places.app()), base_url="http://orion"
+    ) as http:
+        assert (
+            await http.post(SENSE_PATH, json={"kind": "sleep", "value": "5 h"})
+        ).status_code == 401
+        sleep = {"kind": "sleep", "value": "5 h 10, réveillé 3 fois"}
+        assert (await http.post(SENSE_PATH, json=sleep, headers=auth)).json() == {"ok": True}
+        assert (await http.post(SENSE_PATH, json={"kind": "mood"}, headers=auth)).status_code == 400
+        await http.post(PATH, json={"place": "bureau"}, headers=auth)
+    now = datetime.now().astimezone()
+    lines = await places.situation(now)
+    assert any("arrivé à « bureau »" in line for line in lines)
+    assert any("sommeil : 5 h 10, réveillé 3 fois" in line for line in lines)
+    assert not await places.situation(now + timedelta(days=1))  # yesterday's night is old news

@@ -7,13 +7,14 @@ side-effect free and allowed everywhere.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService, Origin
+from orion.memory.situations import Ending
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 
@@ -79,6 +80,36 @@ class CommitmentListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SituationOpenInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=3, max_length=120, description="« Cherche un appart à Lyon »")
+    summary: str = Field(min_length=3, max_length=600, description="What is known of it")
+    about: list[str] = Field(default_factory=list[str], description="People it involves")
+    until: str | None = Field(default=None, description="ISO date it should be over by")
+
+
+class SituationUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    situation_id: str = Field(description="si_…")
+    note: str = Field(min_length=3, max_length=400, description="What is new")
+    summary: str | None = Field(default=None, max_length=600, description="Rewritten, if changed")
+    until: str | None = None
+
+
+class SituationCloseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    situation_id: str = Field(description="si_…")
+    ending: Literal["settled", "dropped"] = "settled"
+    outcome: str = Field(default="", max_length=300, description="What came of it")
+
+
+class SituationListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 def memory_tools(memory: MemoryService) -> list[Tool]:
     async def remember(args: Any, ctx: ToolContext) -> ToolResult:
         fact_id = await memory.remember(
@@ -126,6 +157,40 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
             return ToolResult("Aucun engagement en cours.")
         return ToolResult("\n".join(format_commitment(c) for c in open_items))
 
+    async def situation_open(args: Any, ctx: ToolContext) -> ToolResult:
+        sid = await memory.open_situation(
+            args.title, args.summary, origin_of(ctx), about=args.about, until=args.until
+        )
+        return ToolResult(f"Situation ouverte ({sid}).", data={"situation_id": sid})
+
+    def _open(situation_id: str) -> ToolResult | None:
+        found = memory.situations.by_id.get(situation_id)
+        if found is None or not found.open:
+            return ToolResult(f"No open situation {situation_id}", is_error=True)
+        return None
+
+    async def situation_update(args: Any, ctx: ToolContext) -> ToolResult:
+        if refused := _open(args.situation_id):
+            return refused
+        await memory.update_situation(
+            args.situation_id, args.note, origin_of(ctx), summary=args.summary, until=args.until
+        )
+        return ToolResult(f"Situation {args.situation_id} complétée.")
+
+    async def situation_close(args: Any, ctx: ToolContext) -> ToolResult:
+        if refused := _open(args.situation_id):
+            return refused
+        await memory.close_situation(
+            args.situation_id, origin_of(ctx), Ending(args.ending), args.outcome
+        )
+        return ToolResult(f"Situation {args.situation_id} close.")
+
+    async def situations_list(args: Any, ctx: ToolContext) -> ToolResult:
+        current = memory.situations.current()
+        if not current:
+            return ToolResult("Aucune situation en cours.")
+        return ToolResult("\n".join(s.line() for s in current))
+
     write: dict[str, Any] = {
         "effect": Effect.INTERNAL,
         "reversibility": Reversibility.REVERSIBLE,
@@ -140,9 +205,10 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
     return [
         Tool(
             name="remember",
-            description="Save a durable fact about the owner, someone in their life, or a project. "
-            "Use it when you learn something worth knowing in a month. To correct a fact, pass "
-            "its id in `replaces`. Never claim you remembered something without calling this.",
+            description="Save a durable fact about the owner, someone in their life, or a project: "
+            "still true in a year. What lasts a while (a trip, an illness, a search) is a "
+            "`situation`. To correct a fact, pass its id in `replaces`. Never claim you "
+            "remembered something without calling this.",
             input_model=RememberInput,
             handler=remember,
             **write,
@@ -175,6 +241,36 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
             input_model=CommitmentCloseInput,
             handler=commitment_close,
             **write,
+        ),
+        Tool(
+            name="situation_open",
+            description="Something going on in his life for a while (a trip, an illness, a "
+            "search, an exam to prepare, a worry, a project with an end): never a fact.",
+            input_model=SituationOpenInput,
+            handler=situation_open,
+            **write,
+        ),
+        Tool(
+            name="situation_update",
+            description="What is new about an open situation.",
+            input_model=SituationUpdateInput,
+            handler=situation_update,
+            **write,
+        ),
+        Tool(
+            name="situation_close",
+            description="It is over: settled or dropped, and what came of it (what lasts is a "
+            "fact: `remember`).",
+            input_model=SituationCloseInput,
+            handler=situation_close,
+            **write,
+        ),
+        Tool(
+            name="situations_list",
+            description="The open situations.",
+            input_model=SituationListInput,
+            handler=situations_list,
+            **read,
         ),
         Tool(
             name="commitments_list",

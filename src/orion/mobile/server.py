@@ -598,7 +598,12 @@ def core_routes(
     async def memory(request: Request, c: Control) -> object:
         query = request.query_params.get("q", "")
         facts = await c.facts(query, request.query_params.get("past") == "1")
-        return {"facts": facts, "portrait": None if query.strip() else await c.portrait()}
+        searching = bool(query.strip())
+        return {
+            "facts": facts,
+            "portrait": None if searching else await c.portrait(),
+            "situations": [] if searching else await c.situations(),
+        }
 
     async def forget(request: Request, c: Control) -> object:
         await c.forget(str(request.path_params["id"]))

@@ -126,10 +126,46 @@ def sounds_like_an_assistant(text: str) -> bool:
     return len(text) < SHORT_REPLY and _HEADING.search(text) is not None
 
 
+DEFERS = ("mission:start", "task:start", "think_later")
+"""Putting a request off: a mission, a background task, a question kept for the night."""
+LOOKS = (
+    "web_search",
+    "web_read",
+    "browser",
+    "recall",
+    "attachment_look",
+    "conversations_search",
+    "library",
+    "papers",
+    "mail",
+    "agenda",
+    "consult_expert",
+    "think_harder",
+    "people",
+    "skill",
+)
+"""Doing something for the request now: looking it up, reading, asking the stronger model."""
+NOW_NOTE = (
+    "Tu as remis sa demande à plus tard (mission, tâche ou réflexion) sans rien chercher "
+    "maintenant. Ce qui se trouve en quelques recherches, cherche-le tout de suite et réponds "
+    "avec ce que tu as trouvé ; ce que tu as lancé ne sert qu'à la suite (surveiller, "
+    "approfondir, revenir plus tard)."
+)
+
+
+def defers_without_trying(called: Sequence[str]) -> bool:
+    """D151: seen for real, a mission « every 6 h » for what deserved an answer now."""
+    return any(c.startswith(DEFERS) for c in called) and not any(
+        c.startswith(LOOKS) for c in called
+    )
+
+
 def finish_check(text: str, called: Sequence[str] = ()) -> str | None:
     """The note that sends Orion back to work, or None when the reply may go. `called`: the
-    tools called during the turn."""
+    tools called during the turn (`tool`, or `tool:action` for a tool with actions)."""
     notes: list[str] = []
+    if defers_without_trying(called):
+        notes.append(NOW_NOTE)
     if ends_on_offer(text):
         notes.append(OFFER_NOTE)
     elif promises_later(text) and not any(name.startswith(KEEPS_A_PROMISE) for name in called):

@@ -21,6 +21,7 @@ from orion.core.events import Trust
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryService, Origin
+from orion.memory.situations import Ending
 from orion.memory.store import Fact
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 
@@ -44,14 +45,33 @@ Allowed operations (dates are ISO, null when unknown):
    "creditor": "owner|orion|<name>", "due": date or datetime}
 - {"op": "close_commitment", "commitment_id": str, "status": "done|cancelled",
    "evidence": str | null}
+- {"op": "open_situation", "title": str, "summary": str, "about": [str], "until": date}
+- {"op": "update_situation", "situation_id": str, "note": str, "summary": str | null,
+   "until": date}
+- {"op": "close_situation", "situation_id": str, "ending": "settled|dropped",
+   "outcome": str}
+
+Facts and situations:
+- A fact stays true: who someone is, where they live and work, a lasting taste, a health
+  condition, a relationship. A situation is what is going on for a while: a trip, an
+  illness, a search (a flat, a job), an exam or a deadline to prepare, a worry, a project
+  with an end, a conflict, a move. A situation is NEVER recorded as a fact: it would never
+  die. Give it an `until` when one is known or can be reasonably set (the trip's return, the
+  exam's date); otherwise null.
+- What is new about an open situation goes to update_situation (a short note; rewrite the
+  summary when it changed). When it is over (found the flat, back from the trip, healed),
+  close_situation with what came of it; what came of it that lasts (his new address) is a
+  fact.
+- Moods and worries count when they last or recur: « je stresse pour l'exam » is part of
+  the exam's situation, not small talk.
 
 Rules:
 - Only record what the owner stated or clearly confirmed. Never record Orion's own guesses,
   suggestions or jokes as facts. What Orion read in a photo or a document (whose car, which
   side of a form, who is at fault) is Orion's reading: record it only once the owner confirmed
   it, never because the owner did not object.
-- Facts are durable: worth knowing in a month. Skip small talk, one-off questions, moods of the
-  moment, and anything already in memory (same meaning counts as already there).
+- Facts are durable: worth knowing in a month. Skip small talk, one-off questions, passing
+  moods, and anything already in memory (same meaning counts as already there).
 - When the owner corrects or changes something already in memory, use update_fact (or
   invalidate_fact if there is no replacement). Never delete history yourself.
 - A commitment is a concrete promise with someone owing something: "je dois envoyer le devis à
@@ -87,6 +107,32 @@ class _InvalidateFact(BaseModel):
     valid_to: str | None = None
 
 
+class _OpenSituation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    op: Literal["open_situation"]
+    title: str = Field(min_length=3, max_length=120)
+    summary: str = Field(min_length=3, max_length=600)
+    about: list[str] = Field(default_factory=list[str])
+    until: str | None = None
+
+
+class _UpdateSituation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    op: Literal["update_situation"]
+    situation_id: str
+    note: str = Field(min_length=3, max_length=400)
+    summary: str | None = Field(default=None, max_length=600)
+    until: str | None = None
+
+
+class _CloseSituation(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    op: Literal["close_situation"]
+    situation_id: str
+    ending: Literal["settled", "dropped"] = "settled"
+    outcome: str = Field(default="", max_length=300)
+
+
 class _AddCommitment(BaseModel):
     model_config = ConfigDict(extra="ignore")
     op: Literal["add_commitment"]
@@ -105,7 +151,14 @@ class _CloseCommitment(BaseModel):
 
 
 Operation = Annotated[
-    _AddFact | _UpdateFact | _InvalidateFact | _AddCommitment | _CloseCommitment,
+    _AddFact
+    | _UpdateFact
+    | _InvalidateFact
+    | _AddCommitment
+    | _CloseCommitment
+    | _OpenSituation
+    | _UpdateSituation
+    | _CloseSituation,
     Field(discriminator="op"),
 ]
 _OPERATION = TypeAdapter[Operation](Operation)
@@ -148,6 +201,7 @@ class MemoryExtractor:
         related = await self._memory.search(said[-4000:], limit=12 + 3 * len(exchanges))
         known = {f.id: f for f in [*related, *recorded]}
         commitments = await self._memory.store.commitments()
+        situations = self._memory.situations.current()
         user = "\n".join(
             [
                 f"Today: {today.isoformat()} ({today.strftime('%A')})",
@@ -156,6 +210,10 @@ class MemoryExtractor:
                 *(format_fact(f) for f in known.values()),
                 *(format_commitment(c) for c in commitments),
                 "" if known or commitments else "(nothing related)",
+                "",
+                "Open situations:",
+                *(s.line() for s in situations),
+                "" if situations else "(none)",
                 "",
                 *(
                     line
@@ -180,10 +238,21 @@ class MemoryExtractor:
         except ProviderError:
             log.exception("memory.extract_failed")
             return ExtractionReport(rejected=["provider error"], unavailable=True)
-        return await self._apply(response.text, origin, set(known), {c.id for c in commitments})
+        return await self._apply(
+            response.text,
+            origin,
+            set(known),
+            {c.id for c in commitments},
+            {s.id for s in situations},
+        )
 
     async def _apply(
-        self, raw: str, origin: Origin, fact_ids: set[str], commitment_ids: set[str]
+        self,
+        raw: str,
+        origin: Origin,
+        fact_ids: set[str],
+        commitment_ids: set[str],
+        situation_ids: set[str],
     ) -> ExtractionReport:
         report = ExtractionReport()
         try:
@@ -201,14 +270,19 @@ class MemoryExtractor:
             except ValidationError as exc:
                 report.rejected.append(f"invalid operation: {exc.errors(include_url=False)[:1]}")
                 continue
-            outcome = await self._apply_one(op, origin, fact_ids, commitment_ids)
+            outcome = await self._apply_one(op, origin, fact_ids, commitment_ids, situation_ids)
             (report.applied if outcome.startswith("ok") else report.rejected).append(outcome)
         if report.applied or report.rejected:
             log.info("memory.extracted", applied=report.applied, rejected=report.rejected)
         return report
 
     async def _apply_one(
-        self, op: Operation, origin: Origin, fact_ids: set[str], commitment_ids: set[str]
+        self,
+        op: Operation,
+        origin: Origin,
+        fact_ids: set[str],
+        commitment_ids: set[str],
+        situation_ids: set[str],
     ) -> str:
         memory = self._memory
         match op:
@@ -249,6 +323,23 @@ class MemoryExtractor:
                     return f"close_commitment refused: unknown id {op.commitment_id}"
                 await memory.close_commitment(op.commitment_id, op.status, origin, op.evidence)
                 return f"ok close_commitment {op.commitment_id}"
+            case _OpenSituation():
+                sid = await memory.open_situation(
+                    op.title, op.summary, origin, about=op.about, until=op.until
+                )
+                return f"ok open_situation {sid}"
+            case _UpdateSituation():
+                if op.situation_id not in situation_ids:
+                    return f"update_situation refused: unknown id {op.situation_id}"
+                await memory.update_situation(
+                    op.situation_id, op.note, origin, summary=op.summary, until=op.until
+                )
+                return f"ok update_situation {op.situation_id}"
+            case _CloseSituation():
+                if op.situation_id not in situation_ids:
+                    return f"close_situation refused: unknown id {op.situation_id}"
+                await memory.close_situation(op.situation_id, origin, Ending(op.ending), op.outcome)
+                return f"ok close_situation {op.situation_id}"
 
 
 EXTRACTOR_TRUST = Trust.SYSTEM

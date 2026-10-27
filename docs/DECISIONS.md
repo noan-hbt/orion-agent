@@ -3360,3 +3360,131 @@ copie comme pour orion.toml. Le dossier `config/` étant le sien, un fichier lai
 remplacé quand même. `install.sh` rend aussi tout le dossier au gardien après `orion setup`.
 Rejoué avec un utilisateur ordinaire : l'ancien code échoue sur `orion.toml.previous`, le
 nouveau passe. Le serveur se répare à sa prochaine mise à jour automatique, sans rien relancer.
+
+## D149 — Les situations : ce qui se passe dans sa vie en ce moment (chantier 1 de la refonte)
+
+*27/10/2026 · acceptée*
+
+Premier chantier de la refonte (`architecture/05-refonte.md`). La mémoire n'avait que des
+faits, censés rester vrais. Ce qui dure un temps (un voyage, une maladie, une recherche
+d'appart, un examen à préparer, un souci, un projet qui finira) devenait un fait qui ne
+mourait jamais, ou n'était pas gardé du tout parce qu'il ne « vaudrait plus rien dans un mois ».
+Le propriétaire le voyait : Orion garde du temporaire et rate l'important.
+
+Une **situation** a un titre, ce qu'on en sait, les gens qu'elle touche, un horizon (la date
+où elle devrait être finie, si on la connaît), des nouvelles (les six dernières), et une fin :
+réglée, abandonnée, ou passée son horizon. Événements `situation.opened`, `situation.updated`,
+`situation.closed` ; projection `Situations`, tenue par `MemoryService` à côté des faits.
+- **Orion** les tient en conversation avec l'outil `situation` (open, update, close, list) ;
+  `remember` ne garde plus que ce qui reste vrai.
+- **L'extracteur** voit les situations ouvertes et sépare désormais fait durable, situation et
+  engagement ; ce qui ressort d'une situation et qui dure (sa nouvelle adresse) devient un fait.
+- **La nuit**, le code ferme une situation deux jours après son horizon. Un tri relit les faits
+  notés depuis la dernière nuit (120 par nuit, du plus ancien au plus récent : une grande
+  mémoire est triée en quelques nuits) ; ceux qui n'étaient pas durables sont clos comme faits
+  et rouverts en situation s'ils durent encore. La situation garde la source du fait : oublier
+  cette source l'oublie aussi.
+- **`<maintenant>`** les montre d'abord (« en cours », six au plus, les dernières touchées),
+  seulement celles qui viennent de lui ou d'Orion. Le **portrait** de la nuit s'écrit à partir
+  d'elles et de celles qui viennent de finir. Le **Carnet** de l'application les montre sous
+  son portrait, « En ce moment ».
+
+Évaluation `un_voyage_est_une_situation` (« je pars à Lisbonne vendredi avec Léa, retour
+lundi ») : 3/3 sur Haiku 5.5. Pas encore vérifié en vrai : le tri de sa mémoire réelle la
+première nuit.
+
+## D150 — La veille : Orion prend du recul dans la journée (chantier 2 de la refonte)
+
+*27/10/2026 · acceptée*
+
+Vingt sources pouvaient faire parler Orion (agenda, mails, missions, papiers, proches…), chacune
+avec sa règle, sans voir les autres ; et Orion ne réfléchissait à la vie du propriétaire dans
+son ensemble qu'une fois, la nuit, sur la conversation. Le propriétaire le trouvait sans
+intuition ni recul.
+
+Le module `watch` (actif par défaut) : trois fois par jour (7 h 30, 12 h 30, 18 h 30 ; réglable),
+Orion prend un moment à lui, dans son propre fil (`veille`), avec le modèle fort et ses outils.
+Il lit ses situations (D149, avec celles sans nouvelles depuis trois semaines et celles qui
+viennent de finir), son agenda d'aujourd'hui et de demain, ses échéances, les 30 derniers faits
+appris, ce qu'il a dit depuis la dernière veille (seulement ce qui est de confiance), et ses
+propres conclusions des trois derniers jours pour ne pas se répéter. Il se demande ce qu'un ami
+attentif verrait (ce qui coince, ce qui approche et se prépare, les liens, ce qui s'est tu, une
+idée concrète), fait ce qui se fait d'ici (chercher, préparer, mettre à jour une situation,
+poser un rappel, lancer une tâche), puis conclut : `SILENCE`, `MAINTENANT : …` ou
+`AU POINT : …`. La conclusion devient une alerte du moteur d'initiative (importance 0,6 : elle
+part ; 0,3 : elle attend le prochain point), avec les heures calmes, le budget du jour et le
+vérificateur. Une veille manquée est rattrapée une fois ; Orion en pause, elle ne tourne pas.
+
+Comme la nuit, rien ne part de ce fil et rien n'est demandé au propriétaire : le gardien
+refuse ce qui agit sur le monde (`REFLECTIVE_THREADS`), et ce qui demande son oui va dans la
+conclusion. Le module n'ajoute rien au message système : tout est dans la consigne de la veille.
+
+Évaluations (Haiku 5.5 pour Orion, Opus pour la veille) : `la_veille_voit_le_passeport`
+(un passeport qui expire le 29 et un Eurostar pour Londres le 31, appris séparément) 2/2 ; elle
+relie les deux, rappelle que la carte d'identité ne suffit plus au Royaume-Uni et propose le
+passeport temporaire en préfecture. La première version ne voyait pas les faits récents et
+ratait le lien (« s'il n'y a pas de voyage en vue… ») : d'où les 30 derniers faits.
+`la_veille_se_tait_sans_raison` 2/2 (rien ne part tout de suite). Coût : 5 à 20 centimes par
+veille sur OpenRouter, rien sur un forfait. Pas encore fait : une veille déclenchée par un
+événement (un mail important, un agenda qui bouge), en plus des heures fixes.
+
+## D151 — Le tiroir : moins d'outils sous les yeux ; faire maintenant avant de remettre à plus tard (chantier 3)
+
+*27/10/2026 · acceptée*
+
+À chaque pas, le modèle choisissait parmi 58 outils (46 avec les modules par défaut), dont
+beaucoup servent une fois par mois ou quand il le demande. Et le propriétaire a vu Orion lancer
+une mission « toutes les 6 h » pour ce qui méritait une réponse tout de suite.
+
+- **Le tiroir.** `ToolRegistry` prend une seconde liste, le tiroir (`DRAWER_TOOLS` dans
+  `app.py`) : autonomie, provenance, confinement d'une source, réglages, modules, console,
+  dépense, chronique, carnet d'erreurs, style, doute, mains sur ses machines… Le modèle ne voit
+  qu'un outil, `orion`, qui les liste d'une ligne chacun ; il les appelle par
+  `orion(tool, args)`. La boucle remplace aussitôt cet appel par celui de l'outil lui-même :
+  le gardien, les accords du propriétaire (vérifiés par nom), le journal et les évaluations
+  voient `autonomy_grant`, jamais `orion`. Des arguments faux renvoient le schéma de l'outil,
+  que le modèle n'a pas vu, pour qu'il refasse l'appel. Avec les modules par défaut : 31 outils
+  au lieu de 46, 32,7 k caractères de schémas au lieu de 40 k ; le message système perd aussi
+  ses paragraphes sur l'autonomie et la provenance, resserrés (43,3 k avec tous les modules).
+- **Faire maintenant d'abord**, vérifié dans le code (étend D144). La relecture finale lit
+  désormais l'action de chaque appel (`mission:start`, `task:start`). Un tour du propriétaire
+  qui remet sa demande à plus tard (mission, tâche de fond, réflexion pour la nuit) sans avoir
+  rien cherché (web, navigateur, mémoire, papiers, mails, expert…) revient une fois au modèle :
+  ce qui se trouve en quelques recherches se cherche et se répond tout de suite ; ce qui est
+  lancé ne sert qu'à la suite.
+
+Pas fait : réunir les façons de remettre à plus tard (`remind_me`, `follow_up`, `think_later`,
+`awaiting`) en un seul outil. Le vrai travers était de remettre au lieu de faire, que la
+vérification ci-dessus vise ; fusionner les outils obligerait à réécrire leurs événements.
+
+## D152 — Les ratés de sa vraie vie (chantier 4)
+
+*27/10/2026 · acceptée*
+
+Les évaluations s'écrivaient à la main, après qu'il a raconté ce qui n'allait pas. Ses
+signaux le disent déjà dans le journal : un 👎 sur un message d'Orion, et ses mots quand il
+le corrige (« non, c'est pas ça », « tu t'es trompé », « je t'ai déjà dit… »).
+`orion misses` les liste avec ce qu'il avait demandé et ce qu'Orion a répondu ;
+`orion misses --case N` en écrit le début d'un cas d'évaluation (sa demande, le moment, le
+contexte), à compléter d'une vérification et à ajouter à `evals/cases.py`. Rien ne quitte son
+serveur. Lu à partir des signaux qu'Orion collecte déjà pour apprendre son manuel
+(`adaptation/signals.py`), sans nouvel événement.
+
+## D153 — Ce que son téléphone sait (chantier 6, première source)
+
+*27/10/2026 · acceptée*
+
+Orion ne voyait de sa vie que ses messages, son agenda, ses mails, ses papiers et ses
+fichiers. Sans application native, ce que l'iPhone sait passe par les automatisations
+Raccourcis, que le module `places` utilisait déjà pour les arrivées et départs (D57). Avec le
+même jeton, ses automatisations envoient maintenant `{"kind", "value"}` à `/places/sense` :
+son sommeil (au réveil), son mode concentration, une batterie faible, la fin d'un
+entraînement, sa santé, ce qu'il écoute. Événement `phone.sensed` (confiance du téléphone, pas
+ses mots). Ce qu'il a dit depuis moins de 18 h, et le dernier lieu où il est arrivé ou d'où il
+est parti, apparaissent dans `<maintenant>` et dans la veille (D150). `orion places token`
+explique quoi régler. Caddy fait passer tout `/places/*`. Seulement ce qu'il choisit d'envoyer,
+et Orion n'en déduit rien d'autre.
+
+Le format des messages (chantier 5) n'a pas changé : le modèle écrit déjà une fois, avec les
+balises de l'application, et chaque canal les rend à sa façon (D126). Les sources suivantes du
+chantier 6 (contacts, trajets, colis et abonnements, banque, maison, flux) restent à faire.
