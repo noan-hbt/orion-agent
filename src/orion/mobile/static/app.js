@@ -417,8 +417,7 @@ async function conversation() {
   view.typing = h("div", { class: "typing", hidden: true, "aria-label": "Orion écrit" }, h("i"), h("i"), h("i"));
   view.offline = h("p", { class: "offline", hidden: true }, "Hors ligne : je me reconnecte…");
   view.older = h("button", { class: "pill small older", hidden: true, onclick: older }, "Messages plus anciens");
-  view.work = h("article", { class: "live-work", hidden: true, "aria-live": "polite", "aria-label": "Orion au travail" });
-  view.thread.append(view.older, view.list, view.offline, view.typing, view.work, view.asks);
+  view.thread.append(view.older, view.list, view.offline, view.typing, view.asks);
   view.scrollBottom = h("button", {
     class: "scroll-bottom glass", type: "button", hidden: true, "aria-label": "Derniers messages",
     onpointerdown: (event) => event.preventDefault(),
@@ -762,7 +761,6 @@ function render(message, previous) {
     nodes.push(timestamp(date));
   }
   const el = h("div", { class: `msg ${message.who}`, "data-who": message.who, "data-ref": message.ref, "data-at": date.getTime() });
-  if (message.trace) el.append(traceOf(message.trace));
   for (const [index, file] of message.files.entries()) el.append(attachment(message, file, index));
   if (message.blocks && message.blocks.length) el.append(...message.blocks.map(block));
   else if (message.text) el.append(h("div", { class: "bubble" }, ...rich(message.text)));
@@ -1373,10 +1371,10 @@ function setLive(on) {
 }
 
 function setTyping(on, keep = false) {
-  // Orion may keep working after a message (a progress line): the server says when it stops.
+  // Orion may keep working after a message he sends mid-work: the server says when it stops.
   if (keep && state.typing) return typingBubble(false);
   state.typing = on;
-  typingBubble(on && view.work.hidden);
+  typingBubble(on);
   paintStatus();
   if (on) bottom();
 }
@@ -1395,146 +1393,20 @@ function typingBubble(on) {
   }
 }
 
-// -- Orion at work, live (D133, D143) -----------------------------------------------------------
-// One quiet element where his next message will be: what he does now (shimmering), what he
-// says of it, his plan as a checklist. Stopping is the composer's button; "en fond" comes only
-// once the work is long. Nothing here is a message: when he answers, it folds above the answer.
-
-let workClock = null;
+// -- Orion at work (D133, D169) ----------------------------------------------------------------
+// Only the three dots while he works, as anyone typing: what he finds comes as messages. The
+// work is kept to stop it from the composer's button.
 
 function elapsed(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")}`;
 }
 
-function swap(el, text) {
-  // A line that changes slides in; one that does not is left alone (no flicker on updates).
-  if (el.textContent === text) return;
-  el.textContent = text;
-  el.classList.remove("swap");
-  void el.offsetWidth;
-  el.classList.add("swap");
-}
-
-function planList(plan, live) {
-  return h(
-    "ol",
-    { class: "plan" },
-    plan.map(([text, status]) =>
-      h("li", { class: status }, h("span", { class: "mark" }, status === "done" ? icon("check", 12) : status === "doing" && live ? spinner() : null), h("span", {}, text)),
-    ),
-  );
-}
-
-function workParts() {
-  if (view.workParts) return view.workParts;
-  const parts = {
-    title: h("span", { class: "lw-title shimmer" }),
-    time: h("span", { class: "lw-time" }),
-    said: h("p", { class: "lw-said", hidden: true }),
-    body: h("div", { class: "lw-body" }),
-    more: h("button", { class: "lw-more", type: "button", hidden: true, "aria-expanded": "false" }),
-    later: h("button", { class: "lw-later", type: "button", hidden: true }, "Continuer en fond"),
-    open: false,
-  };
-  parts.more.addEventListener("click", () => {
-    parts.open = !parts.open;
-    parts.more.setAttribute("aria-expanded", String(parts.open));
-    paintWork();
-  });
-  parts.later.addEventListener("click", () => {
-    state.backgrounded = state.work?.since;
-    parts.later.hidden = true;
-    submit("Passe ça en tâche de fond et préviens-moi quand c'est prêt.");
-  });
-  view.work.replaceChildren(
-    h("div", { class: "lw-head" }, h("span", { class: "lw-orb", "aria-hidden": "true" }), parts.title, parts.time),
-    parts.said,
-    parts.body,
-    h("div", { class: "lw-foot" }, parts.more, parts.later),
-  );
-  view.workParts = parts;
-  return parts;
-}
-
-function paintWork() {
-  const work = state.work;
-  if (!work) return;
-  const p = workParts();
-  const seconds = (Date.now() - new Date(work.since)) / 1000;
-  swap(p.title, work.stopping ? "J'arrête…" : work.doing[0] ? headline(work.doing) : work.steps ? "Je fais le point…" : "Je réfléchis…");
-  p.time.textContent = elapsed(seconds);
-  const said = work.said?.[work.said.length - 1];
-  p.said.hidden = !said;
-  if (said) swap(p.said, said);
-  const plan = work.plan || [];
-  const done = work.done || [];
-  if (plan.length) {
-    p.body.replaceChildren(planList(plan, true));
-    p.more.hidden = true;
-  } else {
-    p.body.replaceChildren(p.open && done.length ? h("ul", { class: "trail" }, done.map((t) => h("li", {}, icon("check", 12), capital(t)))) : "");
-    p.more.hidden = !done.length;
-    p.more.textContent = p.open ? "Masquer" : `${plural(done.length, "chose faite", "choses faites")}`;
-  }
-  p.later.hidden = seconds < 25 || work.stopping || state.backgrounded === work.since;
-}
-
-// Calls run together read as one line: « Je lis lemonde.fr, lefigaro.fr » (D162).
-function headline(doing) {
-  const [first, ...rest] = doing;
-  const verb = first.split(" ").slice(0, 2).join(" ") + " ";
-  const same = rest.filter((d) => d.startsWith(verb));
-  const others = rest.length - same.length;
-  const text = [first, ...same.map((d) => d.slice(verb.length))].join(", ");
-  return capital(others ? `${text} et ${others} autre${others > 1 ? "s" : ""} chose${others > 1 ? "s" : ""}` : text);
-}
-
-function capital(text) {
-  return text ? text[0].toUpperCase() + text.slice(1) : text;
-}
-
 function setWork(work) {
-  const was = state.work;
   state.work = work;
-  clearInterval(workClock);
-  // A quick answer keeps the three dots; the element comes with the first step.
-  const shown = !!work && state.typing && (work.steps > 0 || work.doing.length > 0 || work.said?.length > 0);
-  view.work.hidden = !shown;
-  typingBubble(state.typing && !shown);
   view.avatar.classList.toggle("busy", state.typing || !!work);
   sendMode();
   paintNowWork();
-  if (!shown) {
-    view.workParts = null;
-    return;
-  }
-  if (!was || was.since !== work.since) {
-    view.workParts = null; // a new turn: a fresh element, folded
-    view.work.classList.remove("new");
-    void view.work.offsetWidth;
-    view.work.classList.add("new");
-  }
-  paintWork();
-  workClock = setInterval(paintWork, 1000);
-  bottom();
-}
-
-function traceOf(trace) {
-  // Above his answer, folded: how long he worked, and what he did and said on the way.
-  const label = `Travaillé ${elapsed(trace.seconds)} · ${plural(trace.steps, "étape", "étapes")}`;
-  const plan = trace.plan || [];
-  return h(
-    "details",
-    { class: "trace" },
-    h("summary", {}, h("span", { class: "lw-orb still", "aria-hidden": "true" }), label),
-    h(
-      "div",
-      { class: "trace-body" },
-      (trace.said || []).map((line) => h("p", { class: "lw-said" }, line)),
-      plan.length ? planList(plan, false) : h("ul", { class: "trail" }, (trace.done || []).map((t) => h("li", {}, icon("check", 12), capital(t)))),
-    ),
-  );
 }
 
 function paintStatus() {
@@ -2241,15 +2113,15 @@ function talkAbout(text) {
 function paintNowWork() {
   if (!view.nowWork) return;
   const o = state.overview;
-  const work = state.work && (state.work.steps > 0 || state.work.doing.length) ? state.work : null;
+  const work = state.work;
   const waiting = state.approvals.size + (state.questions || 0);
   const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, h("img", { class: "orb-avatar", src: `${BASE}orion-avatar.svg`, alt: "" }));
   let title;
   let line;
   let acts = [];
   if (work) {
-    title = h("span", { class: "shimmer" }, work.doing[0] ? headline(work.doing) : capital(work.said?.[work.said.length - 1] || "Je réfléchis…"));
-    line = `depuis ${elapsed((Date.now() - new Date(work.since)) / 1000)} · ${plural(work.steps, "étape", "étapes")}`;
+    title = h("span", { class: "shimmer" }, "Je m'en occupe…");
+    line = `depuis ${elapsed((Date.now() - new Date(work.since)) / 1000)}`;
     acts = [
       h("button", { class: "pill small", type: "button", onclick: () => show("talk") }, "Suivre"),
       h("button", { class: "pill small danger", type: "button", disabled: work.stopping, onclick: () => api("api/stop", {}).catch((e) => toast(said(e))) }, work.stopping ? "J'arrête…" : "Arrêter"),

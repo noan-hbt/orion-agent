@@ -186,14 +186,24 @@ class TelegramClient:
         return cast(list[dict[str, Any]], found)
 
     async def send_message(
-        self, chat_id: int, text: str, buttons: list[tuple[str, str]] | None = None
+        self,
+        chat_id: int,
+        text: str,
+        buttons: list[tuple[str, str]] | None = None,
+        quiet: bool = False,
     ) -> int:
         markup = (
             {"inline_keyboard": [[{"text": t, "callback_data": d} for t, d in buttons]]}
             if buttons
             else None
         )
-        sent = await self.call("sendMessage", chat_id=chat_id, text=text, reply_markup=markup)
+        sent = await self.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=text,
+            reply_markup=markup,
+            disable_notification=True if quiet else None,
+        )
         return int(cast(dict[str, Any], sent)["message_id"])
 
     async def send_file(
@@ -375,9 +385,9 @@ class TelegramChannel:
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
 
-    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
+    async def transmit(self, to: str, text: str, idempotency_key: str, quiet: bool = False) -> str:
         try:
-            return str(await self._client.send_message(int(to), text))
+            return str(await self._client.send_message(int(to), text, quiet=quiet))
         except TelegramError as exc:
             raise SendError(str(exc), retryable=exc.retryable) from exc
 
@@ -409,8 +419,8 @@ class TelegramChannel:
         await self._runner.catch_up()
         return self.state.owner_chat is not None
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
-        await self._send_to_owner(text, correlation_id)
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
+        await self._send_to_owner(text, correlation_id, quiet)
 
     async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
         chat = self._owner_chat()
@@ -443,10 +453,12 @@ class TelegramChannel:
             raise SendError("the owner has not written to Orion on Telegram yet", retryable=False)
         return self.state.owner_chat
 
-    async def _send_to_owner(self, text: str, correlation_id: str | None = None) -> list[str]:
+    async def _send_to_owner(
+        self, text: str, correlation_id: str | None = None, quiet: bool = False
+    ) -> list[str]:
         chat = str(self._owner_chat())
         return [
-            await self.outbox.send(CHANNEL, chat, part, correlation_id)
+            await self.outbox.send(CHANNEL, chat, part, correlation_id, quiet=quiet)
             for part in _parts(text.strip())
         ]
 

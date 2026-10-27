@@ -39,7 +39,6 @@ from orion.guardian.outbox import SendError
 from orion.guardian.policy import ActionProposal, Approval
 from orion.runtime import (
     OWNER_THREAD,
-    Activity,
     Interjection,
     Orion,
     Photo,
@@ -106,7 +105,9 @@ class Outlet(Protocol):
 
     async def available(self) -> bool: ...
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None: ...
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
+        """`quiet`: sent without ringing (what he says while still working, D169)."""
+        ...
 
     def working(self, item: Inbound) -> AbstractAsyncContextManager[None]:
         """Shown while Orion handles `item`: read receipt, typing indicator…"""
@@ -128,17 +129,11 @@ class AskingOutlet(Outlet, Protocol):
 
 
 @runtime_checkable
-class LiveOutlet(Outlet, Protocol):
-    """A channel that shows Orion's work as it goes, and where he can call it off (the app)."""
-
-    async def watch(self, activity: Activity) -> None: ...
+class StoppableOutlet(Outlet, Protocol):
+    """A channel where he can call off the work on his message (the app)."""
 
     async def stopped(self) -> bool:
         """Whether he asked to stop the work on his message."""
-        ...
-
-    async def narrate(self, text: str) -> None:
-        """What Orion says of his work as it goes, shown with the work, not as a message."""
         ...
 
 
@@ -218,7 +213,12 @@ class OwnerInbox:
         await self._say(outlet, text, correlation_id, None)
 
     async def _say(
-        self, outlet: Outlet, text: str, correlation_id: str | None, item: Inbound | None
+        self,
+        outlet: Outlet,
+        text: str,
+        correlation_id: str | None,
+        item: Inbound | None,
+        quiet: bool = False,
     ) -> None:
         """His words as the messages he meant, each after a pause as if typed (shown typing
         on the channel when it answers a message of his)."""
@@ -226,7 +226,7 @@ class OwnerInbox:
             if i:
                 async with outlet.working(item) if item is not None else nothing_to_show():
                     await asyncio.sleep(beat(message, self._beat))
-            await outlet.deliver(shown(outlet, message), correlation_id)
+            await outlet.deliver(shown(outlet, message), correlation_id, quiet=quiet)
 
     async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
         """A file for the owner, on a channel that carries files."""
@@ -348,14 +348,11 @@ class OwnerInbox:
                 for item in self._arrived_meanwhile(first)
             ]
 
-        async def progress(text: str, correlation_id: str, spoken: bool) -> None:
+        async def progress(text: str, correlation_id: str) -> None:
             if reply is None or first.allow_silence or is_silence(text):
                 return
-            if isinstance(reply, LiveOutlet) and reply is source and not spoken:
-                # What the work is doing goes beside it (D143); his own words are messages (D162).
-                await reply.narrate(text)
-            else:
-                await self._say(reply, text, correlation_id, None)
+            # A message of its own, but only the last one of the turn rings (D169).
+            await self._say(reply, text, correlation_id, None, quiet=True)
 
         async with showing:
             looked = await self._look(batch)
@@ -373,8 +370,7 @@ class OwnerInbox:
                 waiting=lambda: not first.allow_silence and self._waiting(first),
                 photos=photos,
                 sent_at=min((i.sent_at for i in batch if i.sent_at), default=None),
-                watch=source.watch if isinstance(source, LiveOutlet) else None,
-                halted=source.stopped if isinstance(source, LiveOutlet) else None,
+                halted=source.stopped if isinstance(source, StoppableOutlet) else None,
             )
         thought = time.monotonic() - started
         text = turn.text.strip()

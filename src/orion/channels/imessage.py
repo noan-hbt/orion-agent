@@ -281,7 +281,8 @@ class IMessageChannel:
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
 
-    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
+    async def transmit(self, to: str, text: str, idempotency_key: str, quiet: bool = False) -> str:
+        # iMessage has no silent message: `quiet` cannot be honoured here.
         try:
             sent = await self._client.send(to, text, idempotency_key, self._settings.identity_id)
         except LineError as exc:
@@ -314,7 +315,7 @@ class IMessageChannel:
         await self._runner.catch_up()
         return self.state.owner_conversation is not None
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
         await self._send_to_owner(text, correlation_id)
 
     @asynccontextmanager

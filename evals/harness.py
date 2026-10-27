@@ -227,13 +227,15 @@ def never_says(pattern: str, why: str) -> Check:
 
 NARRATION = (
     r"^\W*(?:je (?:vais |m'en )?(?:regarde|cherche|lance|lis|fouille|consulte|v[ée]rifie|"
-    r"occupe|y mets)|laisse-moi|un instant|je jette)"
+    r"occupe|y mets)|je vais\b|laisse-moi|un instant|je jette)"
 )
-"""A mid-turn line that says what he does rather than what he found (« Je regarde… »)."""
+"""A mid-turn line that says what he does or will do rather than what he found or did
+(« Je regarde… », « Je vais comparer… »; D169)."""
 
 
 def no_narration() -> Check:
-    """What he writes while he works is never an announcement of the work (D162)."""
+    """What he writes while he works is never an announcement of the work (D162, D169)."""
+
     regex = re.compile(NARRATION, re.IGNORECASE)
 
     async def check(o: Observation, _j: Judge) -> str | None:
@@ -426,9 +428,8 @@ async def run_case(
                     if isinstance(step, Say):
                         sent = datetime.now(PARIS) - step.waited if step.waited else None
 
-                        async def spoke(text: str, _cid: str, spoken: bool) -> None:
-                            if spoken:
-                                observation.spoken.append(text)
+                        async def spoke(text: str, _cid: str) -> None:
+                            observation.spoken.append(text)
 
                         turn = await app.orion.handle_owner_message(
                             OWNER_THREAD, step.text, "imessage", sent_at=sent, progress=spoke

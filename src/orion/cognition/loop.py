@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import math
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -25,7 +24,7 @@ from typing import Literal, cast
 import structlog
 
 from orion.core.events import Trust
-from orion.guardian.policy import ALONE, TRUSTED_FLOOR, ActionProposal, Guardian
+from orion.guardian.policy import ALONE, ActionProposal, Guardian
 from orion.providers.base import (
     Message,
     ModelProvider,
@@ -36,7 +35,6 @@ from orion.providers.base import (
     Usage,
 )
 from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
-from orion.tools.builtin import TELL
 
 log = structlog.get_logger(__name__)
 
@@ -109,15 +107,6 @@ class LoopSettings:
     finish_check: FinishCheck | None = None
     """Asked once per run about the final reply before it goes: a note sends the model back
     to work for one more step (`orion.cognition.finish`)."""
-    progress_after: float = 15.0
-    progress_every: float = 60.0
-    """A turn still working after `progress_after` seconds says what it is doing when the model
-    said nothing, at most once per `progress_every` seconds, `PROGRESS_AT_MOST` times."""
-    progress_model: str | None = None
-    """Writes that line from the owner's request and the calls under way (a small, fast
-    model); without it, or when it fails, the tools' `doing` or a plain notice."""
-    progress_about: str = ""
-    """The owner's request this turn, for `progress_model`."""
 
 
 WRAP_UP = (
@@ -194,17 +183,6 @@ UNSENT = (
     "Réponds en tenant compte de tout.]"
 )
 GOING_ON = "C'est plus long que prévu, je continue."
-WORKING = "Je m'en occupe, ça prend un peu de temps…"
-PROGRESS_AT_MOST = 3
-PROGRESS_SECONDS = 4.0
-"""How long the progress line may take to write before the plain one goes instead."""
-PROGRESS = (
-    "Tu es Orion, l'assistant personnel de ton propriétaire. Il attend pendant que tu "
-    "travailles. Écris-lui une seule phrase courte (quinze mots au plus), au tutoiement, à la "
-    "première personne, qui dit concrètement ce que tu es en train de faire. Pas de « je m'en "
-    "occupe », pas d'excuse, pas de délai promis, pas d'emoji. N'invente rien : seulement sa "
-    "demande et les actions listées. Ne répète pas ce que tu lui as déjà dit."
-)
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -215,26 +193,15 @@ SWITCH_COST = "max_cost_usd"
 
 @dataclass(frozen=True)
 class Told:
-    """Words for the owner now, mid-turn (a plan shown): the caller delivers them."""
+    """Words for the owner now, mid-turn (the turn goes on past its steps): the caller
+    delivers them."""
 
     text: str
-    plan: bool = False
-    """The plan as text: a channel that draws the plan itself (the app) has no use for it."""
-
-
-@dataclass(frozen=True)
-class Working:
-    """Tools about to run, in the owner's words: for a channel that shows the work live."""
-
-    doing: tuple[str, ...]
 
 
 REPEAT_REFUSED = "repeat refused"
 
-EARLY = ("plan",)
-"""Run before a step's other calls, so what they tell leaves before a slow tool runs."""
-
-LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Working | Finished
+LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
 
 
 async def run_agent(
@@ -266,9 +233,6 @@ async def run_agent(
     parts: list[str] = []  # a reply cut by the length limit, so far: continued, then joined
     segment = 0  # model calls since the turn started or last went on (`Budget.continuations`)
     continuations = budget.continuations
-    began = time.monotonic()
-    shown_at = -math.inf
-    shown: set[str] = set()
     called: list[str] = []
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
@@ -432,48 +396,16 @@ async def run_agent(
                 yield event
             return
 
-        clock = time.monotonic()
-        if response.text and response.text.strip():
-            shown_at = clock  # the model said what it does: the caller delivers that
-        elif (
-            clock - began >= settings.progress_after and clock - shown_at >= settings.progress_every
-        ):
-            doing = _doing(registry, calls, context_trust >= TRUSTED_FLOOR)
-            if doing not in shown and len(shown) < PROGRESS_AT_MOST:
-                if settings.progress_model is not None:
-                    written, spent = await _progress(
-                        provider, settings, calls, doing, shown, context_trust
-                    )
-                    if spent is not None:
-                        usage = usage + spent.usage
-                        yield ModelCalled(spent)
-                    doing = written or doing
-                shown.add(doing)
-                shown_at = clock
-                yield Told(doing)
-
         stalled = False
         for call in calls:
             call_counts[_signature(call)] += 1
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
-        yield Working(_labels(registry, calls, context_trust >= TRUSTED_FLOOR))
         started = time.monotonic()
-        first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
         try:
-            for call in calls:
-                if call.name in EARLY:
-                    result, reason = await _execute_one(
-                        call, registry, guardian, settings, context_trust, call_counts, budget
-                    )
-                    first[call.id] = (call, result, reason)
-                    told = result.data.get(TELL)
-                    if isinstance(told, str) and told and not result.is_error:
-                        shown_at = time.monotonic()
-                        yield Told(told, plan=call.name == "plan")
-            rest = await _execute_calls(
-                [c for c in calls if c.id not in first],
+            executions = await _execute_calls(
+                calls,
                 registry,
                 guardian,
                 settings,
@@ -488,18 +420,11 @@ async def run_agent(
             log.exception("loop.tool_step_failed", thread=settings.thread_id)
             stopped = f"Not run: an internal error stopped the step ({type(exc).__name__})."
             for call in calls:
-                done = first.get(call.id)
-                answer: Message = {
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": done[1].content if done is not None else stopped,
-                }
+                answer: Message = {"role": "tool", "tool_call_id": call.id, "content": stopped}
                 messages.append(answer)
-                yield MessageEmitted(answer, done[1].trust if done is not None else Trust.SYSTEM)
+                yield MessageEmitted(answer, Trust.SYSTEM)
             yield finished(StopReason.TOOL_ERROR, last_text, repr(exc))
             return
-        by_id = {**first, **{c.id: (c, r, why) for c, r, why in rest}}
-        executions = [by_id[c.id] for c in calls]
         tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
             switch = result.data.get(SWITCH_MODEL)
@@ -538,57 +463,6 @@ async def run_agent(
                 context_trust = min(context_trust, trust)
 
 
-async def _progress(
-    provider: ModelProvider,
-    settings: LoopSettings,
-    calls: list[ToolCall],
-    doing: str,
-    shown: set[str],
-    context_trust: Trust,
-) -> tuple[str, ModelResponse | None]:
-    """The progress line, written for this turn by `progress_model`: "" when it cannot be (the
-    plain line goes instead). After content from elsewhere, the calls' arguments may carry its
-    words: then only their names reach the line, never what a page could have put in them."""
-    assert settings.progress_model is not None
-    trusted = context_trust >= TRUSTED_FLOOR
-    lines: list[str] = []
-    for call in calls:
-        try:
-            arguments: object = json.loads(call.arguments or "{}")
-        except json.JSONDecodeError:
-            arguments = {}
-        action = (
-            cast(dict[str, object], arguments).get("action")
-            if isinstance(arguments, dict)
-            else None
-        )
-        name = f"{call.name} ({action})" if isinstance(action, str) else call.name
-        lines.append(f"- {name} : {call.arguments[:300]}" if trusted else f"- {name}")
-    said = "".join(f"\n- « {s} »" for s in sorted(shown))
-    content = (
-        f"Sa demande : « {settings.progress_about[:500]} »\n"
-        f"Ce que tu fais maintenant :\n"
-        + "\n".join(lines)
-        + (f"\n(en bref : {doing})" if doing != WORKING else "")
-        + (f"\nDéjà dit pendant ce travail :{said}" if said else "")
-    )
-    request = ModelRequest(
-        model=settings.progress_model,
-        messages=[{"role": "system", "content": PROGRESS}, {"role": "user", "content": content}],
-        session_id=f"{settings.session_id}:progress",
-        max_tokens=80,
-    )
-    try:
-        response = await asyncio.wait_for(provider.complete(request), PROGRESS_SECONDS)
-    except (ProviderError, TimeoutError) as exc:
-        log.warning("loop.progress_unwritten", error=repr(exc))
-        return "", None
-    line = " ".join(response.text.split()).strip('«» "')
-    if not line or len(line) > 200 or line in shown:
-        return "", response
-    return line, response
-
-
 def _called(call: ToolCall) -> str:
     """`tool`, or `tool:action` for a tool with actions: what the finish check reads."""
     try:
@@ -599,41 +473,6 @@ def _called(call: ToolCall) -> str:
         cast(dict[str, object], arguments).get("action") if isinstance(arguments, dict) else None
     )
     return f"{call.name}:{action}" if isinstance(action, str) and action else call.name
-
-
-def _labels(registry: ToolRegistry, calls: list[ToolCall], trusted: bool) -> tuple[str, ...]:
-    """What each call does, once each, in order: from its arguments (`Tool.doing_of`) when the
-    tool can tell, else the tool's `doing`."""
-    labels: list[str] = []
-    for call in calls:
-        tool = registry.get(call.name)
-        if tool is None:
-            continue
-        label = _label(tool, call, trusted) or tool.doing
-        if label and label not in labels:
-            labels.append(label)
-    return tuple(labels)
-
-
-def _label(tool: Tool, call: ToolCall, trusted: bool) -> str:
-    """This call's own `doing`: "" when the tool has none or its arguments do not parse (the
-    call will fail on its own, and say why)."""
-    if tool.doing_of is None:
-        return ""
-    try:
-        arguments = tool.parse(call.arguments)
-    except ToolInputError:
-        return ""
-    return " ".join(tool.doing_of(arguments, trusted).split())[:80]
-
-
-def _doing(registry: ToolRegistry, calls: list[ToolCall], trusted: bool) -> str:
-    """What these calls do, in the owner's words: the tools' `doing`, else a plain notice."""
-    labels = _labels(registry, calls, trusted)
-    if not labels:
-        return WORKING
-    text = ", ".join(labels)
-    return f"{text[0].upper()}{text[1:]}…"
 
 
 async def _execute_calls(

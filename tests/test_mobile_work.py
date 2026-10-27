@@ -1,4 +1,4 @@
-"""Orion at work, live in the app (D133): what it does as it goes, and a way to stop it."""
+"""Orion at work in the app (D133, D169): he can stop it."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from tests.test_mobile_channel import URL, FakePusher, World, pair
 from tests.test_telegram import Empty
 
 
-async def test_he_sees_what_it_does_and_stops_it(journal: SqliteJournal, tmp_path: Path) -> None:
+async def test_he_stops_the_work_on_his_message(journal: SqliteJournal, tmp_path: Path) -> None:
     release = asyncio.Event()
     ran: list[str] = []
 
@@ -40,7 +40,6 @@ async def test_he_sees_what_it_does_and_stops_it(journal: SqliteJournal, tmp_pat
         input_model=Empty,
         handler=search,
         effect=Effect.NONE,
-        doing="je cherche des trains",
     )
     provider = ScriptedProvider(
         call_tools(("trains", {}), cost=0.002), call_tools(("trains", {}), cost=0.002)
@@ -68,17 +67,10 @@ async def test_he_sees_what_it_does_and_stops_it(journal: SqliteJournal, tmp_pat
             await pair(World(channel, http, phone, provider, FakePusher(), devices))
             assert (await http.post("/app/api/stop")).json() == {"stopping": False}  # idle
 
-            async with channel.hub.listen() as live:
+            async with channel.hub.listen():
                 await http.post("/app/api/send", json={"text": "un train pour Lyon ?"})
                 await until(lambda: bool(ran))
-                seen: list[dict[str, Any]] = []
-                while not seen or not seen[-1]["doing"]:
-                    event = await live.get()
-                    if event["type"] == "work":
-                        seen.append(event["work"])
-                assert seen[-1]["doing"] == ["je cherche des trains"]
-                assert seen[-1]["cost"] == 0.002 and seen[-1]["steps"] == 1
-
+                assert channel.work is not None and set(channel.work) == {"since", "stopping"}
                 assert (await http.post("/app/api/stop")).json() == {"stopping": True}
                 assert channel.work is not None and channel.work["stopping"]
                 release.set()

@@ -8,7 +8,7 @@ It does what the Telegram channel does, with Orion as its own provider:
 - what Orion sends goes through the channel's outbox and becomes `mobile.outbound`: the app
   reads the conversation from the journal, and gets each new message live while it is open;
   closed, it gets a notification (Web Push, encrypted for the phone);
-- while Orion thinks, the app shows it;
+- while Orion thinks, the app shows it, and the owner can call the work off;
 - an action is put to the owner in the app; his answer counts only signed by a paired passkey,
   after Face ID, for this approval and this answer; no answer before the timeout means no;
 - his reactions on Orion's messages are signals for adaptation.
@@ -23,7 +23,6 @@ import contextlib
 import mimetypes
 import re
 import shutil
-import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -48,7 +47,6 @@ from orion.guardian.outbox import Outbox, SendError
 from orion.guardian.policy import ActionProposal, Approval
 from orion.mobile.devices import Devices
 from orion.mobile.push import PushError, Subscription, allowed_endpoint
-from orion.runtime import Activity
 
 log = structlog.get_logger(__name__)
 
@@ -118,8 +116,6 @@ class Said:
     text: str
     at: str
     files: tuple[Kept, ...] = ()
-    trace: dict[str, Any] | None = field(default=None, compare=False)
-    """How Orion got to this answer, when he worked for it: shown folded above it."""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -128,7 +124,6 @@ class Said:
             "who": self.who,
             "text": self.text,
             "at": self.at,
-            "trace": self.trace,
             "blocks": public(self.text) if self.who == "orion" else [],
             "files": [
                 {"ref": f"{self.ref}/{i}", "name": f.name, "type": f.content_type, "size": f.size}
@@ -187,7 +182,6 @@ class MobileState:
                 str(payload.get("text") or ""),
                 str(payload["at"]),
                 _kept(payload.get("files")),
-                cast(dict[str, Any], payload["trace"]) if payload.get("trace") else None,
             )
             self.said.append(said)
             if event.kind == INBOUND:
@@ -271,26 +265,6 @@ def _safe_name(name: str, content_type: str) -> str:
     return safe[:120]
 
 
-TRACE_SECONDS = 120.0
-"""How long finished work waits for its answer (a turn that ends in silence has none)."""
-
-
-def _unique(items: list[str]) -> list[str]:
-    return list(dict.fromkeys(items))
-
-
-def _trace_of(work: dict[str, Any], seconds: float) -> dict[str, Any]:
-    """What is kept of the work with the answer: how long, how many steps, what was done and
-    said, and the plan as it ended."""
-    return {
-        "seconds": round(seconds),
-        "steps": work["steps"],
-        "done": _unique([*work["done"], *work["doing"]])[-12:],
-        "said": work["said"],
-        "plan": work["plan"],
-    }
-
-
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -329,10 +303,8 @@ class MobileChannel:
         self.typing = False
         """Whether Orion is working on his message right now (an app that opens shows it)."""
         self.work: dict[str, Any] | None = None
-        """What it is doing right now, as the app shows it."""
+        """The work on his message, while it runs: since when, and whether he asked to stop."""
         self._stop = False
-        self._trace: tuple[float, dict[str, Any]] | None = None
-        """The work just finished, kept for the answer that follows it (D143)."""
         self.asked: dict[str, Asked] = {}
         self._changed: set[str] = set()
         inbox.register(self)
@@ -450,8 +422,8 @@ class MobileChannel:
 
     # -- outbound: transport for the outbox, outlet for the inbox ------------------------------
 
-    async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
-        return await self._show(text, idempotency_key, ())
+    async def transmit(self, to: str, text: str, idempotency_key: str, quiet: bool = False) -> str:
+        return await self._show(text, idempotency_key, (), quiet)
 
     async def transmit_file(self, to: str, text: str, path: str, idempotency_key: str) -> str:
         source = Path(path)
@@ -467,30 +439,22 @@ class MobileChannel:
         kept = Kept(relative, name, mimetypes.guess_type(name)[0] or "", target.stat().st_size)
         return await self._show(text, idempotency_key, (kept,))
 
-    async def _show(self, text: str, key: str, files: tuple[Kept, ...]) -> str:
+    async def _show(self, text: str, key: str, files: tuple[Kept, ...], quiet: bool = False) -> str:
         """The message joins the conversation (once, whatever a resumed send does), goes to
-        the open app, or else to the phone's notifications."""
+        the open app, or else to the phone's notifications (unless `quiet`)."""
         await self.sync()
         if key in self.state.sent:
             return key
-        trace, self._trace = self._trace, None
-        fresh = trace is not None and time.monotonic() - trace[0] < TRACE_SECONDS
         await self._append(
             OUTBOUND,
-            {
-                "ref": key,
-                "text": text,
-                "at": _now(),
-                "files": [f.__dict__ for f in files],
-                **({"trace": trace[1]} if fresh and trace is not None else {}),
-            },
+            {"ref": key, "text": text, "at": _now(), "files": [f.__dict__ for f in files]},
             Trust.SYSTEM,
             Provenance(source="orion:app", actor="orion:core"),
         )
         said = self.state.find(key)
         assert said is not None
         self.hub.publish({"type": "message", "message": self.state.public(said)})
-        if not self.hub.listening:
+        if not self.hub.listening and not quiet:
             body = plain(text) or (f"📎 {files[0].name}" if files else "")
             await self._notify(
                 {"title": "Orion", "body": body[:PUSH_PREVIEW], "tag": key, "kind": "message"}
@@ -530,8 +494,8 @@ class MobileChannel:
         assert self.devices is not None
         return await self.devices.any_paired()
 
-    async def deliver(self, text: str, correlation_id: str | None) -> None:
-        await self.outbox.send(CHANNEL, "owner", text.strip(), correlation_id)
+    async def deliver(self, text: str, correlation_id: str | None, quiet: bool = False) -> None:
+        await self.outbox.send(CHANNEL, "owner", text.strip(), correlation_id, quiet=quiet)
 
     async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
         await self.outbox.send(CHANNEL, "owner", caption, correlation_id, media=str(path))
@@ -540,54 +504,16 @@ class MobileChannel:
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
         self.typing = True
         self._stop = False
-        self._trace = None
-        began = time.monotonic()
-        self.work = {
-            "since": _now(),
-            "doing": [],
-            "done": [],
-            "said": [],
-            "plan": [],
-            "cost": 0.0,
-            "steps": 0,
-            "stopping": False,
-        }
+        self.work = {"since": _now(), "stopping": False}
         self.hub.publish({"type": "typing", "on": True})
         self.hub.publish({"type": "work", "work": self.work})
         try:
             yield
         finally:
-            if self.work["steps"] > 0:  # a turn that only answered leaves no trace
-                self._trace = (time.monotonic(), _trace_of(self.work, time.monotonic() - began))
             self.typing = False
             self.work = None
             self._stop = False
             self.hub.publish({"type": "typing", "on": False})
-
-    async def watch(self, activity: Activity) -> None:
-        """The work as it goes: what is about to run, what it has cost so far."""
-        if self.work is None:
-            return
-        self.work = {
-            **self.work,
-            "doing": list(activity.doing),
-            "done": _unique([*self.work["done"], *self.work["doing"]])[-12:],
-            "plan": [list(step) for step in activity.plan] or self.work["plan"],
-            "cost": activity.cost_usd,
-            "steps": activity.steps,
-        }
-        self.hub.publish({"type": "work", "work": self.work})
-
-    async def narrate(self, text: str) -> None:
-        """What Orion says of his work as it goes: shown live above the work, never a message
-        of its own (nothing to notify, nothing piled in the conversation; D143)."""
-        if self.work is None:
-            return
-        line = plain(text).strip()
-        if not line:
-            return
-        self.work = {**self.work, "said": [*self.work["said"], line][-8:]}
-        self.hub.publish({"type": "work", "work": self.work})
 
     async def stopped(self) -> bool:
         return self._stop

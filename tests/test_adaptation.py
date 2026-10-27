@@ -398,7 +398,9 @@ async def test_tapbacks_point_at_the_message_they_judge(
     from orion.guardian.outbox import Outbox
 
     class Transport:
-        async def transmit(self, to: str, text: str, idempotency_key: str) -> str:
+        async def transmit(
+            self, to: str, text: str, idempotency_key: str, quiet: bool = False
+        ) -> str:
             return "remote-1"
 
     await Outbox(tjournal, {"imessage": Transport()}).send("imessage", "conv", "Une blague nulle")

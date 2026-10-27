@@ -102,7 +102,6 @@ def shell_tool(workspace: Path, max_seconds: int) -> Tool:
 
     return Tool(
         name="shell",
-        doing="je lance une commande",
         description="Run a command on your server, in your workspace (files you made or "
         "downloaded are there), when no other tool does it: convert a file, check something, "
         "run a script, read logs (`sudo -n journalctl -u orion-core`). You are root through "
