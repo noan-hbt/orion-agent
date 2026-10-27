@@ -8,7 +8,10 @@ only what its own configuration allows, whatever the server asks:
 - `find_files`: file names matching a query, inside the allowed folders only;
 - `read_file`: the text of one file inside the allowed folders (size capped);
 - `get_file`: one file inside the allowed folders, byte for byte, for Orion to send to the
-  owner (10 MiB at most).
+  owner (10 MiB at most);
+- `exit` (off unless he turns it on, `orion hand exit on`): Orion's browser goes out through
+  this machine's connection (D145). Only to the web's ports, and never to an address of the
+  machine's own network, checked after its own name lookup.
 
 Paths are resolved (symlinks included) and must stay inside an allowed folder. The
 configuration (`~/.config/orion/hand.json`, mode 0600) holds the server, the device's secret,
@@ -19,11 +22,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import ipaddress
 import json
 import os
 import platform
 import shutil
+import socket as sockets
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +51,17 @@ MAX_VISITED = 20_000
 """Entries looked at per search: a shared home folder must not keep the call waiting."""
 SKIPPED = frozenset({"node_modules", "__pycache__", "Library"})
 DEFAULT_ACTIONS = ("notify", "find_files", "read_file", "get_file")
+EXIT_PORTS = (80, 443)
+MAX_EXITS = 64
+"""Connections open at once for Orion's browser: a page opens a handful, a dozen at most."""
+CHUNK = 64 * 1024
+
+
+def _public(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_global
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -66,10 +84,10 @@ class HandConfig:
             file.write(json.dumps(self.__dict__, indent=2))
         path.chmod(0o600)
 
-    def socket_url(self) -> str:
+    def socket_url(self, path: str = "/hands/connect") -> str:
         parts = urlsplit(self.server)
         scheme = "wss" if parts.scheme == "https" else "ws"
-        return f"{scheme}://{parts.netloc}/hands/connect"
+        return f"{scheme}://{parts.netloc}{path}"
 
 
 class Refused(ValueError):
@@ -80,6 +98,10 @@ class Hand:
     def __init__(self, config: HandConfig) -> None:
         self.config = config
         self._roots = [Path(r).expanduser().resolve() for r in config.roots]
+        self.exit_ports: tuple[int, ...] = EXIT_PORTS
+        self.public: Callable[[str], bool] = _public
+        """Where the browser may go: never the machine's own network (the box, a NAS)."""
+        self._exits: set[asyncio.Task[None]] = set()
 
     def _inside(self, path: str) -> Path:
         target = Path(path).expanduser().resolve()
@@ -196,6 +218,9 @@ class Hand:
                 if not isinstance(loaded, dict):
                     continue
                 message = cast(dict[str, Any], loaded)
+                if message.get("type") == "exit":
+                    self._open_exit(socket, message)
+                    continue
                 if message.get("type") != "call":
                     continue
                 call_id = str(message.get("id"))
@@ -209,6 +234,84 @@ class Hand:
                     log.info("hand.refused", action=message.get("action"), reason=str(exc))
                     reply = {"type": "result", "id": call_id, "ok": False, "error": str(exc)}
                 await socket.send(json.dumps(reply))
+
+    def _open_exit(self, control: Any, message: dict[str, Any]) -> None:
+        stream = str(message.get("stream", ""))
+
+        async def refuse(reason: str) -> None:
+            log.info("hand.exit_refused", host=message.get("host"), reason=reason)
+            await control.send(
+                json.dumps({"type": "exit_refused", "stream": stream, "error": reason})
+            )
+
+        async def go() -> None:
+            try:
+                remote = await self._connect(str(message.get("host", "")), message.get("port"))
+            except Refused as exc:
+                await refuse(str(exc))
+                return
+            except OSError as exc:
+                await refuse(f"unreachable: {exc}")
+                return
+            await self._carry(stream, *remote)
+
+        if "exit" not in self.config.actions:
+            task = asyncio.ensure_future(refuse("this machine does not let Orion's browser out"))
+        elif len(self._exits) >= MAX_EXITS:
+            task = asyncio.ensure_future(refuse("too many connections at once"))
+        else:
+            task = asyncio.ensure_future(go())
+        self._exits.add(task)
+        task.add_done_callback(self._exits.discard)
+
+    async def _connect(
+        self, host: str, port: object
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        """Open host:port, after checking where its name leads from here."""
+        if not isinstance(port, int) or port not in self.exit_ports:
+            raise Refused("only the web's ports")
+        found = await asyncio.get_running_loop().getaddrinfo(host, port, type=sockets.SOCK_STREAM)
+        addresses = [str(info[4][0]) for info in found]
+        if not addresses or not all(self.public(a) for a in addresses):
+            raise Refused(f"{host} is not a public address")
+        # The address checked is the one dialled: a name cannot change meanwhile.
+        return await asyncio.open_connection(addresses[0], port)
+
+    async def _carry(
+        self, stream: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """The bytes, both ways, over a WebSocket of their own back to the server."""
+        try:
+            async with websockets.connect(
+                self.config.socket_url(f"/hands/exit/{stream}"),
+                additional_headers={"Authorization": f"Bearer {self.config.secret}"},
+                max_size=None,
+            ) as tunnel:
+
+                async def out() -> None:
+                    while data := await reader.read(CHUNK):
+                        await tunnel.send(data)
+                    await tunnel.close()
+
+                async def back() -> None:
+                    async for data in tunnel:
+                        writer.write(data if isinstance(data, bytes) else data.encode())
+                        await writer.drain()
+
+                tasks = {asyncio.ensure_future(out()), asyncio.ensure_future(back())}
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                for task in done:
+                    if task.exception() is not None and not isinstance(
+                        task.exception(), (OSError, websockets.WebSocketException)
+                    ):
+                        log.warning("hand.exit_failed", error=repr(task.exception()))
+        except (OSError, websockets.WebSocketException) as exc:
+            log.info("hand.exit_closed", error=repr(exc))
+        finally:
+            with contextlib.suppress(OSError):
+                writer.close()
 
     async def run_forever(self) -> None:
         delay = 1.0

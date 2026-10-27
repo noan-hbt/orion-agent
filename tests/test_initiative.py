@@ -14,6 +14,7 @@ from orion.guardian.policy import Guardian
 from orion.initiative.engine import (
     DELIVERED,
     SUPPRESSED,
+    Alert,
     InitiativeEngine,
     InitiativeSettings,
     digest_lines,
@@ -377,3 +378,59 @@ async def test_what_orion_almost_said_keeps_the_trust_of_where_it_came_from(
     await engine._runner.catch_up()  # pyright: ignore[reportPrivateUsage]
     almost = engine._almost(at(25, 19))  # pyright: ignore[reportPrivateUsage]  # Sunday
     assert almost is not None and almost.trust is Trust.THIRD_PARTY
+
+
+async def test_what_can_wait_waits_for_the_point_and_what_he_ignores_stops(
+    world: World,
+) -> None:
+    """D144, D146: what matters goes at once; a small thing goes in the evening point, in one
+    message; a kind of message he never answers stops."""
+    from orion.core.events import NewEvent
+
+    class Day:
+        async def alerts(self, now: datetime) -> list[Alert]:
+            if now.hour < 10:
+                return []
+            idea = f"idea:{now.day}"
+            return [
+                Alert(
+                    idea,
+                    "Une piste sur les vélos cargo",
+                    "ça peut te servir",
+                    "Vélos cargo",
+                    importance=0.3,
+                ),
+                Alert("rdv:1", "Dentiste à 10 h 40", "c'est bientôt", "Dentiste", importance=0.9),
+            ]
+
+    engine = InitiativeEngine(
+        world.orion, world.journal, world.timers, world.inbox, SETTINGS,
+        memory=world.memory.store, clock=world.clock, alerts=[Day()],
+    )  # fmt: skip
+    world.clock.now = at(20, 8, 31)
+    assert await engine.tick() == []  # the morning point: nothing to say
+    world.clock.now = at(20, 10)
+    world.provider.extend(reply("Dentiste à 10 h 40."))
+    assert await engine.tick() == ["rdv:1"]  # it matters: alone, now
+    world.clock.now = at(20, 15)
+    assert await engine.tick() == []  # the small idea waits
+    world.clock.now = at(20, 19, 5)
+    world.provider.extend(reply("Ce soir : une piste sur les vélos cargo."))
+    assert sorted(await engine.tick()) == ["digest:2026-10-20:19:00", "idea:20"]
+    assert world.inbox.messages == [
+        "Dentiste à 10 h 40.",
+        "Ce soir : une piste sur les vélos cargo.",
+    ]
+    assert "point de 19:00" in world.provider.requests[-1].messages[-1]["content"]
+
+    said: dict[str, object] = {"why": "x", "day": "2026-10-21", "explicit": False, "mentions": []}
+    by = Provenance(source="orion:initiative", actor="orion:initiative")
+    await world.journal.append(
+        [NewEvent(kind=DELIVERED, payload={**said, "key": f"idea:{n}"}, provenance=by,
+                  trust=Trust.SYSTEM) for n in (1, 2, 3)]
+    )  # fmt: skip
+    world.clock.now = at(22, 19, 5)
+    world.provider.extend(reply("Rien d'autre."))
+    await engine.tick()
+    [stopped] = [p for p in await kinds(world.journal, SUPPRESSED) if p["key"] == "idea:22"]
+    assert stopped["reason"] == "il ne répond plus à ce genre de message"

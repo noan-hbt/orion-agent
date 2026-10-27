@@ -11,7 +11,14 @@ Each candidate goes through the same gate: quiet hours, a daily attention budget
 of what was already said, so nothing is repeated and a restart never re-sends. Then an arbiter
 (`initiative.arbiter`) weighs urgency against the cost of interrupting now: a message that can
 wait waits for a break (the end of a meeting). On Sunday evening, Orion tells the owner what it
-held back that week. The model only
+held back that week.
+
+The rhythm (D144, D146): what Orion has to say of its own accord goes as soon as the arbiter
+lets it (`GOES_NOW`); only small things (a find, a question to get to know him, a memory to
+check) wait for the next point, unless they would be stale by then, and go in that one
+message. A kind of message the owner has not
+answered for a while (`IGNORED_AFTER` in a row) is no longer sent: it shows in the Sunday
+« ce que j'ai failli te dire », where he can say it should not have stopped. The model only
 writes the message (or answers `SILENCE`); it does not decide whether to interrupt. Every
 decision, including staying silent, is journaled with its reason.
 """
@@ -32,6 +39,7 @@ from orion.cognition.loop import StopReason
 from orion.cognition.verifier import Verifier
 from orion.context.recent import recent_lines
 from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -44,6 +52,21 @@ from orion.providers.base import Message
 from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
+
+GOES_NOW = 0.45
+"""From this importance, what Orion has to say goes as soon as the arbiter lets it; below, a
+small thing waits for the next point. 0.75 in D144 held back too much: he found Orion passive."""
+IGNORED_AFTER = 4
+"""Deliveries of a kind, in a row and within `IGNORED_FOR`, he never engaged with: it stops."""
+IGNORED_FOR = timedelta(days=30)
+ENGAGED_WITHIN = timedelta(hours=3)
+"""A message or a tapback this soon after Orion wrote counts as engaging with it."""
+DIGEST_KEY = "digest:"
+FEEDBACK_REACTION = "feedback.reaction"
+POINT_HEAD = (
+    "C'est ton point de {slot}. Un seul message, du plus utile au moins utile, une ou deux "
+    "lignes par sujet ; laisse tomber ce qui ne vaut pas sa lecture."
+)
 
 AWAKE = timedelta(minutes=20)
 """The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
@@ -202,6 +225,12 @@ class Candidate:
     importance: float = 0.5
     budgeted: bool = True
     """Spends the day's attention budget: what Orion says of its own accord (D104)."""
+    carries: tuple[Candidate, ...] = ()
+    """What waited for this point and goes in the same message (D144)."""
+
+    @property
+    def kind(self) -> str:
+        return self.key.split(":", 1)[0]
 
 
 @dataclass(frozen=True)
@@ -224,7 +253,15 @@ class Ledger:
     last_mention: dict[str, date] = field(default_factory=dict[str, date])
     spent: dict[date, int] = field(default_factory=dict[date, int])
     unsaid: list[Unsaid] = field(default_factory=list[Unsaid])
+    sent: list[list[Any]] = field(default_factory=list[list[Any]])
+    """[when, kind, engaged] for each delivery of what Orion said of its own accord."""
     _seq: int = 0
+
+    def ignored(self, kind: str, now: datetime) -> bool:
+        """He has not engaged with this kind of message the last `IGNORED_AFTER` times."""
+        recent = [s for s in self.sent if s[1] == kind and now - s[0] <= IGNORED_FOR]
+        last = recent[-IGNORED_AFTER:]
+        return len(last) == IGNORED_AFTER and not any(s[2] for s in last)
 
     async def checkpoint(self) -> int:
         return self._seq
@@ -234,6 +271,7 @@ class Ledger:
         self.last_mention.clear()
         self.spent.clear()
         self.unsaid.clear()
+        self.sent.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -256,6 +294,15 @@ class Ledger:
                     event.trust,
                 )
             )
+        at = datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
+        if event.kind == FEEDBACK_REACTION or (
+            event.kind == "message.received" and event.provenance.actor == "owner:main"
+        ):
+            for sent in self.sent:
+                if timedelta(0) <= at - sent[0] <= ENGAGED_WITHIN:
+                    sent[2] = True
+        if event.kind == DELIVERED and not payload.get("explicit"):
+            self.sent.append([at, str(payload["key"]).split(":", 1)[0], False])
         if event.kind == DELIVERED:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
@@ -419,21 +466,86 @@ class InitiativeEngine:
         now = self._clock().astimezone(self._zone)
         delivered: list[str] = []
         ready: list[tuple[Candidate, str]] = []
-        for candidate in await self._candidates(now):
+        candidates = await self._candidates(now)
+        point = next((c for c in candidates if c.key.startswith(DIGEST_KEY)), None)
+        held: list[Candidate] = []
+        for candidate in candidates:
+            if candidate is point:
+                continue
             if candidate.explicit:
                 if await self._deliver(candidate, now, None):
                     delivered.append(candidate.key)
                 continue
+            if self._ignored(candidate, now):
+                await self._record(
+                    SUPPRESSED, candidate, now, reason="il ne répond plus à ce genre de message"
+                )
+                continue
+            if self._holds(candidate, now, point):
+                if candidate.expires_at is not None and now > candidate.expires_at:
+                    await self._record(SUPPRESSED, candidate, now, reason="missed its window")
+                elif point is not None:
+                    held.append(candidate)
+                continue
             why_now = await self._admit(candidate, now)
             if why_now is not None:
                 ready.append((candidate, why_now))
+        if point is not None:
+            point = self._with_held(point, held)
+            why_now = await self._admit(point, now)
+            if why_now is not None:
+                ready.append((point, why_now))
         if len(ready) == 1:
             candidate, why_now = ready[0]
             if await self._deliver(candidate, now, why_now):
-                delivered.append(candidate.key)
+                delivered += [candidate.key, *(c.key for c in candidate.carries)]
         elif ready:
             delivered += await self._deliver_together(ready, now)
         return delivered
+
+    def _ignored(self, candidate: Candidate, now: datetime) -> bool:
+        return (
+            candidate.budgeted
+            and candidate.importance < GOES_NOW
+            and not candidate.key.startswith(DIGEST_KEY)
+            and self.ledger.ignored(candidate.kind, now)
+        )
+
+    def _holds(self, candidate: Candidate, now: datetime, point: Candidate | None) -> bool:
+        """What Orion says of its own accord and can wait waits for the point: now if one is
+        open, else the next, unless it would be stale by then."""
+        if not candidate.budgeted or candidate.importance >= GOES_NOW or not self._settings.digests:
+            return False
+        if point is not None:
+            return True
+        return candidate.expires_at is None or candidate.expires_at > self._next_point(now)
+
+    def _next_point(self, now: datetime) -> datetime:
+        today = [datetime.combine(now.date(), slot, self._zone) for slot in self._settings.digests]
+        later = [moment for moment in today if moment > now]
+        return min(later) if later else min(today) + timedelta(days=1)
+
+    @staticmethod
+    def _with_held(point: Candidate, held: list[Candidate]) -> Candidate:
+        """The point, with what waited for it: one message."""
+        if not held:
+            return point
+        held = sorted(held, key=lambda c: -c.importance)
+        slot = point.key.rsplit(":", 2)[-2:]
+        lines = "\n".join(f"- {c.notice} (pourquoi : {c.why})" for c in held)
+        notice = "\n".join(
+            part
+            for part in (POINT_HEAD.format(slot=":".join(slot)), point.notice, f"Aussi :\n{lines}")
+            if part
+        )
+        return replace(
+            point,
+            notice=notice,
+            fallback="\n\n".join(f for f in (point.fallback, *(c.fallback for c in held)) if f),
+            trust=min(point.trust, *(c.trust for c in held)),
+            mentions=(*point.mentions, *(m for c in held for m in c.mentions)),
+            carries=tuple(held),
+        )
 
     async def _candidates(self, now: datetime) -> list[Candidate]:
         found = [self._reminder(t, now) for t in self._timers.projection.due(now)]
@@ -618,6 +730,7 @@ class InitiativeEngine:
         meeting): one message, most important first, that counts once against the budget."""
         ready = sorted(ready, key=lambda pair: -pair[0].importance)
         parts = [c for c, _ in ready]
+        carried = [item for c in parts for item in c.carries]
         joined = Candidate(
             key=parts[0].key,
             notice="Plusieurs choses l'attendaient. Un seul message, court, de la plus "
@@ -629,9 +742,9 @@ class InitiativeEngine:
             mentions=tuple(m for c in parts for m in c.mentions),
             importance=parts[0].importance,
         )
-        if not await self._deliver(joined, now, ready[0][1], together=parts[1:]):
+        if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
-        return [c.key for c in parts]
+        return [c.key for c in (*parts, *carried)]
 
     async def _deliver(
         self,
@@ -640,6 +753,7 @@ class InitiativeEngine:
         why_now: str | None,
         together: Sequence[Candidate] = (),
     ) -> bool:
+        together = (*together, *candidate.carries)
         if not await self._notifier.available():
             if not self._unavailable_logged:
                 log.warning("initiative.no_channel", key=candidate.key)

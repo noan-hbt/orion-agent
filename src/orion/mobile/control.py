@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -36,10 +36,12 @@ from orion.console.app import ACTIVITY, activity_detail
 from orion.console.dashboard import moment
 from orion.core.events import Provenance, Trust
 from orion.core.journal import EventStore
+from orion.core.projections import ProjectionRunner
 from orion.guardian.autonomy import Autonomy, label
 from orion.hands.desk import HandsDesk
 from orion.initiative.engine import InitiativeSettings, effective_settings
 from orion.memory.model import CommitmentStatus, SettingKey
+from orion.memory.portrait import Portrait
 from orion.memory.service import MemoryService, Origin
 from orion.missions.service import Mission, Missions
 from orion.modules.base import Planned
@@ -83,6 +85,8 @@ class Control:
     """His machines (Orion's hands), once their module is assembled."""
     code: Path | None = None
     """Where Orion's code is checked out (the server updates it there, D94)."""
+    _portrait: Portrait = field(default_factory=Portrait, init=False)
+    _portrait_runner: ProjectionRunner | None = field(default=None, init=False)
 
     @property
     def zone(self) -> ZoneInfo:
@@ -187,6 +191,14 @@ class Control:
             )
 
     # -- what it knows ------------------------------------------------------------------------
+
+    async def portrait(self) -> dict[str, str] | None:
+        """How Orion sees him, as it wrote it last night (D144)."""
+        if self._portrait_runner is None:
+            self._portrait_runner = ProjectionRunner(self.journal, [self._portrait])
+        await self._portrait_runner.catch_up()
+        portrait = self._portrait
+        return {"text": portrait.text, "day": portrait.day} if portrait.text else None
 
     async def facts(self, query: str = "", past: bool = False) -> list[dict[str, Any]]:
         """Newest first; matching `query` (best first) when he searches."""

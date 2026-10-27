@@ -197,3 +197,52 @@ def test_the_hands_secret_is_never_readable_by_others(tmp_path: Path) -> None:
         assert path.stat().st_mode & 0o777 == 0o600
     finally:
         os.umask(old)
+
+
+async def test_the_browser_goes_out_through_his_machine_never_into_his_network(
+    server: tuple[HandsDesk, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D145: a site that refuses servers sees his own connection; his box, his NAS, never."""
+    from orion.hands.exit import HomeExit
+
+    desk, url = server
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+
+    async def echo(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        writer.write(await reader.read(100))
+        await writer.drain()
+        writer.close()
+
+    site = await asyncio.start_server(echo, "127.0.0.1", 0)
+    port = int(site.sockets[0].getsockname()[1])
+    hand = Hand(await pair(url, await desk.new_code("mac"), [], ["exit"]))
+    hand.exit_ports = (port,)
+    hand.public = lambda address: address == "127.0.0.1"  # here, « the web »
+    running = asyncio.create_task(hand.session())
+    await until(lambda: "mac" in desk.connected)
+    relay = HomeExit(desk, ports=(port,))
+    await relay.start()
+
+    async def through(host: str) -> tuple[int, bytes]:
+        reader, writer = await asyncio.open_connection("127.0.0.1", relay.port)
+        writer.write(b"\x05\x01\x00")
+        await reader.readexactly(2)
+        name = host.encode()
+        writer.write(b"\x05\x01\x00\x03" + bytes([len(name)]) + name + port.to_bytes(2, "big"))
+        answer = (await reader.readexactly(10))[1]
+        said = b""
+        if answer == 0:
+            writer.write(b"bonjour")
+            said = await reader.read(100)
+        writer.close()
+        return answer, said
+
+    assert relay.through() == "mac"
+    assert await through("127.0.0.1") == (0, b"bonjour")  # carried by his machine
+    assert (await through("10.0.0.1"))[0] == 2  # his network: his machine refuses
+    running.cancel()
+    await until(lambda: "mac" not in desk.connected)
+    assert relay.through() == ""
+    assert (await through("127.0.0.1"))[0] == 4  # straight out, the server's guard holds
+    await relay.aclose()
+    site.close()

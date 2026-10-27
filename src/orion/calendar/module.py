@@ -67,6 +67,7 @@ class CalendarModule(Module):
         daemon.alerts.append(calendar)
         daemon.digests.append(calendar)
         daemon.presence.append(calendar)
+        daemon.orion.situation.append(calendar)
 
     async def close(self) -> None:
         if self.calendar is not None:

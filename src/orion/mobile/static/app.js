@@ -3939,6 +3939,7 @@ function memoryPanel() {
     },
   });
   const list = h("div", { class: "list items" });
+  const portrait = h("div");
   let kind = "all";
   const KINDS = { all: "Tout", you: "Toi", people: "Proches", projects: "Projets" };
   const IN = { you: ["profile", "preference"], people: ["person"], projects: ["project"] };
@@ -3954,6 +3955,20 @@ function memoryPanel() {
   async function refreshList() {
     const found = await api(`api/memory?q=${encodeURIComponent(query)}${past ? "&past=1" : ""}`);
     const facts = found.facts.filter((f) => kind === "all" || IN[kind].includes(f.category));
+    const seen = found.portrait && (kind === "all" || kind === "you");
+    portrait.replaceChildren(
+      ...(seen
+        ? [
+            h(
+              "article",
+              { class: "card night-note portrait" },
+              h("small", {}, `Comment je te vois · ${found.portrait.day === new Date().toLocaleDateString("sv") ? "réécrit cette nuit" : `écrit le ${new Date(found.portrait.day).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}`}`),
+              ...found.portrait.text.split(/\n\s*\n/).map((part) => h("p", {}, part)),
+              h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ton portrait de moi, ") }, "Ce n'est pas tout à fait ça"),
+            ),
+          ]
+        : []),
+    );
     list.replaceChildren(
       ...(facts.length
         ? facts.map((f) =>
@@ -3971,6 +3986,7 @@ function memoryPanel() {
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
       h("div", { class: "chips" }, kinds, toggle),
+      portrait,
       list,
       h("p", { class: "hint" }, "Touche un souvenir pour le corriger ou l'oublier. Rien n'est effacé en silence : l'ancienne version reste dans l'historique."),
     ];

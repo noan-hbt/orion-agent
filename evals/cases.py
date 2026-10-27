@@ -717,4 +717,80 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(called_with("autonomy_grant", "contact_message", "Victor"),),
     ),
+    Case(
+        name="meteo_en_deux_phrases",
+        origin="D144 : un ton d'assistant (« Bonne question ! Voici… N'hésite pas »), des "
+        "réponses trop longues pour une question en quatre mots.",
+        at=paris(2026, 10, 27, 18, 5),
+        facts=OWNER,
+        steps=(Say("il fait beau demain ?"),),
+        checks=(
+            at_most(260),
+            never_says(ASSISTANT_TICS, "assistant tic"),
+            never_says(r"^\s*(?:[-*•]|\d+\.)\s", "a bulleted list in a chat"),
+        ),
+    ),
+    Case(
+        name="ce_quil_sait_de_lea",
+        origin="D144 : « il ne me connaît pas assez », il redemande ce qu'il sait déjà.",
+        at=paris(2026, 10, 27, 18, 10),
+        facts=(
+            *OWNER,
+            "Sa copine s'appelle Léa.",
+            "Léa est végétarienne.",
+            "Habite près d'Oberkampf, à Paris.",
+        ),
+        steps=(Say("une idée de truc à cuisiner ce soir avec léa ? rapide"),),
+        checks=(
+            judged(
+                "La réponse propose-t-elle un plat végétarien (sans viande ni poisson), sans "
+                "demander à quoi Léa a droit ni ce qu'elle aime ?"
+            ),
+            never_says(ASSISTANT_TICS, "assistant tic"),
+        ),
+    ),
+    Case(
+        name="surveiller_cest_programmer",
+        origin="D144 : « je te tiens au courant » sans rien de programmé : rien ne revenait.",
+        at=paris(2026, 10, 27, 18, 15),
+        facts=OWNER,
+        steps=(
+            Say(
+                "tu peux surveiller le prix du train paris lyon du 14 novembre et me dire "
+                "s'il baisse"
+            ),
+        ),
+        checks=(uses("mission", "task", "remind_me", "awaiting"), no_offer_at_the_end()),
+    ),
+    Case(
+        name="voit_venir_le_dentiste",
+        origin="D146 : « il manque d'intuition » ; il ne fait pas le lien avec ce qu'il sait.",
+        at=paris(2026, 10, 27, 19, 30),
+        facts=(*OWNER, "A rendez-vous chez le dentiste le mercredi 28/10 à 8 h."),
+        steps=(Say("je crois que je vais sortir ce soir avec les potes, jusqu'à tard"),),
+        checks=(
+            judged(
+                "La réponse fait-elle remarquer, en passant et sans faire la morale, qu'il a le "
+                "dentiste demain à 8 h ?"
+            ),
+            at_most(400),
+        ),
+    ),
+    Case(
+        name="prend_en_charge_un_souci_en_passant",
+        origin="D146 : un souci dit en passant reste lettre morte au lieu d'être pris en charge.",
+        at=paris(2026, 10, 27, 19, 40),
+        facts=OWNER,
+        steps=(Say("j'ai encore oublié de résilier ma salle de sport, ça me saoule"),),
+        checks=(uses("remind_me", "commitments", "task", "mission", "browser", "web_search"),),
+    ),
+    Case(
+        name="passeport_en_passant",
+        origin="D146 : la même prise en charge sur un autre souci que l'exemple de la "
+        "constitution (elle ne doit pas seulement recopier l'exemple).",
+        at=paris(2026, 10, 27, 19, 45),
+        facts=OWNER,
+        steps=(Say("faut que je renouvelle mon passeport un de ces jours, la flemme"),),
+        checks=(uses("remind_me", "commitments", "task", "mission", "papers"),),
+    ),
 )

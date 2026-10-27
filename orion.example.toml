@@ -85,7 +85,8 @@ enabled = false
 bot_token = { env = "TELEGRAM_BOT_TOKEN" }
 owner_id = 0                     # your Telegram user id; anyone else is ignored
 
-# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
+# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget. What
+# is small (a find, a question) waits for the next point (`digests`), in one message (D146).
 [initiative]
 enabled = true
 digests = ["08:30:00", "13:00:00", "19:00:00"]

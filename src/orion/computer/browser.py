@@ -1,4 +1,4 @@
-"""The browser: headless Chromium, guarded at the network layer.
+"""The browser: headless Chromium, guarded at the network layer, dressed as a phone's (D145).
 
 Two rules hold whatever the worker decides, because they are enforced on every request the
 page makes, not by asking the model:
@@ -14,6 +14,7 @@ profile and cookies (0600) so a site it signed in to stays signed in.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -37,6 +38,7 @@ from playwright.async_api import (
 )
 from playwright.async_api import Request as PwRequest
 
+from orion.computer.disguise import BLOCKED, LAUNCH_ARGS, init_script, user_agent
 from orion.core.private import write_private
 from orion.guardian.limits import host_in
 from orion.web.fetch import FetchError, check_public
@@ -156,6 +158,10 @@ _SIGN_IN = """(mark) => {
 lone e-mail or login field on a first step) and its password field. With `mark`, both are
 tagged for the owner's values to be typed into them (D142)."""
 
+TYPED_AT_MOST = 200
+KEY_DELAY_MS = 45
+CLEARING_SECONDS = 15.0
+"""How long a check that lets a real browser through by itself (Cloudflare's) may take."""
 STEADY_SECONDS = 8.0
 """How long a page may take to finish building itself after an action (a sign-in, an app)."""
 STEADY_STEP_MS = 250
@@ -192,11 +198,40 @@ class Snapshot:
     steady: bool = True
     """False when the page was still changing (or still saying « veuillez patienter ») after
     `STEADY_SECONDS`: what is read may not last."""
+    blocked: dict[str, Any] | None = None
+    """An anti-bot service turned the browser away (`disguise.BLOCKED`): by whom, and whether
+    a person can get past it."""
+    through: str = ""
+    """The owner's machine the browser goes out through (`orion.hands.exit`), if any."""
 
     def render(self) -> str:
         return (
-            f"URL: {self.url}\nTitre: {self.title}\n\nTexte de la page :\n{self.text}\n\n"
+            self.wall()
+            + f"URL: {self.url}\nTitre: {self.title}\n\nTexte de la page :\n{self.text}\n\n"
             "Éléments (utilise leur numéro) :\n" + "\n".join(self.elements)
+        )
+
+    def wall(self) -> str:
+        """What Orion must know before reading a page an anti-bot service put up."""
+        if self.blocked is None:
+            return ""
+        by = str(self.blocked.get("by", "un anti-robot"))
+        if self.blocked.get("puzzle"):
+            return (
+                f"[Anti-robot ({by}) devant la page : une personne le passe d'un geste. "
+                "`browser` hand_over, avec pourquoi ; il le fait sur son téléphone, puis tu "
+                "reprends, et le site te laisse passer ensuite.]\n\n"
+            )
+        where = (
+            f"même en passant par sa connexion ({self.through}), il refuse : dis-le-lui"
+            if self.through
+            else "propose-lui une fois de relier son ordinateur comme sortie (`orion hand pair "
+            "… --exit`) : tu navigueras depuis sa connexion à lui"
+        )
+        return (
+            f"[Ce site refuse ce navigateur ({by}) : c'est l'adresse du serveur qu'il bloque, "
+            "réessayer n'y changera rien. Passe par une autre source (`web_search`, un autre "
+            f"site), ou {where}.]\n\n"
         )
 
 
@@ -231,6 +266,11 @@ class Session:
         """A profile kept on disk (D116): Orion's own browser keeps its cookies, so a site it
         was signed in to stays signed in, from one conversation to the next and over restarts."""
         self.blocked: list[str] = []
+        self.proxy: dict[str, str] | None = None
+        """Where the browser goes out (`orion.hands.exit`): None, straight from the server."""
+        self.through: Callable[[], str] = lambda: ""
+        """The owner's machine its traffic goes out through right now, if any."""
+        self._version = ""
         self._open_requests: dict[PwRequest, float] = {}
         self._last_traffic = 0.0
         self._numbered: list[tuple[int, int, Frame]] = []
@@ -241,6 +281,9 @@ class Session:
         self._context: BrowserContext | None = None
         self.page: Page | None = None
         self._cleared: set[str] = set()
+        self._phone_dress: bool | None = None
+        """Whether pages are dressed as a phone's (True) or a computer's; None: not dressed."""
+        self._dressing: set[asyncio.Future[None]] = set()
 
     async def __aenter__(self) -> Session:
         try:
@@ -256,8 +299,7 @@ class Session:
             self.profile.mkdir(parents=True, exist_ok=True)
             self._context = await self._pw.chromium.launch_persistent_context(
                 str(self.profile),
-                headless=True,
-                executable_path=self._executable,
+                **self._launch(),
                 accept_downloads=False,
                 locale="fr-FR",
                 timezone_id="Europe/Paris",
@@ -265,10 +307,10 @@ class Session:
                 device_scale_factor=2 if phone else None,
                 is_mobile=bool(phone),
                 has_touch=bool(phone),
-                user_agent=self.phone_agent() if phone else None,
             )
             await self._context.route("**/*", self._guard)
             self._listen(self._context)
+            await self._dress(self._context, bool(phone))
             kept = self.profile / KEPT_COOKIES
             if kept.is_file():  # session cookies: Chromium drops them, the sign-in is in them
                 cookies = json.loads(kept.read_text(encoding="utf-8"))
@@ -276,11 +318,10 @@ class Session:
             self.page = (
                 self._context.pages[0] if self._context.pages else await self._context.new_page()
             )
+            await self._disguise(self.page)
             self.page.set_default_timeout(15_000)
             return self
-        self._browser = await self._pw.chromium.launch(
-            headless=True, executable_path=self._executable
-        )
+        self._browser = await self._pw.chromium.launch(**self._launch())
         state = dict(self.storage_state) if self.storage_state is not None else None
         profile: dict[str, Any] = dict(state.pop("orion", None) or {}) if state else {}
         phone: dict[str, Any] | None = self.phone or profile.get("phone")
@@ -299,9 +340,54 @@ class Session:
         )
         await self._context.route("**/*", self._guard)
         self._listen(self._context)
+        if not profile.get("user_agent"):  # a lent session keeps the browser it was made on
+            await self._dress(self._context, bool(phone))
         self.page = await self._context.new_page()
+        await self._disguise(self.page)
         self.page.set_default_timeout(15_000)
         return self
+
+    def _launch(self) -> dict[str, Any]:
+        """The full Chromium in its new headless mode (the bundled headless shell gives itself
+        away), automation flags off, out through `proxy` if set."""
+        options: dict[str, Any] = {"headless": True, "args": list(LAUNCH_ARGS)}
+        if self._executable:
+            options["executable_path"] = self._executable
+        else:
+            options["channel"] = "chromium"
+        if self.proxy is not None:
+            options["proxy"] = self.proxy
+            # WebRTC would reach out over UDP, around the proxy, and give the server away.
+            options["args"].append("--webrtc-ip-handling-policy=disable_non_proxied_udp")
+        return options
+
+    async def _dress(self, context: BrowserContext, phone: bool) -> None:
+        """Every page of this context tells the same story, popups included (D145)."""
+        self._phone_dress = phone
+        await context.add_init_script(init_script(phone))
+
+        def opened(page: Page) -> None:
+            pending = asyncio.ensure_future(self._disguise(page))
+            self._dressing.add(pending)
+            pending.add_done_callback(self._dressing.discard)
+
+        context.on("page", opened)
+
+    async def _disguise(self, page: Page) -> None:
+        """A Chrome of the engine's own version, with the Client Hints that go with it."""
+        if self._phone_dress is None:
+            return
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            send = cast(Callable[[str, dict[str, Any] | None], Awaitable[dict[str, Any]]], cdp.send)  # pyright: ignore[reportUnknownMemberType]
+            if not self._version:
+                product = str((await send("Browser.getVersion", None))["product"])
+                self._version = product.split("/")[-1]
+            await send(
+                "Emulation.setUserAgentOverride", user_agent(self._version, self._phone_dress)
+            )
+        except Error as exc:  # a page closed meanwhile; any other page is still dressed
+            log.info("computer.undressed_page", error=exc.message[:120])
 
     def _listen(self, context: BrowserContext) -> None:
         """Keep count of the requests under way: a page waiting for one is not ready."""
@@ -348,6 +434,7 @@ class Session:
         if self._context is None:  # pragma: no cover - inside `with` only
             raise BrowserError("the browser is not open")
         page = await self._context.new_page()
+        await self._disguise(page)
         page.set_default_timeout(15_000)
         return page
 
@@ -467,7 +554,10 @@ class Session:
         try:
             if context is not None:
                 try:
-                    await self._keep(context)
+                    # With no tab left, the full Chromium has already dropped its session
+                    # cookies: what was kept as the last tab closed stands.
+                    if context.pages:
+                        await self._keep(context)
                 finally:
                     await context.close()
         finally:
@@ -535,6 +625,7 @@ class Session:
         nothing at all."""
         page = self._page()
         steady = await self._steady()
+        await self._let_clear()
         for attempt in range(3):
             try:
                 await page.wait_for_load_state("domcontentloaded")
@@ -581,7 +672,33 @@ class Session:
             elements,
             [(str(i["url"]), str(i["text"])) for i in data.get("images", [])],
             steady,
+            await self._blocked(),
+            self.through(),
         )
+
+    async def _blocked(self) -> dict[str, Any] | None:
+        try:
+            found = await self._page().evaluate(BLOCKED)
+        except Error:
+            return None
+        if found:
+            log.info("computer.turned_away", url=self._page().url, by=found.get("by"))
+        return cast(dict[str, Any], found) if found else None
+
+    async def _let_clear(self) -> None:
+        """A check that runs in the page, then lets a real browser through by itself
+        (Cloudflare's « Just a moment… »): wait for it, rather than read it as the page."""
+        page = self._page()
+        deadline = time.monotonic() + CLEARING_SECONDS
+        while time.monotonic() < deadline:
+            found = await self._blocked()
+            if found is None or not found.get("passing"):
+                return
+            await page.wait_for_timeout(1000)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5_000)
+            except Error:
+                continue
 
     async def _frames(self) -> list[Frame]:
         """The page's frames that show something (not hidden, not blank)."""
@@ -667,7 +784,13 @@ class Session:
         element = await self._present(number)
 
         async def typing() -> None:
-            await element.fill(text, timeout=8_000)
+            # Key by key, as a person types: a field filled at once, with no key pressed, is
+            # what anti-bot scripts look for. A long text is pasted.
+            if len(text) > TYPED_AT_MOST:
+                await element.fill(text, timeout=8_000)
+            else:
+                await element.fill("", timeout=8_000)
+                await element.press_sequentially(text, delay=KEY_DELAY_MS, timeout=30_000)
             if enter:
                 await element.press("Enter")
 

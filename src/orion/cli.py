@@ -412,7 +412,11 @@ async def _hand(args: argparse.Namespace) -> int:
 
     configure_logging("INFO", False)
     if args.hand_command == "pair":
-        actions = [*DEFAULT_ACTIONS, *(["open_url"] if args.allow_open else [])]
+        actions = [
+            *DEFAULT_ACTIONS,
+            *(["open_url"] if args.allow_open else []),
+            *(["exit"] if args.exit else []),
+        ]
         try:
             config = await pair(args.server, args.code, args.root, actions)
         except Refused as exc:
@@ -420,6 +424,19 @@ async def _hand(args: argparse.Namespace) -> int:
             return 1
         config.save()
         print(f"Relié comme « {config.device} ». Lance maintenant : orion hand run")
+        return 0
+    if args.hand_command == "exit":
+        config = HandConfig.load()
+        config.actions = [a for a in config.actions if a != "exit"] + (
+            ["exit"] if args.state == "on" else []
+        )
+        config.save()
+        print(
+            "Le navigateur d'Orion sortira par cette machine quand elle est allumée "
+            "(relance « orion hand run »)."
+            if args.state == "on"
+            else "Le navigateur d'Orion ne passe plus par cette machine."
+        )
         return 0
     try:
         await Hand(HandConfig.load()).run_forever()
@@ -977,6 +994,12 @@ def main(argv: list[str] | None = None) -> int:
     hand_pairing.add_argument(
         "--allow-open", action="store_true", help="Let Orion open web pages (each one approved)"
     )
+    hand_pairing.add_argument(
+        "--exit", action="store_true", help="Let Orion's browser go out through this machine"
+    )
+    hand_sub.add_parser(
+        "exit", help="Let Orion's browser go out through this machine's connection, or not"
+    ).add_argument("state", choices=["on", "off"])
     hand_sub.add_parser("run", help="Connect and serve (keep it running)")
     app = sub.add_parser("app", help="Orion's own app on your phone (D125)")
     app_sub = app.add_subparsers(dest="app_command", required=True)

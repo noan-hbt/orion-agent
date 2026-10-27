@@ -397,6 +397,12 @@ class MissionsModule(Module):
             )
         ]
 
+    async def situation(self, now: datetime) -> list[str]:
+        """What he asked Orion to follow over days (D146)."""
+        if self.missions is None:
+            return []
+        return [f"- tu suis pour lui : {m.goal}" for m in await self.missions.active()]
+
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         if self.missions is None:
             return []
@@ -420,4 +426,5 @@ class MissionsModule(Module):
         settings: MissionSettings = self.settings
         work = MissionWork(self.missions, daemon.orion, self._clock, settings.tick_minutes * 60.0)
         daemon.alerts.append(work)
+        daemon.orion.situation.append(self)
         daemon.add_service("missions.work", work.run)

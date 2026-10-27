@@ -408,6 +408,16 @@ class Calendar:
             )
         return found
 
+    async def situation(self, now: datetime) -> list[str]:
+        """What is left of his day, and tomorrow: beside each message he writes (D146)."""
+        await self._runner.catch_up()
+        today = self.day(now.date(), after=now)
+        tomorrow = self.day(now.date() + timedelta(days=1))
+        return [
+            *([f"- agenda, aujourd'hui : {' ; '.join(today)}"] if today else []),
+            *([f"- agenda, demain : {' ; '.join(tomorrow)}"] if tomorrow else []),
+        ]
+
     async def presence(self, now: datetime) -> Moment:
         """Busy during a timed event; otherwise, when the last one ended (today)."""
         await self._runner.catch_up()

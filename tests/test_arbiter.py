@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -70,12 +71,13 @@ class Agenda:
 
 
 def engine(w: World, **kwargs: object) -> InitiativeEngine:
+    """Without points, so the arbiter alone decides when (D144 holds the rest for a point)."""
     return InitiativeEngine(
         w.orion,
         w.journal,
         w.timers,
         w.inbox,
-        SETTINGS,
+        replace(SETTINGS, digests=()),
         memory=w.memory.store,
         clock=w.clock,
         **kwargs,  # type: ignore[arg-type]

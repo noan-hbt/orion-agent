@@ -22,6 +22,7 @@ from orion.tools.base import Tool, ToolContext
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
+    from orion.hands.exit import HomeExit
 
 SessionFactory = Callable[[], Session]
 PHONE = {"width": 412, "height": 860}
@@ -62,6 +63,8 @@ class ComputerModule(Module):
         super().__init__(config)
         self._sessions = sessions
         self.desk: BrowserDesk | None = None
+        self.exit: HomeExit | None = None
+        """The relay through the owner's machines, when his hands are on (D145)."""
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: ComputerSettings = self.settings
@@ -70,10 +73,13 @@ class ComputerModule(Module):
 
         def browser() -> Session:
             # Like a person (D115), with one profile kept on disk (D116), posing as a phone
-            # so the owner can take it in hand from his.
+            # so the owner can take it in hand from his; out through his own connection when
+            # one of his machines lets it (D145).
             session = Session(False, executable=executable)
             session.profile = profile
             session.phone = PHONE
+            if self.exit is not None:
+                session.proxy, session.through = self.exit.proxy, self.exit.through
             return session
 
         sessions = self._sessions or browser
@@ -127,7 +133,13 @@ class ComputerModule(Module):
         from orion.channels.telegram_module import TelegramModule
         from orion.computer.handover import handover_app
         from orion.console.module import ConsoleModule
+        from orion.hands.exit import HomeExit
+        from orion.hands.module import HandsModule
 
+        hands = daemon.plate.module(HandsModule)
+        if hands is not None and hands.desk is not None and self.exit is None:
+            self.exit = HomeExit(hands.desk)
+            await self.exit.start()
         desk = self.desk
         console = daemon.plate.module(ConsoleModule)
         bot = daemon.plate.module(TelegramModule)
@@ -158,6 +170,11 @@ class ComputerModule(Module):
     async def close(self) -> None:
         if self.desk is not None:
             await self.desk.aclose()
+        if self.exit is not None:
+            await self.exit.aclose()
 
     def doctor(self) -> list[str]:
-        return ["your own browser (no separate web agent, D113)"]
+        return [
+            "your own browser (no separate web agent, D113), dressed as a phone's Chrome (D145); "
+            "out through the owner's machine when his hand allows it (`orion hand exit on`)"
+        ]

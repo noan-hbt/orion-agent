@@ -314,7 +314,7 @@ class Vault:
                     fallback=f"{paper.label} : expire le {paper.valid_until:%d/%m/%Y}.",
                     trust=Trust.THIRD_PARTY,
                     expires_at=datetime.combine(paper.valid_until, datetime.min.time(), self.zone),
-                    importance=0.6 if days == WARN_DAYS[0] else 0.75,
+                    importance=0.6,  # weeks ahead: it waits for a point (D144)
                 )
             )
         return found

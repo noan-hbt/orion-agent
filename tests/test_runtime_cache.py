@@ -19,7 +19,7 @@ from orion.core.journal import SqliteJournal
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import Guardian
 from orion.providers.base import ModelRequest, ModelResponse
-from orion.runtime import Orion
+from orion.runtime import OWNER_THREAD, Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
 from tests.fakes import ScriptedProvider, call_tools, echo_tool, reply
@@ -424,3 +424,32 @@ def test_each_model_has_its_cache_lifetime() -> None:
     assert cache_minutes("openrouter:deepseek/deepseek-v4.1-flash") == 240
     assert cache_minutes("claude-code:opus") == 5
     assert cache_minutes("chatgpt:gpt-5.5") == 60
+
+
+async def test_where_his_life_stands_comes_with_his_message_when_it_changed(
+    journal: SqliteJournal,
+) -> None:
+    """D146: his agenda beside what he writes, so Orion links them; once, until it changes."""
+
+    class Agenda:
+        def __init__(self) -> None:
+            self.lines = ["- agenda, demain : 08:00-08:30 Dentiste"]
+
+        async def situation(self, now: datetime) -> list[str]:
+            return self.lines
+
+    provider = ScriptedProvider(reply("Pense au dentiste à 8 h."), reply("Ok."), reply("Noté."))
+    orion = make_orion(journal, provider)
+    agenda = Agenda()
+    orion.situation.append(agenda)
+    await orion.start()
+    await orion.handle_owner_message(OWNER_THREAD, "je sors ce soir", "t", now=at(1))
+    assert "<maintenant>\n- agenda, demain : 08:00-08:30 Dentiste" in str(
+        provider.requests[0].messages[-1]["content"]
+    )
+    await orion.handle_owner_message(OWNER_THREAD, "merci", "t", now=at(2))
+    assert "<maintenant>" not in str(provider.requests[1].messages[-1]["content"])  # same
+    agenda.lines = ["- agenda, demain : 10:00 Dentiste (déplacé)"]
+    await orion.handle_owner_message(OWNER_THREAD, "et demain ?", "t", now=at(3))
+    assert "déplacé" in str(provider.requests[2].messages[-1]["content"])
+    assert_prefix_stable(provider)
