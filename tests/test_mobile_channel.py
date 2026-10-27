@@ -351,18 +351,18 @@ async def test_another_phone_is_added_or_let_go_only_with_face_id(world: World) 
     assert (await http.get("/app/devices")).json()["devices"] == ["ipad"]
 
 
-async def test_what_orion_says_as_he_works_folds_above_his_answer(world: World) -> None:
-    """In the app, his words beside a tool call are shown live with the work, not sent as
-    messages of their own (no notification, nothing piled up): the answer keeps them (D143)."""
+async def test_what_orion_says_as_he_works_is_a_message_of_its_own(world: World) -> None:
+    """In the app, his own words beside a tool call are something he tells the owner: a
+    message, before the answer (D162). What the work is doing stays in the live bubble."""
     await pair(world)
     world.provider.extend(
-        call_tools(("lookup", {}), text="Je regarde ton agenda."), reply("Tu es libre jeudi.")
+        call_tools(("lookup", {}), text="Ton jeudi est pris par le dentiste."),
+        reply("Tu es libre vendredi."),
     )
     await world.http.post("/app/api/send", json={"text": "Je suis libre quand ?"})
-    await until(lambda: any(s.who == "orion" for s in world.channel.state.said))
-    [answer] = [s for s in world.channel.state.said if s.who == "orion"]
-    assert answer.text == "Tu es libre jeudi."
-    assert answer.trace is not None and answer.trace["said"] == ["Je regarde ton agenda."]
+    await until(lambda: len([s for s in world.channel.state.said if s.who == "orion"]) == 2)
+    said, answer = [s for s in world.channel.state.said if s.who == "orion"]
+    assert said.text == "Ton jeudi est pris par le dentiste."
+    assert answer.text == "Tu es libre vendredi."
+    assert answer.trace is not None and answer.trace["said"] == []
     assert answer.trace["steps"] >= 1
-    shown = (await world.http.get("/app/api/messages")).json()["messages"]
-    assert shown[-1]["trace"]["said"] == ["Je regarde ton agenda."]

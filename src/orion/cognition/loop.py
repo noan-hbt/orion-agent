@@ -438,7 +438,7 @@ async def run_agent(
         elif (
             clock - began >= settings.progress_after and clock - shown_at >= settings.progress_every
         ):
-            doing = _doing(registry, calls)
+            doing = _doing(registry, calls, context_trust >= TRUSTED_FLOOR)
             if doing not in shown and len(shown) < PROGRESS_AT_MOST:
                 if settings.progress_model is not None:
                     written, spent = await _progress(
@@ -458,7 +458,7 @@ async def run_agent(
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
-        yield Working(_labels(registry, calls))
+        yield Working(_labels(registry, calls, context_trust >= TRUSTED_FLOOR))
         started = time.monotonic()
         first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
         try:
@@ -601,19 +601,35 @@ def _called(call: ToolCall) -> str:
     return f"{call.name}:{action}" if isinstance(action, str) and action else call.name
 
 
-def _labels(registry: ToolRegistry, calls: list[ToolCall]) -> tuple[str, ...]:
-    """The tools' `doing`, once each, in order."""
+def _labels(registry: ToolRegistry, calls: list[ToolCall], trusted: bool) -> tuple[str, ...]:
+    """What each call does, once each, in order: from its arguments (`Tool.doing_of`) when the
+    tool can tell, else the tool's `doing`."""
     labels: list[str] = []
     for call in calls:
         tool = registry.get(call.name)
-        if tool is not None and tool.doing and tool.doing not in labels:
-            labels.append(tool.doing)
+        if tool is None:
+            continue
+        label = _label(tool, call, trusted) or tool.doing
+        if label and label not in labels:
+            labels.append(label)
     return tuple(labels)
 
 
-def _doing(registry: ToolRegistry, calls: list[ToolCall]) -> str:
+def _label(tool: Tool, call: ToolCall, trusted: bool) -> str:
+    """This call's own `doing`: "" when the tool has none or its arguments do not parse (the
+    call will fail on its own, and say why)."""
+    if tool.doing_of is None:
+        return ""
+    try:
+        arguments = tool.parse(call.arguments)
+    except ToolInputError:
+        return ""
+    return " ".join(tool.doing_of(arguments, trusted).split())[:80]
+
+
+def _doing(registry: ToolRegistry, calls: list[ToolCall], trusted: bool) -> str:
     """What these calls do, in the owner's words: the tools' `doing`, else a plain notice."""
-    labels = _labels(registry, calls)
+    labels = _labels(registry, calls, trusted)
     if not labels:
         return WORKING
     text = ", ".join(labels)

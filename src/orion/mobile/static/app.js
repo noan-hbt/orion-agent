@@ -1462,7 +1462,7 @@ function paintWork() {
   if (!work) return;
   const p = workParts();
   const seconds = (Date.now() - new Date(work.since)) / 1000;
-  swap(p.title, work.stopping ? "J'arrête…" : work.doing[0] ? capital(work.doing[0]) : work.steps ? "Je regarde ce que j'ai…" : "Je réfléchis…");
+  swap(p.title, work.stopping ? "J'arrête…" : work.doing[0] ? headline(work.doing) : work.steps ? "Je fais le point…" : "Je réfléchis…");
   p.time.textContent = elapsed(seconds);
   const said = work.said?.[work.said.length - 1];
   p.said.hidden = !said;
@@ -1478,6 +1478,16 @@ function paintWork() {
     p.more.textContent = p.open ? "Masquer" : `${plural(done.length, "chose faite", "choses faites")}`;
   }
   p.later.hidden = seconds < 25 || work.stopping || state.backgrounded === work.since;
+}
+
+// Calls run together read as one line: « Je lis lemonde.fr, lefigaro.fr » (D162).
+function headline(doing) {
+  const [first, ...rest] = doing;
+  const verb = first.split(" ").slice(0, 2).join(" ") + " ";
+  const same = rest.filter((d) => d.startsWith(verb));
+  const others = rest.length - same.length;
+  const text = [first, ...same.map((d) => d.slice(verb.length))].join(", ");
+  return capital(others ? `${text} et ${others} autre${others > 1 ? "s" : ""} chose${others > 1 ? "s" : ""}` : text);
 }
 
 function capital(text) {
@@ -2238,7 +2248,7 @@ function paintNowWork() {
   let line;
   let acts = [];
   if (work) {
-    title = h("span", { class: "shimmer" }, capital(work.doing[0] || work.said?.[work.said.length - 1] || "Je réfléchis…"));
+    title = h("span", { class: "shimmer" }, work.doing[0] ? headline(work.doing) : capital(work.said?.[work.said.length - 1] || "Je réfléchis…"));
     line = `depuis ${elapsed((Date.now() - new Date(work.since)) / 1000)} · ${plural(work.steps, "étape", "étapes")}`;
     acts = [
       h("button", { class: "pill small", type: "button", onclick: () => show("talk") }, "Suivre"),

@@ -3661,3 +3661,32 @@ manquait la marche à suivre : la skill `maison-home-assistant` du catalogue la 
 (l'intégration à ajouter, le jeton par le formulaire du gardien, le serveur `maison` avec ses
 outils de lecture en `read_only`) et dit comment s'en servir : lire l'état sans demander, agir
 avec son accord, ne pas réciter la maison sans raison.
+
+## D162 — La barre dit ce qu'il fait, ses mots deviennent des messages
+
+*27/10/2026 · acceptée · révise D143*
+
+La bulle de travail disait surtout « Je lis la page », « Je cherche sur le web », « Je regarde
+ce que j'ai » : l'outil, jamais ce qu'il en fait. Et ce qu'Orion écrivait en chemin, rare
+(la constitution le retenait), finissait dans cette bulle au lieu de lui parler.
+
+- **Chaque appel dit ce qu'il fait, d'après ses arguments** (`Tool.doing_of`) : « je lis
+  lemonde.fr », « je cherche « vols Lisbonne » », « je regarde les mails de Paul ». Sans modèle :
+  instantané et gratuit. Après un contenu venu d'ailleurs, seul ce que la forme d'un argument
+  garantit peut paraître (le domaine d'une adresse), jamais son texte libre ; sinon le `doing`
+  de l'outil. Des appels lancés ensemble se lisent d'une ligne (« Je lis lemonde.fr,
+  lefigaro.fr ») ; entre deux appels, « Je fais le point… ». `recall`, `person` et `agenda` ont
+  maintenant leurs mots.
+- **Ce que le modèle écrit avec un appel d'outil est un message**, dans l'application aussi
+  (`Progress` dit si le texte vient de lui). Ce que dit le travail (la phrase de progression,
+  le plan) reste dans la bulle, comme en D143.
+- **La constitution ne le retient plus, elle l'oriente** : ne jamais annoncer ce qu'il fait
+  (la bulle le montre), mais écrire tout de suite ce qu'il apprend ou décide en chemin et qui
+  change quelque chose pour le propriétaire. Pas d'outil `say` : un modèle oublie de l'appeler,
+  alors que le texte à côté d'un appel, il l'écrit déjà. S'il se tait, la bulle suffit.
+- Évaluations : `il_dit_ce_quil_trouve_pas_ce_quil_fait` (aucune annonce de travail en chemin)
+  et son témoin `une_question_simple_sans_parole_en_chemin` (un tour court ne parle qu'une
+  fois). Le cache de prompt est intact : rien de volatil n'entre dans le message système.
+
+Pas fait ici : une réponse en plusieurs messages (la réponse, puis une question à part). À
+reprendre si les messages en chemin tiennent leurs promesses.

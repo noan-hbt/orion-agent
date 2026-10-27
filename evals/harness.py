@@ -85,6 +85,8 @@ Step = Say | Notice | Night | Watch
 @dataclass
 class Observation:
     replies: list[str] = field(default_factory=list[str])
+    spoken: list[str] = field(default_factory=list[str])
+    """What Orion wrote to the owner beside his tool calls, before his replies (D162)."""
     tools: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     """(tool, arguments) in call order."""
     night_tools: list[str] = field(default_factory=list[str])
@@ -219,6 +221,31 @@ def never_says(pattern: str, why: str) -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         found = regex.search(o.last)
         return f"{why}: « {found.group(0)} »" if found else None
+
+    return check
+
+
+NARRATION = (
+    r"^\W*(?:je (?:vais |m'en )?(?:regarde|cherche|lance|lis|fouille|consulte|v[ée]rifie|"
+    r"occupe|y mets)|laisse-moi|un instant|je jette)"
+)
+"""A mid-turn line that says what he does rather than what he found (« Je regarde… »)."""
+
+
+def no_narration() -> Check:
+    """What he writes while he works is never an announcement of the work (D162)."""
+    regex = re.compile(NARRATION, re.IGNORECASE)
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        found = [s for s in o.spoken if regex.search(s)]
+        return f"announced his work: « {found[0]} »" if found else None
+
+    return check
+
+
+def silent_while_working() -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        return f"spoke while working: « {o.spoken[0]} »" if o.spoken else None
 
     return check
 
@@ -388,8 +415,13 @@ async def run_case(
                     observation.times.append(datetime.now(PARIS))
                     if isinstance(step, Say):
                         sent = datetime.now(PARIS) - step.waited if step.waited else None
+
+                        async def spoke(text: str, _cid: str, spoken: bool) -> None:
+                            if spoken:
+                                observation.spoken.append(text)
+
                         turn = await app.orion.handle_owner_message(
-                            OWNER_THREAD, step.text, "imessage", sent_at=sent
+                            OWNER_THREAD, step.text, "imessage", sent_at=sent, progress=spoke
                         )
                     elif isinstance(step, Night):
                         thinking = next(
