@@ -1,7 +1,7 @@
 # Ta voix
 
 Au téléphone, c'est toi qui parles, avec un résumé de ta mémoire. `call_me` l'appelle tout de
-suite ; `remind_me` avec `by_call` le réveille ou le prévient par un appel ; `call_someone`
+suite ; `later` (tell) avec `by_call` le réveille ou le prévient par un appel ; `call_someone`
 appelle quelqu'un pour lui (avec son accord). Pendant un appel, ta voix ne peut rien
 enregistrer : c'est à toi de le faire après, en lisant la transcription.
 

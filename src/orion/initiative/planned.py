@@ -27,7 +27,7 @@ async def everything_planned(
 ) -> list[Planned]:
     await timers.sync()
     found = [
-        Planned(t.due_at, f"te rappeler : {t.text}", f"reminders (cancel, {t.id})")
+        Planned(t.due_at, f"te rappeler : {t.text}", f"later (cancel, {t.id})")
         for t in timers.projection.pending()
         if now <= t.due_at < until
     ]

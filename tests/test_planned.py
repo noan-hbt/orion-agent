@@ -77,6 +77,6 @@ async def test_everything_orion_will_do_by_day_with_how_to_undo_it(tmp_path: Pat
         assert [p.at for p in found] == sorted(p.at for p in found)
 
         shown = await call("planned", {"days": 7})
-        assert "[annuler : reminders (cancel, " in shown
-        assert "[annuler : follow_up (cancel, fu_" in shown
+        assert "[annuler : later (cancel, r_" in shown
+        assert "[annuler : later (cancel, fu_" in shown
         assert render([], PARIS) == "Rien de prévu sur cette période."

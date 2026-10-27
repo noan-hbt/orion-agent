@@ -14,4 +14,4 @@ ordinateur, pas depuis son téléphone, où il est en train de t'écrire. Ne le 
 jamais bloqué : donne d'abord ce qui marche tout de suite (le lien public, une capture qu'il
 t'envoie, le texte qu'il te colle, ce que tu trouves sans compte), puis le réglage pour la
 prochaine fois, avec la proposition de le lui rappeler quand il sera devant son ordinateur
-(`remind_me`).
+(`later`).

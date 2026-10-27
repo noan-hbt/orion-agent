@@ -364,7 +364,7 @@ class Awaiting:
                 + (
                     "C'était déjà la dernière relance : ne relance plus, dis-le-lui."
                     if last
-                    else "Si tu relances, attends la suite avec `awaiting` (wait, "
+                    else "Si tu relances, attends la suite avec `later` (reply_from, "
                     f"follows={wait.id})."
                 )
             )
@@ -529,7 +529,7 @@ class AwaitingModule(Module):
             Planned(
                 w.at,
                 f"revenir sur {w.about}, si {awaiting.describe(w)} n'a pas répondu",
-                f"awaiting (cancel, {w.id})",
+                f"later (cancel, {w.id})",
             )
             for w in awaiting.state.pending()
             if now <= w.at < until

@@ -9,7 +9,7 @@ the guardian decides on.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, cast
@@ -80,6 +80,10 @@ class Tool:
     doing: str = ""
     """What a call does, in the owner's words (« je cherche sur le web »): said when a turn
     runs long and the model said nothing (`LoopSettings.progress_after`)."""
+    route: Callable[[BaseModel], tuple[str, dict[str, Any]]] | None = None
+    """A tool that stands for others (`later`, D157): the tool and arguments a call becomes,
+    before it runs (`ToolRegistry.resolve`); ValueError when it cannot. Its handler runs only
+    when the call could not be turned, and says why."""
 
     def effect_for(self, arguments: BaseModel) -> Effect:
         return self.effect_of(arguments) if self.effect_of is not None else self.effect
@@ -172,18 +176,25 @@ class ToolRegistry:
 
     `drawer`: tools used rarely (once a month, or when he asks), kept out of the model's menu
     and called through one tool, `orion` (D151). Each keeps its name everywhere else: the
-    guardian, the journal and the owner's approvals see the drawer's tool, not `orion`."""
+    guardian, the journal and the owner's approvals see the drawer's tool, not `orion`.
 
-    def __init__(self, tools: list[Tool], drawer: list[Tool] | None = None) -> None:
-        drawer = drawer or []
+    `behind`: tools another stands for (`Tool.route`, D157), in the drawer but not listed in
+    it: the model reaches them through the tool that stands for them."""
+
+    def __init__(
+        self, tools: list[Tool], drawer: list[Tool] | None = None, behind: Sequence[Tool] = ()
+    ) -> None:
+        drawer = [*(drawer or []), *behind]
         names = [t.name for t in [*tools, *drawer]]
         if len(set(names)) != len(names) or DRAWER in names:
             raise ValueError(f"duplicate tool names: {names}")
         self._tools = {t.name: t for t in sorted([*tools, *drawer], key=lambda t: t.name)}
         self._drawer = {t.name for t in drawer}
+        self._behind = hidden = {t.name for t in behind}
         shown = [t for t in self._tools.values() if t.name not in self._drawer]
-        if drawer:
-            shown.append(self._drawer_tool(sorted(drawer, key=lambda t: t.name)))
+        listed = sorted((t for t in drawer if t.name not in hidden), key=lambda t: t.name)
+        if listed:
+            shown.append(self._drawer_tool(listed))
             shown.sort(key=lambda t: t.name)
         self._specs = [t.spec() for t in shown]
 
@@ -204,10 +215,11 @@ class ToolRegistry:
         )
 
     def resolve(self, call: ToolCall) -> ToolCall:
-        """A call through the drawer, as the call of the drawer's tool itself; others as they
-        are. A drawer call that names no drawer tool stays as it is (and fails as unknown)."""
+        """A call through the drawer, as the call of the drawer's tool itself; a call of a tool
+        that stands for others (`Tool.route`), as the call it stands for; others as they are.
+        A call that cannot be turned stays as it is (and fails, saying why)."""
         if call.name != DRAWER:
-            return call
+            return self._routed(call)
         try:
             asked: Any = json.loads(call.arguments or "{}")
         except json.JSONDecodeError:
@@ -218,13 +230,28 @@ class ToolRegistry:
         if name not in self._drawer:
             return call
         args: object = cast(dict[str, Any], asked).get("args") or {}
+        return self._routed(
+            ToolCall(id=call.id, name=name, arguments=json.dumps(args, ensure_ascii=False))
+        )
+
+    def _routed(self, call: ToolCall) -> ToolCall:
+        tool = self._tools.get(call.name)
+        if tool is None or tool.route is None:
+            return call
+        try:
+            name, args = tool.route(tool.parse(call.arguments))
+        except (ToolInputError, ValueError):
+            return call
+        if name not in self._tools or name == call.name:
+            return call
         return ToolCall(id=call.id, name=name, arguments=json.dumps(args, ensure_ascii=False))
 
     def in_drawer(self, name: str) -> bool:
         return name in self._drawer
 
     def drawer_names(self) -> list[str]:
-        return sorted(self._drawer)
+        """The drawer's listed tools (not those reached through another)."""
+        return sorted(self._drawer - self._behind)
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

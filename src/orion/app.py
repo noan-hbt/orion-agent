@@ -20,6 +20,7 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy, autonomy_tools
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.policy import Guardian
+from orion.initiative.later import STANDS_FOR, later_tool
 from orion.initiative.planned import planned_tools
 from orion.initiative.timers import TimerProjection, Timers
 from orion.initiative.tools import reminder_tools
@@ -148,6 +149,8 @@ DRAWER_TOOLS = frozenset(
 )
 """Tools used once in a while, or when he asks: out of the model's menu, in the drawer
 (`orion`, D151). Fewer choices at every step for the everyday ones."""
+BEHIND_TOOLS = frozenset(STANDS_FOR)
+"""The ways to come back later: `later` stands for them (D157), and they are not listed."""
 
 
 def core_tools(plate: Plate) -> list[Tool]:
@@ -203,6 +206,7 @@ def core_tools(plate: Plate) -> list[Tool]:
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
         *(spending_tools(plate.provider) if isinstance(plate.provider, Spending) else []),
         *planned_tools(plate.modules, plate.timers, plate.config.agent.timezone),
+        later_tool(),
     ]
 
 
@@ -268,8 +272,9 @@ async def build_app(
             journal=journal,
             provider=provider,
             registry=ToolRegistry(
-                [t for t in tools if t.name not in DRAWER_TOOLS],
+                [t for t in tools if t.name not in DRAWER_TOOLS | BEHIND_TOOLS],
                 [t for t in tools if t.name in DRAWER_TOOLS],
+                [t for t in tools if t.name in BEHIND_TOOLS],
             ),
             guardian=Guardian(
                 plate.approver,

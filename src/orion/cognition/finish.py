@@ -57,6 +57,7 @@ _PROMISE = re.compile(
 )
 
 KEEPS_A_PROMISE = (
+    "later",
     "remind_me",
     "task",
     "mission",

@@ -87,7 +87,7 @@ tourne déjà ne se relance pas. Puis fais-le, vraiment :
   réponse, même « je maintiens », et pourquoi.
 - Un but qui prendra des jours : avance la mission, ou ouvre-la (`mission`) s'il y tenait.
 - Un moment dont il faudra prendre des nouvelles (un entretien, un rendez-vous médical, une
-  visite, un examen) : `follow_up` (plan), sauf s'il est déjà prévu.
+  visite, un examen) : `later` (ask), sauf s'il est déjà prévu.
 - S'il te reste du temps et qu'une piste t'intrigue, là où sa vie croise ce qu'il ne sait pas
   encore (ses centres d'intérêt : `curiosity` list) : suis-la.
 Rien ne part cette nuit : pas de message, pas d'envoi, pas de demande d'accord. Ce qui demande
@@ -678,7 +678,7 @@ class ThinkingModule(Module):
             return []
         await thinking.sync()
         found = [
-            Planned(f.at, f"te demander : {f.question}", f"follow_up (cancel, {f.id})")
+            Planned(f.at, f"te demander : {f.question}", f"later (cancel, {f.id})")
             for f in thinking.state.follow_ups.values()
             if now <= f.at < until
         ]

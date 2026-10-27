@@ -44,7 +44,7 @@ async def test_serve_asks_through_the_inbox_and_shares_the_registry(
         assert isinstance(channel, IMessageChannel)
         assert app.approver.target is inbox
         tools = {spec.name for spec in app.orion._registry.specs()}
-        assert {"remind_me", "remember", "current_time"} <= tools
+        assert {"later", "remember", "current_time"} <= tools
 
 
 @pytest.mark.parametrize(
