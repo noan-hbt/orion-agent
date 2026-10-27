@@ -417,7 +417,7 @@ async function conversation() {
   view.typing = h("div", { class: "typing", hidden: true, "aria-label": "Orion écrit" }, h("i"), h("i"), h("i"));
   view.offline = h("p", { class: "offline", hidden: true }, "Hors ligne : je me reconnecte…");
   view.older = h("button", { class: "pill small older", hidden: true, onclick: older }, "Messages plus anciens");
-  view.work = h("article", { class: "work card", hidden: true, "aria-live": "polite", "aria-label": "Orion au travail" });
+  view.work = h("article", { class: "live-work", hidden: true, "aria-live": "polite", "aria-label": "Orion au travail" });
   view.thread.append(view.older, view.list, view.offline, view.typing, view.work, view.asks);
   view.scrollBottom = h("button", {
     class: "scroll-bottom glass", type: "button", hidden: true, "aria-label": "Derniers messages",
@@ -762,6 +762,7 @@ function render(message, previous) {
     nodes.push(timestamp(date));
   }
   const el = h("div", { class: `msg ${message.who}`, "data-who": message.who, "data-ref": message.ref, "data-at": date.getTime() });
+  if (message.trace) el.append(traceOf(message.trace));
   for (const [index, file] of message.files.entries()) el.append(attachment(message, file, index));
   if (message.blocks && message.blocks.length) el.append(...message.blocks.map(block));
   else if (message.text) el.append(h("div", { class: "bubble" }, ...rich(message.text)));
@@ -1375,75 +1376,136 @@ function typingBubble(on) {
   }
 }
 
-// -- Orion at work: what it does as it goes, and a way to stop it (D133) ------------------------
+// -- Orion at work, live (D133, D143) -----------------------------------------------------------
+// One quiet element where his next message will be: what he does now (shimmering), what he
+// says of it, his plan as a checklist. Stopping is the composer's button; "en fond" comes only
+// once the work is long. Nothing here is a message: when he answers, it folds above the answer.
 
 let workClock = null;
 
+function elapsed(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")}`;
+}
+
+function swap(el, text) {
+  // A line that changes slides in; one that does not is left alone (no flicker on updates).
+  if (el.textContent === text) return;
+  el.textContent = text;
+  el.classList.remove("swap");
+  void el.offsetWidth;
+  el.classList.add("swap");
+}
+
+function planList(plan, live) {
+  return h(
+    "ol",
+    { class: "plan" },
+    plan.map(([text, status]) =>
+      h("li", { class: status }, h("span", { class: "mark" }, status === "done" ? icon("check", 12) : status === "doing" && live ? spinner() : null), h("span", {}, text)),
+    ),
+  );
+}
+
+function workParts() {
+  if (view.workParts) return view.workParts;
+  const parts = {
+    title: h("span", { class: "lw-title shimmer" }),
+    time: h("span", { class: "lw-time" }),
+    said: h("p", { class: "lw-said", hidden: true }),
+    body: h("div", { class: "lw-body" }),
+    more: h("button", { class: "lw-more", type: "button", hidden: true, "aria-expanded": "false" }),
+    later: h("button", { class: "lw-later", type: "button", hidden: true }, "Continuer en fond"),
+    open: false,
+  };
+  parts.more.addEventListener("click", () => {
+    parts.open = !parts.open;
+    parts.more.setAttribute("aria-expanded", String(parts.open));
+    paintWork();
+  });
+  parts.later.addEventListener("click", () => {
+    state.backgrounded = state.work?.since;
+    parts.later.hidden = true;
+    submit("Passe ça en tâche de fond et préviens-moi quand c'est prêt.");
+  });
+  view.work.replaceChildren(
+    h("div", { class: "lw-head" }, h("span", { class: "lw-orb", "aria-hidden": "true" }), parts.title, parts.time),
+    parts.said,
+    parts.body,
+    h("div", { class: "lw-foot" }, parts.more, parts.later),
+  );
+  view.workParts = parts;
+  return parts;
+}
+
+function paintWork() {
+  const work = state.work;
+  if (!work) return;
+  const p = workParts();
+  const seconds = (Date.now() - new Date(work.since)) / 1000;
+  swap(p.title, work.stopping ? "J'arrête…" : work.doing[0] ? capital(work.doing[0]) : work.steps ? "Je regarde ce que j'ai…" : "Je réfléchis…");
+  p.time.textContent = elapsed(seconds);
+  const said = work.said?.[work.said.length - 1];
+  p.said.hidden = !said;
+  if (said) swap(p.said, said);
+  const plan = work.plan || [];
+  const done = work.done || [];
+  if (plan.length) {
+    p.body.replaceChildren(planList(plan, true));
+    p.more.hidden = true;
+  } else {
+    p.body.replaceChildren(p.open && done.length ? h("ul", { class: "trail" }, done.map((t) => h("li", {}, icon("check", 12), capital(t)))) : "");
+    p.more.hidden = !done.length;
+    p.more.textContent = p.open ? "Masquer" : `${plural(done.length, "chose faite", "choses faites")}`;
+  }
+  p.later.hidden = seconds < 25 || work.stopping || state.backgrounded === work.since;
+}
+
+function capital(text) {
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
 function setWork(work) {
+  const was = state.work;
   state.work = work;
   clearInterval(workClock);
-  const shown = work && (work.steps > 0 || work.doing.length);
+  // A quick answer keeps the three dots; the element comes with the first step.
+  const shown = !!work && state.typing && (work.steps > 0 || work.doing.length > 0 || work.said?.length > 0);
   view.work.hidden = !shown;
   typingBubble(state.typing && !shown);
   view.avatar.classList.toggle("busy", state.typing || !!work);
   sendMode();
   paintNowWork();
-  if (!shown) return;
-  const since = new Date(work.since);
-  const clock = h("span", { class: "clock" });
-  const tick = () => {
-    const s = Math.max(0, Math.floor((Date.now() - since) / 1000));
-    clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-  };
-  tick();
-  workClock = setInterval(tick, 1000);
-  const stop = h(
-    "button",
-    {
-      type: "button",
-      class: "pill small",
-      disabled: work.stopping,
-      onclick: async () => {
-        stop.disabled = true;
-        try {
-          await api("api/stop", {});
-        } catch (error) {
-          stop.disabled = false;
-          toast(said(error));
-        }
-      },
-    },
-    work.stopping ? "J'arrête…" : "Arrêter",
-  );
-  // A message that arrives during a turn joins it between two steps: Orion reads this one,
-  // hands the rest to a background task with everything it knows, and says so.
-  const later = h(
-    "button",
-    {
-      type: "button",
-      class: "pill small ghost",
-      disabled: work.stopping || state.backgrounded === work.since,
-      onclick: () => {
-        state.backgrounded = work.since;
-        later.disabled = true;
-        submit("Passe ça en tâche de fond et préviens-moi quand c'est prêt.");
-      },
-    },
-    "En fond",
-  );
-  const step = (text, current) =>
-    h("li", { class: current ? "now" : "" }, h("span", { class: "mark" }, current ? spinner() : icon("check", 13)), text);
-  view.work.replaceChildren(
-    h(
-      "header",
-      {},
-      h("span", { class: "ico" }, icon("orion", 18, "none")),
-      h("span", {}, h("b", {}, "Je travaille"), h("small", {}, clock, ` · ${plural(work.steps, "étape", "étapes")}`, work.cost ? ` · ${money(work.cost)}` : "")),
-    ),
-    h("ul", {}, (work.done || []).slice(-4).map((t) => step(t, false)), work.doing.map((t) => step(t, true))),
-    h("div", { class: "acts" }, later, stop),
-  );
+  if (!shown) {
+    view.workParts = null;
+    return;
+  }
+  if (!was || was.since !== work.since) {
+    view.workParts = null; // a new turn: a fresh element, folded
+    view.work.classList.remove("new");
+    void view.work.offsetWidth;
+    view.work.classList.add("new");
+  }
+  paintWork();
+  workClock = setInterval(paintWork, 1000);
   bottom();
+}
+
+function traceOf(trace) {
+  // Above his answer, folded: how long he worked, and what he did and said on the way.
+  const label = `Travaillé ${elapsed(trace.seconds)} · ${plural(trace.steps, "étape", "étapes")}`;
+  const plan = trace.plan || [];
+  return h(
+    "details",
+    { class: "trace" },
+    h("summary", {}, h("span", { class: "lw-orb still", "aria-hidden": "true" }), label),
+    h(
+      "div",
+      { class: "trace-body" },
+      (trace.said || []).map((line) => h("p", { class: "lw-said" }, line)),
+      plan.length ? planList(plan, false) : h("ul", { class: "trail" }, (trace.done || []).map((t) => h("li", {}, icon("check", 12), capital(t)))),
+    ),
+  );
 }
 
 function paintStatus() {
@@ -2157,8 +2219,8 @@ function paintNowWork() {
   let line;
   let acts = [];
   if (work) {
-    title = work.doing[0] || "Je travaille.";
-    line = `${plural(work.steps, "étape", "étapes")}${work.cost ? ` · ${money(work.cost)}` : ""}`;
+    title = h("span", { class: "shimmer" }, capital(work.doing[0] || work.said?.[work.said.length - 1] || "Je réfléchis…"));
+    line = `depuis ${elapsed((Date.now() - new Date(work.since)) / 1000)} · ${plural(work.steps, "étape", "étapes")}`;
     acts = [
       h("button", { class: "pill small", type: "button", onclick: () => show("talk") }, "Suivre"),
       h("button", { class: "pill small danger", type: "button", disabled: work.stopping, onclick: () => api("api/stop", {}).catch((e) => toast(said(e))) }, work.stopping ? "J'arrête…" : "Arrêter"),
@@ -3266,18 +3328,28 @@ function digestsSheet(o, refresh) {
 // -- Orion's browser, in his hands (D116) ---------------------------------------------------------
 
 function browserPanel(handover) {
+  // His hands on Orion's tab, like a browser of his own (D116, D143): the page fills the screen;
+  // a tap clicks, a drag scrolls; the bar at the bottom types into the field he touched (a
+  // password field gets his phone's passwords); « Terminé » gives the tab back.
   let size = { width: 412, height: 860 };
   let over = false;
   let n = 0;
-  const status = h("p", { class: "hint" }, "Ouverture…");
-  const picture = h("img", { class: "live", alt: "L'onglet de mon navigateur" });
+  let busy = 0;
+  let form = null;
+  const host = h("span", { class: "bv-host" }, "…");
+  const bar = h("div", { class: "bv-progress", hidden: true });
+  const picture = h("img", { class: "bv-page", alt: "La page de mon navigateur", draggable: false });
+  const stage = h("div", { class: "bv-stage" }, picture);
   const shot = () => {
     if (!over && picture.isConnected) picture.src = `${BASE}api/browser/${handover.token}/shot?n=${n++}`;
   };
-  let busy = false;
+  picture.addEventListener("load", () => setTimeout(shot, 900));
+  picture.addEventListener("error", () => setTimeout(shot, 2000));
+
   async function act(body) {
-    if (busy || over) return;
-    busy = true;
+    if (over) return null;
+    busy += 1;
+    bar.hidden = false;
     try {
       const data = await api(`api/browser/${handover.token}/act`, body);
       if (data.done) {
@@ -3286,72 +3358,151 @@ function browserPanel(handover) {
         close();
         nowChanged();
         if (data.keep) keepSheet(data.keep);
-      } else {
-        status.textContent = data.url || "";
-        if (data.width) size = { width: data.width, height: data.height };
-        paintSignIn(data.form);
+        return data;
       }
+      if (data.url) host.textContent = new URL(data.url).host.replace(/^www\./, "");
+      if (data.width) size = { width: data.width, height: data.height };
+      form = data.form || null;
+      signChip.hidden = !form;
+      if ("field" in data) fieldFor(data.field);
+      return data;
     } catch (error) {
-      status.textContent = said(error);
+      toast(said(error));
+      return null;
     } finally {
-      busy = false;
+      busy -= 1;
+      bar.hidden = busy === 0;
       setTimeout(shot, 250);
     }
   }
-  picture.addEventListener("click", (event) => {
-    const box = picture.getBoundingClientRect();
-    act({ do: "tap", x: ((event.clientX - box.left) / box.width) * size.width, y: ((event.clientY - box.top) / box.height) * size.height });
+
+  // A tap clicks where he touched; a drag scrolls the page by as much.
+  let start = null;
+  stage.addEventListener("pointerdown", (event) => {
+    start = { x: event.clientX, y: event.clientY, dy: 0, dragging: false };
+    stage.setPointerCapture(event.pointerId);
   });
-  picture.addEventListener("load", () => setTimeout(shot, 900));
-  picture.addEventListener("error", () => setTimeout(shot, 2000));
-  const field = h("input", { type: "password", autocomplete: "off", placeholder: "Texte à taper", "aria-label": "Texte à taper" });
-  const typeIt = () => {
-    if (!field.value) return;
-    act({ do: "type", text: field.value });
-    field.value = "";
-  };
-  field.addEventListener("keydown", (event) => event.key === "Enter" && (event.preventDefault(), typeIt()));
-  const key = (label, aria, body) => h("button", { class: "pill small", type: "button", "aria-label": aria, onclick: () => act(body) }, label);
-  // A sign-in form on the page: filled here, by the phone's own passwords (Face ID), and typed
-  // into the page by Orion's browser, rather than tapped out on a picture (D142).
-  const signUser = h("input", { type: "text", name: "username", autocomplete: "username", autocapitalize: "none", spellcheck: false, placeholder: "Identifiant ou e-mail", "aria-label": "Identifiant" });
-  const signPass = h("input", { type: "password", name: "password", autocomplete: "current-password", placeholder: "Mot de passe", "aria-label": "Mot de passe" });
-  const userField = h("label", { class: "field-edit" }, signUser);
-  const passField = h("label", { class: "field-edit" }, signPass);
-  const signIn = h(
-    "form",
-    {
-      class: "card sign-in",
-      hidden: true,
-      onsubmit: (event) => {
-        event.preventDefault();
-        if (!signUser.value && !signPass.value) return;
-        act({ do: "signin", username: userField.hidden ? "" : signUser.value, password: passField.hidden ? "" : signPass.value });
-        signPass.value = "";
-      },
-    },
-    h("b", {}, "Cette page te demande de te connecter"),
-    userField,
-    passField,
-    h("button", { class: "pill primary wide", type: "submit" }, icon("key", 18), "Me connecter"),
-    h("small", { class: "hint" }, "Touche un champ : ton iPhone propose tes mots de passe enregistrés. Je les tape dans la page, puis je l'envoie."),
-  );
-  function paintSignIn(form) {
-    signIn.hidden = !form;
-    if (!form) return;
-    userField.hidden = !form.username;
-    passField.hidden = !form.password;
+  stage.addEventListener("pointermove", (event) => {
+    if (!start) return;
+    const dy = event.clientY - start.y;
+    if (!start.dragging && Math.abs(dy) > 8) start.dragging = true;
+    if (start.dragging) {
+      start.dy = dy;
+      picture.style.transform = `translateY(${Math.max(-120, Math.min(120, dy / 3))}px)`;
+    }
+  });
+  stage.addEventListener("pointerup", (event) => {
+    if (!start) return;
+    const was = start;
+    start = null;
+    picture.style.transform = "";
+    const box = picture.getBoundingClientRect();
+    const scale = size.width / box.width;
+    if (was.dragging) {
+      act({ do: "scroll", dy: Math.round(-was.dy * scale * 1.6) });
+      return;
+    }
+    const x = (event.clientX - box.left) * scale;
+    const y = (event.clientY - box.top) * scale;
+    const dot = h("span", { class: "bv-tap" });
+    dot.style.left = `${event.clientX - stage.getBoundingClientRect().left}px`;
+    dot.style.top = `${event.clientY - stage.getBoundingClientRect().top}px`;
+    stage.append(dot);
+    setTimeout(() => dot.remove(), 600);
+    act({ do: "tap", x, y });
+  });
+  stage.addEventListener("pointercancel", () => {
+    start = null;
+    picture.style.transform = "";
+  });
+
+  // The bar: what he types goes into the field he touched, as that field asks.
+  const field = h("input", { type: "text", class: "bv-input", enterkeyhint: "go", autocapitalize: "none", spellcheck: false, autocomplete: "off", placeholder: "Écrire dans la page", "aria-label": "Texte à taper dans la page" });
+  function fieldFor(kind) {
+    const password = kind === "password";
+    field.type = password ? "password" : kind === "email" ? "email" : "text";
+    field.autocomplete = password ? "current-password" : kind === "email" ? "username" : "off";
+    field.placeholder = password ? "Mot de passe" : kind ? "Écrire dans ce champ" : "Écrire dans la page";
+    dock.classList.toggle("ready", !!kind);
   }
-  const close = panel("Prendre la main", () => [
-    h("p", { class: "quote report" }, handover.why),
-    signIn,
-    picture,
-    status,
-    h("div", { class: "type-row" }, h("label", { class: "field-edit" }, field), h("button", { class: "round", type: "button", "aria-label": field.type === "password" ? "Voir" : "Cacher", onclick: () => (field.type = field.type === "password" ? "text" : "password") }, icon("where", 18)), h("button", { class: "pill small primary", type: "button", onclick: typeIt }, "Taper")),
-    h("div", { class: "keys" }, key("⏎", "Entrée", { do: "key", key: "Enter" }), key("⌫", "Effacer", { do: "key", key: "Backspace" }), key("▲", "Monter", { do: "scroll", dy: -500 }), key("▼", "Descendre", { do: "scroll", dy: 500 }), key("←", "Page précédente", { do: "back" })),
-    h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: () => act({ do: "cancel" }) }, "Annuler"), h("button", { class: "pill primary", type: "button", onclick: () => act({ do: "done" }) }, "J'ai fini")),
-    h("p", { class: "hint" }, "Touche l'image pour cliquer, puis tape dessous. C'est mon navigateur, sur ton serveur : ce que tu tapes va dans la page, jamais dans notre conversation. Une connexion réussie, je te propose de la garder dans mon coffre."),
-  ]);
+  async function typeIt(enter) {
+    const text = field.value;
+    if (!text && !enter) return;
+    field.value = "";
+    if (text) await act({ do: "type", text });
+    if (enter) await act({ do: "key", key: "Enter" });
+  }
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      typeIt(true);
+    } else if (event.key === "Backspace" && !field.value) {
+      act({ do: "key", key: "Backspace" });
+    }
+  });
+  const tool = (name, label, onclick) => h("button", { class: "bv-tool", type: "button", "aria-label": label, onclick }, icon(name, 20));
+  const dock = h(
+    "div",
+    { class: "bv-dock glass" },
+    tool("back", "Page précédente", () => act({ do: "back" })),
+    h("label", { class: "bv-field" }, field, h("button", { class: "bv-send", type: "button", "aria-label": "Taper", onpointerdown: (event) => event.preventDefault(), onclick: () => typeIt(false) }, icon("up", 16))),
+    tool("arrow", "Champ suivant", () => act({ do: "key", key: "Tab" })),
+  );
+
+  // A sign-in form on the page: his phone's passwords, in one go (D142).
+  const signChip = h("button", { class: "bv-chip glass", type: "button", hidden: true, onclick: () => signInSheet() }, icon("key", 16), "Se connecter avec mes identifiants");
+  function signInSheet() {
+    const user = h("input", { type: "text", name: "username", autocomplete: "username", autocapitalize: "none", spellcheck: false, placeholder: "Identifiant ou e-mail", "aria-label": "Identifiant" });
+    const pass = h("input", { type: "password", name: "password", autocomplete: "current-password", placeholder: "Mot de passe", "aria-label": "Mot de passe" });
+    const done = sheet(
+      h("h2", {}, `Se connecter à ${host.textContent}`),
+      h(
+        "form",
+        {
+          class: "login-form",
+          onsubmit: (event) => {
+            event.preventDefault();
+            done();
+            act({ do: "signin", username: form?.username ? user.value : "", password: form?.password ? pass.value : "" });
+          },
+        },
+        form?.username ? h("label", { class: "field-edit" }, user) : null,
+        form?.password ? h("label", { class: "field-edit" }, pass) : null,
+        h("button", { class: "pill primary wide", type: "submit" }, icon("key", 18), "Me connecter"),
+      ),
+      h("p", { class: "hint" }, "Touche un champ : ton iPhone propose tes mots de passe enregistrés. Je les tape dans la page, puis je l'envoie ; après, je te propose de les garder."),
+    );
+  }
+
+  const el = h(
+    "section",
+    { class: "panel browser-view", role: "dialog", "aria-modal": "true", "aria-label": "Prendre la main" },
+    h(
+      "header",
+      { class: "bv-top glass" },
+      h("button", { class: "bv-cancel", type: "button", onclick: () => act({ do: "cancel" }) }, "Annuler"),
+      h("span", { class: "bv-where" }, icon("shield", 13), host),
+      h("button", { class: "bv-done", type: "button", onclick: () => act({ do: "done" }) }, "Terminé"),
+      bar,
+    ),
+    h("p", { class: "bv-why" }, handover.why),
+    signChip,
+    stage,
+    dock,
+  );
+  let closed = false;
+  function close() {
+    if (closed) return;
+    closed = true;
+    over = true;
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 500);
+    unstack(close);
+    overlayState();
+  }
+  stack(close);
+  layer.append(el);
+  overlayState();
   setTimeout(() => act({ do: "start" }), 50);
 }
 

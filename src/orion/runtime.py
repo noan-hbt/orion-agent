@@ -12,9 +12,11 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -145,6 +147,8 @@ class Activity:
     """What the tools about to run do, in his words; empty between steps."""
     cost_usd: float
     steps: int
+    plan: tuple[tuple[str, str], ...] = ()
+    """Orion's plan for this turn, if it keeps one: (step, todo | doing | done)."""
 
 
 Watch = Callable[[Activity], Awaitable[None]]
@@ -609,6 +613,7 @@ class Orion:
         result: TurnResult | None = None
         spent = 0.0
         steps_made = 0
+        plan: tuple[tuple[str, str], ...] = ()
         async for event in run_agent(
             self._provider,
             self._registry,
@@ -652,13 +657,16 @@ class Orion:
                             )
                         ]
                     )
-                case Told(text=told):
-                    if progress is not None:
+                case Told(text=told, plan=planned):
+                    if progress is not None and not (planned and watch is not None):
                         await progress(told, correlation_id)
                 case Working(doing=doing):
                     if watch is not None:
-                        await watch(Activity(doing, round(spent, 5), steps_made))
+                        await watch(Activity(doing, round(spent, 5), steps_made, plan))
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
+                    if call.name == "plan" and not tool_result.is_error and watch is not None:
+                        plan = _plan_of(call.arguments)
+                        await watch(Activity((), round(spent, 5), steps_made, plan))
                     await self._journal.append(
                         [
                             self._event(
@@ -919,3 +927,19 @@ def is_silence(text: str) -> bool:
 
 def _attr(value: str) -> str:
     return value.replace("&", "&amp;").replace('"', "&quot;").replace("\n", " ")
+
+
+def _plan_of(arguments: str) -> tuple[tuple[str, str], ...]:
+    """The steps of a `plan` call, as the app draws them."""
+    try:
+        steps: object = json.loads(arguments).get("steps", [])
+    except (ValueError, AttributeError):
+        return ()
+    if not isinstance(steps, list):
+        return ()
+    found: list[tuple[str, str]] = []
+    for step in cast(list[object], steps):
+        if isinstance(step, dict):
+            known = cast(dict[str, Any], step)
+            found.append((str(known.get("text", ""))[:160], str(known.get("status", "todo"))))
+    return tuple(found)

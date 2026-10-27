@@ -8,6 +8,8 @@ that is the same whatever the channel:
 - messages that arrive while Orion works join the running turn between two steps, so it can
   change course ("non, laisse tomber") instead of finishing a plan the owner revoked;
 - while Orion thinks, the channel shows it is working (read receipt, typing indicator);
+- what Orion says of his work as it goes is a message of its own, except where the work is
+  shown live (the app), where it is shown with it (D143);
 - the reply goes back through the outlet the message asked for, unless Orion answers
   `SILENCE` (a call transcript that needs no follow-up, or a voice message already sent);
 - proactive messages, files and questions for approval go where he last wrote from, or else
@@ -132,6 +134,10 @@ class LiveOutlet(Outlet, Protocol):
 
     async def stopped(self) -> bool:
         """Whether he asked to stop the work on his message."""
+        ...
+
+    async def narrate(self, text: str) -> None:
+        """What Orion says of his work as it goes, shown with the work, not as a message."""
         ...
 
 
@@ -306,7 +312,11 @@ class OwnerInbox:
             ]
 
         async def progress(text: str, correlation_id: str) -> None:
-            if reply is not None and not first.allow_silence and not is_silence(text):
+            if reply is None or first.allow_silence or is_silence(text):
+                return
+            if isinstance(reply, LiveOutlet) and reply is source:
+                await reply.narrate(text)  # beside the work it is about (D143)
+            else:
                 await reply.deliver(shown(reply, text), correlation_id)
 
         async with showing:

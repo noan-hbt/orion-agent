@@ -243,9 +243,13 @@ async def test_he_takes_orions_browser_in_hand_from_the_app(
     tapped = (
         await world.http.post(f"/app/api/browser/{token}/act", json={"do": "tap", "x": 10, "y": 20})
     ).json()
-    assert tapped == {"url": "", "width": 412, "height": 860, "form": None} and done == [
-        ("tap", {"x": 10.0, "y": 20.0})
-    ]
+    assert tapped == {
+        "url": "",
+        "width": 412,
+        "height": 860,
+        "form": None,
+        "field": None,
+    } and done == [("tap", {"x": 10.0, "y": 20.0})]
     finished = (await world.http.post(f"/app/api/browser/{token}/act", json={"do": "done"})).json()
     assert finished == {"done": "Merci, je reprends.", "keep": None}
     assert (await world.http.get("/app/api/browser")).json() == {"handovers": []}

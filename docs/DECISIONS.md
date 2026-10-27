@@ -3161,3 +3161,35 @@ la main dans un champ « Texte à taper » : le propriétaire trouvait ça peu p
   passée, l'app le demande sur place, et la carte reste dans Maintenant un quart d'heure.
 - Orion préfère save_password à hand_over pour une connexion simple : une fois gardé, il se
   connecte seul les fois suivantes.
+
+## D143 — Orion au travail, en direct et sans bruit ; sa main dans le navigateur, comme Safari
+
+*27/10/2026 · acceptée · révise D121 et D133 pour l'application, révise D116 et D142*
+
+Le propriétaire trouvait les annonces d'Orion pendant un long tour bonnes sur le papier, mais
+mal faites : chacune était un message à part, notifié, qui restait dans la conversation. La carte
+« Je travaille » (minuteur, coût, étapes, deux boutons) faisait tableau de bord. Et sous la vue
+du navigateur, une rangée de boutons (⏎ ⌫ ▲ ▼ ←) n'avait rien de naturel.
+
+- **Dans l'application, ce qu'Orion dit en travaillant n'est plus un message** : la boîte de
+  réception le passe au canal qui montre le travail (`LiveOutlet.narrate`). Rien n'est notifié
+  ni empilé. Ailleurs (Telegram, iMessage), rien ne change.
+- **Une seule bulle vivante, là où viendra sa réponse** : ce qu'il fait maintenant, en texte
+  qui scintille ; la dernière chose qu'il en a dite ; son plan en liste à cocher s'il en tient
+  un (`plan`, transmis par `Activity.plan` plutôt qu'en texte) ; le temps écoulé. Une réponse
+  rapide garde les trois points. Arrêter reste le bouton de la barre de saisie ; « Continuer en
+  fond » n'apparaît qu'après 25 s.
+- **La réponse garde la trace du travail**, repliée au-dessus d'elle (« Travaillé 1 min 12 ·
+  6 étapes ») : ce qu'il a dit, fait, et son plan final. Elle est enregistrée avec le message
+  dans le journal de l'application ; le modèle ne la voit pas, le cache de prompt est intact.
+- **La vue du navigateur occupe l'écran** : Annuler, le site et Terminé en haut ; un toucher
+  clique, un glissé fait défiler ; en bas, une barre comme celle de Safari (page précédente,
+  le champ où écrire, champ suivant). Toucher un champ de la page adapte ce champ : un mot de
+  passe y devient un champ mot de passe que l'iPhone sait remplir. Entrée tape le texte et
+  valide ; effacer dans un champ vide efface dans la page. « Se connecter avec mes
+  identifiants » (D142) flotte au-dessus quand la page demande une connexion.
+
+Corrigé au passage : orion.toml ne s'écrivait pas depuis l'application sur le serveur. Le
+fichier temporaire et la copie précédente étaient écrits à côté du lien `/srv/orion/orion.toml`,
+dans un dossier où systemd interdit d'écrire ; ils le sont maintenant à côté du vrai fichier
+(`config/`), et le lien reste un lien.

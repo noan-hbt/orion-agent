@@ -23,7 +23,7 @@ from orion.mobile.push import Subscription
 from orion.mobile.server import COOKIE, mobile_app
 from orion.tools.base import Tool
 from tests.fake_passkey import FakePasskey
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, call_tools, reply
 from tests.test_imessage import make_orion, until
 from tests.test_telegram import Empty, nothing
 
@@ -349,3 +349,20 @@ async def test_another_phone_is_added_or_let_go_only_with_face_id(world: World) 
     )
     assert gone.status_code == 200, gone.text
     assert (await http.get("/app/devices")).json()["devices"] == ["ipad"]
+
+
+async def test_what_orion_says_as_he_works_folds_above_his_answer(world: World) -> None:
+    """In the app, his words beside a tool call are shown live with the work, not sent as
+    messages of their own (no notification, nothing piled up): the answer keeps them (D143)."""
+    await pair(world)
+    world.provider.extend(
+        call_tools(("lookup", {}), text="Je regarde ton agenda."), reply("Tu es libre jeudi.")
+    )
+    await world.http.post("/app/api/send", json={"text": "Je suis libre quand ?"})
+    await until(lambda: any(s.who == "orion" for s in world.channel.state.said))
+    [answer] = [s for s in world.channel.state.said if s.who == "orion"]
+    assert answer.text == "Tu es libre jeudi."
+    assert answer.trace is not None and answer.trace["said"] == ["Je regarde ton agenda."]
+    assert answer.trace["steps"] >= 1
+    shown = (await world.http.get("/app/api/messages")).json()["messages"]
+    assert shown[-1]["trace"]["said"] == ["Je regarde ton agenda."]

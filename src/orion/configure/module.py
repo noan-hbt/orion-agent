@@ -190,7 +190,11 @@ def rewrite(source: Path, changes: list[Change]) -> tuple[str, str]:
 
 
 def write(source: Path, before: str, after: str) -> None:
-    """Atomically, keeping the previous file beside it. Raises ConfigureError."""
+    """Atomically, keeping the previous file beside it. Raises ConfigureError.
+
+    Beside the real file: on the server, `/srv/orion/orion.toml` is a link to
+    `config/orion.toml`, and only `config/` may be written by the guardian (systemd)."""
+    source = source.resolve()
     try:
         if source.read_text("utf-8") != before:
             raise ConfigureError(f"{source} changed meanwhile: read it again and redo the change")

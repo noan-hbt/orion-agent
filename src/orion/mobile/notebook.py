@@ -298,13 +298,17 @@ class Notebook:
                 )
                 do = "start"
             size: dict[str, int] = await desk.on_tab(found.thread, lambda s: act_on(s, do, body))
+            extra: dict[str, Any] = {}
             if do == "type":  # into a sign-in form: offered to keep once he is done (D120)
                 desk.note_typed(token, await desk.on_tab(found.thread, focused))
+            elif do == "tap":  # the field he touched, for the app's keyboard to fit it (D143)
+                touched = await desk.on_tab(found.thread, focused)
+                extra["field"] = touched["type"] if touched else None
             form = await desk.on_tab(found.thread, lambda s: s.sign_in_form())
         except (BrowserError, Refused) as exc:
             raise ControlError(f"Pas pu : {exc}") from exc
         tab = desk.tab(found.thread)
-        return {"url": tab.page.url if tab else "", **size, "form": form}
+        return {"url": tab.page.url if tab else "", **size, "form": form, **extra}
 
     # -- logins Orion asks him for, or offers to keep (D142) ------------------------------------
 

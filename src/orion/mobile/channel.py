@@ -23,6 +23,7 @@ import contextlib
 import mimetypes
 import re
 import shutil
+import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -117,6 +118,8 @@ class Said:
     text: str
     at: str
     files: tuple[Kept, ...] = ()
+    trace: dict[str, Any] | None = field(default=None, compare=False)
+    """How Orion got to this answer, when he worked for it: shown folded above it."""
 
     def public(self) -> dict[str, Any]:
         return {
@@ -125,6 +128,7 @@ class Said:
             "who": self.who,
             "text": self.text,
             "at": self.at,
+            "trace": self.trace,
             "blocks": public(self.text) if self.who == "orion" else [],
             "files": [
                 {"ref": f"{self.ref}/{i}", "name": f.name, "type": f.content_type, "size": f.size}
@@ -183,6 +187,7 @@ class MobileState:
                 str(payload.get("text") or ""),
                 str(payload["at"]),
                 _kept(payload.get("files")),
+                cast(dict[str, Any], payload["trace"]) if payload.get("trace") else None,
             )
             self.said.append(said)
             if event.kind == INBOUND:
@@ -266,6 +271,26 @@ def _safe_name(name: str, content_type: str) -> str:
     return safe[:120]
 
 
+TRACE_SECONDS = 120.0
+"""How long finished work waits for its answer (a turn that ends in silence has none)."""
+
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
+
+
+def _trace_of(work: dict[str, Any], seconds: float) -> dict[str, Any]:
+    """What is kept of the work with the answer: how long, how many steps, what was done and
+    said, and the plan as it ended."""
+    return {
+        "seconds": round(seconds),
+        "steps": work["steps"],
+        "done": _unique([*work["done"], *work["doing"]])[-12:],
+        "said": work["said"],
+        "plan": work["plan"],
+    }
+
+
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -306,6 +331,8 @@ class MobileChannel:
         self.work: dict[str, Any] | None = None
         """What it is doing right now, as the app shows it."""
         self._stop = False
+        self._trace: tuple[float, dict[str, Any]] | None = None
+        """The work just finished, kept for the answer that follows it (D143)."""
         self.asked: dict[str, Asked] = {}
         self._changed: set[str] = set()
         inbox.register(self)
@@ -446,9 +473,17 @@ class MobileChannel:
         await self.sync()
         if key in self.state.sent:
             return key
+        trace, self._trace = self._trace, None
+        fresh = trace is not None and time.monotonic() - trace[0] < TRACE_SECONDS
         await self._append(
             OUTBOUND,
-            {"ref": key, "text": text, "at": _now(), "files": [f.__dict__ for f in files]},
+            {
+                "ref": key,
+                "text": text,
+                "at": _now(),
+                "files": [f.__dict__ for f in files],
+                **({"trace": trace[1]} if fresh and trace is not None else {}),
+            },
             Trust.SYSTEM,
             Provenance(source="orion:app", actor="orion:core"),
         )
@@ -505,12 +540,25 @@ class MobileChannel:
     async def working(self, item: InboxItem) -> AsyncGenerator[None]:
         self.typing = True
         self._stop = False
-        self.work = {"since": _now(), "doing": [], "cost": 0.0, "steps": 0, "stopping": False}
+        self._trace = None
+        began = time.monotonic()
+        self.work = {
+            "since": _now(),
+            "doing": [],
+            "done": [],
+            "said": [],
+            "plan": [],
+            "cost": 0.0,
+            "steps": 0,
+            "stopping": False,
+        }
         self.hub.publish({"type": "typing", "on": True})
         self.hub.publish({"type": "work", "work": self.work})
         try:
             yield
         finally:
+            if self.work["steps"] > 0:  # a turn that only answered leaves no trace
+                self._trace = (time.monotonic(), _trace_of(self.work, time.monotonic() - began))
             self.typing = False
             self.work = None
             self._stop = False
@@ -523,10 +571,22 @@ class MobileChannel:
         self.work = {
             **self.work,
             "doing": list(activity.doing),
-            "done": [*self.work.get("done", []), *self.work["doing"]][-12:],
+            "done": _unique([*self.work["done"], *self.work["doing"]])[-12:],
+            "plan": [list(step) for step in activity.plan] or self.work["plan"],
             "cost": activity.cost_usd,
             "steps": activity.steps,
         }
+        self.hub.publish({"type": "work", "work": self.work})
+
+    async def narrate(self, text: str) -> None:
+        """What Orion says of his work as it goes: shown live above the work, never a message
+        of its own (nothing to notify, nothing piled in the conversation; D143)."""
+        if self.work is None:
+            return
+        line = plain(text).strip()
+        if not line:
+            return
+        self.work = {**self.work, "said": [*self.work["said"], line][-8:]}
         self.hub.publish({"type": "work", "work": self.work})
 
     async def stopped(self) -> bool:
