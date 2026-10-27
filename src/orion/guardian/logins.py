@@ -164,7 +164,13 @@ async def add_login(config: OrionConfig, ledger: Ledger, login: Login) -> None:
 
 
 async def keep_login(
-    config: OrionConfig, ledger: Ledger, site: str, username: str, password: str, url: str = ""
+    config: OrionConfig,
+    ledger: Ledger,
+    site: str,
+    username: str,
+    password: str,
+    url: str = "",
+    totp_value: str = "",
 ) -> Login:
     """A login the owner gave (his form, or what he typed in a hand-over), kept under a name of
     its own: the site's (`doctolib`), or `doctolib-2` if that one is taken by another account.
@@ -178,9 +184,28 @@ async def keep_login(
         if existing.username == username.strip() and found in existing.sites:
             break  # the same account: its password is updated
         name, n = f"{base}-{n}", n + 1
-    login = make_login(name, [found], username, password, "", url)
+    login = make_login(name, [found], username, password, totp_value, url)
     await add_login(config, ledger, login)
     return login
+
+
+def listing(config: OrionConfig) -> list[dict[str, Any]]:
+    """The vault as the owner's app shows it (D142): never a password nor a 2FA secret."""
+    folder = logins_dir(config)
+    shown: list[dict[str, Any]] = []
+    for path in sorted(folder.glob("*.json"), key=lambda p: p.stem) if folder.is_dir() else []:
+        login = read_login(config, path.stem)
+        if login is not None:
+            shown.append(
+                {
+                    "name": login.name,
+                    "sites": login.sites,
+                    "username": login.username,
+                    "totp": bool(login.totp),
+                    "url": login.url,
+                }
+            )
+    return shown
 
 
 async def remove_login(config: OrionConfig, ledger: Ledger, name: str) -> bool:

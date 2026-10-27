@@ -219,6 +219,9 @@ async def test_he_takes_orions_browser_in_hand_from_the_app(
             async def focused_field(self) -> None:
                 return None
 
+            async def sign_in_form(self) -> None:
+                return None
+
         return await action(Tab())
 
     desk.on_tab = on_tab  # type: ignore[method-assign]
@@ -240,11 +243,11 @@ async def test_he_takes_orions_browser_in_hand_from_the_app(
     tapped = (
         await world.http.post(f"/app/api/browser/{token}/act", json={"do": "tap", "x": 10, "y": 20})
     ).json()
-    assert tapped == {"url": "", "width": 412, "height": 860} and done == [
+    assert tapped == {"url": "", "width": 412, "height": 860, "form": None} and done == [
         ("tap", {"x": 10.0, "y": 20.0})
     ]
     finished = (await world.http.post(f"/app/api/browser/{token}/act", json={"do": "done"})).json()
-    assert finished == {"done": "Merci, je reprends."}
+    assert finished == {"done": "Merci, je reprends.", "keep": None}
     assert (await world.http.get("/app/api/browser")).json() == {"handovers": []}
     assert (await world.http.get(f"/app/api/browser/{token}/shot")).status_code == 404
 

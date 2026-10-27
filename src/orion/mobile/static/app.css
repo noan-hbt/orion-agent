@@ -449,6 +449,12 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 img.live { display:block; width:100%; min-height:200px; border-radius:20px; background:#fff; touch-action:manipulation; }
 .type-row { display:flex; align-items:center; gap:8px; }
 .type-row .field-edit { flex:1; min-width:0; }
+.sign-in,.login-form { display:flex; flex-direction:column; gap:10px; }
+.sign-in { padding:16px; }
+.sign-in b { font-size:15px; line-height:20px; }
+.sign-in .hint { margin:0; }
+.login-form details summary { padding:6px 4px; color:var(--blue); font-size:15px; line-height:20px; cursor:pointer; }
+.login-form details[open] { display:flex; flex-direction:column; gap:8px; }
 .keys { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:6px; }
 .keys .pill { padding-right:4px; padding-left:4px; }
 .voice { position:fixed; inset:0; z-index:12; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:28px; padding:calc(var(--top) + 64px) 28px calc(var(--bottom) + 40px); background:#fff; text-align:center; animation:fade-in .25s ease; }

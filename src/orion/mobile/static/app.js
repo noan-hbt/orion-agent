@@ -67,6 +67,7 @@ const ICONS = {
   people: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 5.2a3 3 0 0 1 0 5.6M17.5 14.2A5.5 5.5 0 0 1 20.5 19"/>',
   rules: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
   wave: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/>',
 };
 
 function icon(name, size = 20, stroke = "currentColor") {
@@ -2212,6 +2213,8 @@ async function nowFill(refresh) {
       ),
     );
   }
+  const { asked } = await api("api/logins/asked").catch(() => ({ asked: [] }));
+  for (const offer of asked) sections.push(loginAskCard(offer));
   const approvals = [...state.approvals.values()];
   if (approvals.length || found.questions.length) {
     sections.push(
@@ -2499,7 +2502,7 @@ const TINTS = {
   toml: "gray", sliders: "gray", blocks: "purple", server: "blue", phone: "green", bell: "red",
   door: "red", shield: "indigo", check: "green", clock: "orange", calendar: "red", spark: "yellow",
   target: "pink", file: "blue", where: "teal", book: "orange", photo: "pink", face: "indigo",
-  people: "teal", rules: "purple", moon: "indigo", wave: "purple",
+  people: "teal", rules: "purple", moon: "indigo", wave: "purple", key: "gray",
 };
 
 function tint(name) {
@@ -2526,6 +2529,12 @@ async function settingsFill(refresh) {
     if (error instanceof ApiError && error.status === 404) return null;
     throw error;
   });
+  const vault = await api("logins")
+    .then((found) => found.logins)
+    .catch((error) => {
+      if (error instanceof ApiError && error.status === 404) return null; // no vault here
+      throw error;
+    });
   const machines = await api("api/machines")
     .then((found) => found.machines)
     .catch((error) => {
@@ -2612,6 +2621,12 @@ async function settingsFill(refresh) {
         row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
       ),
       h("p", { class: "hint" }, `Tu changes un réglage ici en le signant avec Face ID, sans passer par la conversation. ${plural(owner, "réglage te protège", "réglages te protègent")} : eux ne changent jamais sans ta signature.`),
+    );
+  }
+  if (vault) {
+    parts.push(
+      h("p", { class: "label" }, "Mes accès"),
+      h("div", { class: "list items" }, row("key", "Mots de passe", vault.length ? plural(vault.length, "gardé", "gardés") : "aucun", vaultPanel, "", "je me connecte pour toi, sans les voir")),
     );
   }
   parts.push(
@@ -3270,9 +3285,11 @@ function browserPanel(handover) {
         toast(data.done);
         close();
         nowChanged();
+        if (data.keep) keepSheet(data.keep);
       } else {
         status.textContent = data.url || "";
         if (data.width) size = { width: data.width, height: data.height };
+        paintSignIn(data.form);
       }
     } catch (error) {
       status.textContent = said(error);
@@ -3295,16 +3312,201 @@ function browserPanel(handover) {
   };
   field.addEventListener("keydown", (event) => event.key === "Enter" && (event.preventDefault(), typeIt()));
   const key = (label, aria, body) => h("button", { class: "pill small", type: "button", "aria-label": aria, onclick: () => act(body) }, label);
+  // A sign-in form on the page: filled here, by the phone's own passwords (Face ID), and typed
+  // into the page by Orion's browser, rather than tapped out on a picture (D142).
+  const signUser = h("input", { type: "text", name: "username", autocomplete: "username", autocapitalize: "none", spellcheck: false, placeholder: "Identifiant ou e-mail", "aria-label": "Identifiant" });
+  const signPass = h("input", { type: "password", name: "password", autocomplete: "current-password", placeholder: "Mot de passe", "aria-label": "Mot de passe" });
+  const userField = h("label", { class: "field-edit" }, signUser);
+  const passField = h("label", { class: "field-edit" }, signPass);
+  const signIn = h(
+    "form",
+    {
+      class: "card sign-in",
+      hidden: true,
+      onsubmit: (event) => {
+        event.preventDefault();
+        if (!signUser.value && !signPass.value) return;
+        act({ do: "signin", username: userField.hidden ? "" : signUser.value, password: passField.hidden ? "" : signPass.value });
+        signPass.value = "";
+      },
+    },
+    h("b", {}, "Cette page te demande de te connecter"),
+    userField,
+    passField,
+    h("button", { class: "pill primary wide", type: "submit" }, icon("key", 18), "Me connecter"),
+    h("small", { class: "hint" }, "Touche un champ : ton iPhone propose tes mots de passe enregistrés. Je les tape dans la page, puis je l'envoie."),
+  );
+  function paintSignIn(form) {
+    signIn.hidden = !form;
+    if (!form) return;
+    userField.hidden = !form.username;
+    passField.hidden = !form.password;
+  }
   const close = panel("Prendre la main", () => [
     h("p", { class: "quote report" }, handover.why),
+    signIn,
     picture,
     status,
     h("div", { class: "type-row" }, h("label", { class: "field-edit" }, field), h("button", { class: "round", type: "button", "aria-label": field.type === "password" ? "Voir" : "Cacher", onclick: () => (field.type = field.type === "password" ? "text" : "password") }, icon("where", 18)), h("button", { class: "pill small primary", type: "button", onclick: typeIt }, "Taper")),
     h("div", { class: "keys" }, key("⏎", "Entrée", { do: "key", key: "Enter" }), key("⌫", "Effacer", { do: "key", key: "Backspace" }), key("▲", "Monter", { do: "scroll", dy: -500 }), key("▼", "Descendre", { do: "scroll", dy: 500 }), key("←", "Page précédente", { do: "back" })),
     h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: () => act({ do: "cancel" }) }, "Annuler"), h("button", { class: "pill primary", type: "button", onclick: () => act({ do: "done" }) }, "J'ai fini")),
-    h("p", { class: "hint" }, "Touche l'image pour cliquer, puis tape dessous. C'est mon navigateur, sur ton serveur : ce que tu tapes va dans la page, jamais dans notre conversation."),
+    h("p", { class: "hint" }, "Touche l'image pour cliquer, puis tape dessous. C'est mon navigateur, sur ton serveur : ce que tu tapes va dans la page, jamais dans notre conversation. Une connexion réussie, je te propose de la garder dans mon coffre."),
   ]);
   setTimeout(() => act({ do: "start" }), 50);
+}
+
+// -- his vault: the logins Orion signs in with, never shown again (D142) --------------------------
+
+function vaultPanel() {
+  let query = "";
+  panel("Mots de passe", async (refresh) => {
+    const { logins } = await api("logins");
+    const list = h("div");
+    const search = h("input", { type: "search", value: query, placeholder: "Chercher un site", "aria-label": "Chercher un site", autocapitalize: "none" });
+    function paint() {
+      const q = query.toLowerCase();
+      const found = logins.filter((l) => !q || [l.name, l.username, ...l.sites].join(" ").toLowerCase().includes(q));
+      list.replaceChildren(
+        found.length
+          ? h("div", { class: "list items" }, found.map((l) => row("key", l.sites[0] || l.name, l.totp ? "2FA" : null, () => loginDetails(l, refresh), "", l.username || "sans identifiant")))
+          : h("p", { class: "empty" }, logins.length ? "Aucun accès pour ce site." : "Ton coffre est vide. Ajoute un accès : je me connecterai pour toi, sans jamais voir le mot de passe."),
+      );
+    }
+    search.addEventListener("input", () => ((query = search.value.trim()), paint()));
+    paint();
+    return [
+      logins.length > 5 ? h("label", { class: "search glass" }, icon("search", 18), search) : null,
+      h("button", { class: "pill primary wide", type: "button", onclick: () => loginSheet({ onSaved: refresh }) }, icon("plus", 20), "Ajouter un accès"),
+      list,
+      h("p", { class: "hint" }, "Ton coffre est sur ton serveur. Je tape un mot de passe pour toi, seulement sur son site et dans un champ mot de passe : ni moi ni notre conversation ne le voyons, et cette app ne le réaffiche jamais."),
+    ];
+  });
+}
+
+function loginDetails(login, refresh) {
+  let sure = false;
+  const remove = h(
+    "button",
+    {
+      class: "pill wide danger",
+      type: "button",
+      onclick: async () => {
+        if (!sure) {
+          sure = true;
+          remove.textContent = "Retirer vraiment ?";
+          return;
+        }
+        try {
+          await api(`logins/${encodeURIComponent(login.name)}/remove`, {});
+          toast("Retiré de mon coffre.");
+          close();
+          refresh();
+        } catch (error) {
+          toast(said(error));
+        }
+      },
+    },
+    "Retirer du coffre",
+  );
+  const close = sheet(
+    h("h2", {}, login.sites[0] || login.name),
+    h("p", { class: "quote" }, [`Identifiant : ${login.username || "aucun"}`, `Sites : ${login.sites.join(", ")}`, `Double authentification : ${login.totp ? "oui" : "non"}`, `Nom pour moi : ${login.name}`].join("\n")),
+    h(
+      "button",
+      {
+        class: "pill primary wide",
+        type: "button",
+        onclick: () => {
+          close();
+          loginSheet({ site: login.sites[0], username: login.username, url: login.url, onSaved: refresh });
+        },
+      },
+      "Changer le mot de passe",
+    ),
+    remove,
+  );
+}
+
+function loginSheet({ site = "", username = "", url = "", why = "", token = "", onSaved } = {}) {
+  // A real form, with the fields iOS knows: the phone fills them from its own passwords.
+  const where = h("input", { type: "text", name: "url", inputmode: "url", value: site, placeholder: "doctolib.fr, ou l'adresse de la page", "aria-label": "Site", autocapitalize: "none", autocomplete: "off", spellcheck: false, readOnly: !!token });
+  const user = h("input", { type: "text", name: "username", value: username, placeholder: "Identifiant ou e-mail", "aria-label": "Identifiant", autocomplete: "username", autocapitalize: "none", spellcheck: false });
+  const pass = h("input", { type: "password", name: "password", placeholder: "Mot de passe", "aria-label": "Mot de passe", autocomplete: "current-password" });
+  const otp = h("input", { type: "text", placeholder: "Clé, ou lien otpauth://", "aria-label": "Clé de double authentification", autocomplete: "off", autocapitalize: "none", spellcheck: false });
+  const status = h("p", { class: "error", role: "alert" });
+  const send = h("button", { class: "pill primary wide", type: "submit" }, icon("key", 20), "Garder dans mon coffre");
+  const form = h(
+    "form",
+    {
+      class: "login-form",
+      onsubmit: async (event) => {
+        event.preventDefault();
+        if (!where.value.trim()) return (status.textContent = "Le site, s'il te plaît.");
+        if (!pass.value) return (status.textContent = "Le mot de passe, s'il te plaît.");
+        send.disabled = true;
+        try {
+          const kept = await api("logins", { site: where.value.trim(), username: user.value.trim(), password: pass.value, totp: otp.value.trim(), url });
+          pass.value = "";
+          otp.value = "";
+          if (token) await api(`api/logins/asked/${encodeURIComponent(token)}`, { answer: "saved", name: kept.name });
+          toast(`Gardé dans mon coffre, sous « ${kept.name} ».`);
+          close();
+          onSaved?.();
+          nowChanged();
+        } catch (error) {
+          status.textContent = said(error);
+          send.disabled = false;
+        }
+      },
+    },
+    h("label", { class: "field-edit" }, where),
+    h("label", { class: "field-edit" }, user),
+    h("label", { class: "field-edit" }, pass),
+    h("details", { class: "more" }, h("summary", {}, "Double authentification (facultatif)"), h("label", { class: "field-edit" }, otp), h("p", { class: "hint" }, "La clé que le site montre quand tu actives la double authentification. Je taperai alors le code moi-même : les deux facteurs seront sur ton serveur.")),
+    status,
+    send,
+  );
+  const close = sheet(
+    h("h2", {}, token ? `Ton accès ${site}` : site ? `Ton accès ${site}` : "Ajouter un accès"),
+    why ? h("p", { class: "quote" }, why) : null,
+    form,
+    h("p", { class: "hint" }, "Touche Identifiant : ton iPhone te propose tes mots de passe enregistrés, avec Face ID. Ils vont droit dans mon coffre, jamais dans notre conversation."),
+  );
+}
+
+function answerLogin(offer, answer, done) {
+  return async () => {
+    try {
+      const reply = await api(`api/logins/asked/${encodeURIComponent(offer.token)}`, { answer });
+      toast(reply.done);
+      done?.();
+      nowChanged();
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+}
+
+function keepSheet(offer) {
+  const close = sheet(
+    h("h2", {}, "Garder cet accès ?"),
+    h("p", { class: "quote" }, `${offer.site}${offer.username ? ` · ${offer.username}` : ""}`),
+    h("p", { class: "hint" }, "Le mot de passe que tu viens de taper va dans mon coffre : la prochaine fois, je me connecte seul, sans le voir."),
+    h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: answerLogin(offer, "no", () => close()) }, "Non merci"), h("button", { class: "pill primary", type: "button", onclick: answerLogin(offer, "keep", () => close()) }, "Garder")),
+  );
+}
+
+function loginAskCard(offer) {
+  const keep = offer.kind === "keep";
+  return h(
+    "article",
+    { class: "ask card" },
+    h("header", {}, h("span", { class: "ico" }, icon("key", 18, "#fff")), h("span", {}, h("b", {}, keep ? "Garder cet accès ?" : `Ton accès ${offer.site}`), h("small", {}, keep ? `${offer.site}${offer.username ? ` · ${offer.username}` : ""}` : "pour que je me connecte à ta place"))),
+    offer.why ? h("p", {}, offer.why) : null,
+    keep
+      ? h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: answerLogin(offer, "no") }, "Non merci"), h("button", { class: "pill primary", type: "button", onclick: answerLogin(offer, "keep") }, "Garder"))
+      : h("div", { class: "row2" }, h("button", { class: "pill", type: "button", onclick: answerLogin(offer, "no") }, "Plus tard"), h("button", { class: "pill primary", type: "button", onclick: () => loginSheet({ site: offer.site, url: offer.url, why: offer.why, token: offer.token }) }, "Saisir")),
+  );
 }
 
 // -- talking: a voice mode over the conversation ----------------------------------------------------

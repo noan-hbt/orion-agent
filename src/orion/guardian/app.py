@@ -36,6 +36,7 @@ from orion.core.events import Event, Trust
 from orion.core.projections import ProjectionRunner
 from orion.guardian.federation import ADMIN_HEADER, admin_token
 from orion.guardian.ledger import APP_ANSWER, APPROVAL_REQUESTED
+from orion.guardian.logins import keep_login, listing, remove_login
 from orion.guardian.service import APP_CONVERSATION
 from orion.mobile.channel import SUBSCRIBED, UNSUBSCRIBED
 from orion.mobile.devices import Devices, session_key
@@ -140,6 +141,7 @@ class AppEdge:
             self.url.startswith("https://"),
             self.settings.session_days,
             self,
+            lambda: self,
         )
         self.service.listeners.append(("app", app, self.settings.host, self.settings.port))
 
@@ -181,6 +183,25 @@ class AppEdge:
         except (ConfigureError, ValidationError) as exc:
             raise ValueError(str(exc)) from exc
         return bool(done["changed"])
+
+    # -- his vault, in the app (D142): the core never sees a password -------------------------
+
+    async def listing(self) -> list[dict[str, Any]]:
+        return listing(self.service.config)
+
+    async def save(
+        self, site: str, username: str, password: str, totp_value: str = "", url: str = ""
+    ) -> dict[str, Any]:
+        await self.service.ledger.catch_up()
+        login = await keep_login(
+            self.service.config, self.service.ledger, site, username, password, url, totp_value
+        )
+        log.info("guardian.login_kept", name=login.name, how="app")
+        return {"name": login.name, "sites": login.sites}
+
+    async def remove(self, name: str) -> bool:
+        await self.service.ledger.catch_up()
+        return await remove_login(self.service.config, self.service.ledger, name)
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:

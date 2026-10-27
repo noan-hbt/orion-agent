@@ -29,8 +29,10 @@ from orion.guardian.logins import (
     Loan,
     LoginError,
     keep_login,
+    listing,
     logins_dir,
     read_login,
+    remove_login,
     totp,
 )
 
@@ -133,3 +135,20 @@ class LocalVault:
         except LoginError as exc:
             raise VaultError(str(exc)) from exc
         return {"name": login.name, "sites": login.sites}
+
+    # -- the vault in the owner's app (D142) ----------------------------------------------------
+
+    async def listing(self) -> list[dict[str, Any]]:
+        return listing(self.config)
+
+    async def save(
+        self, site: str, username: str, password: str, totp_value: str = "", url: str = ""
+    ) -> dict[str, Any]:
+        """A login he typed in the app's vault; LoginError (a ValueError) if it is not one."""
+        async with self._ledger() as ledger:
+            login = await keep_login(self.config, ledger, site, username, password, url, totp_value)
+        return {"name": login.name, "sites": login.sites}
+
+    async def remove(self, name: str) -> bool:
+        async with self._ledger() as ledger:
+            return await remove_login(self.config, ledger, name)

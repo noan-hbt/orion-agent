@@ -3132,3 +3132,32 @@ Reste voulu (D88) : un message proactif va là où il a écrit en dernier. S'il 
 Telegram, la suite y va jusqu'à son prochain message dans l'application. Garder un
 identifiant (`browser_save_password`) reste sur Telegram : l'application n'a pas encore ce
 formulaire.
+
+## D142 — Le coffre dans l'application, rempli par les mots de passe du téléphone
+
+*27/10/2026 · acceptée · complète D111, D116, D120 et D135*
+
+Le coffre (D111, D120) ne se remplissait que par Telegram, ou sur le serveur. Et pour se
+connecter dans une passation (D116), il fallait toucher une image puis taper son mot de passe à
+la main dans un champ « Texte à taper » : le propriétaire trouvait ça peu pratique. Désormais :
+- **Mots de passe**, dans Réglages : la liste des accès gardés (le site, l'identifiant, la
+  double authentification), en ajouter un, changer un mot de passe, en retirer un. Un mot de
+  passe ne se réaffiche jamais. Ces routes sont au bord de l'application (`/app/logins`) : en
+  mode séparé, c'est le gardien qui les sert et qui garde le coffre, et le cœur ne voit toujours
+  pas le mot de passe. Il suffit d'être connecté à l'app, sans Face ID : ajouter un accès ne
+  donne rien à personne, et l'iPhone a déjà demandé Face ID pour le remplir.
+- **Un vrai formulaire** : les champs portent `autocomplete="username"` et `current-password`,
+  donc l'iPhone propose ses mots de passe enregistrés (Face ID), au lieu de les retaper.
+- **Orion demande dans l'application** (`browser` save_password) : une carte dans Maintenant
+  ouvre ce formulaire, le site déjà rempli. L'app le donne au coffre, puis dit au cœur le nom
+  sous lequel il est gardé ; le cœur vérifie qu'il y est, pour ce site, avant de prévenir Orion.
+  Sur Telegram (s'il y a écrit en dernier, D141), comme avant.
+- **Dans une passation, la page de connexion devient un formulaire** : quand la page montre un
+  champ mot de passe (ou un premier champ identifiant seul), « Prendre la main » affiche
+  Identifiant et Mot de passe au-dessus de l'image. Le navigateur d'Orion les tape dans les
+  champs de la page et envoie le formulaire ; le mot de passe est masqué pour Orion aussitôt.
+  Toucher l'image reste possible pour le reste (un code, un captcha).
+- **« Garder cet accès ? » arrive tout de suite** : après « J'ai fini », si la connexion est
+  passée, l'app le demande sur place, et la carte reste dans Maintenant un quart d'heure.
+- Orion préfère save_password à hand_over pour une connexion simple : une fois gardé, il se
+  connecte seul les fois suivantes.

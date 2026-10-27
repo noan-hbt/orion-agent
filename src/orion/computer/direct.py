@@ -38,6 +38,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
+from orion.guardian.logins import site_of
 from orion.initiative.engine import Alert
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import normalize
@@ -116,6 +117,8 @@ class HandOver:
     typed: dict[str, str] = field(default_factory=dict[str, str])
     """What he typed into a sign-in form (site, username, password), to offer to keep it in
     the vault once he is done (D120). In memory only, never journaled."""
+    offered: str = ""
+    """The token of the offer to keep that login, once he is done: the app asks him at once."""
 
 
 @dataclass
@@ -427,7 +430,7 @@ class BrowserDesk:
         if still:
             return
         try:
-            await self._offer(
+            found.offered = await self._offer(
                 KeepOffer(
                     typed.get("site", ""),
                     "",
@@ -493,6 +496,16 @@ class BrowserDesk:
         return "Mots de passe gardés (`browser` login) :\n" + "\n".join(lines)
 
     async def save_password(self, args: Any) -> str:
+        if self.vault is not None and self._in_app():
+            # The app's form posts to the vault's keeper (the guardian, run apart): the core
+            # never sees the password either way (D142).
+            await self._offer(KeepOffer(args.site, args.why, time.monotonic() + KEEP_SECONDS))
+            return (
+                f"Il a, dans l'app (onglet Maintenant), un formulaire pour mettre son identifiant "
+                f"de {args.site} dans ton coffre, rempli par les mots de passe de son téléphone. "
+                "Dis-le-lui en une phrase. Tu ne verras jamais le mot de passe : quand on te dira "
+                "qu'il est gardé, `browser` login avec le nom donné."
+            )
         # With the guardian apart, its own form on Telegram takes it: the core never sees it.
         if self.guardian is None and self.vault is not None:
             await self._offer(KeepOffer(args.site, args.why, time.monotonic() + KEEP_SECONDS))
@@ -515,16 +528,26 @@ class BrowserDesk:
 
     # -- keeping a login from his phone (D120) -------------------------------------------------
 
-    async def _offer(self, offer: KeepOffer) -> None:
-        if self.notify is None or not self.base_url:
+    def _in_app(self) -> bool:
+        """Whether he answers in the app: it is there, and he is not on Telegram (D141)."""
+        telegram = self.notify is not None and bool(self.base_url)
+        return self.in_app and not (telegram and self.on_telegram())
+
+    async def _offer(self, offer: KeepOffer) -> str:
+        """In the app, shown in Maintenant (D142); else a Telegram button. Its token."""
+        in_app = self._in_app()
+        if not in_app and (self.notify is None or not self.base_url):
             raise Refused(
-                "Keeping a login from his phone needs Telegram and the console's public address "
-                "([modules.console] public_url); on the server: `orion logins add`."
+                "Keeping a login from his phone needs the app, or Telegram and the console's "
+                "public address ([modules.console] public_url); on the server: "
+                "`orion logins add`."
             )
         token = tokens.token_urlsafe(24)
         now = time.monotonic()
         self.offers = {t: o for t, o in self.offers.items() if o.until > now}
         self.offers[token] = offer
+        if in_app or self.notify is None:
+            return token
         what = (
             f"Garder ton identifiant {offer.site} ({offer.username}) dans mon coffre ?"
             if offer.password
@@ -534,6 +557,43 @@ class BrowserDesk:
             f"{what} Je ne verrai jamais le mot de passe : je le taperai pour toi.",
             f"{self.base_url}/keep?t={token}",
         )
+        return token
+
+    def asked(self) -> list[dict[str, str]]:
+        """What the app shows him (D142): a login to keep, or one Orion asks him for."""
+        now = time.monotonic()
+        return [
+            {
+                "token": token,
+                "site": site_of(offer.site) or offer.site,
+                "url": offer.url or (offer.site if "://" in offer.site else ""),
+                "why": offer.why,
+                "username": offer.username,
+                "kind": "keep" if offer.password else "ask",
+            }
+            for token, offer in list(self.offers.items())
+            if offer.until > now
+        ]
+
+    def decline(self, token: str) -> None:
+        self.offers.pop(token, None)
+
+    async def saved(self, token: str, name: str) -> None:
+        """He filled Orion's request in the app, which put the login `name` straight into the
+        vault: the core checks it is there, for that site (it never sees the password)."""
+        found = self.offers.get(token)
+        if found is None or found.until <= time.monotonic() or self.vault is None:
+            raise Refused("C'est terminé, ou le lien a expiré.")
+        try:
+            kept = await self.vault.accounts()
+        except (GuardianUnavailableError, VaultError) as exc:
+            raise Refused(str(exc)) from exc
+        site = site_of(found.site)
+        if not any(k["name"] == name and site in k["sites"] for k in kept["logins"]):
+            raise Refused(f"Rien n'est gardé sous « {name} » pour {found.site}.")
+        del self.offers[token]
+        self.kept.append((name, site, datetime.now(UTC)))
+        log.info("browser.login_kept", name=name)
 
     def offer(self, token: str) -> KeepOffer | None:
         found = self.offers.get(token)
@@ -557,6 +617,26 @@ class BrowserDesk:
         self.kept.append((kept["name"], ", ".join(kept["sites"]), datetime.now(UTC)))
         log.info("browser.login_kept", name=kept["name"])
         return str(kept["name"])
+
+    async def sign_in(self, token: str, username: str, password: str) -> dict[str, Any]:
+        """His username and password from the app's sign-in form, typed into the page and
+        sent (D142); masked for Orion at once, and offered to keep once he is done."""
+        found = self.handover(token)
+        if found is None:
+            raise Refused("That hand-over is over.")
+        live = self._live.get(found.thread)
+        if live is not None and password:
+            live.hidden.add(password)
+        where: dict[str, str] = await self.on_tab(
+            found.thread, lambda s: s.sign_in(username, password)
+        )
+        if password:
+            self.note_typed(
+                token, {"type": "password", "value": password, "username": username, **where}
+            )
+        elif username:
+            self.note_typed(token, {"type": "text", "value": username})
+        return where
 
     def note_typed(self, token: str, typed: dict[str, str] | None) -> None:
         """What he just typed in a hand-over, when it went into a sign-in form."""
@@ -897,8 +977,10 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         ),
         tool(
             "browser_hand_over",
-            "A page needs him (sign in, a code, a captcha): he gets this tab on his phone, does "
-            "it, says he is done, and you resume. Your browser stays signed in afterwards.",
+            "A page needs him (a code sent to him, a captcha, a sign-in his vault cannot do): "
+            "he gets this tab on his phone, does it (a sign-in form is filled from his phone's "
+            "passwords), says he is done, and you resume. Your browser stays signed in "
+            "afterwards.",
             HandOverInput,
             hand_over,
             Effect.INTERNAL,
@@ -912,8 +994,9 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         ),
         tool(
             "browser_save_password",
-            "Ask him to put a password in your vault (a form on his phone), for "
-            "`login` to fill a sign-in form later. Never ask for a password in a message.",
+            "Ask him to put a site's login in your vault: a form in his app, filled from his "
+            "phone's passwords. Then `login` and fill sign you in, now and later: for a plain "
+            "sign-in, better than hand_over. Never ask for a password in a message.",
             PasswordInput,
             save_password,
             Effect.INTERNAL,

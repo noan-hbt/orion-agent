@@ -120,6 +120,41 @@ _PASSWORD_SHOWN = """() => [...document.querySelectorAll('input[type=password]')
   const r = i.getBoundingClientRect();
   return r.width > 0 && r.height > 0 && getComputedStyle(i).visibility !== 'hidden';
 })"""
+_SIGN_IN = """(mark) => {
+  const shown = (i) => {
+    const r = i.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(i).visibility !== 'hidden'
+      && !i.disabled && !i.readOnly;
+  };
+  const kind = (i) => (i.getAttribute('type') || 'text').toLowerCase();
+  const textual = (i) => ['text', 'email', 'tel'].includes(kind(i));
+  const inputs = [...document.querySelectorAll('input')].filter(shown);
+  const password = inputs.find((i) => kind(i) === 'password') || null;
+  let username = null;
+  if (password) {
+    const scope = password.form ? inputs.filter((i) => i.form === password.form) : inputs;
+    const before = scope.filter((i) => textual(i)
+      && (i.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING));
+    username = before[before.length - 1] || null;
+  } else {
+    const said = (i) => [i.name, i.id, i.autocomplete, i.placeholder,
+      i.getAttribute('aria-label')].join(' ');
+    username = inputs.find((i) => textual(i)
+      && (kind(i) === 'email' || /user|login|mail|ident|account|compte/i.test(said(i)))) || null;
+  }
+  if (!password && !username) return null;
+  if (mark) {
+    document.querySelectorAll('[data-orion-sign-in]').forEach(
+      (e) => e.removeAttribute('data-orion-sign-in'));
+    if (username) username.setAttribute('data-orion-sign-in', 'username');
+    if (password) password.setAttribute('data-orion-sign-in', 'password');
+  }
+  return {username: !!username, password: !!password, host: location.hostname,
+    url: location.href};
+}"""
+"""The page's sign-in form, in a frame: its username field (the one before the password, or a
+lone e-mail or login field on a first step) and its password field. With `mark`, both are
+tagged for the owner's values to be typed into them (D142)."""
 
 STEADY_SECONDS = 8.0
 """How long a page may take to finish building itself after an action (a sign-in, an app)."""
@@ -382,6 +417,46 @@ class Session:
             except Error:
                 continue
         return False
+
+    async def _sign_in_frame(self, mark: bool) -> tuple[Frame, dict[str, Any]] | None:
+        page = self._page()
+        for frame in [page.main_frame, *[f for f in page.frames if f is not page.main_frame]]:
+            try:
+                found = await frame.evaluate(_SIGN_IN, mark)
+            except Error:
+                continue
+            if found:
+                return frame, cast(dict[str, Any], found)
+        return None
+
+    async def sign_in_form(self) -> dict[str, bool] | None:
+        """Whether the page asks to sign in: which of the username and password it shows."""
+        found = await self._sign_in_frame(False)
+        if found is None:
+            return None
+        return {"username": bool(found[1]["username"]), "password": bool(found[1]["password"])}
+
+    async def sign_in(self, username: str, password: str) -> dict[str, str]:
+        """The owner's username and password, typed into the page's sign-in form, then sent:
+        for his hand-over only (D142). Where it went (host, address)."""
+        found = await self._sign_in_frame(True)
+        if found is None:
+            raise BrowserError("no sign-in form on this page")
+        frame, form = found
+        last: Locator | None = None
+        try:
+            for name, value in (("username", username), ("password", password)):
+                if form[name] and value:
+                    last = frame.locator(f'[data-orion-sign-in="{name}"]').first
+                    await last.fill(value, timeout=8_000)
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        if last is None:
+            raise BrowserError("nothing to type in this form")
+        sent = last
+        await self._do(lambda: sent.press("Enter", timeout=8_000))
+        await self.settle()
+        return {"host": str(form["host"]), "url": str(form["url"])}
 
     async def wheel(self, dy: int) -> None:
         await self._do(lambda: self._page().mouse.wheel(0, dy))
