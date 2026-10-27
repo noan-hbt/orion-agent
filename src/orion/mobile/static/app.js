@@ -511,6 +511,7 @@ async function conversation() {
     });
   }, { passive: true });
   swipeTimes();
+  pinToBottom(view.thread, () => !view.talk.hidden);
 
   state.messages = [];
   state.refs.clear();
@@ -587,6 +588,21 @@ function sendMode() {
   }
   view.send.disabled = stop && !!state.work.stopping;
   view.send.setAttribute("aria-label", stop ? "Arrêter Orion" : empty ? "Message vocal" : "Envoyer");
+}
+
+// A thread read at its end stays at its end: an image that loads, the dots, a question, a
+// taller composer or the keyboard never leave the last message hidden.
+function pinToBottom(thread, shown) {
+  let pinned = true;
+  thread.addEventListener("scroll", () => {
+    pinned = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 140;
+  }, { passive: true });
+  const pin = () => {
+    if (pinned && shown()) thread.scrollTop = thread.scrollHeight;
+  };
+  new ResizeObserver(pin).observe(thread);
+  new MutationObserver(pin).observe(thread, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
+  thread.addEventListener("load", pin, true);
 }
 
 function nearBottom() {

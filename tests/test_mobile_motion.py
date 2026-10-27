@@ -90,3 +90,33 @@ async def test_the_composer_gives_back_the_dock_room_only_once_the_keyboard_is_u
         after = await page.evaluate(keyboard)
         await browser.close()
     assert (on_focus, with_keyboard, after) == (False, True, False)
+
+
+PIN = _piece("function pinToBottom(", "\n}\n")
+
+
+async def test_a_thread_read_at_its_end_stays_there_as_it_grows() -> None:
+    """Seen for real: an image or the dots appeared below and the last message was left hidden."""
+    result = await _run(
+        PIN + "\nwindow.pinToBottom = pinToBottom;",
+        """async () => {
+          const thread = document.createElement("div");
+          thread.style.cssText = "height:300px; overflow-y:auto";
+          document.body.append(thread);
+          const grow = async (px) => {
+            const el = document.createElement("div");
+            el.style.height = `${px}px`;
+            thread.append(el);
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          };
+          const gap = () => thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+          pinToBottom(thread, () => true);
+          await grow(1000);
+          const atEnd = gap();
+          thread.scrollTop = 0;
+          await new Promise((r) => setTimeout(r, 50));
+          await grow(200);
+          return { atEnd, readingAbove: thread.scrollTop };
+        }""",
+    )
+    assert result == {"atEnd": 0, "readingAbove": 0}
