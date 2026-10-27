@@ -528,6 +528,7 @@ async function conversation() {
   listen();
   offerNotifications();
   show(state.tab);
+  grow();
   if (location.hash.length > 1) goTo(location.hash.slice(1));
 }
 
@@ -573,9 +574,30 @@ addEventListener("hashchange", () => {
   if (view.thread && location.hash.length > 1) goTo(location.hash.slice(1));
 });
 
+// The field is measured on a hidden twin: collapsing the real one to measure it lost its caret,
+// and iOS slid the whole app up to find it again, one line at a time.
 function grow() {
-  view.text.style.height = "auto";
-  view.text.style.height = `${Math.min(view.text.scrollHeight, 118)}px`;
+  const text = view.text;
+  if (!text.offsetWidth) return;
+  if (!view.twin) {
+    view.twin = text.cloneNode();
+    view.twin.removeAttribute("aria-label");
+    view.twin.className = "twin";
+    view.twin.tabIndex = -1;
+    view.twin.readOnly = true;
+    view.twin.setAttribute("aria-hidden", "true");
+    view.twin.style.height = "0px";
+    text.after(view.twin);
+  }
+  view.twin.style.width = `${text.offsetWidth}px`;
+  view.twin.value = text.value;
+  const height = `${Math.min(view.twin.scrollHeight, 118)}px`;
+  if (text.style.height === height) return;
+  // The thread keeps the same distance to its end, so a taller field never scrolls it.
+  const thread = view.thread;
+  const fromEnd = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+  text.style.height = height;
+  thread.scrollTop = thread.scrollHeight - thread.clientHeight - fromEnd;
 }
 
 function sendMode() {
@@ -1409,28 +1431,48 @@ function setTyping(on, keep = false) {
 }
 
 // The dots give their place to the message that ends them in the same frame, so the thread never
-// jumps; if Orion keeps working, they come back under it a moment later.
+// jumps; if Orion keeps working, they come back under it a moment later. Entry and exit are one
+// animation at a time, each started from where the last one left the bubble.
 function typingBubble(on, comeBack = false) {
   clearTimeout(view.typingExit);
+  const el = view.typing;
+  const leaving = el.classList.contains("leaving");
   if (on) {
-    if (!view.typing.hidden && !view.typing.classList.contains("leaving")) return;
-    view.typing.classList.remove("leaving");
-    view.typing.hidden = false;
+    if (!el.hidden && !leaving) return;
+    view.typingMove?.cancel();
+    el.classList.remove("leaving");
+    el.hidden = false;
+    view.typingMove = el.animate(
+      [{ opacity: 0, transform: "scale(.2)" }, { opacity: 1, offset: 0.6 }, { opacity: 1, transform: "scale(1)" }],
+      { duration: still() ? 0 : 500, easing: "cubic-bezier(.34,1.56,.64,1)" },
+    );
   } else if (comeBack) {
-    view.typing.hidden = true;
-    view.typing.classList.remove("leaving");
+    view.typingMove?.cancel();
+    el.hidden = true;
+    el.classList.remove("leaving");
     view.typingExit = setTimeout(() => {
       if (!state.typing) return;
       typingBubble(true);
       bottom(false, true);
     }, 900);
-  } else if (!view.typing.hidden) {
-    view.typing.classList.add("leaving");
-    view.typingExit = setTimeout(() => {
-      view.typing.hidden = true;
-      view.typing.classList.remove("leaving");
-    }, 260);
+  } else if (!el.hidden && !leaving) {
+    view.typingMove?.cancel();
+    el.classList.add("leaving");
+    const move = (view.typingMove = el.animate(
+      [{}, { opacity: 0, transform: "scale(.3)", height: "0px", marginTop: "0px", marginBottom: "0px" }],
+      { duration: still() ? 0 : 260, easing: "cubic-bezier(.32,.72,0,1)", fill: "forwards" },
+    ));
+    move.onfinish = () => {
+      if (view.typingMove !== move) return;
+      el.hidden = true;
+      el.classList.remove("leaving");
+      move.cancel();
+    };
   }
+}
+
+function still() {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 // -- Orion at work (D133, D169) ----------------------------------------------------------------
@@ -1739,7 +1781,7 @@ function overlayState() {
   const sheets = [...layer.querySelectorAll(".scrim:not(.leaving)")];
   document.body.classList.toggle("panel-open", !!panels.length);
   document.body.classList.toggle("sheet-open", !!sheets.length);
-  app.inert = !!(panels.length || sheets.length || layer.querySelector(".tapback-overlay:not(.leaving)"));
+  app.inert = !!(panels.length || sheets.length || layer.querySelector(".tapback-overlay:not(.leaving), .plus-scrim:not(.leaving)"));
   for (const scrim of layer.querySelectorAll(".scrim")) scrim.inert = scrim !== sheets[sheets.length - 1];
   for (const el of [...Object.values(view.tabs || {}), ...layer.querySelectorAll(".panel")]) {
     el.classList.toggle("panel-behind", panels.length > 0 && el !== panels[panels.length - 1]);
@@ -1953,11 +1995,12 @@ function messageMenu(el, message) {
   navigator.vibrate?.(8);
 }
 
-// -- the + sheet ------------------------------------------------------------------------------
+// -- the + menu ---------------------------------------------------------------------------------
+// As in Messages: the thread blurs and a column of round, colored apps rises from the + button.
 
-function actions() {
-  const tile = (name, text, onclick, accent = false) =>
-    h("button", { type: "button", class: accent ? "accent" : "", onclick: () => (close(), onclick()) }, icon(name, 22), text);
+function actions(event) {
+  if (layer.querySelector(".plus-scrim:not(.leaving)")) return;
+  const plus = event?.currentTarget || view.talk.querySelector(".composer .attach");
   const prefill = (text) => () => {
     view.text.value = text;
     keepDraft(text);
@@ -1966,20 +2009,48 @@ function actions() {
     view.text.focus();
     view.text.setSelectionRange(text.length, text.length);
   };
-  const close = sheet(
-    h(
-      "div",
-      { class: "tiles" },
-      tile("photo", "Photos", () => view.photos.click(), true),
-      tile("camera", "Caméra", () => view.camera.click()),
-      tile("file", "Fichier", () => view.files.click()),
-      tile("mic", "Vocal", () => recorder.start()),
-      tile("clock", "Rappel", prefill("Rappelle-moi ")),
-      tile("target", "Mission", prefill("Nouvelle mission : ")),
-      tile("spark", "Recherche", prefill("Cherche en tâche de fond : ")),
-      tile("moon", "Penses-y", prefill("Penses-y à tête reposée : ")),
+  const items = [
+    ["camera", "Caméra", "c-gray", () => view.camera.click()],
+    ["photo", "Photos", "c-photos", () => view.photos.click()],
+    ["file", "Fichier", "c-blue", () => view.files.click()],
+    ["mic", "Vocal", "c-orange", () => recorder.start()],
+    ["clock", "Rappel", "c-red", prefill("Rappelle-moi ")],
+    ["target", "Mission", "c-green", prefill("Nouvelle mission : ")],
+    ["spark", "Recherche", "c-indigo", prefill("Cherche en tâche de fond : ")],
+    ["moon", "Penses-y", "c-purple", prefill("Penses-y à tête reposée : ")],
+  ];
+  const list = h(
+    "div",
+    { class: "plus-menu", role: "menu", "aria-label": "Joindre" },
+    items.map(([name, text, color, run], i) =>
+      h(
+        "button",
+        { type: "button", role: "menuitem", style: `--i:${items.length - 1 - i}`, onclick: () => (close(), run()) },
+        h("span", { class: `ico plus-ico ${color}` }, icon(name, 20)),
+        text,
+      ),
     ),
   );
+  const scrim = h("div", { class: "plus-scrim", onclick: (e) => e.target === scrim && close() }, list);
+  const at = plus.getBoundingClientRect();
+  const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-top")) || 0;
+  list.style.left = `${Math.max(8, at.left)}px`;
+  let closed = false;
+  let restoreFocus = () => {};
+  function close() {
+    if (closed) return;
+    closed = true;
+    scrim.classList.add("leaving");
+    setTimeout(() => scrim.remove(), 300);
+    unstack(close);
+    overlayState();
+    restoreFocus();
+  }
+  stack(close);
+  layer.append(scrim);
+  list.style.bottom = `${Math.max(8, top + scrim.offsetHeight - at.top + 10)}px`;
+  overlayState();
+  restoreFocus = dialogFocus(list);
 }
 
 // -- the tabs: now, the conversation, his notebook, the settings ------------------------------

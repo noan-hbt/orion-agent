@@ -33,9 +33,7 @@ textarea:focus-visible,.search input:focus-visible { outline:none; }
 .pill.wide { width:100%; }
 .round { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:44px; height:44px; border-radius:50%; }
 .round:not(.glass) { background:var(--fill); }
-.pill,.round,.find,.tabbar,.tabbar button,.quick button,button.tile,.bento button,.chip,.send,.tiles button,.emoji button,.tapback-picker button,.orb,summary { transition:transform .4s var(--bounce),opacity .2s ease; }
-.pill:not(:disabled):active,.round:not(:disabled):active,.find:active,.tabbar:active,button.tile:active,.bento button:active,.chip:active,.send:active,.tiles button:active,.quick button:not(:disabled):active,.orb:active,summary:active { transform:scale(.96); transition-duration:.08s; }
-.danger,.error { color:var(--red); }
+.pill,.round,.find,.tabbar,.tabbar button,.quick button,button.tile,.bento button,.chip,.send,.pill:not(:disabled):active,.round:not(:disabled):active,.find:active,.tabbar:active,button.tile:active,.bento button:active,.chip:active,.send:active,.danger,.error { color:var(--red); }
 .hint,.empty { color:var(--label-2); font-size:13px; line-height:18px; }
 
 /* Pairing stays usable above the keyboard. */
@@ -121,14 +119,13 @@ textarea:focus-visible,.search input:focus-visible { outline:none; }
 .file .tile { display:flex; align-items:center; justify-content:center; width:38px; min-height:38px; padding:0; border-radius:10px; background:#fff; color:var(--blue); }
 .file b { display:block; max-width:190px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:15px; line-height:20px; font-weight:600; }
 .file small { font-size:12px; line-height:16px; color:var(--label-2); }
-.thread > .typing { position:relative; flex:0 0 auto; align-self:flex-start; display:flex; align-items:center; justify-content:center; gap:5px; width:58px; height:38px; margin:10px 0 6px 2px; border-radius:19px; background:var(--gray-bubble); transform-origin:bottom left; animation:typing-in .5s var(--bounce),typing-breathe 2.4s ease-in-out .5s infinite; }
+.thread > .typing { position:relative; flex:0 0 auto; align-self:flex-start; display:flex; align-items:center; justify-content:center; gap:5px; width:58px; height:38px; margin:10px 0 6px 2px; border-radius:19px; background:var(--gray-bubble); transform-origin:bottom left; }
 .thread > .typing::before,.thread > .typing::after { content:""; position:absolute; border-radius:50%; background:var(--gray-bubble); }
 .thread > .typing::before { width:10px; height:10px; left:-3px; bottom:-3px; }
 .thread > .typing::after { width:5px; height:5px; left:-7px; bottom:-7px; }
 .thread > .typing i { width:9px; height:9px; border-radius:50%; background:#8E8E93; animation:typing-dot 1.35s ease-in-out infinite; }
 .thread > .typing i:nth-child(2) { animation-delay:.18s; }
 .thread > .typing i:nth-child(3) { animation-delay:.36s; }
-.thread > .typing.leaving { overflow:hidden; animation:typing-out .26s var(--spring) forwards; }
 .offline { align-self:center; margin:8px 0; color:var(--label-2); font-size:13px; line-height:18px; text-align:center; }
 .scroll-bottom { position:absolute; z-index:3; right:16px; bottom:calc(var(--bottom) + 140px); display:flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:50%; color:var(--blue); animation:badge-pop .35s var(--bounce); }
 .scroll-bottom svg { transform:rotate(180deg); }
@@ -213,6 +210,7 @@ body.keyboard .scroll-bottom { bottom:66px; }
 .composer .field { display:flex; flex:1; min-width:0; align-items:flex-end; min-height:36px; padding:2px 2px 2px 12px; border:1px solid rgba(60,60,67,.18); border-radius:18px; background:rgba(255,255,255,.85); box-shadow:0 2px 8px rgba(0,0,0,.025); transition:border-color .25s ease,box-shadow .35s var(--spring); }
 .composer .field:focus-within { outline:none; border-color:rgba(0,122,255,.4); box-shadow:0 0 0 4px rgba(0,122,255,.08),0 2px 8px rgba(0,0,0,.03); }
 .composer textarea { flex:1; min-width:0; width:0; min-height:30px; max-height:118px; padding:4px 5px 4px 0; border:0; border-radius:0; background:none; resize:none; font-size:17px; line-height:22px; }
+.composer textarea.twin { position:absolute; top:0; left:0; z-index:-1; visibility:hidden; overflow:hidden; pointer-events:none; }
 .composer textarea::placeholder { color:var(--label-3); opacity:1; }
 .composer .send { position:relative; display:flex; align-items:center; justify-content:center; flex:0 0 30px; width:30px; height:30px; border-radius:50%; background:var(--blue); color:#fff; transition:background-color .25s ease,color .25s ease,transform .4s var(--bounce); }
 .composer .send:not(.mic):not(:disabled):active { transform:scale(.86); }
@@ -399,9 +397,18 @@ body:not(.keyboard) .dock { transition-delay:0s; }
 .scrim.leaving { animation:fade-out .3s ease forwards; }
 .scrim.leaving .sheet { animation:sheet-out .3s var(--spring) forwards; }
 .sheet-behind { transform:scale(.94); border-radius:28px; overflow:hidden; pointer-events:none; }
-.tiles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
-.tiles button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; min-height:82px; padding:12px 3px; border-radius:20px; background:var(--fill); font-size:12px; line-height:16px; }
-.tiles button.accent { color:var(--blue); background:rgba(0,122,255,.12); }
+/* The + menu, as Messages draws it: a blurred thread, a column of round apps over the + button. */
+.plus-scrim { position:fixed; inset:0; z-index:10; background:rgba(255,255,255,.55); -webkit-backdrop-filter:blur(22px) saturate(160%); backdrop-filter:blur(22px) saturate(160%); animation:fade-in .25s ease; }
+.plus-scrim.leaving { animation:fade-out .25s ease forwards; }
+.plus-menu { position:absolute; display:flex; flex-direction:column; align-items:flex-start; gap:2px; }
+.plus-menu button { display:flex; align-items:center; gap:14px; padding:6px 16px 6px 2px; border-radius:24px; background:none; font-size:17px; line-height:22px; font-weight:400; letter-spacing:-.41px; color:var(--label); transform-origin:left bottom; animation:plus-in .42s var(--bounce) both; animation-delay:calc(var(--i) * 22ms); transition:transform .3s var(--bounce); }
+.plus-menu button:active { transform:scale(.94); transition-duration:.08s; }
+.plus-scrim.leaving .plus-menu button { animation:plus-out .2s var(--spring) both; animation-delay:calc(var(--i) * 10ms); }
+.plus-ico { width:40px; height:40px; border-radius:50%; box-shadow:0 1px 3px rgba(0,0,0,.12); }
+.ico.c-gray { background:#8E8E93; color:#fff; }
+.ico.c-photos { background:conic-gradient(from 200deg,#FF9500,#FFCC00,#34C759,#30B0C7,#007AFF,#AF52DE,#FF2D55,#FF9500); color:#fff; }
+@keyframes plus-in { from { opacity:0; transform:translateY(18px) scale(.55); } }
+@keyframes plus-out { to { opacity:0; transform:translateY(12px) scale(.6); } }
 .emoji { display:flex; justify-content:space-between; padding:5px; border-radius:999px; background:var(--fill); }
 .emoji button { width:44px; height:44px; border-radius:50%; font-size:26px; }
 .emoji button[aria-pressed="true"] { background:#fff; }
@@ -411,7 +418,7 @@ body:not(.keyboard) .dock { transition-delay:0s; }
 .viewer img { max-width:100%; max-height:100%; object-fit:contain; }
 
 /* Layers sit on what the keyboard leaves visible, as the app does. */
-.panel,.scrim,.voice,.tapback-overlay,.viewer { top:var(--app-top,0px); bottom:auto; height:var(--app-h); }
+.panel,.scrim,.plus-scrim,.voice,.tapback-overlay,.viewer { top:var(--app-top,0px); bottom:auto; height:var(--app-h); }
 
 /* Existing notebook, settings, browser and voice surfaces. */
 .field-edit { display:block; }
@@ -533,9 +540,6 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 @keyframes avatar-breathe { 50% { transform:scale(1.03); } }
 @keyframes orb-breathe { 50% { transform:scale(1.035); filter:brightness(1.1); } }
 @keyframes typing-dot { 0%,60%,100% { opacity:.3; transform:translateY(0) scale(.85); } 28% { opacity:1; transform:translateY(-3px) scale(1); } }
-@keyframes typing-in { 0% { opacity:0; transform:scale(.2); } 60% { opacity:1; } }
-@keyframes typing-out { to { opacity:0; transform:scale(.3); height:0; margin-top:0; margin-bottom:0; } }
-@keyframes typing-breathe { 50% { transform:scale(1.04); } }
 @keyframes halo { from { opacity:.9; transform:scale(1); } to { opacity:0; transform:scale(1.45); } }
 @keyframes status-in { from { opacity:0; transform:translateY(4px); } }
 @keyframes chip-in { from { opacity:0; transform:translateY(6px) scale(.7); } }
