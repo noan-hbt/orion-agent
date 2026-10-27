@@ -119,6 +119,37 @@ def offers(config: OrionConfig) -> list[str]:
     return [offer for kind in discover(config) for offer in kind(config).offers()]
 
 
+DRAWER_TOOLS = frozenset(
+    {
+        "autonomy",
+        "autonomy_grant",
+        "autonomy_revoke",
+        "chronicle",
+        "configure_change",
+        "configure_show",
+        "console_link",
+        "contain_source",
+        "doubt",
+        "hand_find_files",
+        "hand_notify",
+        "hand_open",
+        "hand_read_file",
+        "hands",
+        "initiative_settings",
+        "mistake",
+        "module_install",
+        "module_remove",
+        "modules",
+        "onboarding_stop",
+        "owner_style",
+        "provenance",
+        "spending",
+    }
+)
+"""Tools used once in a while, or when he asks: out of the model's menu, in the drawer
+(`orion`, D151). Fewer choices at every step for the everyday ones."""
+
+
 def core_tools(plate: Plate) -> list[Tool]:
     """The core's tools; small variants of one domain are the actions of one tool."""
     memory = memory_tools(plate.memory)
@@ -236,7 +267,10 @@ async def build_app(
         orion = Orion(
             journal=journal,
             provider=provider,
-            registry=ToolRegistry(tools),
+            registry=ToolRegistry(
+                [t for t in tools if t.name not in DRAWER_TOOLS],
+                [t for t in tools if t.name in DRAWER_TOOLS],
+            ),
             guardian=Guardian(
                 plate.approver,
                 autonomy.allows,

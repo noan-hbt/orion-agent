@@ -3427,3 +3427,64 @@ ratait le lien (« s'il n'y a pas de voyage en vue… ») : d'où les 30 dernier
 `la_veille_se_tait_sans_raison` 2/2 (rien ne part tout de suite). Coût : 5 à 20 centimes par
 veille sur OpenRouter, rien sur un forfait. Pas encore fait : une veille déclenchée par un
 événement (un mail important, un agenda qui bouge), en plus des heures fixes.
+
+## D151 — Le tiroir : moins d'outils sous les yeux ; faire maintenant avant de remettre à plus tard (chantier 3)
+
+*27/10/2026 · acceptée*
+
+À chaque pas, le modèle choisissait parmi 58 outils (46 avec les modules par défaut), dont
+beaucoup servent une fois par mois ou quand il le demande. Et le propriétaire a vu Orion lancer
+une mission « toutes les 6 h » pour ce qui méritait une réponse tout de suite.
+
+- **Le tiroir.** `ToolRegistry` prend une seconde liste, le tiroir (`DRAWER_TOOLS` dans
+  `app.py`) : autonomie, provenance, confinement d'une source, réglages, modules, console,
+  dépense, chronique, carnet d'erreurs, style, doute, mains sur ses machines… Le modèle ne voit
+  qu'un outil, `orion`, qui les liste d'une ligne chacun ; il les appelle par
+  `orion(tool, args)`. La boucle remplace aussitôt cet appel par celui de l'outil lui-même :
+  le gardien, les accords du propriétaire (vérifiés par nom), le journal et les évaluations
+  voient `autonomy_grant`, jamais `orion`. Des arguments faux renvoient le schéma de l'outil,
+  que le modèle n'a pas vu, pour qu'il refasse l'appel. Avec les modules par défaut : 31 outils
+  au lieu de 46, 32,7 k caractères de schémas au lieu de 40 k ; le message système perd aussi
+  ses paragraphes sur l'autonomie et la provenance, resserrés (43,3 k avec tous les modules).
+- **Faire maintenant d'abord**, vérifié dans le code (étend D144). La relecture finale lit
+  désormais l'action de chaque appel (`mission:start`, `task:start`). Un tour du propriétaire
+  qui remet sa demande à plus tard (mission, tâche de fond, réflexion pour la nuit) sans avoir
+  rien cherché (web, navigateur, mémoire, papiers, mails, expert…) revient une fois au modèle :
+  ce qui se trouve en quelques recherches se cherche et se répond tout de suite ; ce qui est
+  lancé ne sert qu'à la suite.
+
+Pas fait : réunir les façons de remettre à plus tard (`remind_me`, `follow_up`, `think_later`,
+`awaiting`) en un seul outil. Le vrai travers était de remettre au lieu de faire, que la
+vérification ci-dessus vise ; fusionner les outils obligerait à réécrire leurs événements.
+
+## D152 — Les ratés de sa vraie vie (chantier 4)
+
+*27/10/2026 · acceptée*
+
+Les évaluations s'écrivaient à la main, après qu'il a raconté ce qui n'allait pas. Ses
+signaux le disent déjà dans le journal : un 👎 sur un message d'Orion, et ses mots quand il
+le corrige (« non, c'est pas ça », « tu t'es trompé », « je t'ai déjà dit… »).
+`orion misses` les liste avec ce qu'il avait demandé et ce qu'Orion a répondu ;
+`orion misses --case N` en écrit le début d'un cas d'évaluation (sa demande, le moment, le
+contexte), à compléter d'une vérification et à ajouter à `evals/cases.py`. Rien ne quitte son
+serveur. Lu à partir des signaux qu'Orion collecte déjà pour apprendre son manuel
+(`adaptation/signals.py`), sans nouvel événement.
+
+## D153 — Ce que son téléphone sait (chantier 6, première source)
+
+*27/10/2026 · acceptée*
+
+Orion ne voyait de sa vie que ses messages, son agenda, ses mails, ses papiers et ses
+fichiers. Sans application native, ce que l'iPhone sait passe par les automatisations
+Raccourcis, que le module `places` utilisait déjà pour les arrivées et départs (D57). Avec le
+même jeton, ses automatisations envoient maintenant `{"kind", "value"}` à `/places/sense` :
+son sommeil (au réveil), son mode concentration, une batterie faible, la fin d'un
+entraînement, sa santé, ce qu'il écoute. Événement `phone.sensed` (confiance du téléphone, pas
+ses mots). Ce qu'il a dit depuis moins de 18 h, et le dernier lieu où il est arrivé ou d'où il
+est parti, apparaissent dans `<maintenant>` et dans la veille (D150). `orion places token`
+explique quoi régler. Caddy fait passer tout `/places/*`. Seulement ce qu'il choisit d'envoyer,
+et Orion n'en déduit rien d'autre.
+
+Le format des messages (chantier 5) n'a pas changé : le modèle écrit déjà une fois, avec les
+balises de l'application, et chaque canal les rend à sa façon (D126). Les sources suivantes du
+chantier 6 (contacts, trajets, colis et abonnements, banque, maison, flux) restent à faire.

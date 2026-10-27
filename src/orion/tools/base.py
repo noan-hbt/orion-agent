@@ -14,10 +14,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from orion.core.events import Trust
-from orion.providers.base import ToolSpec
+from orion.providers.base import ToolCall, ToolSpec
 
 
 class Effect(StrEnum):
@@ -142,16 +142,89 @@ class ToolInputError(ValueError):
     """The model sent arguments that do not match the tool's schema."""
 
 
+DRAWER = "orion"
+"""The tool through which the drawer's tools are called (D151)."""
+
+
+class _DrawerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str = Field(description="One of the tools listed above")
+    args: dict[str, Any] = Field(
+        default_factory=dict[str, Any], description="Its arguments; {} to see what it takes"
+    )
+
+
+DRAWER_LINE = 70
+"""Characters of each drawer tool's description shown in the listing."""
+
+
+def _first_sentence(text: str) -> str:
+    line = text.strip().split("\n", 1)[0]
+    cut = line.find(". ")
+    line = line if cut < 0 else line[: cut + 1]
+    return line if len(line) <= DRAWER_LINE else line[: DRAWER_LINE - 1].rsplit(" ", 1)[0] + "…"
+
+
 class ToolRegistry:
     """A fixed, ordered tool catalog. Order and content never change for a given registry, so
-    the serialized tool list is part of the stable, cacheable prompt prefix."""
+    the serialized tool list is part of the stable, cacheable prompt prefix.
 
-    def __init__(self, tools: list[Tool]) -> None:
-        names = [t.name for t in tools]
-        if len(set(names)) != len(names):
+    `drawer`: tools used rarely (once a month, or when he asks), kept out of the model's menu
+    and called through one tool, `orion` (D151). Each keeps its name everywhere else: the
+    guardian, the journal and the owner's approvals see the drawer's tool, not `orion`."""
+
+    def __init__(self, tools: list[Tool], drawer: list[Tool] | None = None) -> None:
+        drawer = drawer or []
+        names = [t.name for t in [*tools, *drawer]]
+        if len(set(names)) != len(names) or DRAWER in names:
             raise ValueError(f"duplicate tool names: {names}")
-        self._tools = {t.name: t for t in sorted(tools, key=lambda t: t.name)}
-        self._specs = [t.spec() for t in self._tools.values()]
+        self._tools = {t.name: t for t in sorted([*tools, *drawer], key=lambda t: t.name)}
+        self._drawer = {t.name for t in drawer}
+        shown = [t for t in self._tools.values() if t.name not in self._drawer]
+        if drawer:
+            shown.append(self._drawer_tool(sorted(drawer, key=lambda t: t.name)))
+            shown.sort(key=lambda t: t.name)
+        self._specs = [t.spec() for t in shown]
+
+    @staticmethod
+    def _drawer_tool(drawer: list[Tool]) -> Tool:
+        async def unreachable(args: Any, ctx: ToolContext) -> ToolResult:
+            del args, ctx
+            return ToolResult("orion is resolved before it runs", is_error=True)
+
+        listed = "\n".join(f"- {t.name}: {_first_sentence(t.description)}" for t in drawer)
+        return Tool(
+            name=DRAWER,
+            description="Your less frequent tools, called by name with their arguments:\n" + listed,
+            input_model=_DrawerInput,
+            handler=unreachable,
+            effect=Effect.NONE,
+            reversibility=Reversibility.REVERSIBLE,
+        )
+
+    def resolve(self, call: ToolCall) -> ToolCall:
+        """A call through the drawer, as the call of the drawer's tool itself; others as they
+        are. A drawer call that names no drawer tool stays as it is (and fails as unknown)."""
+        if call.name != DRAWER:
+            return call
+        try:
+            asked: Any = json.loads(call.arguments or "{}")
+        except json.JSONDecodeError:
+            return call
+        if not isinstance(asked, dict):
+            return call
+        name = str(cast(dict[str, Any], asked).get("tool") or "")
+        if name not in self._drawer:
+            return call
+        args: object = cast(dict[str, Any], asked).get("args") or {}
+        return ToolCall(id=call.id, name=name, arguments=json.dumps(args, ensure_ascii=False))
+
+    def in_drawer(self, name: str) -> bool:
+        return name in self._drawer
+
+    def drawer_names(self) -> list[str]:
+        return sorted(self._drawer)
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)

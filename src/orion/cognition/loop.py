@@ -35,7 +35,7 @@ from orion.providers.base import (
     ToolCall,
     Usage,
 )
-from orion.tools.base import Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
+from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 from orion.tools.builtin import TELL
 
 log = structlog.get_logger(__name__)
@@ -408,7 +408,9 @@ async def run_agent(
             return
 
         tool_calls_made += len(response.tool_calls)
-        called.extend(call.name for call in response.tool_calls)
+        # A call through the drawer is the call of the drawer's own tool from here on (D151).
+        calls = [registry.resolve(call) for call in response.tool_calls]
+        called.extend(_called(call) for call in calls)
         over = (
             "cost budget"
             if usage.cost_usd > max_cost
@@ -418,7 +420,7 @@ async def run_agent(
         )
         if over:
             # The calls asked for are answered (not run), so the conversation stays well formed.
-            for call in response.tool_calls:
+            for call in calls:
                 skipped: Message = {
                     "role": "tool",
                     "tool_call_id": call.id,
@@ -436,11 +438,11 @@ async def run_agent(
         elif (
             clock - began >= settings.progress_after and clock - shown_at >= settings.progress_every
         ):
-            doing = _doing(registry, response.tool_calls)
+            doing = _doing(registry, calls)
             if doing not in shown and len(shown) < PROGRESS_AT_MOST:
                 if settings.progress_model is not None:
                     written, spent = await _progress(
-                        provider, settings, response.tool_calls, doing, shown, context_trust
+                        provider, settings, calls, doing, shown, context_trust
                     )
                     if spent is not None:
                         usage = usage + spent.usage
@@ -451,16 +453,16 @@ async def run_agent(
                 yield Told(doing)
 
         stalled = False
-        for call in response.tool_calls:
+        for call in calls:
             call_counts[_signature(call)] += 1
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
-        yield Working(_labels(registry, response.tool_calls))
+        yield Working(_labels(registry, calls))
         started = time.monotonic()
         first: dict[str, tuple[ToolCall, ToolResult, str]] = {}
         try:
-            for call in response.tool_calls:
+            for call in calls:
                 if call.name in EARLY:
                     result, reason = await _execute_one(
                         call, registry, guardian, settings, context_trust, call_counts, budget
@@ -471,7 +473,7 @@ async def run_agent(
                         shown_at = time.monotonic()
                         yield Told(told, plan=call.name == "plan")
             rest = await _execute_calls(
-                [c for c in response.tool_calls if c.id not in first],
+                [c for c in calls if c.id not in first],
                 registry,
                 guardian,
                 settings,
@@ -485,7 +487,7 @@ async def run_agent(
             # answer, or every later request in this thread would be refused by the provider.
             log.exception("loop.tool_step_failed", thread=settings.thread_id)
             stopped = f"Not run: an internal error stopped the step ({type(exc).__name__})."
-            for call in response.tool_calls:
+            for call in calls:
                 done = first.get(call.id)
                 answer: Message = {
                     "role": "tool",
@@ -497,7 +499,7 @@ async def run_agent(
             yield finished(StopReason.TOOL_ERROR, last_text, repr(exc))
             return
         by_id = {**first, **{c.id: (c, r, why) for c, r, why in rest}}
-        executions = [by_id[c.id] for c in response.tool_calls]
+        executions = [by_id[c.id] for c in calls]
         tool_seconds += time.monotonic() - started
         for call, result, reason in executions:
             switch = result.data.get(SWITCH_MODEL)
@@ -587,6 +589,18 @@ async def _progress(
     return line, response
 
 
+def _called(call: ToolCall) -> str:
+    """`tool`, or `tool:action` for a tool with actions: what the finish check reads."""
+    try:
+        arguments: object = json.loads(call.arguments or "{}")
+    except json.JSONDecodeError:
+        return call.name
+    action = (
+        cast(dict[str, object], arguments).get("action") if isinstance(arguments, dict) else None
+    )
+    return f"{call.name}:{action}" if isinstance(action, str) and action else call.name
+
+
 def _labels(registry: ToolRegistry, calls: list[ToolCall]) -> tuple[str, ...]:
     """The tools' `doing`, once each, in order."""
     labels: list[str] = []
@@ -674,11 +688,21 @@ async def _execute_one(
             REPEAT_REFUSED,
         )
     tool = registry.get(call.name)
-    if tool is None:
+    if tool is None or call.name == DRAWER:
+        if call.name == DRAWER:
+            held = ", ".join(registry.drawer_names())
+            return ToolResult(f"No such tool in the drawer; it holds: {held}", is_error=True), (
+                "unknown tool"
+            )
         return ToolResult(f"Unknown tool: {call.name}", is_error=True), "unknown tool"
     try:
         arguments = tool.parse(call.arguments)
     except ToolInputError as exc:
+        if registry.in_drawer(call.name):  # the model has not seen its schema: show it
+            schema = json.dumps(tool.spec().parameters, ensure_ascii=False)
+            return ToolResult(f"{exc}\n{call.name} takes: {schema}", is_error=True), (
+                "invalid input"
+            )
         return ToolResult(str(exc), is_error=True), "invalid input"
 
     decision = await guardian.decide(
