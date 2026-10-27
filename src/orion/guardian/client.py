@@ -19,8 +19,14 @@ import httpx
 from orion.calendar.service import CalendarAccount
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient
 from orion.channels.telegram import TelegramClient
-from orion.guardian.wire import ApprovalRequest, MailRequest, batch_from_json
-from orion.mail.imap import Batch
+from orion.guardian.wire import (
+    ApprovalRequest,
+    MailRequest,
+    MailSearch,
+    batch_from_json,
+    mails_from_json,
+)
+from orion.mail.imap import Batch, RawMail
 from orion.mail.service import MailAccount
 
 BASE_URL = "http://guardian"
@@ -136,6 +142,20 @@ class GuardianClient:
         return batch_from_json(
             await self.post(f"/v1/mail/{account.name}", cursor.model_dump(mode="json"))
         )
+
+    async def mail_search(
+        self,
+        account: MailAccount,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        limit: int,
+        now: datetime,
+    ) -> list[RawMail]:
+        """That window of the mailbox, read live by the guardian (D171)."""
+        query = MailSearch(since=since, before=before, sender=sender, limit=limit, now=now)
+        data = await self.post(f"/v1/mail/{account.name}/search", query.model_dump(mode="json"))
+        return mails_from_json(data["mails"])
 
     async def mail_send(self, account: MailAccount, mail: Any, grant: str | None) -> str:
         """Sent by the guardian, if the owner approved this very mail. Returns its Message-ID."""

@@ -196,6 +196,16 @@ class BrowserDesk:
     async def _tab(self, thread: str) -> _Live:
         """The conversation's tab, the browser opened first if need be; the session then acts
         on it. Called under the lock."""
+        if self._session is not None and not self._session.alive:
+            # Chromium died under it: its tabs went with it, a new browser takes over (D171).
+            log.warning("browser.relaunch", tabs=len(self._live))
+            for live in self._live.values():
+                if live.closer is not None:
+                    live.closer.cancel()
+            self._live.clear()
+            self.held.clear()
+            session, self._session = self._session, None
+            await session.discard()
         if self._session is None:
             session = self._sessions()
             await session.__aenter__()

@@ -330,12 +330,28 @@ async def test_calendars_and_mail_are_read_by_the_guardian(
         assert account.password.resolve().get_secret_value() == "app-pw"
         return Batch(42, 7, [mail], skipped=1)
 
-    async with running_guardian(config, fetch_calendar=feed, fetch_mail=mailbox) as g:
+    async def search(
+        account: MailAccount,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        limit: int,
+        now: datetime,
+    ) -> list[RawMail]:
+        assert account.password.resolve().get_secret_value() == "app-pw"
+        assert (since.month, before, sender, limit) == (5, None, "paul", 50)
+        return [mail]
+
+    async with running_guardian(
+        config, fetch_calendar=feed, fetch_mail=mailbox, search_mail=search
+    ) as g:
         account = CalendarAccount(name="perso", url=SecretRef(env="NOT_IN_THE_CORE"))
         assert "VCALENDAR" in await g.client.calendar(account)
         box = MailAccount(name="perso", host="h", username="u", password=SecretRef(env="NONE"))
         batch = await g.client.mail(box, 0, 0, 2, 25, datetime(2026, 10, 20, tzinfo=UTC))
         assert batch == Batch(42, 7, [mail], skipped=1)
+        since = datetime(2026, 5, 20, tzinfo=UTC)
+        assert await g.client.mail_search(box, since, None, "paul", 50, since) == [mail]
         with pytest.raises(ConnectionError, match="no mail account"):
             await g.client.mail(
                 MailAccount(name="other", host="h", username="u", password=SecretRef(env="X")),

@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from orion.computer.browser import CRASH_DIR, Session
 from orion.computer.direct import PAGE, BrowserDesk, browser_tools
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
@@ -112,3 +113,27 @@ async def test_reading_the_rest_of_a_long_page(
     assert "Locations" in await use(tools, "browser_read", part=0)
     assert "Locations à Lyon" in await use(tools, "browser_read", find="lyon")
     assert "n'apparaît pas" in await use(tools, "browser_read", find="piscine")
+
+
+async def test_a_browser_that_died_is_opened_again(journal: SqliteJournal) -> None:
+    site = Site()
+    desk = BrowserDesk(journal, lambda: session(site))
+    tools = {t.name: t for t in browser_tools(desk)}
+    assert "Locations à Lyon" in await use(tools, "browser_open", url="https://annonces.test/")
+    dead = desk.session
+    assert dead.page is not None
+    await dead.page.context.close()  # Chromium goes away under the session (a crash)
+    assert not dead.alive
+    assert "Locations à Lyon" in await use(tools, "browser_open", url="https://annonces.test/")
+    assert desk.session is not dead and desk.session.alive
+    await desk.aclose()
+
+
+async def test_a_browser_that_cannot_start_says_so(journal: SqliteJournal) -> None:
+    started = Session()._launch()  # pyright: ignore[reportPrivateUsage]
+    assert f"--crash-dumps-dir={CRASH_DIR}" in started["args"]  # Chromium's crash handler
+    desk = BrowserDesk(journal, lambda: Session(executable="/nowhere/chromium"))
+    tools = {t.name: t for t in browser_tools(desk)}
+    said = await use(tools, "browser_open", url="https://annonces.test/")
+    assert said.startswith("ERROR the browser did not start")
+    await desk.aclose()

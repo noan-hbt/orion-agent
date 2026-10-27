@@ -3853,3 +3853,25 @@ changements d'onglet brutaux, et l'app loin des belles animations demandées.
 - **Des micro-interactions partout** : arrivée des bulles et des pièces, réponses rapides en
   cascade, accueil, champ du composeur, surbrillance des lignes, grand titre qui s'efface au
   défilement. Toujours transform et opacité ; rien quand le système réduit les animations.
+
+## D171 — Le mail se lit en direct, aussi loin qu'il faut ; un navigateur mort se relance
+
+*28/10/2026 · acceptée · complète D114*
+
+Orion n'a pas pu fouiller 4-5 mois de mails : `mail` plafonnait à 30 jours, et ne lisait de
+toute façon que la copie locale, qui ne remonte qu'à `lookback_days` (2 jours) avant le
+démarrage. Le navigateur, lui, planta deux fois au lancement : le gestionnaire de crash de
+Chromium réclamait `--database`, absent, et le processus finit en SIGTRAP.
+
+- **`mail` lit la boîte telle qu'elle est à l'instant** : chaque liste synchronise d'abord,
+  plus de copie vieille de cinq minutes. La lecture d'un mail (`read`) garde le cache.
+- **Plus loin que la synchro, il cherche sur le serveur** : `days` va jusqu'à des années,
+  `until_days` borne une fenêtre, `sender` vise. Un `SEARCH SINCE … BEFORE … FROM …`, toujours
+  en lecture seule (EXAMINE, BODY.PEEK), les 50 plus récents par compte. Ce qui n'était pas
+  connu devient des cartes comme les autres, journalisées, tiers ; rien n'est gardé deux fois.
+  En mode séparé, c'est le gardien qui cherche (`/v1/mail/{compte}/search`).
+- **Chromium reçoit un dossier de crash** (`--crash-dumps-dir`, rapporteur coupé) : sans
+  dossier personnel, son gestionnaire de crash n'en trouvait pas et l'abattait au démarrage.
+- **Un navigateur qui ne démarre pas le dit** au lieu de faire tomber l'outil, et **un
+  navigateur mort se relance** : la session se sait perdue quand son contexte se ferme sans
+  qu'on l'ait demandé ; l'appel suivant en ouvre une neuve, ses onglets étant partis avec.

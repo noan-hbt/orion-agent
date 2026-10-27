@@ -139,3 +139,42 @@ def fetch_since(
                         mails.append(parse_message(uid, parts[1], now))
                         break
         return Batch(current, found[-1], mails, skipped=len(found) - len(chosen))
+
+
+def search_window(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    folder: str,
+    since: datetime,
+    before: datetime | None,
+    sender: str | None,
+    limit: int,
+    now: datetime,
+) -> list[RawMail]:
+    """Messages received between `since` and `before` (from `sender` if given), newest `limit`
+    only, read live on the server however old they are (D171). Blocking: run it in a thread."""
+    with imaplib.IMAP4_SSL(host, port, timeout=30) as imap:
+        imap.login(username, password)
+        status, _ = imap.select(folder, readonly=True)
+        if status != "OK":
+            raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
+        criteria = ["SINCE", since.strftime("%d-%b-%Y")]
+        if before is not None:
+            # BEFORE is a day, exclusive: the day itself is in the window.
+            criteria += ["BEFORE", (before + timedelta(days=1)).strftime("%d-%b-%Y")]
+        if sender:
+            criteria += ["FROM", '"' + sender.replace("\\", "").replace('"', "") + '"']
+        _, data = imap.uid("SEARCH", *criteria)
+        found = sorted(int(u) for u in (data[0] or b"").split())
+        mails: list[RawMail] = []
+        for uid in found[-limit:]:
+            _, fetched = imap.uid("FETCH", str(uid), "(BODY.PEEK[])")
+            for item in fetched:
+                if isinstance(item, tuple):
+                    parts = cast(tuple[Any, ...], item)
+                    if len(parts) > 1 and isinstance(parts[1], bytes):
+                        mails.append(parse_message(uid, parts[1], now))
+                        break
+        return mails

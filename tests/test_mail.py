@@ -139,6 +139,22 @@ def test_fetch_is_strictly_read_only_and_resumes_after_the_last_uid(
     FakeIMAP.uidvalidity = 42
 
 
+def test_a_window_is_searched_live_however_old(monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeIMAP.mailbox = {10: PLAIN, 11: HTML, 12: NEWSLETTER}
+    FakeIMAP.log = []
+    monkeypatch.setattr(imap.imaplib, "IMAP4_SSL", FakeIMAP)
+    since, before = NOW - timedelta(days=150), NOW - timedelta(days=120)
+    found = imap.search_window(
+        "imap.x", 993, "noan", "app-pw", "INBOX", since, before, 'edf"', 2, NOW
+    )
+    assert ("select", "INBOX", "True") in FakeIMAP.log  # still read-only
+    assert ("SEARCH", "SINCE", "23-May-2026", "BEFORE", "23-Jun-2026", "FROM", '"edf"') in (
+        FakeIMAP.log
+    )
+    assert all(entry[2] == "(BODY.PEEK[])" for entry in FakeIMAP.log if entry[0] == "FETCH")
+    assert [m.uid for m in found] == [11, 12]  # the newest `limit`
+
+
 def json_reply(answer: dict[str, Any]) -> Any:
     return reply(json.dumps(answer))
 
@@ -268,6 +284,51 @@ async def test_tool_alerts_and_digest_carry_third_party_trust(journal: SqliteJou
     box.recent = ten  # pyright: ignore[reportAttributeAccessIssue]
     many = await box.digest(NOW, NOW - timedelta(days=1), first_slot=True, last_slot=False)
     assert many[-1].text == "- et 2 autre(s) mail(s) qui comptent (`mail` pour les voir)"
+
+
+async def test_the_tool_reads_the_mailbox_now_and_months_back(journal: SqliteJournal) -> None:
+    server = Server(parse_message(10, PLAIN, NOW))
+    old = NOW - timedelta(days=140)
+    bill = RawMail(
+        3, "<old@edf>", "facture@edf.example", "EDF", "Facture mai", old, "54 EUR", False
+    )
+    own = RawMail(4, "<own@x>", OWNER, "Noan", "note", old, "secret", False)
+    searches: list[tuple[datetime, datetime | None, str | None]] = []
+
+    async def search(
+        account: MailAccount,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        limit: int,
+        now: datetime,
+    ) -> list[RawMail]:
+        searches.append((since, before, sender))
+        return [bill, own]
+
+    box = Mailbox(journal, settings(), "Europe/Paris", server.fetch, lambda: NOW, search)
+    await box.start()
+    [tool] = mail_tools(box)
+    ctx = ToolContext(thread_id="o", correlation_id="c")
+
+    result = await tool.handler(tool.parse("{}"), ctx)
+    assert "Paul Martin" in result.content and searches == []  # the sync covers two days
+    server.mails.append(parse_message(11, HTML, NOW))  # just arrived: seen at once
+    assert "EDF" in (await tool.handler(tool.parse("{}"), ctx)).content
+
+    window = '{"days": 150, "until_days": 120, "sender": "edf"}'
+    result = await tool.handler(tool.parse(window), ctx)
+    assert searches == [(NOW - timedelta(days=150), NOW - timedelta(days=120), "edf")]
+    [line] = result.content.splitlines()[1:]
+    assert "« Facture mai »" in line and result.trust is Trust.THIRD_PARTY
+    await tool.handler(tool.parse(window), ctx)
+    cards = [e for e in await journal.read() if e.kind == CARD]
+    assert len(cards) == 3  # read again, not kept twice; the owner's own mail is skipped
+    rebuilt = MailState()
+    await ProjectionRunner(journal, [rebuilt]).catch_up()
+    assert rebuilt.cards == box.state.cards
+    bad = await tool.handler(tool.parse('{"days": 10, "until_days": 10}'), ctx)
+    assert bad.is_error
 
 
 def test_a_mail_cannot_close_its_own_tag() -> None:
