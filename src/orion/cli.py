@@ -288,6 +288,33 @@ async def _forget(config: OrionConfig, source: str, reason: str) -> int:
     return 0 if report.verified else 1
 
 
+async def _reminders(config: OrionConfig, args: argparse.Namespace) -> int:
+    """His pending reminders, and cancelling one by hand when Orion cannot."""
+    from orion.core.events import Provenance
+    from orion.initiative.timers import TimerProjection, Timers
+    from orion.initiative.tools import describe_moment
+
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        timers = Timers(journal, TimerProjection())
+        await timers.sync()
+        if args.reminders_command == "list":
+            pending = timers.projection.pending()
+            if not pending:
+                print("Aucun rappel programmé.")
+            for timer in pending:
+                moment = describe_moment(timer.due_at, config.agent.timezone)
+                print(f"{timer.id}  {moment} : {timer.text}")
+            return 0
+        if timers.projection.get(args.reminder_id) is None:
+            print(f"Aucun rappel en attente {args.reminder_id}", file=sys.stderr)
+            return 1
+        await timers.cancel(
+            args.reminder_id, args.reason, Provenance(source="cli", actor="owner:cli")
+        )
+    print(f"Rappel {args.reminder_id} annulé.")
+    return 0
+
+
 async def _misses(config: OrionConfig, case: int | None) -> int:
     """What went wrong for real (D152): his 👎 and his corrections, with what Orion answered."""
     from datetime import datetime
@@ -1025,6 +1052,12 @@ def main(argv: list[str] | None = None) -> int:
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
     forget.add_argument("--reason", default="owner request")
+    reminders = sub.add_parser("reminders", help="His pending reminders; cancel one by hand")
+    reminders_sub = reminders.add_subparsers(dest="reminders_command", required=True)
+    reminders_sub.add_parser("list", help="The pending reminders, with their ids")
+    reminders_cancel = reminders_sub.add_parser("cancel", help="Cancel a reminder by its id")
+    reminders_cancel.add_argument("reminder_id", help="The id, e.g. r_…")
+    reminders_cancel.add_argument("--reason", default="owner request")
     google = sub.add_parser("google", help="Let Orion add events to a Google Calendar")
     google_sub = google.add_subparsers(dest="google_command", required=True)
     google_auth = google_sub.add_parser("auth", help="Get the refresh token (once)")
@@ -1157,6 +1190,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_contacts_import(config, vcf))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
+    if args.command == "reminders":
+        return asyncio.run(_reminders(config, args))
     if args.command == "hands":
         return asyncio.run(_hands(config, args))
     if args.command == "console":
