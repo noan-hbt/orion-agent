@@ -142,5 +142,7 @@ async def test_the_phone_token_and_his_notes_from_the_app(
         }
         again = await upkeep.library_import(notes[:1])
         assert again["skipped"] == ["Voyage Lisbonne (déjà dans la bibliothèque)"]
+        report = await upkeep.week()  # the week's report, from the app (D156)
+        assert report["turns"] == 0 and "before" in report
     finally:
         await store.close()

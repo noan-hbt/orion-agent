@@ -774,6 +774,9 @@ def core_routes(
     async def missed(_request: Request, c: Control) -> object:
         return {"misses": await kept(c).misses()}
 
+    async def week(_request: Request, c: Control) -> object:
+        return await kept(c).week()
+
     async def phone_token(_request: Request, c: Control) -> object:
         return await kept(c).phone_token()
 
@@ -908,6 +911,7 @@ def core_routes(
         api("machines/{name}/pair/options", controls(machine_options), post=True),
         api("machines/{name}/pair", controls(machine_pair), post=True),
         api("misses", controls(missed)),
+        api("week", controls(week)),
         api("library/import", controls(library_import), post=True),
         api("phone/token", controls(phone_token), post=True),
         api("chatgpt", controls(chatgpt)),

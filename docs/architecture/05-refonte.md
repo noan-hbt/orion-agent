@@ -188,7 +188,7 @@ voit, pas les garanties qui le rendent sûr.
 | 1. Les situations | fait | D149 |
 | 2. La veille | fait, à heures fixes et quand un mail ou l'agenda bouge | D150, D155 |
 | 3. Moins d'outils | tiroir et « faire maintenant » faits ; un seul « plus tard » et constitution courte pas faits | D151 |
-| 4. La fiabilité mesurée | `orion misses` fait ; relevé de la semaine pas fait | D152 |
+| 4. La fiabilité mesurée | `orion misses` et `orion week` faits | D152, D156 |
 | 5. Le format par canal | déjà l'architecture (D126) : rien changé | — |
 | 6. Ce qu'il voit de sa vie | son téléphone fait ; contacts, trajets, colis, banque, maison, flux à faire | D153 |
 

@@ -3537,10 +3537,27 @@ heures fixes :
   → jeu 14:00 »), disparu, ou une invitation. La première lecture d'un agenda n'est pas une
   nouvelle ; ce qu'Orion a écrit lui-même non plus.
 
-Le projection de la veille les suit à partir du journal, sans nouvel événement de source.
+La projection de la veille les suit à partir du journal, sans nouvel événement de source.
 Garde-fous : trois par jour au plus (`stirred_per_day`, 0 pour n'en garder aucune), deux heures
 au moins après la veille précédente (`stirred_gap_minutes`), et rien si une veille fixe arrive
 dans l'heure : elle le verra. Chaque veille, fixe ou déclenchée, lit ce qui a bougé depuis la
 précédente (`<ce-qui-a-bouge>`) ; une veille déclenchée sait qu'elle l'est et regarde d'abord
 ce que ça change pour le reste. `watch.done` garde son heure, ce qu'elle a vu et si elle a été
 déclenchée.
+
+## D156 — Le relevé de la semaine (chantier 4, complète D152)
+
+*27/10/2026 · acceptée*
+
+`orion misses` liste les ratés un par un. Pour choisir le chantier suivant, il fallait aussi la
+semaine d'un coup d'œil. `orion week` (et `GET /api/week`, pour l'écran Serveur de l'app,
+D154) relit les sept derniers jours du journal, à côté des sept d'avant :
+- les **tours arrêtés avant la fin**, par raison (à court de pas, de budget, tournait en rond,
+  réponse coupée, modèle muet, outil planté), et combien en lui répondant ;
+- les **outils en erreur**, les plus fréquents d'abord (les refus du gardien comptent) ;
+- les **réponses corrigées** : ses 👎 et ses corrections (D152), les dernières en clair ;
+- le **coût**, dont ce qu'Orion a dépensé sans qu'il ait rien demandé, et les fils qui coûtent
+  le plus (`veille`, `nuit`…).
+
+Rien de nouveau n'est enregistré : `turn.finished`, `tool.executed`, `spend.recorded` et les
+signaux d'adaptation suffisent. Rien ne quitte son serveur.

@@ -3,7 +3,8 @@
 The owner never logs in to his server any more. What only `orion …` on the server did is here,
 in the app's Serveur screen:
 
-- **his misses** (D152): his 👎 and his corrections, with what Orion had answered;
+- **his misses** (D152): his 👎 and his corrections, with what Orion had answered; and the
+  week's report (D156): turns stopped short, tool errors, corrections and cost;
 - **the phone's token** (D153): a new one for the Shortcuts automations, with the addresses;
 - **his ChatGPT plan** (D62): signed in or not, the sign-in itself (the address to open, then
   the one the browser was sent back to), signing out;
@@ -30,6 +31,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from orion.adaptation.misses import misses
+from orion.adaptation.week import weeks
 from orion.core.events import Event, Provenance
 from orion.core.journal import EventStore
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
@@ -131,12 +133,20 @@ class Upkeep:
 
     # -- his misses (D152) --------------------------------------------------------------------
 
-    async def misses(self) -> list[dict[str, Any]]:
+    async def _events(self) -> list[Event]:
         events: list[Event] = []
         after = 0
         while page := await self.journal.read(after, JOURNAL_PAGE):
             events.extend(page)
             after = page[-1].seq
+        return events
+
+    async def week(self) -> dict[str, object]:
+        this, before = weeks(await self._events(), self.zone, datetime.now(self.zone))
+        return this.payload(before)
+
+    async def misses(self) -> list[dict[str, Any]]:
+        events = await self._events()
         found = misses(events, self.zone, datetime.now(self.zone))[-MISSES_SHOWN:]
         return [
             {
