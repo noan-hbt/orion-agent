@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import socket
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,10 @@ from tests.fake_guardian import guardian_config, running_guardian
 from tests.fake_inkbox import CONVERSATION, OWNER, FakeInkbox
 from tests.fakes import ScriptedProvider
 from tests.test_imessage import make_orion, until
+
+unix_sockets = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="the guardian serves on a Unix socket"
+)
 
 STRANGER = "+33699999999"
 GARAGE = "+33622222222"
@@ -262,7 +267,8 @@ async def test_the_channel_asks_through_the_guardian_and_returns_the_grant(
         pending = asyncio.create_task(
             channel.approve(ActionProposal(tool, arguments, Trust.OWNER, "owner"))
         )
-        await until(lambda: len(g.fake.sent) == 1)
+        # The channel waits for the answer only once the guardian's question is back to it.
+        await until(lambda: len(g.fake.sent) == 1 and bool(channel._approvals))  # pyright: ignore[reportPrivateUsage]
         assert "appeler Garage Martin" in g.fake.texts()[0]
         g.fake.react(g.fake.sent[0]["id"], "like")
         await channel.poll_once()
@@ -404,6 +410,7 @@ def test_relative_guardian_paths_are_beside_the_config(tmp_path: Path) -> None:
     assert config.guardian_ledger_path == tmp_path / "guardian" / "guardian.sqlite3"
 
 
+@unix_sockets
 async def test_the_guardian_process_serves_on_a_group_socket(tmp_path: Path) -> None:
     import os
     import stat
@@ -439,6 +446,7 @@ async def test_the_guardian_process_serves_on_a_group_socket(tmp_path: Path) -> 
         socket.unlink(missing_ok=True)
 
 
+@unix_sockets
 async def test_run_split_orion_does_not_start_without_its_guardian(tmp_path: Path) -> None:
     from orion.app import build_app
     from orion.modules.base import ModuleError
