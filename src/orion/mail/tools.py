@@ -16,7 +16,7 @@ from orion.guardian.client import GuardianUnavailableError
 from orion.mail.service import Mailbox, MailCard
 from orion.mail.smtp import ADDRESS, MailFile, Outgoing, Postman, SendError
 from orion.mail.tidy import Draft, Tidied, Tidy
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult, quoted
 
 
 class MailInput(BaseModel):
@@ -86,6 +86,16 @@ FileLookup = Callable[[str], tuple[str, str, bytes] | None]
 TIDIED = "mail.tidied"
 DRAFTED = "mail.drafted"
 MAX_ATTACHED = 15 * 1024 * 1024
+
+
+def looking(args: Any, trusted: bool) -> str:
+    if args.read:
+        return "je lis un mail"
+    if args.bulk:
+        return "je trie tes newsletters"
+    if args.sender and trusted:
+        return f"je regarde les mails de {quoted(args.sender, 30)}"
+    return ""
 
 
 def _bulk(cards: list[MailCard]) -> str:
@@ -257,6 +267,7 @@ def mail_tools(
         Tool(
             name="mail",
             doing="je regarde tes mails",
+            doing_of=looking,
             description="The owner's recent mail (sender, subject, date), and a mail's whole "
             "text with `read`: you read it yourself. Read-only.",
             input_model=MailInput,

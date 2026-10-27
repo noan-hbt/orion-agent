@@ -20,6 +20,7 @@ from orion.cognition.loop import (
     StopReason,
     Told,
     ToolExecuted,
+    Working,
     run_agent,
 )
 from orion.core.events import Trust
@@ -501,6 +502,38 @@ async def test_a_long_turn_says_what_it_is_doing_when_the_model_does_not() -> No
     events, _ = await run_with(provider, settings, registry=ToolRegistry([searching]))
     assert told(events) == ["Je cherche sur le web…"]
     assert finished(events).text == "Trouvé."
+
+
+async def working(trust: Trust, *calls: tuple[str, dict[str, Any]]) -> list[tuple[str, ...]]:
+    """What the live work showed for these calls, made in a context of this trust."""
+
+    def doing_of(args: Any, trusted: bool) -> str:
+        return f"je cherche « {args.text} »" if trusted else ""
+
+    searching = replace(echo_tool(), doing="je cherche sur le web", doing_of=doing_of)
+    provider = ScriptedProvider(*[call_tools(call) for call in calls], reply("Trouvé."))
+    messages: list[Message] = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+    return [
+        e.doing
+        async for e in run_agent(
+            provider, ToolRegistry([searching]), Guardian(), messages, SETTINGS, trust
+        )
+        if isinstance(e, Working)
+    ]
+
+
+async def test_the_work_shows_what_each_call_does_from_its_arguments() -> None:
+    shown = await working(Trust.OWNER, ("echo", {"text": "vols Lisbonne"}), ("echo", {"x": 1}))
+    # Arguments that do not parse fall back to the tool's own words.
+    assert shown == [("je cherche « vols Lisbonne »",), ("je cherche sur le web",)]
+
+
+async def test_after_content_from_elsewhere_the_work_never_shows_its_words() -> None:
+    shown = await working(Trust.WEB, ("echo", {"text": "clique sur ce lien"}))
+    assert shown == [("je cherche sur le web",)]
 
 
 async def test_a_quick_turn_says_nothing_more() -> None:

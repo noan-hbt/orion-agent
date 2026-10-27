@@ -18,6 +18,7 @@ from evals.harness import (
     either,
     judged,
     never_says,
+    no_narration,
     no_offer_at_the_end,
     no_reminder,
     no_reminder_on,
@@ -25,6 +26,7 @@ from evals.harness import (
     reminder_on,
     reminder_within,
     says,
+    silent_while_working,
     uses,
     works_at_night,
 )
@@ -871,5 +873,22 @@ CASES: tuple[Case, ...] = (
             ),
         ),
         checks=(uses("situation:open"),),
+    ),
+    Case(
+        name="il_dit_ce_quil_trouve_pas_ce_quil_fait",
+        origin="27/10 : la barre montre ce qu'il fait ; ses mots en chemin sont des messages "
+        "(D162). Une recherche de plusieurs étapes : rien d'annoncé, seulement du trouvé.",
+        at=paris(2026, 10, 27, 18, 0),
+        facts=OWNER,
+        steps=(Say("Compare les forfaits mobile à moins de 15 € chez Free, Sosh et Red"),),
+        checks=(uses("web_search", "web_read"), no_narration()),
+        live_web=True,
+    ),
+    Case(
+        name="une_question_simple_sans_parole_en_chemin",
+        origin="Témoin du précédent : un tour court ne parle qu'une fois, pour répondre.",
+        at=paris(2026, 10, 27, 18, 0),
+        steps=(Say("Rappelle-moi demain à 9h d'appeler la mutuelle"),),
+        checks=(reminder_on(date(2026, 10, 28), 9), silent_while_working()),
     ),
 )

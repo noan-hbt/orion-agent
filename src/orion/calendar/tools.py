@@ -97,6 +97,7 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
     tools = [
         Tool(
             name="agenda",
+            doing="je regarde ton agenda",
             description="The owner's calendar events, day by day (times are local). Use it "
             "before saying anything about their schedule.",
             input_model=AgendaInput,

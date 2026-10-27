@@ -311,11 +311,12 @@ class OwnerInbox:
                 for item in self._arrived_meanwhile(first)
             ]
 
-        async def progress(text: str, correlation_id: str) -> None:
+        async def progress(text: str, correlation_id: str, spoken: bool) -> None:
             if reply is None or first.allow_silence or is_silence(text):
                 return
-            if isinstance(reply, LiveOutlet) and reply is source:
-                await reply.narrate(text)  # beside the work it is about (D143)
+            if isinstance(reply, LiveOutlet) and reply is source and not spoken:
+                # What the work is doing goes beside it (D143); his own words are messages (D162).
+                await reply.narrate(text)
             else:
                 await reply.deliver(shown(reply, text), correlation_id)
 

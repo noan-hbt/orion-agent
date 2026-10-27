@@ -38,7 +38,7 @@ from orion.memory.service import MemoryService, Origin
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.providers.base import ProviderError
 from orion.tools.actions import grouped
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult, quoted
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -187,6 +187,15 @@ class RecallInput(BaseModel):
     until: date | None = Field(default=None, description="Up to and including this day")
 
 
+def _searching(args: Any, trusted: bool) -> str:
+    return f"je cherche {quoted(args.query)} dans ta bibliothèque" if trusted else ""
+
+
+def _recalling(args: Any, trusted: bool) -> str:
+    about = str(args.about).strip()
+    return f"je relis ce qu'on s'est dit de {quoted(about)}" if trusted and about else ""
+
+
 class ListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -326,6 +335,7 @@ def library_tools(
         Tool(
             name="library_search",
             doing="je cherche dans ta bibliothèque",
+            doing_of=_searching,
             description="Search the owner's library (their notes and documents) for passages "
             "about a question, by words and by meaning.",
             input_model=SearchInput,
@@ -335,6 +345,7 @@ def library_tools(
         Tool(
             name="conversations_search",
             doing="je relis nos conversations",
+            doing_of=_recalling,
             description="What was said with the owner, about something and/or between two "
             "dates (« qu'est-ce que je disais de ça en août ? »). Older than memory's facts.",
             input_model=RecallInput,
