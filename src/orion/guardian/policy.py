@@ -95,8 +95,9 @@ NEVER_FROM_UNTRUSTED = frozenset({"module_install", "module_remove"})
 """Never done from a context holding outside content, even with his yes: adding code to Orion
 (D105) is decided in a clean conversation. Letting Orion act alone is put to him there, with
 the exact grant and why he is asked (D111)."""
-NEVER_ALONE = frozenset({"module_install", "module_remove"})
-"""Always put to him, whatever autonomy the config lists: code that runs with his memory."""
+NEVER_ALONE = frozenset({"module_install", "module_remove", "autonomy_grant"})
+"""Always put to him, whatever autonomy the config lists: code that runs with his memory, and
+letting Orion do more alone."""
 ANY_ACTION = "*"
 """In `[guardian] autonomable`: the owner may let Orion do any action alone (D167), but those
 of `NEVER_ALONE`, when he asks for it; the ritual still offers only the actions listed."""
@@ -202,6 +203,14 @@ class Guardian:
             "this call only: if he asks again later, call the tool again, the rules may differ."
         )
 
+    async def _alone(self, tool: Tool, proposal: ActionProposal) -> bool:
+        """The owner let Orion do this alone, with these parameters."""
+        return (
+            self._autonomous is not None
+            and tool.name not in NEVER_ALONE
+            and await self._autonomous(tool.name, proposal.arguments.model_dump())
+        )
+
     async def decide(self, proposal: ActionProposal) -> Decision:
         tool = proposal.tool
         effect = tool.effect_for(proposal.arguments)
@@ -232,6 +241,10 @@ class Guardian:
             if proposal.ask_reason:  # what happened in a conversation he did not see, first
                 reason = f"{proposal.ask_reason}, et {reason}"
             if effect is Effect.EXTERNAL:
+                if await self._alone(tool, proposal) and tool.name not in NEVER_FROM_UNTRUSTED:
+                    # He told Orion to stop asking, knowing a mail or a page could steer it
+                    # (D168): an autonomy holds whatever the conversation contains.
+                    return Decision(Verdict.ALLOW, ALONE)
                 if self._approvals == "prudent" or tool.name in NEVER_FROM_UNTRUSTED:
                     return Decision(
                         Verdict.DENY, self._untrusted_refusal(tool, proposal.context_trust)
@@ -272,12 +285,7 @@ class Guardian:
             return Decision(Verdict.ALLOW, "side-effect free")
         if effect is Effect.INTERNAL:
             return Decision(Verdict.ALLOW, "internal effect only")
-        if (
-            proposal.context_trust >= TRUSTED_FLOOR
-            and self._autonomous is not None
-            and tool.name not in NEVER_ALONE
-            and await self._autonomous(tool.name, proposal.arguments.model_dump())
-        ):
+        if await self._alone(tool, proposal):
             return Decision(Verdict.ALLOW, ALONE)
         if proposal.context_trust < TRUSTED_FLOOR:
             # A tool built to act on outside content (answering a mail): the owner sees the

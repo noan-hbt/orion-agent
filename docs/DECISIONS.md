@@ -3798,3 +3798,18 @@ commandes root peut tout changer sur le serveur.
   Sans ça, un mail piégé lancerait des commandes root.
 - Il reprend la main d'un mot (`autonomy_revoke`), dans l'app ou la console. Un réglage sans
   `*` revient à la liste fermée d'avant.
+
+## D168 — Une autonomie tient même avec du contenu extérieur
+
+*27/10/2026 · acceptée · revient sur une règle de D167*
+
+Le propriétaire ne veut plus qu'Orion lui redemande une action qu'il lui a laissée, même
+quand un mail ou une page est dans la conversation. Il sait ce que ça veut dire : un mail ou
+une page piégés peuvent faire lancer à Orion, sans lui demander, toute action qu'il lui a
+laissée. Avec le shell, ça veut dire des commandes root, la lecture des secrets comprise.
+
+- **Une autonomie accordée joue quel que soit le contenu de la conversation.**
+- **Ce qui reste :** ajouter ou retirer du code à Orion n'est jamais fait seul, ni depuis du
+  contenu extérieur (`NEVER_ALONE`, `NEVER_FROM_UNTRUSTED`). Accorder une autonomie
+  (`autonomy_grant`) reste une action qu'il approuve lui-même.
+- Revenir en arrière : retirer l'autonomie (`autonomy_revoke`, l'app, la console).

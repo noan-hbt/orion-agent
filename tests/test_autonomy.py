@@ -99,7 +99,7 @@ async def test_it_is_offered_after_a_run_of_yeses_once_a_month(journal: SqliteJo
     assert await autonomy.allows("calendar_add")
 
 
-async def test_granted_actions_run_alone_only_in_a_clean_conversation(
+async def test_granted_actions_run_alone_whatever_the_conversation_holds(
     journal: SqliteJournal,
 ) -> None:
     autonomy = Autonomy(journal, ["calendar_add"])
@@ -112,17 +112,17 @@ async def test_granted_actions_run_alone_only_in_a_clean_conversation(
     decision = await guardian.decide(ActionProposal(add, args, Trust.OWNER, "owner"))
     assert decision.allowed and owner.asked == []
     await guardian.decide(ActionProposal(add, args, Trust.THIRD_PARTY, "owner"))
-    assert len(owner.asked) == 1  # outside content in the conversation: asked again
+    assert owner.asked == []  # outside content in the conversation: still alone (D168)
     other = tool("call_someone")
     await guardian.decide(ActionProposal(other, args, Trust.OWNER, "owner"))
-    assert len(owner.asked) == 2
+    assert len(owner.asked) == 1
     with pytest.raises(ValueError, match="never be done without asking"):
         await autonomy.grant("call_someone", "g", None)
 
     [_, _, revoke] = autonomy_tools(autonomy)
     await revoke.handler(revoke.parse('{"action": "calendar_add"}'), ToolContext("o", "c"))
     await guardian.decide(ActionProposal(add, args, Trust.OWNER, "owner"))
-    assert len(owner.asked) == 3
+    assert len(owner.asked) == 2
     assert [e.kind for e in await journal.read()].count(GRANTED) == 1
 
 
@@ -143,8 +143,8 @@ async def test_any_action_but_adding_code_can_be_granted_when_he_asks(
     args = shell.parse('{"title": "x", "start": "2026-11-03T10:00", "end": "2026-11-03T11:00"}')
     assert (await guardian.decide(ActionProposal(shell, args, Trust.OWNER, "owner"))).allowed
     assert owner.asked == []
-    await guardian.decide(ActionProposal(shell, args, Trust.THIRD_PARTY, "owner"))
-    assert len(owner.asked) == 1  # a mail or a page in the conversation: asked again
+    assert (await guardian.decide(ActionProposal(shell, args, Trust.THIRD_PARTY, "owner"))).allowed
+    assert owner.asked == []  # a mail or a page in the conversation: still alone (D168)
     assert autonomy.shown() == ["calendar_add", "shell"]
 
     [_, status, _] = autonomy_tools(autonomy)
