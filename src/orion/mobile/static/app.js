@@ -235,19 +235,33 @@ function keepDraft(text) {
 
 // -- viewport: the keyboard shrinks the visual viewport, not the layout ----------------------
 
+const view = {};
+let roomy = 0; // the tallest the app has been without a keyboard, for this orientation
+
 function fit() {
   // With the keyboard up, iOS shrinks the visual viewport and may slide it: the app follows it,
   // so the composer sits right on the keyboard and nothing is pushed off the top.
   const vv = window.visualViewport;
-  document.documentElement.style.setProperty("--app-h", `${vv ? vv.height : window.innerHeight}px`);
+  const height = vv ? vv.height : window.innerHeight;
+  const editing = !!document.activeElement?.matches?.("input, textarea, select, [contenteditable]");
+  if (!editing) roomy = height;
+  // The last message stays in view while the keyboard takes its room.
+  const stick = !!view.thread?.isConnected && !view.talk?.hidden && nearBottom();
+  document.documentElement.style.setProperty("--app-h", `${height}px`);
   document.documentElement.style.setProperty("--app-top", `${vv ? Math.max(0, vv.offsetTop) : 0}px`);
+  // The composer gives back the dock's room in the same frame the app shrinks, not on focus:
+  // otherwise it drops, then jumps back up once the keyboard is there.
+  document.body.classList.toggle("keyboard", editing && (window.innerHeight - height > 120 || roomy - height > 120));
   window.scrollTo(0, 0);
+  if (stick) view.thread.scrollTop = view.thread.scrollHeight;
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", fit);
   window.visualViewport.addEventListener("scroll", fit);
 }
 window.addEventListener("resize", fit);
+window.addEventListener("orientationchange", () => (roomy = 0));
+addEventListener("focusout", () => setTimeout(fit, 0));
 fit();
 
 // -- start ------------------------------------------------------------------------------------
@@ -404,7 +418,6 @@ function pairing() {
 
 // -- the conversation -------------------------------------------------------------------------
 
-const view = {};
 
 async function conversation() {
   view.status = h("span", { class: "status" }, "connexion…");
@@ -436,8 +449,6 @@ async function conversation() {
       grow();
       sendMode();
     },
-    onfocus: () => document.body.classList.add("typing"),
-    onblur: () => document.body.classList.remove("typing"),
     onkeydown: (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing && matchMedia("(hover: hover)").matches) {
         event.preventDefault();
@@ -1288,9 +1299,10 @@ function listen() {
       countQuestions();
       nowChanged();
     } else if (data.type === "message") {
+      // The dots step aside before the message lands where they were.
+      if (data.message.who === "orion") setTyping(false, true);
       add(data.message);
       speak(data.message);
-      if (data.message.who === "orion") setTyping(false, true);
       countQuestions();
       nowChanged();
     } else if (data.type === "typing") {
@@ -1372,24 +1384,36 @@ function setLive(on) {
 
 function setTyping(on, keep = false) {
   // Orion may keep working after a message he sends mid-work: the server says when it stops.
-  if (keep && state.typing) return typingBubble(false);
+  if (keep && state.typing) return typingBubble(false, true);
+  const was = state.typing;
   state.typing = on;
   typingBubble(on);
   paintStatus();
-  if (on) bottom();
+  if (on && !was) bottom(false, true);
 }
 
-function typingBubble(on) {
+// The dots give their place to the message that ends them in the same frame, so the thread never
+// jumps; if Orion keeps working, they come back under it a moment later.
+function typingBubble(on, comeBack = false) {
   clearTimeout(view.typingExit);
   if (on) {
+    if (!view.typing.hidden && !view.typing.classList.contains("leaving")) return;
     view.typing.classList.remove("leaving");
     view.typing.hidden = false;
+  } else if (comeBack) {
+    view.typing.hidden = true;
+    view.typing.classList.remove("leaving");
+    view.typingExit = setTimeout(() => {
+      if (!state.typing) return;
+      typingBubble(true);
+      bottom(false, true);
+    }, 900);
   } else if (!view.typing.hidden) {
     view.typing.classList.add("leaving");
     view.typingExit = setTimeout(() => {
       view.typing.hidden = true;
       view.typing.classList.remove("leaving");
-    }, 180);
+    }, 260);
   }
 }
 
@@ -1411,8 +1435,12 @@ function setWork(work) {
 
 function paintStatus() {
   const [text, kind] = !state.live ? ["hors ligne", ""] : state.typing ? ["écrit…", "busy"] : ["en ligne", "live"];
-  view.status.textContent = text;
-  view.status.className = `status ${kind}`;
+  if (view.status.textContent !== text) {
+    view.status.textContent = text;
+    view.status.classList.remove("swap");
+    void view.status.offsetWidth;
+  }
+  view.status.className = `status ${kind} swap`;
   view.avatar.classList.toggle("busy", state.typing || !!state.work);
 }
 
@@ -1981,12 +2009,23 @@ function show(key) {
   if (!view.tabs[key]) key = "now";
   const from = TABS.findIndex(([k]) => k === state.tab);
   const to = TABS.findIndex(([k]) => k === key);
-  if (from >= 0 && from !== to) {
-    // The new tab comes in from the side of its button.
+  const leaving = from >= 0 && from !== to ? view.tabs[state.tab] : null;
+  if (leaving) {
+    // The new tab comes in from the side of its button while the old one slips away under it.
     const el = view.tabs[key];
-    el.classList.remove("enter-left", "enter-right");
+    el.hidden = false;
+    for (const tab of [el, leaving]) {
+      clearTimeout(tab.leaveTimer);
+      tab.classList.remove("enter-left", "enter-right", "leave-left", "leave-right");
+    }
     void el.offsetWidth;
     el.classList.add(to > from ? "enter-right" : "enter-left");
+    leaving.classList.add(to > from ? "leave-left" : "leave-right");
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    leaving.leaveTimer = setTimeout(() => {
+      leaving.classList.remove("leave-left", "leave-right");
+      if (view.tabs[state.tab] !== leaving) leaving.hidden = true;
+    }, still ? 0 : 320);
   }
   state.tab = key;
   try {
@@ -1994,23 +2033,27 @@ function show(key) {
   } catch {
     // private mode: the app opens on Maintenant next time
   }
-  for (const [k, el] of Object.entries(view.tabs)) el.hidden = k !== key;
+  for (const [k, el] of Object.entries(view.tabs)) if (el !== leaving) el.hidden = k !== key;
   for (const [k, b] of Object.entries(view.tabButtons)) b.setAttribute("aria-current", k === key ? "page" : "false");
   const selected = view.tabButtons[key];
   selected.classList.remove("selected-pop");
   requestAnimationFrame(() => selected.classList.add("selected-pop"));
-  placeLens();
+  placeLens(!!leaving);
   if (key === "talk") bottom(true);
   else view.tabs[key].refresh();
 }
 
-function placeLens() {
+function placeLens(moving = false) {
   const b = view.tabButtons?.[state.tab];
   if (!b || !view.lens) return;
   view.lens.style.width = `${b.offsetWidth}px`;
   view.lens.style.transform = `translateX(${b.offsetLeft}px)`;
+  // On its way, the lens stretches like a drop of liquid, then settles.
+  if (moving && view.lens.animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    view.lens.animate([{ scale: "1 1" }, { scale: "1.18 .86", offset: 0.35 }, { scale: ".97 1.03", offset: 0.7 }, { scale: "1 1" }], { duration: 520, easing: "ease-out" });
+  }
 }
-addEventListener("resize", placeLens);
+addEventListener("resize", () => placeLens());
 
 // A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
 function page(title, fill, subtitle) {
