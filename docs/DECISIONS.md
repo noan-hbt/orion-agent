@@ -3112,3 +3112,23 @@ bonne part de ce qu'Orion suit pour le propriétaire n'y avait pas d'écran. Qua
 Pas encore : pas de notification de plus pour une tâche, une mission ou la nuit finies,
 puisqu'Orion en écrit déjà un message (qui, lui, est notifié) ; pas de réponse écrite depuis la
 notification (le web ne le permet pas) : « Répondre » ouvre la conversation, prête à écrire.
+
+## D141 — Avec l'application, plus rien en double sur Telegram
+
+*27/10/2026 · acceptée · complète D88, D116 et D125*
+
+Le propriétaire, passé à l'application, recevait encore certains messages sur Telegram en
+plus. Deux chemins contournaient la boîte de réception unifiée, qui ne choisit qu'un seul
+canal :
+- **le gardien** prévenait que le cœur ne répondait plus, puis qu'il était reparti, par
+  iMessage ou Telegram seulement. Il passe d'abord par la notification de l'application si un
+  téléphone l'accepte (le texte entier, le cœur ne pouvant pas l'écrire dans la conversation),
+  et sinon comme avant ;
+- **la reprise du navigateur** envoyait un bouton Telegram en plus de « Prendre la main » dans
+  l'application. Avec l'application, le bouton ne part que s'il a écrit en dernier depuis
+  Telegram.
+
+Reste voulu (D88) : un message proactif va là où il a écrit en dernier. S'il écrit sur
+Telegram, la suite y va jusqu'à son prochain message dans l'application. Garder un
+identifiant (`browser_save_password`) reste sur Telegram : l'application n'a pas encore ce
+formulaire.

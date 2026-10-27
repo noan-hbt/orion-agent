@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 from playwright.async_api import Route
@@ -146,3 +147,26 @@ async def test_he_signs_in_in_orions_browser_and_it_stays_signed_in(
         assert "Connexion" in result.content  # signed out
     finally:
         await again.aclose()
+
+
+async def test_with_the_app_the_hand_over_goes_where_he_is(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """Not on Telegram as well as in the app: on Telegram only if he last wrote from there."""
+    desk = desk_for(journal, School(), tmp_path / "profile")
+    buttons: list[str] = []
+
+    async def notify(text: str, url: str) -> None:
+        buttons.append(text)
+
+    desk.notify, desk.base_url, desk.in_app = notify, "https://o.fr/console/browser", True
+    desk._live["owner"] = cast(Any, None)  # pyright: ignore[reportPrivateUsage]
+    ctx = ToolContext("owner", "t1")
+    try:
+        said = await desk.hand_over("Connecte-toi", ctx)
+        assert buttons == [] and "Telegram" not in said and "Prendre la main" in said
+        desk.on_telegram = lambda: True
+        said = await desk.hand_over("Connecte-toi", ctx)
+        assert len(buttons) == 1 and "Telegram" in said
+    finally:
+        await desk.aclose()

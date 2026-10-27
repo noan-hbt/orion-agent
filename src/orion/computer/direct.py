@@ -181,6 +181,8 @@ class BrowserDesk:
         """Where the hand-over page is served (the console's public address)."""
         self.in_app = False
         """The app shows a hand-over under way in Maintenant, with the live tab (D135)."""
+        self.on_telegram: Callable[[], bool] = lambda: False
+        """Whether he last wrote from Telegram: with the app there, the button goes only then."""
 
     @property
     def session(self) -> Session:
@@ -363,6 +365,8 @@ class BrowserDesk:
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(ctx.thread_id, why, now + HANDOVER_SECONDS)
         self.held.add(ctx.thread_id)
+        # One place to take the tab, where he is: the app, unless he is on Telegram.
+        telegram = telegram and (not self.in_app or self.on_telegram())
         if telegram and self.notify is not None:
             await self.notify(
                 f"{why}\nTouche le bouton : c'est mon navigateur, sur la page où j'en suis. Fais "

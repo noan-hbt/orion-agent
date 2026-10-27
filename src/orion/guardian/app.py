@@ -286,6 +286,11 @@ class AppEdge:
         )
         await self.sync()
 
+    async def tell(self, what: str, text: str) -> bool:
+        """The guardian's own word to the owner (the core is down, or back), in full: the
+        core cannot add it to the conversation. False if no phone took it."""
+        return await self.push({"title": "Orion", "body": text, "tag": what, "kind": "message"})
+
     async def push(self, message: dict[str, object]) -> bool:
         """To every paired phone, within the rate limit; False if nothing could be sent."""
         if self.vapid is None:

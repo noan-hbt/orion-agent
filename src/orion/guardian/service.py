@@ -434,6 +434,9 @@ class GuardianService:
             await self.check_core()
 
     async def _tell_owner(self, what: str, text: str) -> None:
+        """The app's notification if a phone takes it; else iMessage, else Telegram."""
+        if self.app_edge is not None and await self.app_edge.tell(what, text):
+            return
         await self.ledger.catch_up()
         conversations = sorted(self.ledger.state.owner_conversations)
         if (self._inkbox is None or not conversations) and self.telegram is not None:
