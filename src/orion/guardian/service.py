@@ -69,6 +69,7 @@ from orion.guardian.ledger import (
     PendingApproval,
 )
 from orion.guardian.limits import Limits, missing, within
+from orion.guardian.policy import may_be_alone
 from orion.guardian.wire import ApprovalRequest, batch_to_json, mail_request
 from orion.mail.service import Fetch as MailFetch
 from orion.mail.service import MailAccount, MailSettings, imap_fetch
@@ -737,7 +738,7 @@ class GuardianService:
     async def _autonomy_grant(self, request: Request) -> Response:
         body = await _body(request)
         action = str(body.get("action", ""))
-        if action not in self.config.guardian.autonomable:
+        if not may_be_alone(action, self.config.guardian.autonomable):
             return await self.deny("autonomy", f"{action} can never be done without asking")
         try:
             limits = Limits.model_validate(body.get("limits") or {})
@@ -876,7 +877,9 @@ class GuardianService:
         async with self._spending:
             await self.ledger.catch_up()
             state = self.ledger.state
-            if action not in state.autonomous or action not in self.config.guardian.autonomable:
+            if action not in state.autonomous or not may_be_alone(
+                action, self.config.guardian.autonomable
+            ):
                 return False
             bounds = state.limits.get(action)
             if not within(action, Limits.model_validate(bounds) if bounds else None, params or {}):

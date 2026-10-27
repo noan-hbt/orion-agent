@@ -3,8 +3,9 @@
 Orion runs a command on its server: convert a file, check the disk, run a script, use a tool
 nothing else covers. What protects:
 
-- every command is put to the owner, exact, before it runs (an external effect), and the shell
-  is never something Orion does alone;
+- every command is put to the owner, exact, before it runs (an external effect), unless he
+  let Orion run commands alone (`autonomy_grant`, D167): then only a conversation free of
+  outside content runs one without asking;
 - turning it on is the owner's setting (`modules.shell`, D92): his yes, never alone;
 - the command runs in Orion's workspace (`<data_dir>/workspace`), as Orion's user, with a
   bare environment: no key of Orion's is in its environment. On a server installed by
@@ -105,8 +106,8 @@ def shell_tool(workspace: Path, max_seconds: int) -> Tool:
         description="Run a command on your server, in your workspace (files you made or "
         "downloaded are there), when no other tool does it: convert a file, check something, "
         "run a script, read logs (`sudo -n journalctl -u orion-core`). You are root through "
-        "`sudo -n` when the server allows it. He approves the exact command first. The "
-        "environment holds no key.",
+        "`sudo -n` when the server allows it. He approves the exact command first, unless he "
+        "let you run commands alone. The environment holds no key.",
         input_model=ShellInput,
         handler=handler,
         effect=Effect.EXTERNAL,

@@ -289,11 +289,11 @@ class Control:
                 "alone": action in state.granted,
                 "streak": state.streak.get(action, 0),
             }
-            for action in self.autonomy.autonomable
+            for action in self.autonomy.shown()
         ]
 
     async def take_back(self, action: str) -> None:
-        if self.autonomy is None or action not in self.autonomy.autonomable:
+        if self.autonomy is None or action not in self.autonomy.shown():
             raise ControlError("no such action")
         await self.autonomy.revoke(action, "depuis l'app", None)
 

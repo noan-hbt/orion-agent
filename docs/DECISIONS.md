@@ -3775,3 +3775,26 @@ moi dans une heure ») demandait de l'annuler puis d'en poser un autre.
   `at`. Le texte, l'appel et le rythme sont gardés.
 - Un rappel sans rythme garde exactement le payload d'avant : les journaux existants se
   relisent tels quels.
+
+## D167 — Il peut tout faire seul quand le propriétaire le lui dit, le shell compris
+
+*27/10/2026 · acceptée · revient en partie sur D96 et sur la liste fermée de l'autonomie*
+
+Le propriétaire voulait pouvoir dire « ne me demande plus » pour n'importe quel outil, le
+shell compris : avec root (D164), redemander chaque commande rendait Orion lent à s'occuper de
+sa machine. Mais l'autonomie (`autonomy_grant`) ne s'accordait que pour trois actions
+listées dans `[guardian] autonomable`. Il connaît le risque : un Orion qui lance seul des
+commandes root peut tout changer sur le serveur.
+
+- **`*` dans `[guardian] autonomable`** (le défaut) : toute action peut être accordée quand
+  il la demande, par outil (`shell`, `mail_tidy`, `delegate`…). Il dit oui une fois à
+  l'accord lui-même, vérifié par le guardian comme tout accord (D28). Les actions nommées
+  restent offertes par le rituel mensuel. Une action sous `*` ne l'est jamais : il la demande.
+- **Jamais seul :** ajouter ou retirer du code à Orion (`NEVER_ALONE`, D105). Les limites
+  exigées restent exigées : des destinataires pour un mail ou un proche, des domaines pour le
+  navigateur.
+- **Jamais depuis du contenu extérieur :** une autonomie ne joue que dans une conversation
+  sans contenu venu d'ailleurs. Avec un mail ou une page dans la conversation, il redemande.
+  Sans ça, un mail piégé lancerait des commandes root.
+- Il reprend la main d'un mot (`autonomy_revoke`), dans l'app ou la console. Un réglage sans
+  `*` revient à la liste fermée d'avant.

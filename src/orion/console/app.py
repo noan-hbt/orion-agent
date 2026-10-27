@@ -369,7 +369,7 @@ def console_app(console: Console) -> Starlette:
             return _page("Autonomie", "<p>Indisponible.</p>")
         await console.autonomy.start()
         rows: list[str] = []
-        for action in console.autonomy.autonomable:
+        for action in console.autonomy.shown():
             alone = action in console.autonomy.state.granted
             state = (
                 "sans demander"
