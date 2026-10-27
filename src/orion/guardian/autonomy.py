@@ -4,8 +4,8 @@ An action that needs the owner's approval (adding to the calendar…) can become
 alone, with three rules:
 
 - only actions listed in `[guardian] autonomable` can ever be granted, any action but adding
-  code to Orion when it holds `*` (D167, the default), and only in a conversation free of
-  outside content;
+  code to Orion when it holds `*` (D167, the default); once granted, it holds even with outside
+  content in the conversation (D168), but it is granted only from a clean one;
 - it is offered, not taken: after `offer_after` approvals in a row, Orion asks once, in a
   monthly ritual rather than an interruption, for an action listed by name; any other is
   granted only when the owner asks for it. His yes is checked by the guardian process like any

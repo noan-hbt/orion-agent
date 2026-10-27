@@ -4,8 +4,8 @@ Orion runs a command on its server: convert a file, check the disk, run a script
 nothing else covers. What protects:
 
 - every command is put to the owner, exact, before it runs (an external effect), unless he
-  let Orion run commands alone (`autonomy_grant`, D167): then only a conversation free of
-  outside content runs one without asking;
+  let Orion run commands alone (`autonomy_grant`, D167): then none is asked, even with a
+  mail or a page in the conversation (D168);
 - turning it on is the owner's setting (`modules.shell`, D92): his yes, never alone;
 - the command runs in Orion's workspace (`<data_dir>/workspace`), as Orion's user, with a
   bare environment: no key of Orion's is in its environment. On a server installed by
