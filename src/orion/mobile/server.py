@@ -56,6 +56,8 @@ DEVICE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 """A phone's name, as `orion app pair <name>` takes it."""
 MAX_BODY = 40 * 1024 * 1024
 """Base64 makes a 25 MB file 34 MB."""
+MAX_VCF = 20 * 1024 * 1024
+"""A whole address book, photos included."""
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; "
     "media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
@@ -774,6 +776,9 @@ def core_routes(
     async def missed(_request: Request, c: Control) -> object:
         return {"misses": await kept(c).misses()}
 
+    async def week(_request: Request, c: Control) -> object:
+        return await kept(c).week()
+
     async def phone_token(_request: Request, c: Control) -> object:
         return await kept(c).phone_token()
 
@@ -794,6 +799,12 @@ def core_routes(
         if not 1 <= len(sent) <= 200:
             raise ControlError("one to two hundred notes")
         return await kept(c).library_import([(str(n["name"])[:200], str(n["text"])) for n in sent])
+
+    async def contacts_import(request: Request, c: Control) -> object:
+        vcf = str((await body(request)).get("vcf") or "")
+        if not 0 < len(vcf) <= MAX_VCF:
+            raise ControlError("a contacts export (.vcf), up to 20 MB")
+        return await kept(c).contacts_import(vcf)
 
     async def machine_options(request: Request, c: Control) -> object:
         ceremony, options = await kept(c).machine_options(str(request.path_params["name"]))
@@ -908,7 +919,9 @@ def core_routes(
         api("machines/{name}/pair/options", controls(machine_options), post=True),
         api("machines/{name}/pair", controls(machine_pair), post=True),
         api("misses", controls(missed)),
+        api("week", controls(week)),
         api("library/import", controls(library_import), post=True),
+        api("contacts/import", controls(contacts_import), post=True),
         api("phone/token", controls(phone_token), post=True),
         api("chatgpt", controls(chatgpt)),
         api("chatgpt/start", controls(chatgpt_start), post=True),

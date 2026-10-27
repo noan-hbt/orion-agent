@@ -27,11 +27,13 @@ def builtin_modules() -> list[type[Module]]:
     from orion.computer.module import ComputerModule
     from orion.configure.module import ConfigureModule
     from orion.console.module import ConsoleModule
+    from orion.contacts.module import ContactsModule
     from orion.curiosity.module import CuriosityModule
     from orion.delegation.module import DelegationModule
     from orion.departure.module import DepartureModule
     from orion.expert.module import ExpertModule
     from orion.federation.module import FederationModule
+    from orion.feeds.module import FeedsModule
     from orion.files.module import FilesModule
     from orion.focus.module import FocusModule
     from orion.hands.module import HandsModule
@@ -74,6 +76,7 @@ def builtin_modules() -> list[type[Module]]:
         FederationModule,
         WebModule,
         CuriosityModule,
+        FeedsModule,
         FilesModule,
         ComputerModule,
         BookingModule,
@@ -91,6 +94,7 @@ def builtin_modules() -> list[type[Module]]:
         ChronicleModule,
         IntentionsModule,
         RelationsModule,
+        ContactsModule,
         DepartureModule,
         AdviceModule,
         StyleModule,

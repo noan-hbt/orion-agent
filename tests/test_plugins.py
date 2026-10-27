@@ -178,3 +178,13 @@ async def test_a_catalog_never_points_orion_at_the_server_itself() -> None:
         for url in ("https://127.0.0.1/index.json", "http://example.org/index.json"):
             with pytest.raises(FetchError):
                 await _get_public(http, url)
+
+
+def test_every_skill_of_the_public_catalog_reads() -> None:
+    """D161: the catalog's skills (Home Assistant among them) parse with a name and a line."""
+    from orion.skills.module import CATALOG, MAX_SKILL, parse
+
+    for path in sorted((CATALOG / "skills").glob("*.md")):
+        raw = path.read_text("utf-8")
+        skill = parse(raw, path.stem)
+        assert skill.name == path.stem and skill.description and len(raw) <= MAX_SKILL

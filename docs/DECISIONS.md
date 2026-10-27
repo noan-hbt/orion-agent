@@ -3523,3 +3523,141 @@ dépanner, et pour ce qui tourne ailleurs que sur le serveur (`orion hand` sur s
 Reste sur le serveur : la connexion Google Agenda en écriture (`orion google auth`), à faire
 une fois, et `orion inkbox setup`, qui fait partie de l'installation.
 
+
+## D155 — La veille se réveille quand sa vie bouge (complète D150)
+
+*27/10/2026 · acceptée*
+
+La veille ne tournait qu'à heures fixes : un rendez-vous déplacé à 9 h n'était regardé dans
+son ensemble qu'à 12 h 30. Désormais, ce qui bouge dans sa vie déclenche une veille entre les
+heures fixes :
+- un **mail** qu'Orion a jugé bon de lui dire (l'alerte `mail:` est partie : c'est lui qui a
+  lu le mail et l'a trouvé important, D114) ;
+- son **agenda** dans les 48 h : un rendez-vous ajouté, déplacé (« Dentiste a bougé : jeu 10:00
+  → jeu 14:00 »), disparu, ou une invitation. La première lecture d'un agenda n'est pas une
+  nouvelle ; ce qu'Orion a écrit lui-même non plus.
+
+La projection de la veille les suit à partir du journal, sans nouvel événement de source.
+Garde-fous : trois par jour au plus (`stirred_per_day`, 0 pour n'en garder aucune), deux heures
+au moins après la veille précédente (`stirred_gap_minutes`), et rien si une veille fixe arrive
+dans l'heure : elle le verra. Chaque veille, fixe ou déclenchée, lit ce qui a bougé depuis la
+précédente (`<ce-qui-a-bouge>`) ; une veille déclenchée sait qu'elle l'est et regarde d'abord
+ce que ça change pour le reste. `watch.done` garde son heure, ce qu'elle a vu et si elle a été
+déclenchée.
+
+## D156 — Le relevé de la semaine (chantier 4, complète D152)
+
+*27/10/2026 · acceptée*
+
+`orion misses` liste les ratés un par un. Pour choisir le chantier suivant, il fallait aussi la
+semaine d'un coup d'œil. `orion week` (et `GET /api/week`, pour l'écran Serveur de l'app,
+D154) relit les sept derniers jours du journal, à côté des sept d'avant :
+- les **tours arrêtés avant la fin**, par raison (à court de pas, de budget, tournait en rond,
+  réponse coupée, modèle muet, outil planté), et combien en lui répondant ;
+- les **outils en erreur**, les plus fréquents d'abord (les refus du gardien comptent) ;
+- les **réponses corrigées** : ses 👎 et ses corrections (D152), les dernières en clair ;
+- le **coût**, dont ce qu'Orion a dépensé sans qu'il ait rien demandé, et les fils qui coûtent
+  le plus (`veille`, `nuit`…).
+
+Rien de nouveau n'est enregistré : `turn.finished`, `tool.executed`, `spend.recorded` et les
+signaux d'adaptation suffisent. Rien ne quitte son serveur.
+
+## D159 — Son carnet d'adresses (chantier 6, deuxième source)
+
+*27/10/2026 · acceptée*
+
+Orion ne connaissait les gens de sa vie que par ce qu'il en disait. Son téléphone les connaît
+tous : leurs numéros, leurs adresses, leurs anniversaires. Il exporte ses contacts en un
+fichier `.vcf` (iPhone : Contacts, tout sélectionner, partager ; Android : Contacts, exporter)
+et le donne à Orion depuis l'app (`POST /api/contacts/import`, Réglages) ou avec
+`orion contacts import <fichier>`.
+
+Le module `contacts` (actif par défaut, vide tant qu'il n'a rien importé) lit les vCard 2.1 à
+4.0 (lignes repliées, échappements, quoted-printable des vieux Android, année absente d'iOS
+écrite 1604) : nom, surnoms, numéros, adresses, anniversaire, organisation ; le reste (photos,
+notes) est ignoré. Chaque fiche est journalisée une fois (`contact.card`), puis seulement si
+elle change ; réimporter le même fichier ne fait rien. `contacts` (dans le tiroir) retrouve
+quelqu'un par son nom, un surnom ou un numéro. Un anniversaire sur une fiche devient un
+anniversaire suivi par le module des proches (`relation.birthday`), sauf sur sa propre fiche.
+
+Le carnet reste un carnet : rien n'en devient un fait de la mémoire, et rien ne part. Pas de
+synchronisation CardDAV pour l'instant : l'export suffit, et réimporter met à jour.
+
+## D157 — Un seul « plus tard » : `later` (chantier 3)
+
+*27/10/2026 · acceptée (complète D151)*
+
+D151 avait laissé de côté la fusion des façons de remettre à plus tard, parce qu'elle
+obligeait à réécrire leurs événements. Elle ne les réécrit pas : `later` n'est jamais
+exécuté, le registre le transforme en l'appel qu'il remplace avant qu'il tourne
+(`Tool.route`), comme le tiroir le fait pour `orion`. Le gardien, le journal, `planned`, les
+évaluations et la relecture finale voient `remind_me`, `follow_up`, `awaiting`, `think_later`
+ou `mission`, comme avant.
+
+Le modèle dit quand (`at`, `every_hours`, ou `reply_from` pour une réponse attendue) et quoi
+faire alors (`then`) : le lui dire (`remind_me`), lui demander comment ça s'est passé
+(`follow_up`), y réfléchir cette nuit (`think_later`), y travailler à un rythme (`mission`),
+ou annuler (`cancel`, avec l'identifiant que montre `planned`, qui dit désormais
+« later (cancel, …) »). Un appel incomplet ne se transforme pas : il revient en erreur, avec
+ce qui manque. Les outils remplacés quittent le menu sans entrer dans la liste du tiroir
+(`ToolRegistry(..., behind=…)`) : ils restent appelables par leur nom.
+
+27 outils au lieu de 31, 30,3 k caractères de schémas au lieu de 32,7 k.
+
+## D158 — Une constitution courte (chantier 3)
+
+*27/10/2026 · acceptée*
+
+Le message système faisait 33,2 k caractères avec les modules par défaut. La constitution
+(13,9 k) mêlait ce qu'Orion est et le mode d'emploi de ses outils, que leurs descriptions
+disent déjà là où le modèle les lit. Elle est réécrite en une page (6,6 k) : sa façon de
+parler (avec ses deux exemples), de travailler, de le connaître, sa mémoire, la confiance,
+ce qu'il reçoit et l'initiative. Ce qui ne servait qu'à un outil rare (provenance,
+confinement d'une source, `people` same, `forget_fact`) est dans l'outil. Les offres et la
+section des photos sont resserrées. Le message système par défaut tombe à 24,4 k (35,8 k
+avec tous les modules, au lieu de 43,3 k), sous l'objectif de 25 k, que
+`tests/test_prompt_budget.py` vérifie désormais.
+
+Mesure, évaluations hors web sur Haiku 5.5, un passage : 44/48 avant (D156), 40/48 après
+D157 et D158. Les cinq cas en écart, rejoués trois fois de chaque côté, donnent les mêmes
+scores (`un_cadeau_pour_maman` 3/3 et 3/3, `ce_quil_sait_de_lea` 3/3 et 3/3,
+`voit_venir_le_dentiste` 2/3 et 2/3, `relance_le` 1/3 avant et 2/3 après,
+`demain_a_1h_du_matin` 0/3 des deux côtés, déjà en échec avant la refonte) : du bruit, pas
+une régression.
+
+## D160 — Ses lectures : les flux qu'il suit (chantier 6, troisième source)
+
+*27/10/2026 · acceptée*
+
+Le module `feeds` (actif par défaut, rien à faire tant qu'il ne suit aucun flux) lit toutes
+les trois heures les flux RSS ou Atom de ce qu'il suit, déclarés dans orion.toml
+(`[modules.feeds] urls`) ou par message (`feeds` add, dans le tiroir : « suis le blog de… »).
+Seules les adresses publiques sont lues, comme pour le web, et un document qui déclare une
+DTD ou des entités est refusé. Ce qui est nouveau est journalisé (`feed.item`, contenu web,
+`Trust.WEB`) ; d'un flux qu'on vient d'ajouter, seuls les cinq derniers articles : ses
+archives ne sont pas des nouvelles.
+
+Branché sur la curiosité (D76) : chaque semaine, son juge pèse les articles de la semaine à
+côté de ce que ses recherches ont trouvé, et peut en garder un pour lui. La piste, elle, est
+toujours choisie à partir de sa mémoire seule : rien de ce que dit un flux ne peut orienter ce
+qu'Orion cherche, et le juge ne voit jamais sa mémoire. `feeds` (list) dit ce qu'il y a de
+neuf dans ses lectures.
+
+## D161 — Ses colis, ses abonnements, sa maison (chantier 6, suite)
+
+*27/10/2026 · acceptée*
+
+**Colis et abonnements.** Pas d'extracteur de plus : Orion lit déjà chaque mail lui-même
+(D114). La consigne qui accompagne un mail nouveau (`mail_notice`) lui dit désormais quoi en
+faire : un colis en route devient une situation jusqu'au jour de livraison (D149) ; un essai
+gratuit qui deviendra payant, un abonnement qui se renouvelle ou augmente, un engagement dû
+la veille, pour qu'il puisse résilier à temps. Les deux apparaissent dans `<maintenant>` et
+dans la veille, qui les voient venir. Évaluations sur Haiku 5.5, trois passages :
+`un_colis_en_route` 0/3 avec l'ancienne consigne, 3/3 avec la nouvelle ;
+`un_essai_gratuit_devient_payant` 3/3 dans les deux cas.
+
+**Sa maison.** Le module MCP (D95) branche déjà Home Assistant, qui expose un serveur MCP. Il
+manquait la marche à suivre : la skill `maison-home-assistant` du catalogue la donne
+(l'intégration à ajouter, le jeton par le formulaire du gardien, le serveur `maison` avec ses
+outils de lecture en `read_only`) et dit comment s'en servir : lire l'état sans demander, agir
+avec son accord, ne pas réciter la maison sans raison.

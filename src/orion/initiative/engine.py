@@ -2,7 +2,8 @@
 
 Every tick, deterministic rules turn Orion's state into candidates:
 
-- reminders the owner asked for (`remind_me`), delivered at their time, quiet hours or not;
+- reminders the owner asked for (`remind_me`, through `later`), delivered at their time,
+  quiet hours or not;
 - digests at fixed times of day, built from the commitments ledger, sent only when there is
   something new to say;
 - a heads-up shortly before a commitment that has a precise due time.

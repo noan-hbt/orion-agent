@@ -57,7 +57,7 @@ class Planned:
     what: str
     """In French, as the owner would read it: « te demander comment s'est passé l'entretien »."""
     undo: str = ""
-    """How to call it off, for Orion: « follow_up (cancel, f_…) ». Empty: it cannot be."""
+    """How to call it off, for Orion: « later (cancel, fu_…) ». Empty: it cannot be."""
 
 
 def next_weekly(now: datetime, weekday: int, at: time) -> datetime:

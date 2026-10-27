@@ -319,6 +319,33 @@ async def _misses(config: OrionConfig, case: int | None) -> int:
     return 0
 
 
+async def _contacts_import(config: OrionConfig, vcf: str) -> int:
+    """His address book, from the `.vcf` his phone exports (D159)."""
+    from orion.contacts.module import Contacts
+
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        report = await Contacts(journal, config.memory.owner_names).import_vcards(vcf, "cli")
+    print(
+        f"{report.added} contacts ajoutés, {report.changed} mis à jour, {report.unchanged} "
+        f"inchangés ; {report.birthdays} anniversaires suivis."
+    )
+    return 0
+
+
+async def _week(config: OrionConfig) -> int:
+    """The week at a glance: turns stopped short, tool errors, corrections, cost."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from orion.adaptation.week import report, weeks
+
+    zone = ZoneInfo(config.agent.timezone)
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        events = await journal.read(0, 10_000_000)
+    print(report(*weeks(events, zone, datetime.now(zone))))
+    return 0
+
+
 async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.hands.desk import HandsDesk
 
@@ -990,6 +1017,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
     missed = sub.add_parser("misses", help="What went wrong for real: his 👎 and corrections")
     missed.add_argument("--case", type=int, help="Write miss N as an evaluation case")
+    sub.add_parser("week", help="The week: turns stopped short, tool errors, corrections, cost")
+    contacts = sub.add_parser("contacts", help="His address book")
+    contacts_sub = contacts.add_subparsers(dest="contacts_command", required=True)
+    contacts_import = contacts_sub.add_parser("import", help="Import his phone's .vcf export")
+    contacts_import.add_argument("file", type=Path)
     forget = sub.add_parser("forget", help="Forget everything that came from a source")
     forget.add_argument("source", help="Source prefix, e.g. 'terminal:' or 'mail:abc'")
     forget.add_argument("--reason", default="owner request")
@@ -1118,6 +1150,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "misses":
         return asyncio.run(_misses(config, args.case))
+    if args.command == "week":
+        return asyncio.run(_week(config))
+    if args.command == "contacts":
+        vcf = Path(args.file).read_text(encoding="utf-8", errors="replace")
+        return asyncio.run(_contacts_import(config, vcf))
     if args.command == "forget":
         return asyncio.run(_forget(config, args.source, args.reason))
     if args.command == "hands":

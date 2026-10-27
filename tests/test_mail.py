@@ -254,6 +254,8 @@ async def test_tool_alerts_and_digest_carry_third_party_trust(journal: SqliteJou
         alert.trust is Trust.THIRD_PARTY and alert.why == "un mail de Paul Martin vient d'arriver"
     )
     assert "Dis-moi avant jeudi." in alert.notice and "SILENCE" in alert.notice  # he judges
+    # D161: a parcel becomes a situation until it comes, a trial a dated commitment
+    assert "`situation` (open)" in alert.notice and "`commitments` (add)" in alert.notice
     digest = await box.digest(NOW, NOW - timedelta(days=1), first_slot=True, last_slot=False)
     assert [d.trust for d in digest] == [Trust.THIRD_PARTY, Trust.THIRD_PARTY]
     assert digest[1].text == "- et 1 autre(s) mail(s) sans intérêt particulier"

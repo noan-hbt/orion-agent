@@ -33,6 +33,7 @@ from orion.chronicle.module import ChronicleModule
 from orion.computer.module import ComputerModule
 from orion.computer.vault import LocalVault
 from orion.configure.module import ConfigureModule, SignedSettings
+from orion.contacts.module import ContactsModule
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
@@ -177,6 +178,7 @@ class MobileModule(Module):
         thinking = plate.module(ThinkingModule)
         places = plate.module(PlacesModule)
         library = plate.module(LibraryModule)
+        contacts = plate.module(ContactsModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -203,6 +205,7 @@ class MobileModule(Module):
             hands=lambda: hands.desk if hands is not None else None,
             places=lambda: places.places if places is not None else None,
             library=lambda: library.library if library is not None else None,
+            contacts=lambda: contacts.contacts if contacts is not None else None,
             signer=LocalSigner(self.devices) if self.devices is not None else None,
         )
         self.notebook = Notebook(

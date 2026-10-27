@@ -38,10 +38,21 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 
 # Orion's watch (D150): a few times a day he steps back and looks at your life as a whole
 # (what is going on, your agenda, what falls due, what you said), prepares what he can, and
-# tells you only what is worth it. On by default.
+# tells you only what is worth it. On by default. A mail he judged worth telling you, or a
+# meeting added, moved or cancelled in the next 48 hours, starts one in between (D155).
 # [modules.watch]
 # at = ["07:30", "12:30", "18:30"]
 # budget_usd = 0.6
+# stirred_per_day = 3          # 0: only at the fixed times
+# stirred_gap_minutes = 120
+
+# His reading (D160): the feeds (RSS, Atom) of the blogs and sites he follows. He can also
+# say « suis le blog de … »; the weekly curiosity weighs their new items. On by default.
+# [modules.feeds]
+# urls = ["https://example.org/feed"]
+
+# His address book (D159): the .vcf his phone exports, given from the app or with
+# `orion contacts import contacts.vcf`. Birthdays are then watched. On by default.
 
 # What Orion may spend on models (D79). What it does on its own (the night, curiosity,
 # missions, initiative) stops at the day's or the month's ceiling; answering you never does.
