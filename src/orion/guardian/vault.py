@@ -37,6 +37,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from orion.channels.telegram import TelegramError, check_init_data
+from orion.core.events import Trust
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -48,6 +49,9 @@ log = structlog.get_logger(__name__)
 SECRET_ASKED = "guardian.secret.asked"
 SECRET_SET = "guardian.secret.set"
 VAULT_FILE = "secrets.env"
+CORE_VAULT = "core.secrets.env"
+CORE_SECRETS = frozenset({"OPENROUTER_API_KEY"})
+"""The core's only secrets: written for the core, never kept by the guardian."""
 ASK_TTL = 15 * 60.0
 NAME = re.compile(r"[A-Z][A-Z0-9_]{2,63}")
 MAX_VALUE = 4096
@@ -57,14 +61,21 @@ def vault_path(config: OrionConfig) -> Path:
     return config.guardian.data_dir / VAULT_FILE
 
 
+def core_vault_path(config: OrionConfig) -> Path | None:
+    """The core's own secret (`CORE_SECRETS`), set from the app: beside orion.toml, in the
+    guardian's folder, readable by the core through the group (D154)."""
+    return config.source.parent / CORE_VAULT if config.source is not None else None
+
+
 def load_vault(config: OrionConfig) -> set[str]:
-    """Put the vault's secrets in the environment, under what the server already set. Returns
-    the names it set."""
+    """Put the vault's secrets in the environment. Returns the names it set. A name set from
+    the app, signed with his passkey, wins over the server's file (D154); a name the Telegram
+    form refused there never got in."""
     from orion.setup import read_env
 
     loaded: set[str] = set()
     for name, value in read_env(vault_path(config)).items():
-        if value and name not in os.environ:
+        if value:
             os.environ[name] = value
             loaded.add(name)
     return loaded
@@ -78,7 +89,9 @@ class Asked:
 
 
 class Vault:
-    def __init__(self, service: GuardianService, gate: TelegramGate, from_vault: set[str]) -> None:
+    def __init__(
+        self, service: GuardianService, gate: TelegramGate | None, from_vault: set[str]
+    ) -> None:
         self.service = service
         self.gate = gate
         self.from_vault = from_vault
@@ -94,7 +107,8 @@ class Vault:
 
     def install(self) -> None:
         self.service.routes.append(Route("/v1/secrets/ask", self._ask, methods=["POST"]))
-        self.service.listeners.append(("secrets", self.public_app(), self.host, self.port))
+        if self.gate is not None and self.base:  # the Telegram form; the app needs none
+            self.service.listeners.append(("secrets", self.public_app(), self.host, self.port))
 
     def public_app(self) -> Starlette:
         return Starlette(
@@ -121,6 +135,20 @@ class Vault:
         token = tokens.token_urlsafe(24)
         self.asked = {t: a for t, a in self.asked.items() if a.until > self.now()}
         self.asked[token] = Asked(name, why, self.now() + ASK_TTL)
+        edge = self.service.app_edge
+        if edge is not None:  # his app: Réglages > Secrets (D154)
+            await edge.push(
+                {
+                    "title": "Orion te demande un secret",
+                    "body": f"{name}" + (f" ({why})" if why else "") + " : à saisir dans "
+                    "l'app, Réglages > Secrets.",
+                    "tag": f"secret-{name}",
+                    "kind": "message",
+                }
+            )
+        if self.gate is None:
+            await self.service.ledger.record(SECRET_ASKED, {"name": name, "why": why})
+            return JSONResponse({"asked": name})
         markup = {
             "inline_keyboard": [
                 [
@@ -164,8 +192,11 @@ class Vault:
         except json.JSONDecodeError:
             return JSONResponse({"error": "malformed"}, 400)
         token, value = str(body.get("token", "")), str(body.get("value", ""))
-        user = check_init_data(str(body.get("init", "")), self.gate.client.token, self.now())
-        if not self.gate.owner_id or user != self.gate.owner_id:
+        gate = self.gate
+        if gate is None:
+            return JSONResponse({"error": "no Telegram here: use the app"}, 404)
+        user = check_init_data(str(body.get("init", "")), gate.client.token, self.now())
+        if not gate.owner_id or user != gate.owner_id:
             await self.service.deny("secret", "not opened by the owner, from Telegram")
             return JSONResponse({"error": "Ouvre ce formulaire depuis Telegram."}, 403)
         asked = self.asked.pop(token, None)
@@ -182,10 +213,54 @@ class Vault:
         self.from_vault.add(asked.name)
         await self.service.ledger.record(SECRET_SET, {"name": asked.name})
         log.info("guardian.secret_set", name=asked.name)
-        await self.gate.tell(f"C'est enregistré dans mon gardien : {asked.name}.")
+        await gate.tell(f"C'est enregistré dans mon gardien : {asked.name}.")
+        self._restart()
+        return JSONResponse({"set": asked.name})
+
+    # -- from his app, signed with his passkey for this name and this value (D154) ----------
+
+    def asked_now(self) -> list[dict[str, str]]:
+        now = self.now()
+        seen: dict[str, str] = {}
+        for asked in self.asked.values():
+            if asked.until > now:
+                seen[asked.name] = asked.why
+        return [{"name": name, "why": why} for name, why in sorted(seen.items())]
+
+    async def set_from_app(self, name: str, value: str, device: str) -> str:
+        """Set `name`, replacing the server's value too: his signature is for this very value.
+        Where: `guardian`, or `core` for the core's own key (then the core restarts)."""
+        from orion.setup import write_env
+
+        value = value.strip()
+        if not NAME.fullmatch(name):
+            raise ValueError("a variable name in capitals, e.g. MAIL_PERSO_PASSWORD")
+        if not value or len(value) > MAX_VALUE or "\n" in value or "\r" in value:
+            raise ValueError("empty or invalid value")
+        if name in CORE_SECRETS:
+            path = core_vault_path(self.service.config)
+            if path is None:
+                raise ValueError("Orion runs without an orion.toml: no place for the core's key")
+            write_env(path, {name: value})
+            path.chmod(0o640)  # the core reads it through the group; it watches it and restarts
+            where = "core"
+        else:
+            write_env(vault_path(self.service.config), {name: value})
+            os.environ[name] = value
+            self.from_vault.add(name)
+            where = "guardian"
+        self.asked = {t: a for t, a in self.asked.items() if a.name != name}
+        await self.service.ledger.record(
+            SECRET_SET, {"name": name, "how": f"passkey:{device}"}, Trust.OWNER, source="app"
+        )
+        log.info("guardian.secret_set", name=name, how="app", where=where)
+        if where == "guardian":
+            self._restart()
+        return where
+
+    def _restart(self) -> None:
         if self.service.restart is not None:
             asyncio.get_running_loop().create_task(self.service.restart())
-        return JSONResponse({"set": asked.name})
 
 
 PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">

@@ -28,6 +28,7 @@ from orion.guardian.logins import (
     LEND_SECONDS,
     Loan,
     LoginError,
+    import_logins,
     keep_login,
     listing,
     logins_dir,
@@ -152,3 +153,7 @@ class LocalVault:
     async def remove(self, name: str) -> bool:
         async with self._ledger() as ledger:
             return await remove_login(self.config, ledger, name)
+
+    async def import_export(self, text: str) -> dict[str, Any]:
+        async with self._ledger() as ledger:
+            return await import_logins(self.config, ledger, text)

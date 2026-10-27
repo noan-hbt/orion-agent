@@ -68,19 +68,32 @@ L'app d'Orion (D125) remplace Telegram : la conversation, tes accords signés pa
 notifications et tout le pilotage. Elle est ouverte sur les installations récentes ; sur une
 installation plus ancienne, relance `sudo /srv/orion/app/deploy/install.sh` (avec ton domaine,
 ou sans argument pour garder `<ip>.sslip.io`) : il ajoute `[modules.mobile]` à `orion.toml`,
-remet Caddy à jour et redémarre Orion. Puis :
-
-```bash
-sudo /srv/orion/app/deploy/orion-admin app pair iphone
-```
+remet Caddy à jour, redémarre Orion et, si aucun téléphone n'est encore appairé, affiche le
+code du premier.
 
 Ouvre le lien affiché dans Safari, Partager > « Sur l'écran d'accueil », ouvre Orion depuis
 l'écran d'accueil, saisis le code (une fois, 10 minutes) et crée la passkey. Les
 notifications se demandent depuis l'app.
 
+**Ensuite, plus rien ne se fait sur le serveur (D154).** Tout est dans l'app, onglet
+Réglages, et ce qui compte se signe avec Face ID :
+
+- les réglages d'`orion.toml` et les modules ;
+- les **secrets** (clés d'API, mots de passe de boîtes mail, la clé OpenRouter) : ils vont
+  droit au gardien, Orion ne les voit jamais ; ceux qu'Orion te demande y apparaissent ;
+- **ChatGPT** : la connexion à ton forfait ;
+- les **raccourcis du téléphone** : le jeton et les adresses ;
+- les **autres Orions** : allumer, inviter, accepter un code, délier ;
+- les **machines** : le code pour en relier une (la commande à lancer sur la machine) ;
+- les **téléphones** : en ajouter un, en retirer un ;
+- les **mots de passe** : un par un, ou l'import d'un export CSV ;
+- la **bibliothèque** : tes notes (.md, .txt) ;
+- **mes ratés** : tes 👎 et tes corrections ;
+- la version et les mises à jour, qui se font seules.
+
 Une passkey est liée au nom du serveur (`public_url`) : avec `sslip.io`, si l'IP du VPS change
-ou si tu passes à un vrai domaine, il faut réappairer. `orion-admin app devices` liste les
-appareils, `orion-admin app revoke iphone` en coupe un.
+ou si tu passes à un vrai domaine, il faut réappairer (relance `install.sh`, qui affiche un
+code). Les commandes `orion-admin …` restent là pour dépanner.
 
 ## Au quotidien
 
@@ -170,17 +183,13 @@ identifiant d'un site : l'identifiant, le mot de passe et, si tu veux, la clé d
 authentification. Orion remplit la page de connexion, mais c'est le gardien qui fournit les
 valeurs, seulement sur ce site : ni le modèle ni le journal ne voient ton mot de passe.
 
-- **Depuis ton téléphone** : dis à Orion « garde mon identifiant Doctolib ». Il t'envoie le
-  formulaire du gardien sur Telegram.
-- **Sur le serveur** : `sudo /srv/orion/app/deploy/orion-admin logins add doctolib --site
-  doctolib.fr --user moi@mail.fr --totp`. Le mot de passe et la clé 2FA sont demandés, jamais
-  tapés dans la commande.
+- **Dans l'app** : Réglages > Mots de passe > Ajouter un accès, ou « garde mon identifiant
+  Doctolib » à Orion.
 - **Depuis ton gestionnaire** : exporte-le en CSV (KeePass, KeePassXC, Bitwarden, Chrome,
-  Firefox, 1Password), copie-le sur le serveur, puis
-  `sudo /srv/orion/app/deploy/orion-admin logins import - < export.csv`, et efface le fichier :
-  il contient tes mots de passe en clair.
+  Firefox, 1Password), puis Réglages > Mots de passe > Importer un export, et efface le
+  fichier : il contient tes mots de passe en clair.
 
-`logins list` montre les identifiants gardés, `logins remove <nom>` en retire un. Un code reçu
+L'app montre les identifiants gardés et en retire un. Un code reçu
 par SMS ou par mail : Orion te le demande. Un captcha : il te propose de te connecter depuis
 Telegram.
 
@@ -191,11 +200,8 @@ que tu lui donnes en accordant l'autonomie (à quels destinataires, sur quels si
 ## Rappels de lieu (iPhone)
 
 « Rappelle-moi d'acheter du pain quand je passe à la boulangerie. » Active `[modules.places]`
-(`enabled = true`), relance `orion serve`, puis, sous l'utilisateur du cœur :
-
-```bash
-orion places token     # le jeton du téléphone (en refaire un rend l'ancien inutilisable)
-```
+(`enabled = true`, dans Réglages > orion.toml), puis Réglages > Raccourcis du téléphone >
+Créer un jeton (en refaire un rend l'ancien inutilisable).
 
 Sur l'iPhone, app **Raccourcis** > **Automatisation** > **Arrivée** (ou **Départ**) > choisis le
 lieu > action **Obtenir le contenu de l'URL** :

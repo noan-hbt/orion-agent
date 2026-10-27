@@ -7,7 +7,7 @@ no coordinates, no track.
 
 - `remind_at_place`: a reminder for when the owner arrives at (or leaves) a place;
 - the phone posts `{"place": "boulangerie", "event": "arrive"}` to `/places/event`, with the
-  token `orion places token` printed (only its digest is journaled);
+  token made in the app, D154 (only its digest is journaled);
 - the reminders for that place go off at once, quiet hours or not, like the ones the owner set
   by time: they asked for them.
 
@@ -388,7 +388,8 @@ def place_tools(places: Places) -> list[Tool]:
         lines.append(f"Lieux que son téléphone signale : {known}.")
         if not places.state.token:
             lines.append(
-                "Le téléphone n'est pas encore relié : `orion places token` sur le serveur."
+                "Le téléphone n'est pas encore relié : dans l'app, Réglages > Raccourcis du "
+                "téléphone."
             )
         lines.append(
             "Pour un nouveau lieu : app Raccourcis, Automatisation, « Arrivée » (ou « Départ »), "
@@ -436,7 +437,7 @@ class PlacesModule(Module):
     offer = (
         "Des rappels qui se déclenchent quand il arrive à un endroit ou en part (« quand je "
         "passe à la boulangerie ») : `[modules.places] enabled = true`, puis une automatisation"
-        " sur son iPhone (`orion places`)."
+        " sur son iPhone (l'app : Réglages > Raccourcis du téléphone)."
     )
     instructions = "places.md"
     settings_model = PlaceSettings

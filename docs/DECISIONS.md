@@ -3488,3 +3488,38 @@ et Orion n'en déduit rien d'autre.
 Le format des messages (chantier 5) n'a pas changé : le modèle écrit déjà une fois, avec les
 balises de l'application, et chaque canal les rend à sa façon (D126). Les sources suivantes du
 chantier 6 (contacts, trajets, colis et abonnements, banque, maison, flux) restent à faire.
+
+## D154 — Plus rien sur le serveur : tout passe par l'app
+
+*27/10/2026 · acceptée*
+
+Il voulait ne plus avoir à se connecter à son serveur. Ce qui demandait encore `orion …` ou
+`orion-admin …` se fait dans l'app, onglet Réglages :
+
+- **Ses secrets** : une clé tapée dans l'app va droit au gardien (son côté de l'app, D125) ;
+  ni le cœur ni le modèle ne la voient, le registre ne garde que son nom. La signature Face ID
+  porte sur le nom et l'empreinte de la valeur : une session volée ne peut ni en poser une, ni
+  en changer une signée pour une autre valeur. Une clé posée ainsi remplace celle du serveur
+  (avant, le coffre ne remplaçait jamais `guardian.env`). La seule clé du cœur
+  (`OPENROUTER_API_KEY`) est écrite par le gardien à côté d'`orion.toml`
+  (`core.secrets.env`, lisible par le groupe) ; le cœur la charge au démarrage, la surveille
+  comme `orion.toml` et redémarre. `secret_ask` marche sans Telegram : la demande arrive en
+  notification et dans l'app.
+- **Les autres Orions** (D29) : allumer la fédération (le gardien crée la clé dans son coffre,
+  puis écrit `federation.enabled`), inviter, accepter un code, délier ; chaque fois signé avec
+  Face ID pour ce changement précis.
+- **Une machine** (D1) : son code, signé avec Face ID pour cette machine. La signature est
+  vérifiée par le gardien, qui ne signe pour le cœur que des buts commençant par `core:` : rien
+  de ce que le cœur demande ne peut valoir un accord ou un changement de réglage.
+- **ChatGPT** (D62) : la connexion (l'adresse à ouvrir, puis celle où le navigateur revient),
+  l'état, la déconnexion. Orion démarre même s'il n'est pas encore connecté, et relit ses
+  jetons quand le fichier change : pas de redémarrage.
+- Sans signature, comme les mots de passe un par un (D142) : l'**import d'un export CSV** de
+  ses mots de passe, le **jeton du téléphone** (D153), ses **notes** dans la bibliothèque, et
+  **ses ratés** (D152).
+
+Le code du premier téléphone s'affiche à la fin d'`install.sh`. Les commandes restent pour
+dépanner, et pour ce qui tourne ailleurs que sur le serveur (`orion hand` sur sa machine).
+Reste sur le serveur : la connexion Google Agenda en écriture (`orion google auth`), à faire
+une fois, et `orion inkbox setup`, qui fait partie de l'installation.
+

@@ -338,10 +338,10 @@ class MeetingState:
             self._report(
                 event,
                 f"Ton Orion est maintenant relié à celui de {p['label']} : vous pouvez caler "
-                "des rendez-vous ensemble. Le lien s'est fait par une invitation créée sur ton "
-                "serveur (`orion federation invite`) et acceptée par l'Orion de "
+                "des rendez-vous ensemble. Le lien s'est fait par une invitation qu'il a créée "
+                "dans l'app (signée avec Face ID) et acceptée par l'Orion de "
                 f"{p['label']} : pas par toi, Orion, qui ne peux ni créer ni accepter une "
-                "invitation. Ses empreintes : `orion federation peers` sur le serveur.",
+                "invitation. Les empreintes : app, Réglages > Autres Orions.",
                 f"l'Orion de {p['label']} vient de se présenter avec ton invitation",
                 f"Je suis maintenant relié à l'Orion de {p['label']} : on peut caler des "
                 "rendez-vous et se parler.",
