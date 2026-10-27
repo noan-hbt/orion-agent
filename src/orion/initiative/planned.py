@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.initiative.timers import Timers
+from orion.initiative.tools import REPEAT_FR
 from orion.modules.base import Module, Planned
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -27,7 +28,11 @@ async def everything_planned(
 ) -> list[Planned]:
     await timers.sync()
     found = [
-        Planned(t.due_at, f"te rappeler : {t.text}", f"later (cancel, {t.id})")
+        Planned(
+            t.due_at,
+            f"te rappeler : {t.text}" + (f" ({REPEAT_FR[t.repeat]})" if t.repeat else ""),
+            f"later (cancel, {t.id})",
+        )
         for t in timers.projection.pending()
         if now <= t.due_at < until
     ]

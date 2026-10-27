@@ -26,7 +26,15 @@ def routed(**args: Any) -> tuple[str, dict[str, Any]]:
 def test_when_and_what_pick_the_mechanism() -> None:
     assert routed(then="tell", what="appeler le garage", at="2026-10-29 09:00") == (
         "remind_me",
-        {"when": "2026-10-29T09:00", "what": "appeler le garage", "by_call": False},
+        {"when": "2026-10-29T09:00", "what": "appeler le garage", "by_call": False, "repeat": ""},
+    )
+    assert (
+        routed(then="tell", what="sortir", at="2026-10-29 07:30", repeat="weekdays")[1]["repeat"]
+        == "weekdays"
+    )
+    assert routed(then="tell", id="r_1", at="2026-10-29 10:00") == (
+        "reminders",
+        {"action": "move", "reminder_id": "r_1", "when": "2026-10-29T10:00"},
     )
     name, args = routed(
         then="ask", what="Ça s'est passé comment ?", at="2026-10-29 18:00", context="entretien"
@@ -48,6 +56,7 @@ def test_when_and_what_pick_the_mechanism() -> None:
         {"then": "tell", "what": "le garage"},  # when?
         {"then": "work", "what": "un appart"},  # at what pace?
         {"then": "cancel", "id": "x"},
+        {"then": "ask", "what": "ça va ?", "at": "2026-10-29 18:00", "repeat": "daily"},
         {"then": "tell", "what": "", "at": "2026-10-29 09:00"},
         {"then": "tell", "what": "x y z", "reply_from": "pigeon", "at": "2026-10-29 09:00"},
     ):

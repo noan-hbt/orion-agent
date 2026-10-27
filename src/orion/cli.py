@@ -292,7 +292,7 @@ async def _reminders(config: OrionConfig, args: argparse.Namespace) -> int:
     """His pending reminders, and cancelling one by hand when Orion cannot."""
     from orion.core.events import Provenance
     from orion.initiative.timers import TimerProjection, Timers
-    from orion.initiative.tools import describe_moment
+    from orion.initiative.tools import REPEAT_FR, describe_moment
 
     async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
         timers = Timers(journal, TimerProjection())
@@ -303,7 +303,8 @@ async def _reminders(config: OrionConfig, args: argparse.Namespace) -> int:
                 print("Aucun rappel programmé.")
             for timer in pending:
                 moment = describe_moment(timer.due_at, config.agent.timezone)
-                print(f"{timer.id}  {moment} : {timer.text}")
+                pace = f" ({REPEAT_FR[timer.repeat]})" if timer.repeat else ""
+                print(f"{timer.id}  {moment}{pace} : {timer.text}")
             return 0
         if timers.projection.get(args.reminder_id) is None:
             print(f"Aucun rappel en attente {args.reminder_id}", file=sys.stderr)

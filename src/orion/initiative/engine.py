@@ -832,7 +832,7 @@ class InitiativeEngine:
                 DELIVERED, item, now, correlation_id=correlation_id, how="together", bundled=True
             )
         if candidate.timer is not None:
-            await self._timers.fired(candidate.timer.id, correlation_id)
+            await self._timers.fired(candidate.timer.id, correlation_id, now)
         return True
 
     async def _ring(self, candidate: Candidate) -> bool:
@@ -853,7 +853,7 @@ class InitiativeEngine:
         await self._record(
             DELIVERED, candidate, now=self._clock(), correlation_id=correlation_id, how="call"
         )
-        await self._timers.fired(candidate.timer.id, correlation_id)
+        await self._timers.fired(candidate.timer.id, correlation_id, self._clock())
         return True
 
     def _owner_is_up(self, now: datetime) -> bool:
