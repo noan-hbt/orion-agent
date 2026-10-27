@@ -1,7 +1,8 @@
 """The app's HTTP side (D125), under `/app/`, in two parts.
 
 **The edge** (`edge_routes`): the app's own files, pairing, signing in, the approvals, the
-notifications, and the phones (another one added, or one let go, each signed with Face ID).
+notifications, the phones (another one added, or one let go, each signed with Face ID), and his
+vault of logins (D142).
 Run split (D28), the guardian serves it on the public port: the passkeys, the text of a
 question and the signature that answers it never pass through the core, which could otherwise
 show one action and get another signed.
@@ -114,6 +115,24 @@ def settings_purpose(changes: list[dict[str, Any]]) -> str:
     return "config:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+class Logins(Protocol):
+    """His vault (D142), where it is kept: Orion's own in one process, the guardian's run split.
+    Only the edge reaches it: a password typed in the app never passes through the core."""
+
+    async def listing(self) -> list[dict[str, Any]]:
+        """Each login's name, sites, username and whether it has 2FA: never a password."""
+        ...
+
+    async def save(
+        self, site: str, username: str, password: str, totp_value: str = "", url: str = ""
+    ) -> dict[str, Any]:
+        """Kept (the same account's password replaced): its name and sites. ValueError if it
+        is not a login."""
+        ...
+
+    async def remove(self, name: str) -> bool: ...
+
+
 class Subscriber(Protocol):
     """Where a phone's push subscription is kept: beside the key that signs the pushes."""
 
@@ -188,6 +207,7 @@ def edge_routes(
     secure_cookie: bool,
     session_days: int,
     settings: Settings | None = None,
+    logins: Callable[[], Logins | None] = lambda: None,
 ) -> list[BaseRoute]:
     gate = Gate(devices.origin, devices.session_device)
     failures = [0]
@@ -393,6 +413,40 @@ def edge_routes(
         log.info("mobile.settings_written", paths=[c["path"] for c in changes], device=signer)
         return _ok({"changed": changed})
 
+    # -- his vault: listed, a login kept or let go (D142) ------------------------------------
+
+    async def vault_list(_request: Request, _device: str) -> Response:
+        vault = logins()
+        if vault is None:
+            return _refused("the vault is off", 404)
+        return _ok({"logins": await vault.listing()})
+
+    async def vault_save(request: Request, device: str) -> Response:
+        vault = logins()
+        if vault is None:
+            return _refused("the vault is off", 404)
+        sent = await body(request)
+        fields = ("site", "username", "password", "totp", "url")
+        site, username, password, totp_value, url = (str(sent.get(f) or "") for f in fields)
+        if len(password) > 500 or len(username) > 200 or len(site) + len(url) > 2000:
+            return _refused("too long")
+        try:
+            kept = await vault.save(site, username, password, totp_value, url)
+        except ValueError as exc:  # what is wrong with the login, never what was typed
+            return _refused(str(exc), 422)
+        log.info("mobile.login_kept", name=kept["name"], device=device)
+        return _ok(kept)
+
+    async def vault_remove(request: Request, device: str) -> Response:
+        vault = logins()
+        if vault is None:
+            return _refused("the vault is off", 404)
+        name = str(request.path_params["name"])
+        if not await vault.remove(name):
+            return _refused("no such login", 404)
+        log.info("mobile.login_removed", name=name, device=device)
+        return _ok({})
+
     async def subscribe(request: Request, device: str) -> Response:
         if vapid is None:
             return _refused("notifications are off", 409)
@@ -432,6 +486,9 @@ def edge_routes(
             methods=["POST"],
         ),
         Route(f"{PREFIX}/devices/{{how}}/{{name}}", gate.guarded(phone_change), methods=["POST"]),
+        Route(f"{PREFIX}/logins", gate.guarded(vault_list)),
+        Route(f"{PREFIX}/logins", gate.guarded(vault_save), methods=["POST"]),
+        Route(f"{PREFIX}/logins/{{name}}/remove", gate.guarded(vault_remove), methods=["POST"]),
         Route(f"{PREFIX}/", static),
         Route(f"{PREFIX}/{{name}}", static),
     ]
@@ -674,6 +731,15 @@ def core_routes(
         # What he types goes into the page only: never logged, even on a bad request.
         return await n.act(str(request.path_params["token"]), await body(request))
 
+    async def logins_asked(_request: Request, n: Notebook) -> object:
+        return {"asked": n.logins_asked()}
+
+    async def login_answer(request: Request, n: Notebook) -> object:
+        sent = await body(request)
+        return await n.login_answer(
+            str(request.path_params["token"]), str(sent["answer"]), str(sent.get("name") or "")
+        )
+
     def api(path: str, handler: Guarded, post: bool = False) -> Route:
         return Route(
             f"{PREFIX}/api/{path}", gate.guarded(handler), methods=["POST"] if post else ["GET"]
@@ -721,6 +787,8 @@ def core_routes(
         api("browser", shelf(handovers)),
         api("browser/{token}/shot", shelf(browser_shot)),
         api("browser/{token}/act", shelf(browser_act), post=True),
+        api("logins/asked", shelf(logins_asked)),
+        api("logins/asked/{token}", shelf(login_answer), post=True),
     ]
 
 
@@ -732,6 +800,7 @@ def mobile_app(
     control: Control | None = None,
     notebook: Notebook | None = None,
     settings: Settings | None = None,
+    logins: Callable[[], Logins | None] = lambda: None,
 ) -> Starlette:
     """The whole app, in one process: the channel is its own desk, its devices its own gate."""
     devices = channel.devices
@@ -741,7 +810,9 @@ def mobile_app(
     return Starlette(
         routes=[
             *core_routes(channel, gate, control, notebook),
-            *edge_routes(devices, channel, channel, vapid, secure_cookie, session_days, settings),
+            *edge_routes(
+                devices, channel, channel, vapid, secure_cookie, session_days, settings, logins
+            ),
         ]
     )
 
@@ -764,8 +835,11 @@ def edge_app(
     secure_cookie: bool,
     session_days: int,
     settings: Settings | None = None,
+    logins: Callable[[], Logins | None] = lambda: None,
 ) -> Starlette:
     """The edge alone (run split, served by the guardian)."""
     return Starlette(
-        routes=edge_routes(devices, desk, subscriber, vapid, secure_cookie, session_days, settings)
+        routes=edge_routes(
+            devices, desk, subscriber, vapid, secure_cookie, session_days, settings, logins
+        )
     )

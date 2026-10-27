@@ -286,17 +286,52 @@ class Notebook:
         do = str(body.get("do", ""))
         if do in ("done", "cancel"):
             await desk.give_back(token, done=do == "done")
+            offer = next((a for a in desk.asked() if a["token"] == found.offered), None)
             return {
-                "done": "Merci, je reprends." if do == "done" else "D'accord, je laisse tomber."
+                "done": "Merci, je reprends." if do == "done" else "D'accord, je laisse tomber.",
+                "keep": offer,  # the login he just signed in with: the app asks at once (D142)
             }
         try:
+            if do == "signin":  # his phone's passwords, typed into the page's form (D142)
+                await desk.sign_in(
+                    token, str(body.get("username", ""))[:200], str(body.get("password", ""))[:500]
+                )
+                do = "start"
             size: dict[str, int] = await desk.on_tab(found.thread, lambda s: act_on(s, do, body))
+            extra: dict[str, Any] = {}
             if do == "type":  # into a sign-in form: offered to keep once he is done (D120)
                 desk.note_typed(token, await desk.on_tab(found.thread, focused))
+            elif do == "tap":  # the field he touched, for the app's keyboard to fit it (D143)
+                touched = await desk.on_tab(found.thread, focused)
+                extra["field"] = touched["type"] if touched else None
+            form = await desk.on_tab(found.thread, lambda s: s.sign_in_form())
         except (BrowserError, Refused) as exc:
             raise ControlError(f"Pas pu : {exc}") from exc
         tab = desk.tab(found.thread)
-        return {"url": tab.page.url if tab else "", **size}
+        return {"url": tab.page.url if tab else "", **size, "form": form, **extra}
+
+    # -- logins Orion asks him for, or offers to keep (D142) ------------------------------------
+
+    def logins_asked(self) -> list[dict[str, str]]:
+        desk = self.browser()
+        return desk.asked() if desk is not None else []
+
+    async def login_answer(self, token: str, answer: str, name: str = "") -> dict[str, str]:
+        """`keep` (the login he signed in with, into the vault), `no`, or `saved` (he filled
+        Orion's request: the app put `name` in the vault itself)."""
+        desk = self._desk()
+        try:
+            if answer == "keep":
+                return {"done": f"Gardé dans mon coffre, sous « {await desk.keep(token)} »."}
+            if answer == "saved":
+                await desk.saved(token, name)
+                return {"done": f"Gardé dans mon coffre, sous « {name} »."}
+        except Refused as exc:
+            raise ControlError(str(exc)) from exc
+        if answer != "no":
+            raise ValueError("keep, saved or no")
+        desk.decline(token)
+        return {"done": "D'accord, je ne le garde pas."}
 
 
 def _birthday(found: tuple[int, int, int | None, str] | None, today: date) -> dict[str, Any] | None:

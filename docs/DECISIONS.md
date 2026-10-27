@@ -3112,3 +3112,84 @@ bonne part de ce qu'Orion suit pour le propriétaire n'y avait pas d'écran. Qua
 Pas encore : pas de notification de plus pour une tâche, une mission ou la nuit finies,
 puisqu'Orion en écrit déjà un message (qui, lui, est notifié) ; pas de réponse écrite depuis la
 notification (le web ne le permet pas) : « Répondre » ouvre la conversation, prête à écrire.
+
+## D141 — Avec l'application, plus rien en double sur Telegram
+
+*27/10/2026 · acceptée · complète D88, D116 et D125*
+
+Le propriétaire, passé à l'application, recevait encore certains messages sur Telegram en
+plus. Deux chemins contournaient la boîte de réception unifiée, qui ne choisit qu'un seul
+canal :
+- **le gardien** prévenait que le cœur ne répondait plus, puis qu'il était reparti, par
+  iMessage ou Telegram seulement. Il passe d'abord par la notification de l'application si un
+  téléphone l'accepte (le texte entier, le cœur ne pouvant pas l'écrire dans la conversation),
+  et sinon comme avant ;
+- **la reprise du navigateur** envoyait un bouton Telegram en plus de « Prendre la main » dans
+  l'application. Avec l'application, le bouton ne part que s'il a écrit en dernier depuis
+  Telegram.
+
+Reste voulu (D88) : un message proactif va là où il a écrit en dernier. S'il écrit sur
+Telegram, la suite y va jusqu'à son prochain message dans l'application. Garder un
+identifiant (`browser_save_password`) reste sur Telegram : l'application n'a pas encore ce
+formulaire.
+
+## D142 — Le coffre dans l'application, rempli par les mots de passe du téléphone
+
+*27/10/2026 · acceptée · complète D111, D116, D120 et D135*
+
+Le coffre (D111, D120) ne se remplissait que par Telegram, ou sur le serveur. Et pour se
+connecter dans une passation (D116), il fallait toucher une image puis taper son mot de passe à
+la main dans un champ « Texte à taper » : le propriétaire trouvait ça peu pratique. Désormais :
+- **Mots de passe**, dans Réglages : la liste des accès gardés (le site, l'identifiant, la
+  double authentification), en ajouter un, changer un mot de passe, en retirer un. Un mot de
+  passe ne se réaffiche jamais. Ces routes sont au bord de l'application (`/app/logins`) : en
+  mode séparé, c'est le gardien qui les sert et qui garde le coffre, et le cœur ne voit toujours
+  pas le mot de passe. Il suffit d'être connecté à l'app, sans Face ID : ajouter un accès ne
+  donne rien à personne, et l'iPhone a déjà demandé Face ID pour le remplir.
+- **Un vrai formulaire** : les champs portent `autocomplete="username"` et `current-password`,
+  donc l'iPhone propose ses mots de passe enregistrés (Face ID), au lieu de les retaper.
+- **Orion demande dans l'application** (`browser` save_password) : une carte dans Maintenant
+  ouvre ce formulaire, le site déjà rempli. L'app le donne au coffre, puis dit au cœur le nom
+  sous lequel il est gardé ; le cœur vérifie qu'il y est, pour ce site, avant de prévenir Orion.
+  Sur Telegram (s'il y a écrit en dernier, D141), comme avant.
+- **Dans une passation, la page de connexion devient un formulaire** : quand la page montre un
+  champ mot de passe (ou un premier champ identifiant seul), « Prendre la main » affiche
+  Identifiant et Mot de passe au-dessus de l'image. Le navigateur d'Orion les tape dans les
+  champs de la page et envoie le formulaire ; le mot de passe est masqué pour Orion aussitôt.
+  Toucher l'image reste possible pour le reste (un code, un captcha).
+- **« Garder cet accès ? » arrive tout de suite** : après « J'ai fini », si la connexion est
+  passée, l'app le demande sur place, et la carte reste dans Maintenant un quart d'heure.
+- Orion préfère save_password à hand_over pour une connexion simple : une fois gardé, il se
+  connecte seul les fois suivantes.
+
+## D143 — Orion au travail, en direct et sans bruit ; sa main dans le navigateur, comme Safari
+
+*27/10/2026 · acceptée · révise D121 et D133 pour l'application, révise D116 et D142*
+
+Le propriétaire trouvait les annonces d'Orion pendant un long tour bonnes sur le papier, mais
+mal faites : chacune était un message à part, notifié, qui restait dans la conversation. La carte
+« Je travaille » (minuteur, coût, étapes, deux boutons) faisait tableau de bord. Et sous la vue
+du navigateur, une rangée de boutons (⏎ ⌫ ▲ ▼ ←) n'avait rien de naturel.
+
+- **Dans l'application, ce qu'Orion dit en travaillant n'est plus un message** : la boîte de
+  réception le passe au canal qui montre le travail (`LiveOutlet.narrate`). Rien n'est notifié
+  ni empilé. Ailleurs (Telegram, iMessage), rien ne change.
+- **Une seule bulle vivante, là où viendra sa réponse** : ce qu'il fait maintenant, en texte
+  qui scintille ; la dernière chose qu'il en a dite ; son plan en liste à cocher s'il en tient
+  un (`plan`, transmis par `Activity.plan` plutôt qu'en texte) ; le temps écoulé. Une réponse
+  rapide garde les trois points. Arrêter reste le bouton de la barre de saisie ; « Continuer en
+  fond » n'apparaît qu'après 25 s.
+- **La réponse garde la trace du travail**, repliée au-dessus d'elle (« Travaillé 1 min 12 ·
+  6 étapes ») : ce qu'il a dit, fait, et son plan final. Elle est enregistrée avec le message
+  dans le journal de l'application ; le modèle ne la voit pas, le cache de prompt est intact.
+- **La vue du navigateur occupe l'écran** : Annuler, le site et Terminé en haut ; un toucher
+  clique, un glissé fait défiler ; en bas, une barre comme celle de Safari (page précédente,
+  le champ où écrire, champ suivant). Toucher un champ de la page adapte ce champ : un mot de
+  passe y devient un champ mot de passe que l'iPhone sait remplir. Entrée tape le texte et
+  valide ; effacer dans un champ vide efface dans la page. « Se connecter avec mes
+  identifiants » (D142) flotte au-dessus quand la page demande une connexion.
+
+Corrigé au passage : orion.toml ne s'écrivait pas depuis l'application sur le serveur. Le
+fichier temporaire et la copie précédente étaient écrits à côté du lien `/srv/orion/orion.toml`,
+dans un dossier où systemd interdit d'écrire ; ils le sont maintenant à côté du vrai fichier
+(`config/`), et le lien reste un lien.

@@ -365,7 +365,7 @@ CASES: tuple[Case, ...] = (
         facts=OWNER,
         steps=(Say("Tu peux accéder à mon linkedin ? Noan HERBETH"),),
         checks=(
-            either(uses("browser:hand_over"), uses("browser:open")),
+            either(uses("browser:hand_over"), uses("browser:open"), uses("browser:save_password")),
             judged(
                 "La réponse propose-t-elle d'accéder à son compte LinkedIn depuis le navigateur "
                 "d'Orion (il s'y connecte lui-même, ou Orion lui passe la main), plutôt que de "

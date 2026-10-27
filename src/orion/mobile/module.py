@@ -32,6 +32,7 @@ from orion.awaiting.module import AwaitingModule
 from orion.calendar.module import CalendarModule
 from orion.chronicle.module import ChronicleModule
 from orion.computer.module import ComputerModule
+from orion.computer.vault import LocalVault
 from orion.configure.module import ConfigureModule, SignedSettings
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
@@ -240,6 +241,13 @@ class MobileModule(Module):
                 if configure is not None and configure.configurator is not None
                 else None
             )
+            notebook = self.notebook
+
+            def logins() -> LocalVault | None:
+                desk = notebook.browser() if notebook is not None else None
+                vault = desk.vault if desk is not None else None
+                return vault if isinstance(vault, LocalVault) else None
+
             app = mobile_app(
                 channel,
                 vapid,
@@ -248,6 +256,7 @@ class MobileModule(Module):
                 self.control,
                 self.notebook,
                 signed,
+                logins,
             )
             apps = [("mobile", app, settings.port), ("mobile-api", app, settings.core_port)]
         await channel.start()

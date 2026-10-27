@@ -261,6 +261,21 @@ def test_a_change_never_overwrites_one_made_meanwhile(tmp_path: Path) -> None:
     assert 'model = "b"' in source.read_text("utf-8")
 
 
+def test_through_the_servers_link_the_real_file_is_written(tmp_path: Path) -> None:
+    """`/srv/orion/orion.toml` links to `config/orion.toml`: only `config/` is writable."""
+    from orion.configure.module import write
+
+    (tmp_path / "config").mkdir()
+    real = tmp_path / "config" / "orion.toml"
+    real.write_text('[agent]\nmodel = "a"\n', "utf-8")
+    link = tmp_path / "orion.toml"
+    link.symlink_to(real)
+    write(link, real.read_text("utf-8"), '[agent]\nmodel = "b"\n')
+    assert link.is_symlink() and 'model = "b"' in real.read_text("utf-8")
+    assert (tmp_path / "config" / "orion.toml.previous").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["config", "orion.toml"]
+
+
 async def test_the_way_to_change_comes_with_the_settings(
     journal: SqliteJournal, tmp_path: Path
 ) -> None:

@@ -14,6 +14,7 @@ from orion.core.backup import BackupError, backup, verify
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
+from orion.guardian.app import AppEdge
 from orion.guardian.ledger import CORE_BACK, CORE_SILENT
 from tests.fake_guardian import guardian_config, running_guardian
 
@@ -96,6 +97,40 @@ async def test_the_guardian_tells_the_owner_when_the_core_goes_silent(tmp_path: 
         assert "de nouveau là" in g.fake.texts()[-1]
         kinds = [e.kind for e in await g.journal.read()]
         assert kinds.count(CORE_SILENT) == 1 and kinds.count(CORE_BACK) == 1
+
+
+async def test_with_the_app_the_core_alert_is_a_notification_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Not a Telegram or iMessage message too: the phone's notification, if one takes it."""
+    config = guardian_config(
+        tmp_path, modules={"mobile": {"enabled": True, "public_url": "https://orion.example"}}
+    )
+    async with running_guardian(config, prepare=lambda s: AppEdge(s).install()) as g:
+        g.fake.inbound("salut")
+        core = g.client.inkbox(max_attempts=1)
+        await core.send("conv-owner", "Coucou", "o_1", "ident-1")
+        await core.aclose()
+        edge = g.service.app_edge
+        assert edge is not None
+        pushed: list[dict[str, object]] = []
+        taken = [True]
+
+        async def push(message: dict[str, object]) -> bool:
+            pushed.append(message)
+            return taken[0]
+
+        monkeypatch.setattr(edge, "push", push)
+        clock = [1000.0]
+        g.service.monotonic = lambda: clock[0]
+        await g.client.heartbeat()
+        clock[0] += 400
+        await g.service.check_core()
+        assert len(g.fake.sent) == 1  # "Coucou" only
+        assert "journalctl" in str(pushed[-1]["body"])  # in full
+        taken[0] = False  # no phone took it: a message, as before
+        await g.client.heartbeat()
+        assert len(pushed) == 2 and "de nouveau là" in g.fake.texts()[-1]
 
 
 async def test_the_watch_can_be_turned_off(tmp_path: Path) -> None:

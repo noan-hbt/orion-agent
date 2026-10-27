@@ -217,6 +217,8 @@ class Told:
     """Words for the owner now, mid-turn (a plan shown): the caller delivers them."""
 
     text: str
+    plan: bool = False
+    """The plan as text: a channel that draws the plan itself (the app) has no use for it."""
 
 
 @dataclass(frozen=True)
@@ -464,7 +466,7 @@ async def run_agent(
                     told = result.data.get(TELL)
                     if isinstance(told, str) and told and not result.is_error:
                         shown_at = time.monotonic()
-                        yield Told(told)
+                        yield Told(told, plan=call.name == "plan")
             rest = await _execute_calls(
                 [c for c in response.tool_calls if c.id not in first],
                 registry,

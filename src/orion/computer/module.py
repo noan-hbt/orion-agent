@@ -122,6 +122,7 @@ class ComputerModule(Module):
 
     async def serve(self, daemon: Daemon) -> None:
         """The hand-over (D116): a Telegram button, a page the console serves."""
+        from orion.channels.telegram import CHANNEL as TELEGRAM
         from orion.channels.telegram import TelegramError
         from orion.channels.telegram_module import TelegramModule
         from orion.computer.handover import handover_app
@@ -151,6 +152,7 @@ class ComputerModule(Module):
             )
 
         desk.notify = notify
+        desk.on_telegram = lambda: daemon.inbox.last_channel == TELEGRAM
         held.browser = handover_app(desk, is_owner)
 
     async def close(self) -> None:
