@@ -25,7 +25,12 @@ from orion.mobile.control import ControlError
 from orion.mobile.notebook import Notebook
 from orion.mobile.server import mobile_app
 from orion.thinking.module import NIGHT, ThinkingState
-from tests.test_mobile_channel import URL, World, pair, world  # noqa: F401  (fixture)
+from tests.test_mobile_channel import (
+    URL,
+    World,
+    pair,
+    world,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2026, 10, 27, 8, 0, tzinfo=PARIS)
