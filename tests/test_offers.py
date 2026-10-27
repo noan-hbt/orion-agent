@@ -39,7 +39,7 @@ def test_offers_close_the_constitution_and_are_stable() -> None:
     first = constitution([], offers(config))
     assert first == constitution([], offers(config))  # same config, same bytes (cache)
     section = first[first.index("# Ce que tu pourrais faire de plus") :]
-    assert "Une\nseule fois par sujet" in section and "- " in section
+    assert "une seule fois par sujet" in section and "- " in section
     assert "# Ce que tu pourrais faire de plus" not in constitution([], [])
 
 
