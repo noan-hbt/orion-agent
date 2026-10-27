@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
@@ -113,6 +113,11 @@ class Web(Protocol):
     async def search(self, query: str, correlation_id: str | None = None) -> Findings: ...
 
     async def read(self, url: str, correlation_id: str | None = None) -> Reading: ...
+
+
+FeedReading = Callable[[datetime], Awaitable[list[tuple[str, str, str]]]]
+"""(url, title, summary) of what came in his feeds lately."""
+MAX_READING = 12
 
 
 class CuriositySettings(ModuleSettings):
@@ -261,6 +266,8 @@ class Curiosity:
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = CuriosityState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self.reading: FeedReading | None = None
+        """The week's items in his feeds (D160), weighed by the judge beside the searches."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -316,7 +323,7 @@ class Curiosity:
         lead = await self._lead(now)
         if lead is None:
             return Hunt(outcome="model unavailable")
-        if not lead.piste.strip() or not lead.recherches:
+        if not lead.piste.strip() or not (lead.recherches or self.reading):
             return Hunt(outcome="no lead")
         sent = {f.url for f in self.state.finds.values()}
         results: list[tuple[str, str, str]] = []
@@ -329,6 +336,9 @@ class Curiosity:
             for r in findings.results:
                 if r.url not in sent and r.url not in {u for u, _, _ in results}:
                     results.append((r.url, r.title, ""))
+        if self.reading is not None:  # his feeds: the judge weighs them, the lead never saw them
+            read = [c for c in await self.reading(now) if c[0] not in sent]
+            results += [c for c in read if c[0] not in {u for u, _, _ in results}][:MAX_READING]
         if not results:
             return Hunt(lead.piste, outcome="nothing found")
         judgement = await self._judge(lead, results)

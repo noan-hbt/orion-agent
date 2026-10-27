@@ -132,6 +132,7 @@ DRAWER_TOOLS = frozenset(
         "console_link",
         "contain_source",
         "doubt",
+        "feeds",
         "hand_find_files",
         "hand_notify",
         "hand_open",

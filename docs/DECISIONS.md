@@ -3582,3 +3582,63 @@ anniversaire suivi par le module des proches (`relation.birthday`), sauf sur sa 
 
 Le carnet reste un carnet : rien n'en devient un fait de la mémoire, et rien ne part. Pas de
 synchronisation CardDAV pour l'instant : l'export suffit, et réimporter met à jour.
+
+## D157 — Un seul « plus tard » : `later` (chantier 3)
+
+*27/10/2026 · acceptée (complète D151)*
+
+D151 avait laissé de côté la fusion des façons de remettre à plus tard, parce qu'elle
+obligeait à réécrire leurs événements. Elle ne les réécrit pas : `later` n'est jamais
+exécuté, le registre le transforme en l'appel qu'il remplace avant qu'il tourne
+(`Tool.route`), comme le tiroir le fait pour `orion`. Le gardien, le journal, `planned`, les
+évaluations et la relecture finale voient `remind_me`, `follow_up`, `awaiting`, `think_later`
+ou `mission`, comme avant.
+
+Le modèle dit quand (`at`, `every_hours`, ou `reply_from` pour une réponse attendue) et quoi
+faire alors (`then`) : le lui dire (`remind_me`), lui demander comment ça s'est passé
+(`follow_up`), y réfléchir cette nuit (`think_later`), y travailler à un rythme (`mission`),
+ou annuler (`cancel`, avec l'identifiant que montre `planned`, qui dit désormais
+« later (cancel, …) »). Un appel incomplet ne se transforme pas : il revient en erreur, avec
+ce qui manque. Les outils remplacés quittent le menu sans entrer dans la liste du tiroir
+(`ToolRegistry(..., behind=…)`) : ils restent appelables par leur nom.
+
+27 outils au lieu de 31, 30,3 k caractères de schémas au lieu de 32,7 k.
+
+## D158 — Une constitution courte (chantier 3)
+
+*27/10/2026 · acceptée*
+
+Le message système faisait 33,2 k caractères avec les modules par défaut. La constitution
+(13,9 k) mêlait ce qu'Orion est et le mode d'emploi de ses outils, que leurs descriptions
+disent déjà là où le modèle les lit. Elle est réécrite en une page (6,6 k) : sa façon de
+parler (avec ses deux exemples), de travailler, de le connaître, sa mémoire, la confiance,
+ce qu'il reçoit et l'initiative. Ce qui ne servait qu'à un outil rare (provenance,
+confinement d'une source, `people` same, `forget_fact`) est dans l'outil. Les offres et la
+section des photos sont resserrées. Le message système par défaut tombe à 24,4 k (35,8 k
+avec tous les modules, au lieu de 43,3 k), sous l'objectif de 25 k, que
+`tests/test_prompt_budget.py` vérifie désormais.
+
+Mesure, évaluations hors web sur Haiku 5.5, un passage : 44/48 avant (D156), 40/48 après
+D157 et D158. Les cinq cas en écart, rejoués trois fois de chaque côté, donnent les mêmes
+scores (`un_cadeau_pour_maman` 3/3 et 3/3, `ce_quil_sait_de_lea` 3/3 et 3/3,
+`voit_venir_le_dentiste` 2/3 et 2/3, `relance_le` 1/3 avant et 2/3 après,
+`demain_a_1h_du_matin` 0/3 des deux côtés, déjà en échec avant la refonte) : du bruit, pas
+une régression.
+
+## D160 — Ses lectures : les flux qu'il suit (chantier 6, troisième source)
+
+*27/10/2026 · acceptée*
+
+Le module `feeds` (actif par défaut, rien à faire tant qu'il ne suit aucun flux) lit toutes
+les trois heures les flux RSS ou Atom de ce qu'il suit, déclarés dans orion.toml
+(`[modules.feeds] urls`) ou par message (`feeds` add, dans le tiroir : « suis le blog de… »).
+Seules les adresses publiques sont lues, comme pour le web, et un document qui déclare une
+DTD ou des entités est refusé. Ce qui est nouveau est journalisé (`feed.item`, contenu web,
+`Trust.WEB`) ; d'un flux qu'on vient d'ajouter, seuls les cinq derniers articles : ses
+archives ne sont pas des nouvelles.
+
+Branché sur la curiosité (D76) : chaque semaine, son juge pèse les articles de la semaine à
+côté de ce que ses recherches ont trouvé, et peut en garder un pour lui. La piste, elle, est
+toujours choisie à partir de sa mémoire seule : rien de ce que dit un flux ne peut orienter ce
+qu'Orion cherche, et le juge ne voit jamais sa mémoire. `feeds` (list) dit ce qu'il y a de
+neuf dans ses lectures.
