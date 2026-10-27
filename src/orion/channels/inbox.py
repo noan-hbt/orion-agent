@@ -21,6 +21,7 @@ that is the same whatever the channel:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -150,8 +151,30 @@ async def nothing_to_show() -> AsyncGenerator[None]:
 
 
 def shown(outlet: Outlet, text: str) -> str:
-    """The text as this outlet can show it: pieces it cannot draw become plain text."""
+    """The text as this outlet can show it: pieces it cannot draw become plain text. A
+    `<suite/>` left in it (a caption) is a paragraph break."""
+    text = NEXT.sub("\n\n", text).strip()
     return text if getattr(outlet, "rich", False) else plain(text)
+
+
+NEXT = re.compile(r"\s*<suite\s*/>\s*")
+"""Where Orion's words become another message: two things to say, said apart (D163)."""
+MAX_MESSAGES = 3
+
+
+def messages_of(text: str) -> list[str]:
+    """His words as the messages he meant: cut at each `<suite/>`, never more than
+    `MAX_MESSAGES` (the rest stays in the last one)."""
+    parts = [p.strip() for p in NEXT.split(text) if p.strip()]
+    if len(parts) > MAX_MESSAGES:
+        parts = [*parts[: MAX_MESSAGES - 1], "\n\n".join(parts[MAX_MESSAGES - 1 :])]
+    return parts
+
+
+def beat(text: str, seconds: float) -> float:
+    """The pause before a message that follows another, as if typed: longer for more words,
+    never more than three beats."""
+    return min(3 * seconds, seconds * (0.6 + len(text) / 120))
 
 
 class OwnerInbox:
@@ -160,9 +183,12 @@ class OwnerInbox:
         orion: Orion,
         coalesce_seconds: float = 0.5,
         on_turn: Callable[[TurnResult], Awaitable[None]] | None = None,
+        beat_seconds: float = 1.0,
     ) -> None:
         self._orion = orion
         self._coalesce = coalesce_seconds
+        self._beat = beat_seconds
+        """The pause between two of his messages (`beat`)."""
         self._on_turn = on_turn
         self._outlets: dict[str, Outlet] = {}
         self._queue: asyncio.Queue[Inbound] = asyncio.Queue()
@@ -189,7 +215,18 @@ class OwnerInbox:
         outlet = await self._preferred()
         if outlet is None:
             raise RuntimeError("no owner channel is available")
-        await outlet.deliver(shown(outlet, text), correlation_id)
+        await self._say(outlet, text, correlation_id, None)
+
+    async def _say(
+        self, outlet: Outlet, text: str, correlation_id: str | None, item: Inbound | None
+    ) -> None:
+        """His words as the messages he meant, each after a pause as if typed (shown typing
+        on the channel when it answers a message of his)."""
+        for i, message in enumerate(messages_of(text)):
+            if i:
+                async with outlet.working(item) if item is not None else nothing_to_show():
+                    await asyncio.sleep(beat(message, self._beat))
+            await outlet.deliver(shown(outlet, message), correlation_id)
 
     async def deliver_file(self, path: Path, caption: str, correlation_id: str | None) -> None:
         """A file for the owner, on a channel that carries files."""
@@ -318,7 +355,7 @@ class OwnerInbox:
                 # What the work is doing goes beside it (D143); his own words are messages (D162).
                 await reply.narrate(text)
             else:
-                await reply.deliver(shown(reply, text), correlation_id)
+                await self._say(reply, text, correlation_id, None)
 
         async with showing:
             looked = await self._look(batch)
@@ -352,7 +389,7 @@ class OwnerInbox:
             # needed. The word itself is never his to read.
             log.info("inbox.silence", channel=first.channel, allowed=first.allow_silence)
         elif text and reply is not None:
-            await reply.deliver(shown(reply, text), turn.correlation_id)
+            await self._say(reply, text, turn.correlation_id, batch[-1])
         elif text:
             log.warning("inbox.no_outlet", channel=first.reply_via or first.channel)
         log.info(

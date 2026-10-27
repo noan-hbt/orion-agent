@@ -155,7 +155,7 @@ async def _play(config: OrionConfig, begin: datetime, days: int, zone: ZoneInfo)
     initiative = config.initiative
     week = Week(begin, days, initiative.daily_budget)
     async with build_app(config, Silent()) as app:
-        inbox = OwnerInbox(app.orion, 0.0)
+        inbox = OwnerInbox(app.orion, 0.0, beat_seconds=0.0)
         daemon = Daemon(app.plate, app.orion, inbox, Supervisor())
         for module in app.modules:
             if not module.channel:

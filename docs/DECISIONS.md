@@ -3690,3 +3690,28 @@ ce que j'ai » : l'outil, jamais ce qu'il en fait. Et ce qu'Orion écrivait en c
 
 Pas fait ici : une réponse en plusieurs messages (la réponse, puis une question à part). À
 reprendre si les messages en chemin tiennent leurs promesses.
+
+## D163 — Il parle en plusieurs messages quand il a plusieurs choses à dire
+
+*27/10/2026 · acceptée · complète D162*
+
+Un ami qui répond par texto n'envoie pas un pavé : la réponse, puis, à part, la question ou la
+remarque qui vient après. Couper une réponse en paragraphes ne ferait que l'imiter ; c'est
+Orion qui décide où un message s'arrête, parce qu'il a deux choses à dire.
+
+- **`<suite/>` dans sa réponse commence un autre message**, trois au plus (le reste rejoint le
+  dernier). La constitution le dit en une ligne : deux choses à part, jamais pour couper.
+- **Chaque message suivant arrive comme tapé** : le canal montre qu'il écrit (les trois points
+  dans l'app, l'indicateur sur iMessage et Telegram), une pause qui croît avec la longueur
+  (`beat`, trois battements au plus), puis le message. Ce qu'il écrit de lui-même (initiative)
+  se coupe pareil, sans indicateur.
+- **Le journal garde la réponse telle qu'il l'a écrite**, balise comprise : la conversation
+  rejouée au modèle ne change pas, le cache de prompt est intact. Dans l'app, la trace du
+  travail se replie au-dessus du premier message. Une balise restée ailleurs (une légende)
+  devient un saut de ligne, jamais du texte.
+- Évaluation `deux_messages_seulement_pour_deux_choses` : au plus deux messages pour une
+  nouvelle, et aucun morceau de phrase. Pour tenir le budget de la constitution, la phrase
+  sur les identifiants des souvenirs est partie (chaque bloc les montre, `remember` dit
+  comment s'en servir).
+
+iMessage coupait déjà une réponse à chaque paragraphe (`split_bubbles`) : inchangé ici.

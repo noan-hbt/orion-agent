@@ -63,7 +63,7 @@ async def inbox(journal: SqliteJournal, provider: ScriptedProvider) -> AsyncIter
         compiler=ContextCompiler("C"),
         agent=AgentConfig(),
     )
-    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05, beat_seconds=0.0)
     worker = asyncio.create_task(inbox.run())
     yield inbox
     worker.cancel()
@@ -86,6 +86,34 @@ async def test_bursts_coalesce_per_channel_and_answer_where_they_came_from(
     assert provider.requests[0].messages[-1]["content"].endswith("un\ndeux")
     assert re.search(r"· tui[] ·]", provider.requests[1].messages[-1]["content"])
     assert imessage.shown == ["deux"]
+
+
+async def test_two_things_to_say_go_as_two_messages_typed_one_after_the_other(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    """`<suite/>` is where he meant another message (D163): the second is typed again first;
+    never more than three, and nothing of the marker is ever shown."""
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(
+        reply("Jeudi 18 h, c'est bon.<suite/>Tu y vas avec Léa ?"),
+        reply("a<suite/>b<suite/>c<suite/>d"),
+    )
+    inbox.submit(Inbound("imessage", ("a",), "c'est quand ?"))
+    await until(lambda: len(imessage.sent) == 2)
+    assert imessage.sent == ["Jeudi 18 h, c'est bon.", "Tu y vas avec Léa ?"]
+    assert imessage.shown == ["c'est quand ?", "c'est quand ?"]
+    inbox.submit(Inbound("imessage", ("b",), "et ?"))
+    await until(lambda: len(imessage.sent) == 5)
+    assert imessage.sent[2:] == ["a", "b", "c\n\nd"]
+
+
+async def test_what_orion_writes_first_is_split_the_same_way(inbox: OwnerInbox) -> None:
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    await inbox.notify("Ton colis arrive demain.<suite/>Tu seras là ?", "c1")
+    assert imessage.sent == ["Ton colis arrive demain.", "Tu seras là ?"]
+    assert imessage.shown == []  # nothing of his to answer: no typing to show
 
 
 async def test_call_transcripts_may_need_no_answer(

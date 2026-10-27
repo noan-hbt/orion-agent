@@ -243,6 +243,16 @@ def no_narration() -> Check:
     return check
 
 
+def messages_at_most(count: int) -> Check:
+    """His last answer, cut where he meant another message (`<suite/>`, D163)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        parts = [p for p in re.split(r"<suite\s*/>", o.last) if p.strip()]
+        return None if len(parts) <= count else f"{len(parts)} messages (max {count})"
+
+    return check
+
+
 def silent_while_working() -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         return f"spoke while working: « {o.spoken[0]} »" if o.spoken else None
