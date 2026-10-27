@@ -20,7 +20,7 @@ from orion.modules.base import Module, ModuleError
 from orion.modules.registry import builtin_modules
 from tests.fakes import ScriptedProvider
 
-CONSTITUTION_ALL_MODULES = 35_800
+CONSTITUTION_ALL_MODULES = 36_000
 """Characters of the system message with every built-in module on (34.7k on 20/10/2026; raised
 for background tasks, D110, after trimming missions; 38.9k with going all the way, D118; 39.3k
 with pages read once ready, D119; 37.9k once the way to change settings came with
@@ -28,19 +28,20 @@ with pages read once ready, D119; 37.9k once the way to change settings came wit
 pieces, D126; 40.4k once the app's section tells all it draws, D140; 42.1k with his voice shown
 by examples and the reread before each reply, D144; 43.3k with what intuition means, D146;
 43.5k with situations, D149; 43.3k with the rare in the drawer, D151; 35.8k with the
-constitution rewritten short, D158)."""
+constitution rewritten short, D158; 35.8k with what D167 to D169 taught him)."""
 CONSTITUTION_DEFAULT = 25_000
 """Characters of the system message with the default modules: the rework's goal (33.2k
 before the constitution was rewritten short, D158; 24.4k after)."""
-TOOLS_DEFAULT = 30_500
+TOOLS_DEFAULT = 30_800
 """Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 40.6k with
 background tasks, D110, after trimming missions; 35.3k without pydantic's titles and null
 defaults, 26/10/2026; 36.4k with `awaiting`, D129; 38.6k once grouped tools show each field's
 type and allowed values, D132; 40k with `situation`, D149; 32.7k with the rare
 in the drawer, `orion`, D151; 30.3k with one way to say « later », D157; 30.4k with
-`contacts` in the drawer, D159)."""
-ONE_TOOL = 1_900
-"""Characters of one tool's schema, actions included (the largest, `intention`: 1.6k)."""
+`contacts` in the drawer, D159; 30.6k with D166 to D169)."""
+ONE_TOOL = 2_000
+"""Characters of one tool's schema, actions included (the largest, `intention`: 1.6k; `later`:
+1.9k with repeating reminders, D166)."""
 DRAWER = 2_200
 """Characters of the drawer, `orion`, which lists a line per rare tool (1.9k with `contacts`,
 D159)."""
