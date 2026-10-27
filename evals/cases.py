@@ -9,6 +9,7 @@ from evals.harness import (
     Night,
     Notice,
     Say,
+    Watch,
     asks,
     at_most,
     avoids,
@@ -801,5 +802,30 @@ CASES: tuple[Case, ...] = (
         facts=OWNER,
         steps=(Say("je pars à Lisbonne vendredi avec Léa, retour lundi"),),
         checks=(called_with("situation", "Lisbonne"),),
+    ),
+    Case(
+        name="la_veille_voit_le_passeport",
+        origin="D150 : deux choses sues séparément (un voyage, un passeport qui expire) ne se "
+        "rejoignaient que s'il en parlait ; la veille regarde l'ensemble.",
+        at=paris(2026, 10, 27, 12, 30),
+        facts=(
+            *OWNER,
+            "Le passeport de Noan expire le 29 octobre 2026.",
+            "Noan part à Londres avec Léa le 31 octobre 2026, en Eurostar.",
+        ),
+        steps=(Watch(),),
+        checks=(says(r"(?i)passeport", "the watch links the trip and the passport"),),
+    ),
+    Case(
+        name="la_veille_se_tait_sans_raison",
+        origin="D150 : la veille ne doit pas devenir du bruit ; une journée sans rien de neuf "
+        "ne vaut aucun message tout de suite.",
+        at=paris(2026, 10, 27, 12, 30),
+        facts=OWNER,
+        steps=(
+            Say("salut, rien de spécial aujourd'hui, je bosse", at=paris(2026, 10, 27, 9, 0)),
+            Watch(at=paris(2026, 10, 27, 12, 30)),
+        ),
+        checks=(never_says(r"MAINTENANT", "nothing urgent: nothing goes now"),),
     ),
 )

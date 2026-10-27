@@ -3392,3 +3392,38 @@ réglée, abandonnée, ou passée son horizon. Événements `situation.opened`, 
 Évaluation `un_voyage_est_une_situation` (« je pars à Lisbonne vendredi avec Léa, retour
 lundi ») : 3/3 sur Haiku 5.5. Pas encore vérifié en vrai : le tri de sa mémoire réelle la
 première nuit.
+
+## D150 — La veille : Orion prend du recul dans la journée (chantier 2 de la refonte)
+
+*27/10/2026 · acceptée*
+
+Vingt sources pouvaient faire parler Orion (agenda, mails, missions, papiers, proches…), chacune
+avec sa règle, sans voir les autres ; et Orion ne réfléchissait à la vie du propriétaire dans
+son ensemble qu'une fois, la nuit, sur la conversation. Le propriétaire le trouvait sans
+intuition ni recul.
+
+Le module `watch` (actif par défaut) : trois fois par jour (7 h 30, 12 h 30, 18 h 30 ; réglable),
+Orion prend un moment à lui, dans son propre fil (`veille`), avec le modèle fort et ses outils.
+Il lit ses situations (D149, avec celles sans nouvelles depuis trois semaines et celles qui
+viennent de finir), son agenda d'aujourd'hui et de demain, ses échéances, les 30 derniers faits
+appris, ce qu'il a dit depuis la dernière veille (seulement ce qui est de confiance), et ses
+propres conclusions des trois derniers jours pour ne pas se répéter. Il se demande ce qu'un ami
+attentif verrait (ce qui coince, ce qui approche et se prépare, les liens, ce qui s'est tu, une
+idée concrète), fait ce qui se fait d'ici (chercher, préparer, mettre à jour une situation,
+poser un rappel, lancer une tâche), puis conclut : `SILENCE`, `MAINTENANT : …` ou
+`AU POINT : …`. La conclusion devient une alerte du moteur d'initiative (importance 0,6 : elle
+part ; 0,3 : elle attend le prochain point), avec les heures calmes, le budget du jour et le
+vérificateur. Une veille manquée est rattrapée une fois ; Orion en pause, elle ne tourne pas.
+
+Comme la nuit, rien ne part de ce fil et rien n'est demandé au propriétaire : le gardien
+refuse ce qui agit sur le monde (`REFLECTIVE_THREADS`), et ce qui demande son oui va dans la
+conclusion. Le module n'ajoute rien au message système : tout est dans la consigne de la veille.
+
+Évaluations (Haiku 5.5 pour Orion, Opus pour la veille) : `la_veille_voit_le_passeport`
+(un passeport qui expire le 29 et un Eurostar pour Londres le 31, appris séparément) 2/2 ; elle
+relie les deux, rappelle que la carte d'identité ne suffit plus au Royaume-Uni et propose le
+passeport temporaire en préfecture. La première version ne voyait pas les faits récents et
+ratait le lien (« s'il n'y a pas de voyage en vue… ») : d'où les 30 derniers faits.
+`la_veille_se_tait_sans_raison` 2/2 (rien ne part tout de suite). Coût : 5 à 20 centimes par
+veille sur OpenRouter, rien sur un forfait. Pas encore fait : une veille déclenchée par un
+événement (un mail important, un agenda qui bouge), en plus des heures fixes.

@@ -15,7 +15,14 @@ from orion.config import STRONG_MODEL, AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
-from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval, Guardian, Verdict
+from orion.guardian.policy import (
+    NIGHT_THREAD,
+    WATCH_THREAD,
+    ActionProposal,
+    Approval,
+    Guardian,
+    Verdict,
+)
 from orion.runtime import OWNER_THREAD, Orion, Photo
 from orion.thinking.module import (
     NOTE,
@@ -180,7 +187,8 @@ async def test_a_night_without_orion_fails_closed(journal: SqliteJournal) -> Non
         await thinking_for(journal, NIGHT).tick()
 
 
-async def test_the_night_never_acts_on_the_world_nor_asks_him(journal: SqliteJournal) -> None:
+@pytest.mark.parametrize("thread", [NIGHT_THREAD, WATCH_THREAD])  # and the day's watch, D150
+async def test_the_night_never_acts_on_the_world_nor_asks_him(thread: str) -> None:
     class Asked:
         asked = 0
 
@@ -195,7 +203,7 @@ async def test_the_night_never_acts_on_the_world_nor_asks_him(journal: SqliteJou
     async def verdict(
         name: str, effect: Effect, action: str = "", trust: Trust = Trust.SYSTEM
     ) -> Verdict:
-        proposal = ActionProposal(_tool(name, effect), _Args(action=action), trust, NIGHT_THREAD)
+        proposal = ActionProposal(_tool(name, effect), _Args(action=action), trust, thread)
         return (await guardian.decide(proposal)).verdict
 
     assert await verdict("web_search", Effect.NONE) is Verdict.ALLOW

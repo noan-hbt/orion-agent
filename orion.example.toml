@@ -33,7 +33,15 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # Each module can also name its own, overriding these: [modules.expert] model, [modules.thinking]
 # model, [modules.chronicle] model, [modules.photos] model, [modules.secretary] model,
 # [modules.web] model, [modules.mail] quarantine_model, [modules.computer] model,
-# [modules.delegation] model. [memory] embedding_model is the embeddings model.
+# [modules.delegation] model, [modules.watch] model. [memory] embedding_model is the
+# embeddings model.
+
+# Orion's watch (D150): a few times a day he steps back and looks at your life as a whole
+# (what is going on, your agenda, what falls due, what you said), prepares what he can, and
+# tells you only what is worth it. On by default.
+# [modules.watch]
+# at = ["07:30", "12:30", "18:30"]
+# budget_usd = 0.6
 
 # What Orion may spend on models (D79). What it does on its own (the night, curiosity,
 # missions, initiative) stops at the day's or the month's ceiling; answering you never does.

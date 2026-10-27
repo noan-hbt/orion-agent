@@ -57,6 +57,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.thinking.module import ThinkingModule
     from orion.vocal.module import VocalModule
     from orion.voice.module import VoiceModule
+    from orion.watch.module import WatchModule
     from orion.web.module import WebModule
 
     return [
@@ -85,6 +86,7 @@ def builtin_modules() -> list[type[Module]]:
         PhotosModule,
         PapersModule,
         ThinkingModule,
+        WatchModule,
         AwaitingModule,
         ChronicleModule,
         IntentionsModule,

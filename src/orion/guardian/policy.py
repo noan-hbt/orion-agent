@@ -119,6 +119,16 @@ NIGHT_REFUSAL = (
     "{tool} is not for the night: the owner sleeps. Nothing leaves, nothing reaches him and "
     "nothing is put to him now; propose it to him in your morning note instead"
 )
+WATCH_THREAD = "veille"
+"""Orion's watch during the day (D150): like the night, it looks things up, thinks, prepares
+and starts tasks; what it would tell him or do in the world goes in its conclusion, which the
+initiative engine weighs."""
+WATCH_REFUSAL = (
+    "{tool} is not for your watch: nothing leaves and nothing is put to him from here; say it "
+    "in your conclusion, he gets it from there"
+)
+REFLECTIVE_THREADS = {NIGHT_THREAD: NIGHT_REFUSAL, WATCH_THREAD: WATCH_REFUSAL}
+"""Orion's own threads, where he thinks alone: nothing acts on the world or reaches the owner."""
 
 
 def untrusted_reason(trust: Trust) -> str:
@@ -191,12 +201,13 @@ class Guardian:
                     f"{tool.name} is not for a background task: you look things up and report to "
                     "Orion; ask him in your message, he acts and talks to the owner",
                 )
-        if proposal.thread_id == NIGHT_THREAD and (
+        refusal = REFLECTIVE_THREADS.get(proposal.thread_id)
+        if refusal is not None and (
             effect is Effect.EXTERNAL
             or tool.name in NIGHT_NEVER
             or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
         ):
-            return Decision(Verdict.DENY, NIGHT_REFUSAL.format(tool=tool.name))
+            return Decision(Verdict.DENY, refusal.format(tool=tool.name))
         if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
             proposal.arguments
         ):
@@ -229,11 +240,11 @@ class Guardian:
                     Verdict.ALLOW,
                     f"{effect.value} effect in an untrusted context ({self._approvals} mode)",
                 )
-            if proposal.thread_id == NIGHT_THREAD:
+            if proposal.thread_id in REFLECTIVE_THREADS:
                 return Decision(
                     Verdict.DENY,
-                    f"{tool.name} after reading outside content would be put to the owner, and "
-                    "he sleeps: note it for the morning instead",
+                    f"{tool.name} after reading outside content would be put to the owner, who "
+                    "is not here: say it in your conclusion instead",
                 )
             approval = await self._approver.approve(replace(proposal, ask_reason=reason))
             if approval:

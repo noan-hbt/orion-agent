@@ -30,12 +30,13 @@ from orion.app import build_app
 from orion.cognition.finish import ends_on_offer
 from orion.config import OrionConfig
 from orion.core.events import Trust
-from orion.guardian.policy import NIGHT_THREAD, ActionProposal, Approval
+from orion.guardian.policy import NIGHT_THREAD, WATCH_THREAD, ActionProposal, Approval
 from orion.memory.service import Origin
 from orion.modules.registry import load
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.runtime import OWNER_THREAD
 from orion.thinking.module import ThinkingModule
+from orion.watch.module import WatchModule
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -71,7 +72,14 @@ class Night:
     at: datetime | None = None
 
 
-Step = Say | Notice | Night
+@dataclass(frozen=True)
+class Watch:
+    """Orion's watch during the day (D150). Its reply is its conclusion, as it reads."""
+
+    at: datetime | None = None
+
+
+Step = Say | Notice | Night | Watch
 
 
 @dataclass
@@ -392,6 +400,21 @@ async def run_case(
                         report = await thinking.night(datetime.now(PARIS))
                         observation.replies.append(report.note or "SILENCE")
                         continue
+                    elif isinstance(step, Watch):
+                        watching = next(m.watch for m in app.modules if isinstance(m, WatchModule))
+                        assert watching is not None
+                        watching.orion = app.orion
+                        now = datetime.now(PARIS)
+                        before = len(watching.state.notes)
+                        await watching.watch(now, f"{now:%H:%M}")
+                        notes = watching.state.notes[before:]
+                        observation.replies.append(
+                            " ".join(
+                                f"{'MAINTENANT' if n.now else 'AU POINT'} : {n.text}" for n in notes
+                            )
+                            or "SILENCE"
+                        )
+                        continue
                     else:
                         turn = await app.orion.handle_initiative(
                             OWNER_THREAD, step.text, step.why, step.trust
@@ -404,13 +427,13 @@ async def run_case(
                     payload: dict[str, Any] = event.payload
                     if event.kind == "tool.executed":
                         observation.tools.append((str(payload["tool"]), str(payload["arguments"])))
-                        if payload.get("thread_id") == NIGHT_THREAD:
+                        if payload.get("thread_id") in (NIGHT_THREAD, WATCH_THREAD):
                             action = _action(str(payload["arguments"]))
                             tool = str(payload["tool"])
                             observation.night_tools.append(f"{tool}:{action}" if action else tool)
-                    elif (
-                        event.kind == "model.usage"
-                        and event.payload.get("thread_id") == NIGHT_THREAD
+                    elif event.kind == "model.usage" and event.payload.get("thread_id") in (
+                        NIGHT_THREAD,
+                        WATCH_THREAD,
                     ):
                         observation.cost += float(payload.get("cost_usd", 0.0))
                     elif event.kind == "timer.scheduled":
