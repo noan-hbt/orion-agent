@@ -17,6 +17,7 @@ from evals.harness import (
     called_with,
     either,
     judged,
+    messages_at_most,
     never_says,
     no_narration,
     no_offer_at_the_end,
@@ -890,5 +891,21 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 27, 18, 0),
         steps=(Say("Rappelle-moi demain à 9h d'appeler la mutuelle"),),
         checks=(reminder_on(date(2026, 10, 28), 9), silent_while_working()),
+    ),
+    Case(
+        name="deux_messages_seulement_pour_deux_choses",
+        origin="27/10 : il peut parler en plusieurs messages (D163), pas couper une réponse. "
+        "Une nouvelle qui appelle une réponse et, au plus, une question à part.",
+        at=paris(2026, 10, 27, 19, 0),
+        facts=OWNER,
+        steps=(Say("J'ai eu l'appart à Dreux !! j'emménage le 15 novembre"),),
+        checks=(
+            messages_at_most(2),
+            judged(
+                "Si la réponse contient la balise <suite/>, chaque partie dit-elle une chose "
+                "à part entière (pas une phrase ou une réponse coupée en morceaux) ? Sans "
+                "balise, réponds oui."
+            ),
+        ),
     ),
 )
