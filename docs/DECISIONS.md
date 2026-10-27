@@ -3715,3 +3715,25 @@ Orion qui décide où un message s'arrête, parce qu'il a deux choses à dire.
   comment s'en servir).
 
 iMessage coupait déjà une réponse à chaque paragraphe (`split_bubbles`) : inchangé ici.
+
+## D164 — Orion est root sur son serveur
+
+*27/10/2026 · acceptée · revient en partie sur D28 et D96*
+
+Sans root, Orion ne pouvait pas lire ses propres logs (`journalctl`), ni redémarrer un service,
+ni installer un paquet : il était trop limité pour s'occuper de sa machine. Le propriétaire veut
+qu'il ait les droits root, et il connaît les risques.
+
+- **`orion-core` est root par `sudo -n`** (`deploy/orion-core.sudoers` : `NOPASSWD: ALL`). Le
+  fichier est vérifié par `visudo` avant d'être installé dans `/etc/sudoers.d/orion-core`, par
+  `install.sh` et à chaque mise à jour (`orion-update`). Une version sans ce fichier retire la
+  règle, et `uninstall.sh` la supprime.
+- **L'unité du core perd `NoNewPrivileges` et `ProtectSystem=strict`.** Sans ça, sudo échoue ou
+  le système reste en lecture seule, même pour root.
+- **Ce qui protège encore :** le shell reste désactivé par défaut et son activation reste le
+  réglage du propriétaire (D92). Chaque commande lui est montrée, exacte, avant de s'exécuter
+  (D96).
+- **Ce qu'on perd :** D28 ne tient plus contre un core compromis. Root lit les secrets du
+  guardian (`/etc/orion/guardian.env`, `/srv/orion/guardian`). Le guardian reste le seul
+  chemin normal vers le monde (outbox, politiques), mais ce n'est plus une frontière de
+  sécurité face au core.

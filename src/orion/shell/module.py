@@ -7,9 +7,10 @@ nothing else covers. What protects:
   is never something Orion does alone;
 - turning it on is the owner's setting (`modules.shell`, D92): his yes, never alone;
 - the command runs in Orion's workspace (`<data_dir>/workspace`), as Orion's user, with a
-  bare environment: no key of Orion's is in its environment. It runs as Orion's user all the
-  same, so a command can read what that user can (`core.env` beside orion.toml): the owner's
-  yes to the exact command is what stands between it and those files;
+  bare environment: no key of Orion's is in its environment. On a server installed by
+  install.sh, Orion's user is root through `sudo -n` (D164): a command can read and change
+  anything, the guardian's secrets included. The owner's yes to the exact command is what
+  stands between it and the whole machine;
 - it stops after `timeout` seconds, the whole process group with it; output is bounded;
 - what it prints may come from anywhere (a download, a file): outside content.
 """
@@ -103,7 +104,9 @@ def shell_tool(workspace: Path, max_seconds: int) -> Tool:
         doing="je lance une commande",
         description="Run a command on your server, in your workspace (files you made or "
         "downloaded are there), when no other tool does it: convert a file, check something, "
-        "run a script. He approves the exact command first. The environment holds no key.",
+        "run a script, read logs (`sudo -n journalctl -u orion-core`). You are root through "
+        "`sudo -n` when the server allows it. He approves the exact command first. The "
+        "environment holds no key.",
         input_model=ShellInput,
         handler=handler,
         effect=Effect.EXTERNAL,
