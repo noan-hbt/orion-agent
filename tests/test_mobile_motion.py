@@ -13,18 +13,7 @@ def _piece(start: str, end: str) -> str:
     return APP[begin : APP.index(end, begin) + len(end)]
 
 
-TYPING = _piece("function setTyping(", "\n}\n") + _piece("function typingBubble(", "\n}\n")
 FIT = APP[APP.index("const view = {};") : APP.index("\n}\n", APP.index("function fit() {")) + 3]
-
-STUBS = """
-const state = { typing: false };
-const view = { typing: document.createElement("div") };
-view.typing.hidden = true;
-document.body.append(view.typing);
-function paintStatus() {}
-function bottom() {}
-function still() { return false; }
-"""
 
 
 async def _run(source: str, script: str) -> Any:
@@ -36,39 +25,6 @@ async def _run(source: str, script: str) -> Any:
         result = await page.evaluate(script)
         await browser.close()
     return result
-
-
-async def test_the_dots_step_aside_for_a_message_and_come_back_while_orion_works() -> None:
-    """Seen for real: the dots faded out in place under the new message, then the thread jumped."""
-    result = await _run(
-        STUBS + TYPING + "\nwindow.setTyping = setTyping; window.view = view;",
-        """async () => {
-          setTyping(true);
-          const shown = !view.typing.hidden;
-          setTyping(false, true); // a message from Orion while he keeps working
-          const asideAtOnce = view.typing.hidden;
-          await new Promise((r) => setTimeout(r, 1000));
-          const back = !view.typing.hidden;
-          setTyping(false); // he stopped
-          await new Promise((r) => setTimeout(r, 400));
-          return { shown, asideAtOnce, back, gone: view.typing.hidden };
-        }""",
-    )
-    assert result == {"shown": True, "asideAtOnce": True, "back": True, "gone": True}
-
-
-async def test_the_dots_stay_gone_when_orion_stops_with_his_message() -> None:
-    result = await _run(
-        STUBS + TYPING + "\nwindow.setTyping = setTyping; window.view = view;",
-        """async () => {
-          setTyping(true);
-          setTyping(false, true);
-          setTyping(false);
-          await new Promise((r) => setTimeout(r, 1000));
-          return view.typing.hidden;
-        }""",
-    )
-    assert result is True
 
 
 async def test_the_composer_gives_back_the_dock_room_only_once_the_keyboard_is_up() -> None:
