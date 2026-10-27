@@ -97,6 +97,18 @@ NEVER_FROM_UNTRUSTED = frozenset({"module_install", "module_remove"})
 the exact grant and why he is asked (D111)."""
 NEVER_ALONE = frozenset({"module_install", "module_remove"})
 """Always put to him, whatever autonomy the config lists: code that runs with his memory."""
+ANY_ACTION = "*"
+"""In `[guardian] autonomable`: the owner may let Orion do any action alone (D167), but those
+of `NEVER_ALONE`, when he asks for it; the ritual still offers only the actions listed."""
+
+
+def may_be_alone(action: str, autonomable: list[str]) -> bool:
+    """Whether the owner may let Orion do `action` without asking."""
+    if action in NEVER_ALONE:
+        return False
+    return action in autonomable or ANY_ACTION in autonomable
+
+
 WORKER_THREAD = "task:"
 WORKER_TOOLS = frozenset(
     {"web_search", "web_read", "current_time", "task", "file:download", "file:pdf"}

@@ -405,9 +405,10 @@ class GuardianConfig(BaseModel):
     secrets_host: str = "127.0.0.1"
     secrets_port: int = Field(default=8794, ge=1, le=65535)
     autonomable: list[str] = Field(
-        default_factory=lambda: ["calendar_add", "configure_change", "contact_message"],
-        description="Actions the owner may let Orion do alone, once earned (never calls or "
-        "mail to strangers unless listed here)",
+        default_factory=lambda: ["calendar_add", "configure_change", "contact_message", "*"],
+        description="Actions the owner may let Orion do alone: those listed are offered once "
+        "earned; `*`: any other (the shell included, never adding code to Orion) when he asks "
+        "for it (D167)",
     )
     offer_autonomy_after: int = Field(
         default=5, ge=2, description="Approvals in a row before Orion offers to stop asking"

@@ -3,11 +3,13 @@
 An action that needs the owner's approval (adding to the calendar…) can become one Orion does
 alone, with three rules:
 
-- only actions listed in `[guardian] autonomable` can ever be granted (never calling someone,
-  never mailing a stranger), and only in a conversation free of outside content;
+- only actions listed in `[guardian] autonomable` can ever be granted, any action but adding
+  code to Orion when it holds `*` (D167, the default), and only in a conversation free of
+  outside content;
 - it is offered, not taken: after `offer_after` approvals in a row, Orion asks once, in a
-  monthly ritual rather than an interruption, and the owner's yes is checked by the guardian
-  process like any approval (D28), which then records the grant itself;
+  monthly ritual rather than an interruption, for an action listed by name; any other is
+  granted only when the owner asks for it. His yes is checked by the guardian process like any
+  approval (D28), which then records the grant itself;
 - the owner takes it back with a word (`autonomy_revoke`), and Orion gives it back at the
   first sign the owner did not want what it did.
 
@@ -30,7 +32,7 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.limits import REQUIRED, Limits, missing, within
-from orion.guardian.policy import ActionProposal, Approver
+from orion.guardian.policy import ANY_ACTION, ActionProposal, Approver, may_be_alone
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 log = structlog.get_logger(__name__)
@@ -50,6 +52,7 @@ LABELS = {
     "mail_tidy": "archiver tes mails et te désabonner des newsletters",
     "configure_change": "changer tes propres réglages",
     "contact_message": "écrire à tes proches",
+    "shell": "lancer des commandes sur mon serveur (en root)",
 }
 
 
@@ -153,10 +156,19 @@ class Autonomy:
     async def start(self) -> None:
         await self._runner.catch_up()
 
+    def may(self, action: str) -> bool:
+        """Whether the owner may let Orion do this alone."""
+        return may_be_alone(action, self.autonomable)
+
+    def shown(self) -> list[str]:
+        """The actions to show him: those listed by name, then those he granted besides."""
+        listed = [a for a in self.autonomable if a != ANY_ACTION]
+        return listed + sorted(a for a in self.state.granted if a not in listed and self.may(a))
+
     async def allows(self, action: str, params: dict[str, Any] | None = None) -> bool:
         """Granted, and these parameters stay within the limits it was granted with."""
         await self._runner.catch_up()
-        if action not in self.autonomable or action not in self.state.granted:
+        if not self.may(action) or action not in self.state.granted:
             return False
         bounds = self.state.limits.get(action)
         return within(action, None if bounds is None or bounds.empty else bounds, params or {})
@@ -166,7 +178,9 @@ class Autonomy:
         return [
             (action, self.state.streak.get(action, 0))
             for action in self.autonomable
-            if action not in self.state.granted
+            if action != ANY_ACTION
+            and self.may(action)
+            and action not in self.state.granted
             and action not in REQUIRED  # those are granted with limits the owner states
             and self.state.streak.get(action, 0) >= self._offer_after
         ]
@@ -180,7 +194,7 @@ class Autonomy:
         correlation_id: str | None,
         limits: Limits | None = None,
     ) -> None:
-        if action not in self.autonomable:
+        if not self.may(action):
             raise ValueError(f"{action} can never be done without asking")
         bounds = limits or Limits()
         unbounded = missing(action, bounds)
@@ -305,16 +319,22 @@ def autonomy_tools(autonomy: Autonomy) -> list[Tool]:
                 if a in autonomy.state.granted
                 else f"je demande (oui {autonomy.state.streak.get(a, 0)} fois de suite)"
             )
-            for a in autonomy.autonomable
+            for a in autonomy.shown()
         ]
+        if ANY_ACTION in autonomy.autonomable:
+            lines.append(
+                "- toute autre action (sauf ajouter du code à Orion) : je demande, et il peut "
+                "me dire de ne plus demander (autonomy_grant)"
+            )
         return ToolResult("\n".join(lines) or "Rien ne peut se faire sans lui demander.")
 
     return [
         Tool(
             name=GRANT_ACTION,
-            description="When the owner asks you to stop asking before a kind of action: ask "
-            "them (they approve once) to let you do it alone from now on. Only for actions "
-            "listed by `autonomy`.",
+            description="When the owner asks you to stop asking before a kind of action (« ne "
+            "me demande plus », « autorise définitivement »): ask them (they approve once) to "
+            "let you do it alone from now on. `action` is the tool's name (shell, calendar_add…); "
+            "`autonomy` says which ones can be.",
             input_model=GrantInput,
             handler=grant,
             effect=Effect.EXTERNAL,

@@ -126,6 +126,32 @@ async def test_granted_actions_run_alone_only_in_a_clean_conversation(
     assert [e.kind for e in await journal.read()].count(GRANTED) == 1
 
 
+async def test_any_action_but_adding_code_can_be_granted_when_he_asks(
+    journal: SqliteJournal,
+) -> None:
+    autonomy = Autonomy(journal, ["calendar_add", "*"], offer_after=2, clock=lambda: NOON)
+    await autonomy.start()
+    await approvals(journal, "shell", [True] * 5)
+    assert await autonomy.candidates() == []  # « * » is granted when asked, never offered
+    with pytest.raises(ValueError, match="never be done without asking"):
+        await autonomy.grant("module_install", "g", None)
+
+    await autonomy.grant("shell", "g", None)
+    owner = Owner()
+    guardian = Guardian(owner, autonomy.allows)
+    shell = tool("shell")
+    args = shell.parse('{"title": "x", "start": "2026-11-03T10:00", "end": "2026-11-03T11:00"}')
+    assert (await guardian.decide(ActionProposal(shell, args, Trust.OWNER, "owner"))).allowed
+    assert owner.asked == []
+    await guardian.decide(ActionProposal(shell, args, Trust.THIRD_PARTY, "owner"))
+    assert len(owner.asked) == 1  # a mail or a page in the conversation: asked again
+    assert autonomy.shown() == ["calendar_add", "shell"]
+
+    [_, status, _] = autonomy_tools(autonomy)
+    said = (await status.handler(status.parse("{}"), ToolContext("o", "c"))).content
+    assert "lancer des commandes" in said and "toute autre action" in said
+
+
 async def test_the_guardian_records_the_grant_and_enforces_it(tmp_path: Path) -> None:
     written: list[NewCalendarEvent] = []
 
@@ -140,7 +166,7 @@ async def test_the_guardian_records_the_grant_and_enforces_it(tmp_path: Path) ->
         with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
             await g.client.calendar_add("perso", EVENT, None)
         with pytest.raises(GuardianUnavailableError, match="never be done without asking"):
-            await g.client.post("/v1/autonomy/grant", {"action": "call_someone"})
+            await g.client.post("/v1/autonomy/grant", {"action": "module_install"})
         with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
             await g.client.post("/v1/autonomy/grant", {"action": "calendar_add"})
         grant, message_id = await g.client.request_approval(
