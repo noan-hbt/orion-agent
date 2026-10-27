@@ -6,7 +6,7 @@
 #   add --yes to skip the question
 #
 # Removed: the services and timers, the code, Python and the browser, the data, the secrets,
-# the users and their group, Orion's Caddy site (Caddy gets its default page back).
+# Orion's sudo rule, the users and their group, Orion's Caddy site (Caddy gets its default page back).
 # Kept: the packages (Caddy, uv, ffmpeg, sqlite3: other things may use them) and the firewall
 # rules (SSH, 80 and 443 stay open). Without --purge, the archive holds the journal (your life
 # with Orion), the guardian's ledger and logins, the config and the secrets: keep it safe, or
@@ -84,7 +84,7 @@ CADDY
 fi
 
 echo "==> files"
-rm -rf "$ROOT" "$ETC/orion"
+rm -rf "$ROOT" "$ETC/orion" "$ETC/sudoers.d/orion-core"
 
 echo "==> users"
 for user in orion-core orion-guardian; do

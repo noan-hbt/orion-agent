@@ -49,6 +49,8 @@ def installed(tmp_path: Path) -> tuple[Path, Path]:
         (etc / "systemd" / "system" / unit).write_text("[Unit]")
     (etc / "caddy").mkdir()
     (etc / "caddy" / "Caddyfile").write_text("# Orion's public face: …\no.fr {\n}\n")
+    (etc / "sudoers.d").mkdir()
+    (etc / "sudoers.d" / "orion-core").write_text("orion-core ALL=(ALL:ALL) NOPASSWD: ALL")
     return root, etc
 
 
@@ -144,6 +146,7 @@ def test_uninstalling_removes_orion_and_keeps_an_archive(tmp_path: Path) -> None
     out = run(tmp_path, "uninstall.sh", "--yes")
     assert out.startswith("0\n") and "Orion is uninstalled" in out
     assert not root.exists() and not (etc / "orion").exists()
+    assert not (etc / "sudoers.d" / "orion-core").exists()  # no root left behind
     assert not list((etc / "systemd" / "system").iterdir())
     assert "disable --now -q orion-core.service" in calls(tmp_path)
     assert "file_server" in (etc / "caddy" / "Caddyfile").read_text()  # Caddy's own page again
@@ -155,6 +158,20 @@ def test_uninstalling_removes_orion_and_keeps_an_archive(tmp_path: Path) -> None
     assert any(n.endswith("orion/core.env") for n in names)
     assert not any("/app/" in n for n in names)  # the code is not data
     assert "is not installed" in run(tmp_path, "uninstall.sh", "--yes")
+
+
+def test_orion_is_root_through_sudo_and_its_unit_lets_it() -> None:
+    rule = [
+        line
+        for line in (DEPLOY / "orion-core.sudoers").read_text().splitlines()
+        if line and not line.startswith("#")
+    ]
+    assert rule == ["orion-core ALL=(ALL:ALL) NOPASSWD: ALL"]
+    unit = (DEPLOY / "orion-core.service").read_text()
+    assert "NoNewPrivileges" not in unit and "ProtectSystem" not in unit  # sudo would fail
+    for script in ("install.sh", "orion-update"):
+        text = (DEPLOY / script).read_text()
+        assert "visudo -cqf" in text and "/etc/sudoers.d/orion-core" in text
 
 
 def test_a_purge_keeps_nothing(tmp_path: Path) -> None:

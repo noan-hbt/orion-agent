@@ -12,9 +12,7 @@ Environment=PLAYWRIGHT_BROWSERS_PATH=/srv/orion/browsers
 ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml serve
 Restart=always
 RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/srv/orion/data
+# Its shell may use sudo (D164): no privilege lock, no read-only system, or root could not act.
 PrivateTmp=true
 
 [Install]

@@ -1,0 +1,4 @@
+# Orion is root on its server (D164): the shell's commands may use `sudo -n`. Each command is
+# still put to the owner, exact, before it runs (D96). Installed as /etc/sudoers.d/orion-core
+# by install.sh and orion-update, checked with visudo first; removed by uninstall.sh.
+orion-core ALL=(ALL:ALL) NOPASSWD: ALL

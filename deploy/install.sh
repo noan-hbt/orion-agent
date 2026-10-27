@@ -31,7 +31,7 @@ echo "==> domain: $DOMAIN"
 
 echo "==> packages"
 apt-get update -qq
-apt-get install -y -qq git curl sqlite3 caddy ufw ca-certificates ffmpeg >/dev/null
+apt-get install -y -qq git curl sqlite3 caddy ufw ca-certificates ffmpeg sudo >/dev/null
 if ! command -v uv >/dev/null; then
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 fi
@@ -98,6 +98,9 @@ chmod 0640 "$ROOT"/config/orion.toml*
 
 echo "==> services"
 install -m 0644 "$HERE"/orion-*.service "$HERE"/orion-*.timer /etc/systemd/system/
+# Orion is root through sudo (D164); a sudoers file is checked before it is put in place.
+visudo -cqf "$HERE/orion-core.sudoers"
+install -m 0440 -o root -g root "$HERE/orion-core.sudoers" /etc/sudoers.d/orion-core
 sed "s/@DOMAIN@/$DOMAIN/g" "$HERE/Caddyfile" > /etc/caddy/Caddyfile
 systemctl daemon-reload
 systemctl reload-or-restart caddy
