@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -49,6 +50,9 @@ TEXT_CHARS = 10_000
 MAX_ELEMENTS = 150
 MAX_IMAGES = 8
 KEPT_COOKIES = "cookies.json"
+CRASH_DIR = Path(tempfile.gettempdir()) / "orion-chromium-crashes"
+"""Chromium's crash handler wants a database; without one it aborts the browser at start
+(SIGTRAP) where no home directory gives it its own (D171)."""
 HostCheck = Callable[[str, int], Awaitable[None]]
 
 _SNAPSHOT = """({textChars, start}) => {
@@ -284,13 +288,31 @@ class Session:
         self._phone_dress: bool | None = None
         """Whether pages are dressed as a phone's (True) or a computer's; None: not dressed."""
         self._dressing: set[asyncio.Future[None]] = set()
+        self._lost = False
+        """Chromium went away under it (a crash): the session is good for nothing more."""
 
     async def __aenter__(self) -> Session:
         try:
             return await self._enter()
+        except Error as exc:
+            log.warning("computer.launch_failed", error=exc.message.splitlines()[0])
+            await self.discard()  # no browser or driver left behind
+            raise BrowserError(f"the browser did not start: {exc.message.splitlines()[0]}") from exc
         except BaseException:
             await self.__aexit__(None, None, None)  # no browser or driver left behind
             raise
+
+    @property
+    def alive(self) -> bool:
+        return self._context is not None and not self._lost
+
+    async def discard(self) -> None:
+        """Closes what is left of a session that failed or died, a dead browser's errors
+        logged rather than raised: there is nothing left in it to save."""
+        try:
+            await self.__aexit__(None, None, None)
+        except Error as exc:
+            log.warning("computer.discard_failed", error=exc.message.splitlines()[0])
 
     async def _enter(self) -> Session:
         self._pw = await async_playwright().start()
@@ -350,7 +372,11 @@ class Session:
     def _launch(self) -> dict[str, Any]:
         """The full Chromium in its new headless mode (the bundled headless shell gives itself
         away), automation flags off, out through `proxy` if set."""
-        options: dict[str, Any] = {"headless": True, "args": list(LAUNCH_ARGS)}
+        CRASH_DIR.mkdir(parents=True, exist_ok=True)
+        options: dict[str, Any] = {
+            "headless": True,
+            "args": [*LAUNCH_ARGS, f"--crash-dumps-dir={CRASH_DIR}", "--disable-crash-reporter"],
+        }
         if self._executable:
             options["executable_path"] = self._executable
         else:
@@ -399,9 +425,15 @@ class Session:
             self._open_requests.pop(request, None)
             self._last_traffic = time.monotonic()
 
+        def closed(_: BrowserContext) -> None:
+            if self._context is context:  # not the close `__aexit__` asked for
+                self._lost = True
+                log.warning("computer.browser_lost")
+
         context.on("request", started)
         context.on("requestfinished", ended)
         context.on("requestfailed", ended)
+        context.on("close", closed)
 
     def _busy(self) -> bool:
         """A request under way (not a long poll), or traffic a moment ago."""

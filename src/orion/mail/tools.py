@@ -22,7 +22,12 @@ from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResul
 class MailInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    days: int = Field(default=2, ge=1, le=30, description="How far back")
+    days: int = Field(
+        default=2, ge=1, le=3650, description="How far back, in days: months or years work too"
+    )
+    until_days: int = Field(
+        default=0, ge=0, le=3650, description="Up to how many days ago (0: now), to read a window"
+    )
     everything: bool = Field(
         default=False, description="Include newsletters, notifications and low-importance mail"
     )
@@ -112,7 +117,10 @@ def mail_tools(
     draft: Draft | None = None,
 ) -> list[Tool]:
     async def mail(args: Any, ctx: ToolContext) -> ToolResult:
-        await mailbox.ensure_fresh()
+        if args.read:
+            await mailbox.ensure_fresh()
+        else:
+            await mailbox.sync_once()  # the mailbox as it is now, not five minutes ago (D171)
         if not mailbox.state.synced:
             return ToolResult("No mailbox could be read yet.", is_error=True)
         if args.read:
@@ -125,10 +133,16 @@ def mail_tools(
                 f"<mail>\n{enclosed(found.text or '(texte non gardé)')}\n</mail>",
                 trust=Trust.THIRD_PARTY,
             )
-        since = mailbox.now() - timedelta(days=args.days)
+        now = mailbox.now()
+        since = now - timedelta(days=args.days)
+        before = now - timedelta(days=args.until_days) if args.until_days else None
+        if before is not None and before <= since:
+            return ToolResult("`until_days` must be less than `days`.", is_error=True)
+        if args.days > mailbox.settings.lookback_days or before is not None:
+            await mailbox.dig(since, before, args.sender)  # further back than the sync keeps
         if args.bulk:
-            return ToolResult(_bulk(mailbox.recent(since)), trust=Trust.THIRD_PARTY)
-        cards = mailbox.recent(since, worth_it=not args.everything)
+            return ToolResult(_bulk(mailbox.recent(since, before=before)), trust=Trust.THIRD_PARTY)
+        cards = mailbox.recent(since, worth_it=not args.everything, before=before)
         if args.sender:
             needle = args.sender.lower()
             cards = [c for c in cards if needle in f"{c.from_name} {c.from_addr}".lower()]

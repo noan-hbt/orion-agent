@@ -39,6 +39,7 @@ class MailModule(Module):
             settings,
             self.config.agent.timezone,
             self._fetch or (plate.guardian.mail if plate.guardian else None),
+            search=plate.guardian.mail_search if plate.guardian else None,
         )
         await self.mailbox.start()
         postman = Postman(

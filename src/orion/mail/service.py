@@ -29,7 +29,7 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert, DigestLine
 from orion.mail.card import Card, Category, Importance, headers_card
-from orion.mail.imap import Batch, RawMail, fetch_since
+from orion.mail.imap import Batch, RawMail, fetch_since, search_window
 from orion.memory.model import COMMITMENT_CREATED
 from orion.modules.base import ModuleSettings
 
@@ -199,6 +199,40 @@ async def imap_fetch(
     )
 
 
+Search = Callable[
+    [MailAccount, datetime, datetime | None, str | None, int, datetime], Awaitable[list[RawMail]]
+]
+"""(account, since, before, sender, limit, now) → the mail of that window, read live (D171)."""
+
+
+async def imap_search(
+    account: MailAccount,
+    since: datetime,
+    before: datetime | None,
+    sender: str | None,
+    limit: int,
+    now: datetime,
+) -> list[RawMail]:
+    password = account.password.resolve().get_secret_value()
+    return await asyncio.to_thread(
+        search_window,
+        account.host,
+        account.port,
+        account.username,
+        password,
+        account.folder,
+        since,
+        before,
+        sender,
+        limit,
+        now,
+    )
+
+
+DIG_LIMIT = 50
+"""Mails read per account when Orion looks further back than the sync keeps."""
+
+
 class Mailbox:
     def __init__(
         self,
@@ -207,9 +241,11 @@ class Mailbox:
         timezone: str,
         fetch: Fetch | None = None,
         clock: Callable[[], datetime] | None = None,
+        search: Search | None = None,
     ) -> None:
         self._journal = journal
         self.settings = settings
+        self._search = search or imap_search
         self._zone = ZoneInfo(timezone)
         self._fetch = fetch or imap_fetch
         self._clock = clock or (lambda: datetime.now(self._zone))
@@ -264,6 +300,32 @@ class Mailbox:
                     log.info("mail.skipped_old", account=account.name, count=batch.skipped)
                 added[account.name] = await self._record(account.name, batch, now)
             return added
+
+    async def dig(self, since: datetime, before: datetime | None, sender: str | None) -> int:
+        """Reads that window on the server itself, however old (D171): the mail not yet known
+        becomes cards like the rest. Returns the number of new cards."""
+        async with self._lock:
+            await self._runner.catch_up()
+            now = self._clock()
+            known = {(c.account, c.message_id) for c in self.state.cards.values()}
+            events: list[NewEvent] = []
+            correlation = new_id()
+            for account in self.settings.accounts:
+                try:
+                    mails = await self._search(account, since, before, sender, DIG_LIMIT, now)
+                except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
+                    log.warning("mail.dig_failed", account=account.name, error=repr(exc))
+                    continue
+                for mail in mails:
+                    if mail.from_addr in self._owners or (account.name, mail.message_id) in known:
+                        continue
+                    known.add((account.name, mail.message_id))
+                    events.append(self._card_event(account.name, mail, correlation))
+            if events:
+                await self._journal.append(events)
+                await self._runner.catch_up()
+                log.info("mail.dug", new=len(events))
+            return len(events)
 
     async def _record(self, account: str, batch: Batch, now: datetime) -> int:
         events: list[NewEvent] = []
@@ -320,13 +382,16 @@ class Mailbox:
 
     # -- reading ------------------------------------------------------------------------------
 
-    def recent(self, since: datetime, worth_it: bool = False) -> list[MailCard]:
-        """Cards received since `since`, newest first; `worth_it` drops newsletters,
-        notifications, spam and anything marked low."""
+    def recent(
+        self, since: datetime, worth_it: bool = False, before: datetime | None = None
+    ) -> list[MailCard]:
+        """Cards received since `since` (and before `before`), newest first; `worth_it` drops
+        newsletters, notifications, spam and anything marked low."""
         found = [
             c
             for c in self.state.cards.values()
             if c.received_at >= since
+            and (before is None or c.received_at < before)
             and (
                 not worth_it
                 or (
