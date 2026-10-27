@@ -8,9 +8,10 @@ in French; code, identifiers and comments are in English.
 
 - `uv sync` — install
 - `uv run pytest -q tests/test_x.py` — tests (only the files touched; a stuck test fails after
-  60 s). Without `uv` on the machine: `.venv/Scripts/pytest.exe` (Windows) or `.venv/bin/pytest`
+  60 s). On Windows, `uv` is in `~/.local/bin` (add it to PATH if not found)
 - `uv run ruff format . && uv run ruff check .` — format and lint
-- `uv run pyright` — strict type check (must stay at 0 errors)
+- `uv run pyright --pythonplatform Linux` — strict type check (must stay at 0 errors; Linux
+  like CI and the server, even from Windows)
 - `uv run orion doctor` — check config and storage
 - `uv run python -m evals` — behavioural evaluations on the real model (costs cents; `--model`,
   `--case`, `--repeat`, `--offline`). Add a case when Orion gets something wrong for real.
