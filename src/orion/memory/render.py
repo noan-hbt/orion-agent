@@ -48,9 +48,10 @@ def snapshot_block(
     max_chars: int,
     rules: Sequence[Rule] = (),
     settings: Sequence[SettingChange] = (),
+    portrait: str | None = None,
 ) -> str | None:
-    """Core memory shown once at the start of a conversation window. The playbook comes first:
-    it changes how Orion behaves, not only what it knows."""
+    """Core memory shown once at the start of a conversation window: his portrait (D144), then
+    the playbook, which changes how Orion behaves, then what it knows."""
     core = [f for f in facts if f.category in {Category.PROFILE, Category.PREFERENCE}]
     lines: list[str] = []
     for line in [
@@ -63,6 +64,8 @@ def snapshot_block(
             lines.append("- …")
             break
         lines.append(line)
+    if portrait:
+        lines.insert(0, portrait)
     if not lines:
         return None
     return "<memoire>\n" + "\n".join(lines) + "\n</memoire>"

@@ -717,4 +717,49 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(called_with("autonomy_grant", "contact_message", "Victor"),),
     ),
+    Case(
+        name="meteo_en_deux_phrases",
+        origin="D144 : un ton d'assistant (« Bonne question ! Voici… N'hésite pas »), des "
+        "réponses trop longues pour une question en quatre mots.",
+        at=paris(2026, 10, 27, 18, 5),
+        facts=OWNER,
+        steps=(Say("il fait beau demain ?"),),
+        checks=(
+            at_most(260),
+            never_says(ASSISTANT_TICS, "assistant tic"),
+            never_says(r"^\s*(?:[-*•]|\d+\.)\s", "a bulleted list in a chat"),
+        ),
+    ),
+    Case(
+        name="ce_quil_sait_de_lea",
+        origin="D144 : « il ne me connaît pas assez », il redemande ce qu'il sait déjà.",
+        at=paris(2026, 10, 27, 18, 10),
+        facts=(
+            *OWNER,
+            "Sa copine s'appelle Léa.",
+            "Léa est végétarienne.",
+            "Habite près d'Oberkampf, à Paris.",
+        ),
+        steps=(Say("une idée de truc à cuisiner ce soir avec léa ? rapide"),),
+        checks=(
+            judged(
+                "La réponse propose-t-elle un plat végétarien (sans viande ni poisson), sans "
+                "demander à quoi Léa a droit ni ce qu'elle aime ?"
+            ),
+            never_says(ASSISTANT_TICS, "assistant tic"),
+        ),
+    ),
+    Case(
+        name="surveiller_cest_programmer",
+        origin="D144 : « je te tiens au courant » sans rien de programmé : rien ne revenait.",
+        at=paris(2026, 10, 27, 18, 15),
+        facts=OWNER,
+        steps=(
+            Say(
+                "tu peux surveiller le prix du train paris lyon du 14 novembre et me dire "
+                "s'il baisse"
+            ),
+        ),
+        checks=(uses("mission", "task", "remind_me", "awaiting"), no_offer_at_the_end()),
+    ),
 )

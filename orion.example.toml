@@ -85,13 +85,14 @@ enabled = false
 bot_token = { env = "TELEGRAM_BOT_TOKEN" }
 owner_id = 0                     # your Telegram user id; anyone else is ignored
 
-# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget.
+# When Orion may speak first. Reminders you asked for ignore quiet hours and the budget. What
+# can wait waits for the next point (`digests`) and goes in that one message (D144).
 [initiative]
 enabled = true
-digests = ["08:30:00", "13:00:00", "19:00:00"]
+digests = ["08:30:00", "19:00:00"]
 quiet_start = "22:30:00"
 quiet_end = "08:00:00"
-daily_budget = 12                # what Orion says of its own accord, per day
+daily_budget = 6                 # what Orion says of its own accord, per day
 tick_seconds = 30
 
 # How Orion learns to work with you: from what you tell it (immediately), from your reactions

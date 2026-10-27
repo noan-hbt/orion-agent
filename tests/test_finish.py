@@ -1,10 +1,10 @@
-"""Before handing back: a reply that ends on an offer gets one more step (D118)."""
+"""Before handing back: a reply that is not done yet gets one more step (D118, D144)."""
 
 from __future__ import annotations
 
 import pytest
 
-from orion.cognition.finish import NUDGE, ends_on_offer
+from orion.cognition.finish import OFFER_NOTE, ends_on_offer, finish_check
 from orion.core.journal import SqliteJournal
 from orion.runtime import OWNER_THREAD
 from tests.fakes import ScriptedProvider, call_tools, reply
@@ -41,6 +41,24 @@ def test_a_finished_reply_or_a_real_choice_goes(text: str) -> None:
     assert not ends_on_offer(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "called", "sent_back"),
+    [
+        ("Je regarde les annonces et je te tiens au courant.", [], True),
+        ("Je regarde les annonces et je te tiens au courant.", ["mission"], False),
+        ("C'est noté, je reviens vers toi demain.", ["remind_me"], False),
+        ("Bien sûr ! Le train part à 8 h 12.", [], True),
+        ("Le train part à 8 h 12. N'hésite pas si tu veux autre chose.", [], True),
+        ("## Horaires\nLe train part à 8 h 12.", [], True),
+        ("Le train part à 8 h 12, quai 3.", [], False),
+    ],
+)
+def test_a_promise_without_follow_up_or_assistant_filler_is_sent_back(
+    text: str, called: list[str], sent_back: bool
+) -> None:
+    assert (finish_check(text, called) is not None) is sent_back
+
+
 async def test_an_offer_sends_orion_back_to_work_once(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
         reply("Je peux te chercher les horaires si tu veux ?"),
@@ -51,7 +69,7 @@ async def test_an_offer_sends_orion_back_to_work_once(journal: SqliteJournal) ->
     await orion.start()
     turn = await orion.handle_owner_message(OWNER_THREAD, "La piscine de Dreux ?", "t", now=at(1))
     assert turn.text == "Le dimanche c'est 9 h à 12 h."
-    assert provider.requests[1].messages[-1]["content"] == NUDGE
+    assert OFFER_NOTE in provider.requests[1].messages[-1]["content"]
     assert_prefix_stable(provider)  # the note is journaled: the next turn replays it as sent
 
     provider.extend(reply("Ok."))

@@ -17,7 +17,7 @@ import json
 import math
 import time
 from collections import Counter
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal, cast
@@ -70,7 +70,8 @@ remembered. Errors and called-off work are not: their words were never answered.
 Halted = Callable[[], Awaitable[bool]]
 """Whether the work was called off meanwhile."""
 
-FinishCheck = Callable[[str], str | None]
+FinishCheck = Callable[[str, Sequence[str]], str | None]
+"""(final reply, tools called this turn) → a note that sends the model back, or None."""
 """The final reply → a note for the model when it should not stop there yet, else None."""
 
 
@@ -268,6 +269,7 @@ async def run_agent(
     began = time.monotonic()
     shown_at = -math.inf
     shown: set[str] = set()
+    called: list[str] = []
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -388,7 +390,7 @@ async def run_agent(
                 yield MessageEmitted(unsent, Trust.SYSTEM)
                 continue
             note = (
-                settings.finish_check(text)
+                settings.finish_check(text, called)
                 if settings.finish_check is not None
                 and not checked
                 and reason is StopReason.COMPLETED
@@ -406,6 +408,7 @@ async def run_agent(
             return
 
         tool_calls_made += len(response.tool_calls)
+        called.extend(call.name for call in response.tool_calls)
         over = (
             "cost budget"
             if usage.cost_usd > max_cost

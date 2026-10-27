@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from orion.cognition.finish import offer_check
+from orion.cognition.finish import finish_check
 from orion.cognition.loop import (
     ANSWERED,
     Budget,
@@ -55,6 +55,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import TRUSTED_FLOOR, Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
+from orion.memory.portrait import Portrait, portrait_block
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
@@ -187,10 +188,11 @@ class Orion:
         itself, D87): same input, same bytes, so the prompt cache holds."""
         self._agent = agent
         self.threads = ThreadProjection()
+        self.portrait = Portrait()
         self.owner_wrote_at: datetime | None = None
         """When the owner last wrote (this run): quiet hours do not hold Orion back while he
         is up and talking (`initiative.engine`)."""
-        self._projections = ProjectionRunner(journal, [self.threads])
+        self._projections = ProjectionRunner(journal, [self.threads, self.portrait])
         self._locks: dict[str, asyncio.Lock] = {}
 
     @property
@@ -544,7 +546,7 @@ class Orion:
             reasoning_effort=self._agent.reasoning_effort,
             asking=asking,
             halted=halted,
-            finish_check=offer_check
+            finish_check=finish_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
             progress_model=self._summary_model
@@ -862,6 +864,7 @@ class Orion:
                 self._snapshot_chars,
                 rules=[r for r in rules if r.active],
                 settings=settings,
+                portrait=portrait_block(self.portrait),
             )
             if snapshot:
                 blocks.append(snapshot)

@@ -89,9 +89,9 @@ section drowns the others. What a tool does belongs in its description, read whe
 def constitution(
     modules: list[Module], offers: Sequence[str] = (), owner_names: Sequence[str] = ()
 ) -> str:
-    """The core constitution, his name, each enabled module's section in loading order, then
-    what Orion could do with more setup (D64). All fixed while Orion runs: the system message
-    is cached."""
+    """The core constitution, his name, each enabled module's section in loading order, what
+    Orion could do with more setup (D64), then the reread before each reply. All fixed while
+    Orion runs: the system message is cached."""
     parts = [read_resource("constitution.md").strip()]
     if owner_names:
         # From `[memory] owner_names`: known from the first message, not asked (20/10).
@@ -109,6 +109,8 @@ def constitution(
     if offers:
         listed = "\n".join(f"- {offer}" for offer in offers)
         parts.append(f"{read_resource('offers.md').strip()}\n\n{listed}")
+    # Last, where a model weighs instructions most: the reread before each reply (D144).
+    parts.append(read_resource("closing.md").strip())
     return "\n\n".join(parts) + "\n"
 
 

@@ -11,6 +11,8 @@ model judge each pair:
 It also merges names that are clearly the same person ("Paul" and "Paul Martin"), when the
 model says so and one name is part of the other.
 
+Then it writes his portrait from what memory now holds (`orion.memory.portrait`).
+
 Code, not the model, decides what may be dropped: a fact is never ended in favour of a less
 trusted one, so a fact read in a mail can never push out something the owner said. Every change
 is an ordinary memory event (actor `orion:consolidation`), visible in history and undoable.
@@ -37,6 +39,7 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import DigestLine
 from orion.memory.people import people_index
+from orion.memory.portrait import write_portrait
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Fact, name_key
 from orion.modules.base import Daemon, Module, ModuleSettings
@@ -173,7 +176,10 @@ class Consolidator:
         timezone: str,
         owner_names: list[str],
         clock: Callable[[], datetime] | None = None,
+        portrait_model: str | None = None,
     ) -> None:
+        self._portrait_model = portrait_model
+        """Writes his portrait once memory is tidied (D144); None: no portrait."""
         self._journal = journal
         self._memory = memory
         self._provider = provider
@@ -225,6 +231,13 @@ class Consolidator:
                 return report
             if verdict is not None:
                 report = await self._apply(verdict, pairs, names, now)
+        if self._portrait_model is not None:
+            try:
+                await write_portrait(
+                    self._journal, self._memory, self._provider, self._portrait_model, now
+                )
+            except ProviderError:  # yesterday's portrait stays; tomorrow night tries again
+                log.warning("memory.portrait_failed", exc_info=True)
         await self._journal.append(
             [
                 NewEvent(
@@ -386,6 +399,7 @@ class NightModule(Module):
             settings,
             self.config.agent.timezone,
             self.config.memory.owner_names,
+            portrait_model=self.config.agent.model,
         )
         await consolidator.start()
         self.consolidator = consolidator

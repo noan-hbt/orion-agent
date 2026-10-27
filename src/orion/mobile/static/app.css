@@ -639,6 +639,9 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 .night-note { display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-radius:20px; background:#fff; }
 .night-note small { font-size:12px; color:var(--label-2); }
 .night-note small::first-letter { text-transform:uppercase; }
+.portrait { margin:4px 0 14px; }
+.portrait p { margin:0; line-height:1.45; }
+.portrait .link { align-self:flex-start; background:none; border:0; padding:4px 0 0; font:inherit; font-size:15px; color:var(--blue); }
 .night-note p { margin:0; font-size:15px; line-height:21px; }
 
 /* a message or a request a notification opened: a short glow, then nothing */

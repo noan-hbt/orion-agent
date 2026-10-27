@@ -312,7 +312,7 @@ sans changer ces interfaces.
 
 Le moteur d'initiative tourne toutes les 30 s. Il examine trois sources :
 - les rappels demandés (`remind_me`) ;
-- trois points par jour (8h30, 13h, 19h), construits à partir du registre des engagements ;
+- trois points par jour (8h30, 13h, 19h), construits à partir du registre des engagements (deux depuis D144) ;
 - une alerte une heure avant un engagement à heure précise.
 
 La décision de parler est **déterministe** : heures calmes (22h30 à 8h), budget quotidien
@@ -3193,3 +3193,58 @@ Corrigé au passage : orion.toml ne s'écrivait pas depuis l'application sur le 
 fichier temporaire et la copie précédente étaient écrits à côté du lien `/srv/orion/orion.toml`,
 dans un dossier où systemd interdit d'écrire ; ils le sont maintenant à côté du vrai fichier
 (`config/`), et le lien reste un lien.
+
+## D144 — Orion revu : sa voix, son rythme, ce qu'il sait de lui, aller au bout (révise D15, D20, D36)
+
+*27/10/2026 · acceptée*
+
+Le propriétaire trouvait à redire sur les quatre fronts à la fois : le ton (trop assistant, des
+blagues qui tombent à plat, trop long), les prises d'initiative (trop, au mauvais moment, pour
+rien), une mémoire qui ne fait pas connaître (il redemande ce qu'il sait), et des réponses qui
+s'arrêtent en route. Une refonte d'ensemble plutôt que quatre rustines.
+
+- **Sa voix** (révise D15). La constitution montre au lieu de décrire : deux exemples « non /
+  oui » d'après de vrais travers. Il se cale sur la longueur et le registre du propriétaire, dit
+  le résultat plutôt que son travail, a un avis. L'humour n'est plus une consigne (« une pointe
+  de sarcasme ») mais une permission, quand il vient tout seul ; dans le doute, pas de blague.
+  Les messages au fil du travail : seulement quand ils servent, une phrase. Une courte relecture
+  (`closing.md`) ferme le message système, là où un modèle pèse le plus les consignes : la
+  première phrase répond, c'est à sa mesure, ce qu'il sait de lui s'y sent, ce qui est promis
+  est programmé. Budget du message système relevé à 42,2 k (sections « intentions » et
+  « conseils » resserrées).
+- **Aller au bout, vérifié dans le code** (étend D118). `orion.cognition.finish` relit la réponse
+  finale avant qu'elle parte. Elle revient une fois au modèle quand elle finit sur une offre ;
+  quand elle promet une suite (« je te tiens au courant », « je reviens vers toi ») sans qu'aucun
+  outil du tour ne la programme (rappel, tâche, mission, suivi, attente…), puisqu'une fois la
+  réponse partie rien ne revient ; ou quand elle a des formules d'assistant (« Bien sûr ! »,
+  « N'hésite pas… ») ou des titres dans un message court. Une note, un seul retour par tour.
+- **Son rythme** (révise D20, D36). Une vingtaine de sources peuvent le faire parler, et
+  l'arbitre laissait presque tout passer : seuil bas, et une attente qui rendait tout urgent au
+  bout d'une heure ou deux. Désormais, ce qu'Orion dit de lui-même ne part seul que si ça ne peut
+  pas attendre (importance d'au moins 0,75 : un rendez-vous qui approche, une reprise en main du
+  navigateur) ou que ce serait périmé au prochain point. Le reste attend le prochain point, le
+  matin ou le soir, et part dans ce seul message, du plus utile au moins utile. Par défaut, deux
+  points (8 h 30, 19 h) au lieu de trois, et six messages de lui-même par jour au plus au lieu
+  de douze. Ce qu'on lui a écrit (un proche, une tâche de fond) et ce qu'il a demandé (rappels,
+  comptes rendus) passent comme avant. Un genre de message auquel le propriétaire n'a pas
+  répondu (message ou tapback dans les trois heures) les quatre dernières fois en un mois cesse
+  de partir. Il apparaît dans « ce que j'ai failli te dire » le dimanche, où il peut dire que
+  c'était une erreur, et revient de lui-même au bout d'un mois. Les papiers qui expirent dans un
+  mois attendent un point (0,6).
+- **Ce qu'il sait de lui : un portrait** (étend D27). Une liste de faits ne fait pas connaître
+  quelqu'un. Chaque nuit, après le rangement de la mémoire, le modèle principal écrit un portrait
+  de 1 600 caractères au plus (`orion.memory.portrait`). Il le tire de ce qui est sûr : les faits
+  (pas ceux d'un mail ou d'une page), ses engagements, son manuel, ses messages des sept
+  derniers jours. Le portrait dit qui il est, ce qu'il vit en ce moment, les gens qui comptent.
+  Il ouvre le bloc `<memoire>` de chaque nouvelle fenêtre de conversation. C'est un événement du
+  journal (`memory.portrait.written`), donc il se reconstruit comme le reste ; oublier une source
+  le fait réécrire la nuit suivante. La constitution lui demande de s'en servir sans l'annoncer,
+  et de vérifier sa mémoire avant toute question sur la vie du propriétaire : ce qui date se
+  confirme, ça ne se redemande pas.
+
+  Il le lit aussi en tête de Carnet › Souvenirs (« Comment je te vois »), avec « Ce n'est pas
+  tout à fait ça » pour le corriger dans la conversation.
+
+Évals ajoutées : `meteo_en_deux_phrases`, `ce_quil_sait_de_lea`, `surveiller_cest_programmer`
+(2/2, 3/3, 2/2 sur `anthropic/claude-haiku-5.5`) ; les garde-fous `salut`, `un_truc_avec_paul`,
+`se_lance_seul_sur_un_but`, `va_au_bout_au_lieu_de_proposer` et `quels_outils` passent toujours.
