@@ -39,6 +39,7 @@ import structlog
 from orion.cognition.loop import StopReason
 from orion.cognition.verifier import Verifier
 from orion.context.recent import recent_lines
+from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
@@ -71,6 +72,14 @@ POINT_HEAD = (
 
 AWAKE = timedelta(minutes=20)
 """The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
+
+RESTART_KEY = "restart:"
+WOKEN_WITHIN = timedelta(minutes=15)
+"""Orion spoke in the owner's thread less than this before a restart: he was busy, often with a
+plan for after it (a setting to check, work to pick up). The restart wakes him (D165)."""
+WOKEN_AT_MOST = 3
+"""Restarts in a row that wake him with no owner message between: past this, a restart loop."""
+TAIL = 500
 
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
@@ -452,6 +461,8 @@ class InitiativeEngine:
         self.ledger = Ledger()
         self._runner = ProjectionRunner(journal, [self.ledger])
         self._unavailable_logged = False
+        self._woken: Candidate | None = None
+        self._booted = False
 
     async def run(self, interval: float = 30.0) -> None:
         while True:
@@ -462,6 +473,9 @@ class InitiativeEngine:
         """One pass. Returns the keys delivered (for tests and logs)."""
         await self._runner.catch_up()
         await self._timers.sync()
+        if not self._booted:
+            self._booted = True
+            self._woken = await self._restarted(self._clock())
         if self._memory is not None:
             self._settings = effective_settings(self._base, await self._memory.settings())
         now = self._clock().astimezone(self._zone)
@@ -548,8 +562,45 @@ class InitiativeEngine:
             carries=tuple(held),
         )
 
+    async def _restarted(self, now: datetime) -> Candidate | None:
+        """On boot: Orion was talking in the owner's thread just before it stopped, so it is
+        woken to carry on. A turn like any initiative: it may answer SILENCE."""
+        last = await self._journal.last_seq()
+        stopped: datetime | None = None
+        woken = 0
+        for event in reversed(await self._journal.read(max(0, last - TAIL), TAIL)):
+            if event.kind == "message.received":
+                break
+            if event.kind in (DELIVERED, SUPPRESSED) and str(
+                event.payload.get("key", "")
+            ).startswith(RESTART_KEY):
+                woken += 1
+            if (
+                stopped is None
+                and event.kind == MESSAGE_KIND
+                and event.payload.get("thread_id") == self._settings.thread_id
+            ):
+                stopped = datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
+        if stopped is None or not timedelta(0) <= now - stopped <= WOKEN_WITHIN:
+            return None
+        if woken >= WOKEN_AT_MOST:
+            log.warning("initiative.restart_loop", woken=woken)
+            return None
+        return Candidate(
+            key=f"{RESTART_KEY}{last}",
+            notice="Tu viens de redémarrer. Juste avant, tu étais en train de travailler. Si "
+            "tu avais prévu quelque chose pour après ce redémarrage (vérifier qu'un réglage a "
+            "pris, reprendre une tâche, dire à ton propriétaire où tu en es), fais-le "
+            "maintenant. Sinon, réponds SILENCE.",
+            why="je viens de redémarrer, et je travaillais juste avant",
+            fallback="",
+            explicit=True,
+        )
+
     async def _candidates(self, now: datetime) -> list[Candidate]:
         found = [self._reminder(t, now) for t in self._timers.projection.due(now)]
+        if self._woken is not None:
+            found.append(self._woken)
         for source in self._reports:
             found.extend(
                 Candidate(
