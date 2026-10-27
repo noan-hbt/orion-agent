@@ -3344,3 +3344,19 @@ message spontané). Les modèles de secours (`fallback_models`) ne servent que s
 échoue, quota épuisé compris. Pour ne plus rien envoyer à OpenRouter, il faut nommer
 `verifier_model` (un autre modèle du forfait, `orion chatgpt models`) et `fallback_models`, et
 couper `embedding_model`.
+
+## D148 — orion.toml s'écrit même après un `orion setup` lancé en root
+
+*27/10/2026 · acceptée (complète D143)*
+
+Après D143, l'application affichait encore « permission denied » quand le propriétaire, ou
+Orion, changeait un réglage. `install.sh` lance `orion setup` en root, et celui-ci garde
+l'ancienne version du fichier dans `config/orion.toml.previous`. Le script rendait ensuite au
+gardien `orion.toml`, mais pas cette copie : restée à root, le gardien ne pouvait plus la
+réécrire, et chaque changement échouait avant même de toucher au fichier.
+
+Le gardien ne réécrit plus dans un fichier existant : il écrit à côté, puis remplace, pour la
+copie comme pour orion.toml. Le dossier `config/` étant le sien, un fichier laissé par root est
+remplacé quand même. `install.sh` rend aussi tout le dossier au gardien après `orion setup`.
+Rejoué avec un utilisateur ordinaire : l'ancien code échoue sur `orion.toml.previous`, le
+nouveau passe. Le serveur se répare à sa prochaine mise à jour automatique, sans rien relancer.
