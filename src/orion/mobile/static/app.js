@@ -511,7 +511,7 @@ async function conversation() {
     });
   }, { passive: true });
   swipeTimes();
-  pinToBottom(view.thread, () => !view.talk.hidden);
+  view.follow = pinToBottom(view.thread, () => !view.talk.hidden);
 
   state.messages = [];
   state.refs.clear();
@@ -613,18 +613,47 @@ function sendMode() {
 }
 
 // A thread read at its end stays at its end: an image that loads, the dots, a question, a
-// taller composer or the keyboard never leave the last message hidden.
+// taller composer or the keyboard never leave the last message hidden. Only the owner's own
+// scrolling unpins it: a scroll the app makes (smooth or clamped) never does, and every bubble is
+// watched as it grows, so a message still rising into place is followed to its end.
 function pinToBottom(thread, shown) {
   let pinned = true;
+  let touching = false;
+  let byHand = 0;
+  const hand = () => (byHand = performance.now());
+  thread.addEventListener("touchstart", () => ((touching = true), hand()), { passive: true });
+  thread.addEventListener("touchend", () => ((touching = false), hand()), { passive: true });
+  thread.addEventListener("touchcancel", () => ((touching = false), hand()), { passive: true });
+  // A mouse dragging the scrollbar is a hand too.
+  thread.addEventListener("pointerdown", () => ((touching = true), hand()), { passive: true });
+  addEventListener("pointerup", () => (touching = false), { passive: true });
+  thread.addEventListener("wheel", hand, { passive: true });
+  thread.addEventListener("keydown", hand);
   thread.addEventListener("scroll", () => {
+    // Momentum keeps scrolling after the finger lifts: each of its frames carries the hand on.
+    if (!touching && performance.now() - byHand > 250) return;
+    hand();
     pinned = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 140;
   }, { passive: true });
   const pin = () => {
     if (pinned && shown()) thread.scrollTop = thread.scrollHeight;
   };
-  new ResizeObserver(pin).observe(thread);
-  new MutationObserver(pin).observe(thread, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
+  const sizes = new ResizeObserver(pin);
+  sizes.observe(thread);
+  const watch = (node) => {
+    if (!(node instanceof Element)) return;
+    if (node.matches(".msg, .typing, .ask, .day")) sizes.observe(node);
+    else for (const el of node.querySelectorAll(".msg, .typing, .ask")) sizes.observe(el);
+  };
+  watch(thread);
+  new MutationObserver((changes) => {
+    for (const change of changes) change.addedNodes.forEach(watch);
+    pin();
+  }).observe(thread, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden"] });
   thread.addEventListener("load", pin, true);
+  return () => {
+    pinned = true;
+  };
 }
 
 function nearBottom() {
@@ -634,6 +663,7 @@ function nearBottom() {
 
 function bottom(force = false, smooth = false) {
   if (force || nearBottom()) {
+    view.follow?.();
     requestAnimationFrame(() => {
       view.thread.scrollTo({ top: view.thread.scrollHeight, behavior: smooth && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
       view.unread = false;
