@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.initiative.timers import Repeat
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 Then = Literal["tell", "ask", "think", "work", "cancel"]
@@ -46,7 +47,10 @@ class LaterInput(BaseModel):
         default="", max_length=1000, description="Stakes (think), criteria (work), the moment (ask)"
     )
     by_call: bool = Field(default=False, description="tell: by phone (a wake-up call)")
-    id: str = Field(default="", description="cancel: as `planned` shows it")
+    repeat: Repeat = Field(default="", description="tell: again at that time each day…")
+    id: str = Field(
+        default="", description="cancel: as `planned` shows it; tell with an r_… and `at`: move it"
+    )
     follows: str = Field(default="", description="Awaiting, a nudge: the wait it follows (w_…)")
 
 
@@ -80,6 +84,15 @@ def route(args: BaseModel) -> tuple[str, dict[str, Any]]:
         if wanted.startswith("m_"):
             return "mission", {"action": "close", "mission": wanted, "outcome": why}
         raise ValueError("cancel: `id` is one shown by `planned` (r_…, fu_…, w_…, m_…)")
+    if args.then == "tell" and args.id.strip().startswith("r_"):
+        at = _moment(args.at)
+        return "reminders", {
+            "action": "move",
+            "reminder_id": args.id.strip(),
+            "when": f"{at:%Y-%m-%dT%H:%M}",
+        }
+    if args.repeat and args.then != "tell":
+        raise ValueError("`repeat` is for tell; a pace of work is `every_hours`")
     what = _needs_what(args)
     if args.reply_from:
         who, _, name = args.reply_from.partition(":")
@@ -115,7 +128,12 @@ def route(args: BaseModel) -> tuple[str, dict[str, Any]]:
             "at": f"{at:%Y-%m-%d %H:%M}",
             "question": what[:300],
         }
-    return "remind_me", {"when": f"{at:%Y-%m-%dT%H:%M}", "what": what, "by_call": args.by_call}
+    return "remind_me", {
+        "when": f"{at:%Y-%m-%dT%H:%M}",
+        "what": what,
+        "by_call": args.by_call,
+        "repeat": args.repeat,
+    }
 
 
 def later_tool() -> Tool:
@@ -132,10 +150,10 @@ def later_tool() -> Tool:
         name="later",
         description="The only way to come back to something later: never promise to remind "
         "him, come back or keep an eye without it. When (`at`, `every_hours`, or `reply_from` "
-        "for an answer awaited), then what. « Rappelle-moi jeudi » → tell; how an interview "
-        "or a doctor went → ask, hours after; « laisse-moi y réfléchir » → think; following a "
-        "search over days → work. What can be done now is done now. Check the weekday it "
-        "gives back.",
+        "for an answer awaited), then what. « Rappelle-moi jeudi » → tell; « tous les lundis » "
+        "→ tell with repeat; how an interview or a doctor went → ask, hours after; « laisse-moi "
+        "y réfléchir » → think; following a search over days → work. What can be done now is "
+        "done now. Check the weekday it gives back.",
         input_model=LaterInput,
         handler=unresolved,
         effect=Effect.INTERNAL,

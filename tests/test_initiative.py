@@ -20,7 +20,7 @@ from orion.initiative.engine import (
     InitiativeSettings,
     digest_lines,
 )
-from orion.initiative.timers import TimerProjection, Timers
+from orion.initiative.timers import Timer, TimerProjection, Timers, next_due
 from orion.initiative.tools import reminder_tools
 from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.service import MemoryService, Origin
@@ -171,6 +171,83 @@ async def test_a_restart_does_not_wake_an_idle_orion_nor_loop(world: World) -> N
     asked = len(world.provider.requests)
     assert await world.engine().tick() == []  # a restart loop: no more waking
     assert len(world.provider.requests) == asked
+
+
+async def test_a_repeating_reminder_comes_back_until_cancelled(world: World) -> None:
+    world.provider.extend(
+        call_tools(
+            (
+                "remind_me",
+                {"when": "2026-10-20T09:00", "what": "Sortir les poubelles", "repeat": "weekly"},
+            )
+        ),
+        reply("Chaque mardi à 9h."),
+    )
+    await world.orion.handle_owner_message(
+        "owner", "rappelle-moi les poubelles tous les mardis 9h", "terminal", now=world.clock.now
+    )
+    [first] = world.timers.projection.pending()
+    assert first.repeat == "weekly" and "chaque semaine" in str(
+        world.provider.requests[-1].messages[-1]["content"]
+    )
+
+    world.clock.now = at(20, 9)
+    world.provider.extend(reply("Les poubelles !"))
+    assert await world.engine().tick() == [f"timer:{first.id}"]
+    [second] = world.timers.projection.pending()
+    assert second.id != first.id and second.due_at == at(27, 9)  # DST ended on the 25th
+    assert second.text == first.text and second.trust is Trust.OWNER
+
+    world.timers = Timers(world.journal, TimerProjection())  # a restart: rebuilt from journal
+    await world.timers.sync()
+    [rebuilt] = world.timers.projection.pending()
+    assert rebuilt == second
+
+    await world.timers.cancel(second.id, "owner request", OWNER_PROVENANCE)
+    assert world.timers.projection.pending() == []
+
+
+def test_a_series_keeps_its_day_and_skips_what_was_missed() -> None:
+    def series(repeat: str, anchor: datetime, due: datetime | None = None) -> Timer:
+        return Timer("r_1", due or anchor, "x", "t", Trust.OWNER, 1, repeat=repeat, anchor=anchor)
+
+    jan31 = datetime(2026, 1, 31, 9, tzinfo=PARIS)
+    assert next_due(series("monthly", jan31), jan31) == datetime(2026, 2, 28, 9, tzinfo=PARIS)
+    feb28 = datetime(2026, 2, 28, 9, tzinfo=PARIS)
+    assert next_due(series("monthly", jan31, feb28), feb28) == datetime(
+        2026, 3, 31, 9, tzinfo=PARIS
+    )
+    friday = at(23, 7, 30)
+    assert next_due(series("weekdays", friday), friday) == at(26, 7, 30)  # not the weekend
+    late = at(29, 12)  # Orion was stopped three days: the missed ones are not sent in a burst
+    assert next_due(series("daily", at(26, 8)), late) == at(30, 8)
+    assert next_due(series("yearly", at(20, 9)), at(20, 9)) == datetime(
+        2027, 10, 20, 9, tzinfo=PARIS
+    )
+
+
+async def test_a_reminder_can_be_moved_later(world: World) -> None:
+    await world.timers.schedule(
+        at(19, 19),
+        "Appeler maman",
+        "t",
+        OWNER_PROVENANCE,
+        Trust.OWNER,
+        repeat="daily",
+        timezone="Europe/Paris",
+    )
+    [timer] = world.timers.projection.pending()
+    world.provider.extend(
+        call_tools(("reminder_move", {"reminder_id": timer.id, "when": "2026-10-19T19:30"})),
+        reply("Je te le redis à 19h30."),
+    )
+    await world.orion.handle_owner_message(
+        "owner", "redis-le moi dans une demi-heure", "terminal", now=world.clock.now
+    )
+    [moved] = world.timers.projection.pending()
+    assert moved.id != timer.id and moved.due_at == at(19, 19, 30)
+    assert (moved.text, moved.repeat) == ("Appeler maman", "daily")
+    assert "déplacé" in str(world.provider.requests[-1].messages[-1]["content"])
 
 
 async def test_remind_me_refuses_the_past(world: World) -> None:

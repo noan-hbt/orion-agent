@@ -13,12 +13,21 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Provenance
-from orion.initiative.timers import Timer, Timers
+from orion.initiative.timers import Repeat, Timer, Timers
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 _WEEKDAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+REMINDER_ACTIONS = {"reminders_list": "list", "reminder_move": "move", "reminder_cancel": "cancel"}
+"""The reminder tools grouped as `reminders` actions; `remind_me` stays apart."""
 _GRACE = timedelta(minutes=1)
 _HORIZON = timedelta(days=3 * 366)
+REPEAT_FR = {
+    "daily": "chaque jour",
+    "weekdays": "chaque jour de semaine",
+    "weekly": "chaque semaine",
+    "monthly": "chaque mois",
+    "yearly": "chaque année",
+}
 
 
 def describe_moment(moment: datetime, timezone: str) -> str:
@@ -45,6 +54,16 @@ class RemindMeInput(BaseModel):
     by_call: bool = Field(
         default=False, description="Call the owner instead of messaging (e.g. a wake-up call)"
     )
+    repeat: Repeat = Field(
+        default="", description="Again at the same time each day, weekday, week, month or year"
+    )
+
+
+class ReminderMoveInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reminder_id: str
+    when: str = Field(description="New ISO date-time, local unless an offset is given")
 
 
 class ReminderCancelInput(BaseModel):
@@ -59,7 +78,8 @@ class RemindersListInput(BaseModel):
 
 
 def _line(timer: Timer, timezone: str) -> str:
-    return f"({timer.id}) {describe_moment(timer.due_at, timezone)} : {timer.text}"
+    pace = f" ({REPEAT_FR[timer.repeat]})" if timer.repeat else ""
+    return f"({timer.id}) {describe_moment(timer.due_at, timezone)}{pace} : {timer.text}"
 
 
 def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> list[Tool]:
@@ -69,26 +89,38 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
     def now(timezone: str) -> datetime:
         return clock() if clock is not None else datetime.now(ZoneInfo(timezone))
 
-    async def remind_me(args: Any, ctx: ToolContext) -> ToolResult:
+    def check(when: str, timezone: str) -> datetime | ToolResult:
         try:
-            due = parse_moment(args.when, ctx.timezone)
+            due = parse_moment(when, timezone)
         except ValueError:
-            return ToolResult(f"Not an ISO date-time: {args.when!r}", is_error=True)
+            return ToolResult(f"Not an ISO date-time: {when!r}", is_error=True)
+        current = now(timezone)
+        if due < current - _GRACE:
+            return ToolResult(
+                f"{describe_moment(due, timezone)} is in the past "
+                f"(now: {describe_moment(current, timezone)}).",
+                is_error=True,
+            )
+        if due > current + _HORIZON:
+            return ToolResult("Reminders are limited to three years ahead.", is_error=True)
+        return due
+
+    async def remind_me(args: Any, ctx: ToolContext) -> ToolResult:
         if args.by_call and not calls:
             return ToolResult(
                 "Calls are off: the owner has not enabled [voice] in orion.toml. Say so, and "
                 "offer a message reminder instead.",
                 is_error=True,
             )
-        current = now(ctx.timezone)
-        if due < current - _GRACE:
+        due = check(args.when, ctx.timezone)
+        if isinstance(due, ToolResult):
+            return due
+        if args.repeat == "weekdays" and due.astimezone(ZoneInfo(ctx.timezone)).weekday() >= 5:
             return ToolResult(
-                f"{describe_moment(due, ctx.timezone)} is in the past "
-                f"(now: {describe_moment(current, ctx.timezone)}).",
+                f"{describe_moment(due, ctx.timezone)} is a weekend day: start the weekday "
+                "series on a weekday.",
                 is_error=True,
             )
-        if due > current + _HORIZON:
-            return ToolResult("Reminders are limited to three years ahead.", is_error=True)
         timer_id = await timers.schedule(
             due,
             args.what,
@@ -102,10 +134,31 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             correlation_id=ctx.correlation_id,
             causation_id=ctx.origin_event_id,
             by_call=args.by_call,
+            repeat=args.repeat,
+            timezone=ctx.timezone,
         )
         how = " (par appel)" if args.by_call else ""
+        pace = f", puis {REPEAT_FR[args.repeat]}" if args.repeat else ""
         return ToolResult(
-            f"Rappel programmé ({timer_id}) pour {describe_moment(due, ctx.timezone)}{how}.",
+            f"Rappel programmé ({timer_id}) pour {describe_moment(due, ctx.timezone)}{pace}{how}.",
+            data={"reminder_id": timer_id, "due_at": due.isoformat()},
+        )
+
+    async def reminder_move(args: Any, ctx: ToolContext) -> ToolResult:
+        await timers.sync()
+        if timers.projection.get(args.reminder_id) is None:
+            return ToolResult(f"No pending reminder {args.reminder_id}", is_error=True)
+        due = check(args.when, ctx.timezone)
+        if isinstance(due, ToolResult):
+            return due
+        timer_id = await timers.move(
+            args.reminder_id,
+            due,
+            Provenance(source=f"thread:{ctx.thread_id}", actor="orion:core"),
+            ctx.timezone,
+        )
+        return ToolResult(
+            f"Rappel déplacé ({timer_id}) à {describe_moment(due, ctx.timezone)}.",
             data={"reminder_id": timer_id, "due_at": due.isoformat()},
         )
 
@@ -142,6 +195,14 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             description="Cancel a scheduled reminder.",
             input_model=ReminderCancelInput,
             handler=reminder_cancel,
+            effect=Effect.INTERNAL,
+            reversibility=Reversibility.REVERSIBLE,
+        ),
+        Tool(
+            name="reminder_move",
+            description="Move a scheduled reminder to another moment (« plus tard », snooze).",
+            input_model=ReminderMoveInput,
+            handler=reminder_move,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
         ),

@@ -23,7 +23,7 @@ from orion.guardian.policy import Guardian
 from orion.initiative.later import STANDS_FOR, later_tool
 from orion.initiative.planned import planned_tools
 from orion.initiative.timers import TimerProjection, Timers
-from orion.initiative.tools import reminder_tools
+from orion.initiative.tools import REMINDER_ACTIONS, reminder_tools
 from orion.memory.extractor import MemoryExtractor
 from orion.memory.people import people_tools
 from orion.memory.provenance import Provenances, provenance_tools
@@ -183,12 +183,12 @@ def core_tools(plate: Plate) -> list[Tool]:
             [t for t in memory if t.name in commitments],
             commitments,
         ),
-        *[t for t in reminders if t.name not in {"reminder_cancel", "reminders_list"}],
+        *[t for t in reminders if t.name not in REMINDER_ACTIONS],
         grouped(
             "reminders",
-            "The reminders set with remind_me: see them, cancel one.",
-            [t for t in reminders if t.name in {"reminder_cancel", "reminders_list"}],
-            {"reminders_list": "list", "reminder_cancel": "cancel"},
+            "The reminders set with remind_me: see them, move one (snooze), cancel one.",
+            [t for t in reminders if t.name in REMINDER_ACTIONS],
+            REMINDER_ACTIONS,
         ),
         *[t for t in adaptation if t.name == "initiative_settings"],
         grouped(

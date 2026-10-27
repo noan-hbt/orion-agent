@@ -3754,3 +3754,24 @@ Quand Orion redémarrait après un changement (un réglage, `systemctl restart` 
   alors.
 - **Pas de boucle :** après 3 réveils de suite sans message du propriétaire entre eux
   (`WOKEN_AT_MOST`), un redémarrage ne le réveille plus.
+
+## D166 — Des rappels qui reviennent, et qu'on repousse
+
+*27/10/2026 · acceptée · complète D157*
+
+« Tous les lundis à 8h », « chaque 1er du mois » : Orion ne savait poser qu'un rappel à la
+fois, et une mission (`every_hours`) n'est pas faite pour ça. Repousser un rappel (« redis-le
+moi dans une heure ») demandait de l'annuler puis d'en poser un autre.
+
+- **`repeat` sur un rappel** (`later` tell, `remind_me`) : chaque jour, jour de semaine,
+  semaine, mois ou année, à la même heure locale. Une série n'a qu'une occurrence en attente :
+  quand elle part, la suivante est programmée dans le même ajout au journal, sous un nouvel
+  id. Annuler l'occurrence en attente arrête la série.
+- **Le rythme se compte depuis le premier rappel** (`anchor`, dans le fuseau du propriétaire) :
+  le 31 de chaque mois tombe le 30 ou le 28 sans glisser ensuite, et 9h reste 9h au
+  changement d'heure. Les occurrences manquées pendant un arrêt sont sautées, pas envoyées
+  d'un coup.
+- **Déplacer un rappel** : `reminders` move, ou `later` tell avec son `id` r_… et un nouveau
+  `at`. Le texte, l'appel et le rythme sont gardés.
+- Un rappel sans rythme garde exactement le payload d'avant : les journaux existants se
+  relisent tels quels.

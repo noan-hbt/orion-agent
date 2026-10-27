@@ -4,13 +4,20 @@
 
 `TimerProjection` is rebuilt from those events; nothing about a pending reminder lives only in
 memory. Times are stored as ISO 8601 with an explicit offset.
+
+A repeating reminder (D166) is one occurrence at a time: when one fires, the next is scheduled
+in the same append, under a new id, counted from the series' first moment (`anchor`) in the
+owner's timezone, so "the 31st of each month" falls on the last day of a short month and 9:00
+stays 9:00 across a DST change. Cancelling the pending occurrence ends the series.
 """
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timedelta
+from typing import Any, Literal, get_args
+from zoneinfo import ZoneInfo
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -20,6 +27,9 @@ from orion.core.projections import ProjectionRunner
 TIMER_SCHEDULED = "timer.scheduled"
 TIMER_FIRED = "timer.fired"
 TIMER_CANCELLED = "timer.cancelled"
+
+Repeat = Literal["", "daily", "weekdays", "weekly", "monthly", "yearly"]
+REPEATS: tuple[str, ...] = get_args(Repeat)
 
 
 @dataclass(frozen=True)
@@ -31,6 +41,36 @@ class Timer:
     trust: Trust
     scheduled_seq: int
     by_call: bool = False
+    repeat: str = ""
+    anchor: datetime | None = None
+    """The series' first moment, in the owner's timezone; None for a one-off."""
+
+
+def _shift(anchor: datetime, repeat: str, n: int) -> datetime:
+    if repeat in ("daily", "weekdays"):
+        return anchor + timedelta(days=n)  # same tzinfo: the wall-clock time is kept
+    if repeat == "weekly":
+        return anchor + timedelta(weeks=n)
+    if repeat in ("monthly", "yearly"):
+        months = anchor.month - 1 + (n if repeat == "monthly" else 12 * n)
+        year, month = anchor.year + months // 12, months % 12 + 1
+        day = min(anchor.day, calendar.monthrange(year, month)[1])
+        return anchor.replace(year=year, month=month, day=day)
+    raise ValueError(f"unknown repeat {repeat!r}")
+
+
+def next_due(timer: Timer, after: datetime) -> datetime:
+    """The series' first occurrence strictly after both `after` and this one: missed ones
+    (Orion was stopped) are skipped, not delivered in a burst."""
+    if not timer.repeat or timer.anchor is None:
+        raise ValueError(f"{timer.id} does not repeat")
+    floor = max(after, timer.due_at)
+    n = 1
+    while True:
+        candidate = _shift(timer.anchor, timer.repeat, n)
+        if candidate > floor and (timer.repeat != "weekdays" or candidate.weekday() < 5):
+            return candidate
+        n += 1
 
 
 class TimerProjection:
@@ -64,6 +104,8 @@ class TimerProjection:
                 trust=event.trust,
                 scheduled_seq=event.seq,
                 by_call=bool(payload.get("by_call", False)),
+                repeat=str(payload.get("repeat", "")),
+                anchor=_anchor(payload),
             )
         elif event.kind in (TIMER_FIRED, TIMER_CANCELLED):
             self._pending.pop(str(payload["timer_id"]), None)
@@ -77,6 +119,14 @@ class TimerProjection:
 
     def get(self, timer_id: str) -> Timer | None:
         return self._pending.get(timer_id)
+
+
+def _anchor(payload: dict[str, Any]) -> datetime | None:
+    if not payload.get("repeat"):
+        return None
+    return datetime.fromisoformat(str(payload["anchor"])).astimezone(
+        ZoneInfo(str(payload["timezone"]))
+    )
 
 
 class Timers:
@@ -100,19 +150,19 @@ class Timers:
         correlation_id: str | None = None,
         causation_id: str | None = None,
         by_call: bool = False,
+        repeat: str = "",
+        timezone: str = "",
     ) -> str:
         if due_at.tzinfo is None:
             raise ValueError("due_at must be timezone-aware")
+        if repeat not in REPEATS:
+            raise ValueError(f"unknown repeat {repeat!r}")
+        if repeat and not timezone:
+            raise ValueError("a repeating reminder needs the owner's timezone")
         timer_id = f"r_{new_id()}"
         await self._append(
             TIMER_SCHEDULED,
-            {
-                "timer_id": timer_id,
-                "due_at": due_at.isoformat(),
-                "text": text,
-                "thread_id": thread_id,
-                "by_call": by_call,
-            },
+            _scheduled(timer_id, due_at, text, thread_id, by_call, repeat, due_at, timezone),
             provenance,
             trust,
             correlation_id,
@@ -120,15 +170,43 @@ class Timers:
         )
         return timer_id
 
-    async def fired(self, timer_id: str, correlation_id: str | None = None) -> None:
-        await self._append(
-            TIMER_FIRED,
-            {"timer_id": timer_id},
-            Provenance(source="orion:initiative", actor="orion:initiative"),
-            Trust.SYSTEM,
-            correlation_id,
-            None,
-        )
+    async def fired(
+        self, timer_id: str, correlation_id: str | None = None, now: datetime | None = None
+    ) -> None:
+        """A repeating reminder schedules its next occurrence, after `now`, in the same append."""
+        correlation_id = correlation_id or new_id()
+        system = Provenance(source="orion:initiative", actor="orion:initiative")
+        events = [
+            NewEvent(
+                kind=TIMER_FIRED,
+                payload={"timer_id": timer_id},
+                provenance=system,
+                trust=Trust.SYSTEM,
+                correlation_id=correlation_id,
+            )
+        ]
+        timer = self.projection.get(timer_id)
+        if timer is not None and timer.repeat and timer.anchor is not None:
+            events.append(
+                NewEvent(
+                    kind=TIMER_SCHEDULED,
+                    payload=_scheduled(
+                        f"r_{new_id()}",
+                        next_due(timer, now or timer.due_at),
+                        timer.text,
+                        timer.thread_id,
+                        timer.by_call,
+                        timer.repeat,
+                        timer.anchor,
+                        str(timer.anchor.tzinfo),
+                    ),
+                    provenance=system,
+                    trust=timer.trust,  # the owner's request, not the system's
+                    correlation_id=correlation_id,
+                )
+            )
+        await self._journal.append(events)
+        await self.sync()
 
     async def cancel(self, timer_id: str, reason: str, provenance: Provenance) -> None:
         await self._append(
@@ -138,6 +216,25 @@ class Timers:
             Trust.SYSTEM,
             None,
             None,
+        )
+
+    async def move(
+        self, timer_id: str, due_at: datetime, provenance: Provenance, timezone: str
+    ) -> str:
+        """Cancel and schedule again, same text and pace; a series restarts from `due_at`."""
+        timer = self.projection.get(timer_id)
+        if timer is None:
+            raise ValueError(f"no pending reminder {timer_id}")
+        await self.cancel(timer_id, f"moved to {due_at.isoformat()}", provenance)
+        return await self.schedule(
+            due_at,
+            timer.text,
+            timer.thread_id,
+            provenance,
+            timer.trust,
+            by_call=timer.by_call,
+            repeat=timer.repeat,
+            timezone=timezone,
         )
 
     async def _append(
@@ -162,3 +259,25 @@ class Timers:
             ]
         )
         await self.sync()
+
+
+def _scheduled(
+    timer_id: str,
+    due_at: datetime,
+    text: str,
+    thread_id: str,
+    by_call: bool,
+    repeat: str,
+    anchor: datetime,
+    timezone: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "timer_id": timer_id,
+        "due_at": due_at.isoformat(),
+        "text": text,
+        "thread_id": thread_id,
+        "by_call": by_call,
+    }
+    if repeat:  # a one-off keeps the payload it always had
+        payload |= {"repeat": repeat, "anchor": anchor.isoformat(), "timezone": timezone}
+    return payload
