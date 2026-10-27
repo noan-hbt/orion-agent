@@ -3523,3 +3523,24 @@ dépanner, et pour ce qui tourne ailleurs que sur le serveur (`orion hand` sur s
 Reste sur le serveur : la connexion Google Agenda en écriture (`orion google auth`), à faire
 une fois, et `orion inkbox setup`, qui fait partie de l'installation.
 
+
+## D155 — La veille se réveille quand sa vie bouge (complète D150)
+
+*27/10/2026 · acceptée*
+
+La veille ne tournait qu'à heures fixes : un rendez-vous déplacé à 9 h n'était regardé dans
+son ensemble qu'à 12 h 30. Désormais, ce qui bouge dans sa vie déclenche une veille entre les
+heures fixes :
+- un **mail** qu'Orion a jugé bon de lui dire (l'alerte `mail:` est partie : c'est lui qui a
+  lu le mail et l'a trouvé important, D114) ;
+- son **agenda** dans les 48 h : un rendez-vous ajouté, déplacé (« Dentiste a bougé : jeu 10:00
+  → jeu 14:00 »), disparu, ou une invitation. La première lecture d'un agenda n'est pas une
+  nouvelle ; ce qu'Orion a écrit lui-même non plus.
+
+Le projection de la veille les suit à partir du journal, sans nouvel événement de source.
+Garde-fous : trois par jour au plus (`stirred_per_day`, 0 pour n'en garder aucune), deux heures
+au moins après la veille précédente (`stirred_gap_minutes`), et rien si une veille fixe arrive
+dans l'heure : elle le verra. Chaque veille, fixe ou déclenchée, lit ce qui a bougé depuis la
+précédente (`<ce-qui-a-bouge>`) ; une veille déclenchée sait qu'elle l'est et regarde d'abord
+ce que ça change pour le reste. `watch.done` garde son heure, ce qu'elle a vu et si elle a été
+déclenchée.

@@ -186,7 +186,7 @@ voit, pas les garanties qui le rendent sûr.
 | Chantier | État | Décision |
 |---|---|---|
 | 1. Les situations | fait | D149 |
-| 2. La veille | fait (heures fixes ; pas encore déclenchée par un événement) | D150 |
+| 2. La veille | fait, à heures fixes et quand un mail ou l'agenda bouge | D150, D155 |
 | 3. Moins d'outils | tiroir et « faire maintenant » faits ; un seul « plus tard » et constitution courte pas faits | D151 |
 | 4. La fiabilité mesurée | `orion misses` fait ; relevé de la semaine pas fait | D152 |
 | 5. Le format par canal | déjà l'architecture (D126) : rien changé | — |
