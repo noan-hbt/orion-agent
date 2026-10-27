@@ -7,7 +7,8 @@ in French; code, identifiers and comments are in English.
 ## Commands
 
 - `uv sync` — install
-- `uv run pytest -q` — tests
+- `uv run pytest -q tests/test_x.py` — tests (only the files touched; a stuck test fails after
+  60 s). Without `uv` on the machine: `.venv/Scripts/pytest.exe` (Windows) or `.venv/bin/pytest`
 - `uv run ruff format . && uv run ruff check .` — format and lint
 - `uv run pyright` — strict type check (must stay at 0 errors)
 - `uv run orion doctor` — check config and storage
@@ -26,7 +27,11 @@ in French; code, identifiers and comments are in English.
   wired into `app.py` or `serve.py`. The core stays small.
 - Everything that leaves Orion goes through `guardian.outbox.Outbox` (journaled, idempotent).
   Orion speaks first only through the initiative engine, which journals every decision.
-- Every behaviour change comes with a test.
+- Tests: few, and on behaviour. A new feature gets one or two tests of what the owner would
+  notice, not one per branch; a fix gets the test that would have caught it. Never assert exact
+  wording, layout or counts that are not the point: they break on every change. Run only the
+  test files you touched (`uv run pytest -q tests/test_x.py`), never the whole suite. A test
+  that breaks for a reason unrelated to the change is simplified or deleted, not patched again.
 - Prompt-cache contract (`tests/test_runtime_cache.py`): each model request must extend the
   previous one byte for byte. Nothing volatile (time, retrieved memory) goes in the system
   message; journaled messages are replayed exactly as sent; the tool registry is fixed and
