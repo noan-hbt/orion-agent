@@ -32,14 +32,18 @@ constitution rewritten short, D158)."""
 CONSTITUTION_DEFAULT = 25_000
 """Characters of the system message with the default modules: the rework's goal (33.2k
 before the constitution was rewritten short, D158; 24.4k after)."""
-TOOLS_DEFAULT = 30_400
+TOOLS_DEFAULT = 30_500
 """Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 40.6k with
 background tasks, D110, after trimming missions; 35.3k without pydantic's titles and null
 defaults, 26/10/2026; 36.4k with `awaiting`, D129; 38.6k once grouped tools show each field's
 type and allowed values, D132; 40k with `situation`, D149; 32.7k with the rare
-in the drawer, `orion`, D151; 30.3k with one way to say « later », D157)."""
+in the drawer, `orion`, D151; 30.3k with one way to say « later », D157; 30.4k with
+`contacts` in the drawer, D159)."""
 ONE_TOOL = 1_900
 """Characters of one tool's schema, actions included (the largest, `intention`: 1.6k)."""
+DRAWER = 2_200
+"""Characters of the drawer, `orion`, which lists a line per rare tool (1.9k with `contacts`,
+D159)."""
 
 
 def test_the_system_message_with_every_module_fits(tmp_path: Path) -> None:
@@ -56,8 +60,9 @@ async def test_the_tool_schemas_fit(tmp_path: Path) -> None:
         system = constitution(app.modules, offers(config), config.memory.owner_names)
     assert len(system) <= CONSTITUTION_DEFAULT
     sizes = {s["function"]["name"]: len(json.dumps(s, ensure_ascii=False)) for s in specs}
-    assert max(sizes.values()) <= ONE_TOOL, max(sizes, key=lambda n: sizes[n])
     assert sum(sizes.values()) <= TOOLS_DEFAULT
+    assert sizes.pop("orion") <= DRAWER
+    assert max(sizes.values()) <= ONE_TOOL, max(sizes, key=lambda n: sizes[n])
 
 
 def test_a_module_with_a_long_section_does_not_load(tmp_path: Path) -> None:

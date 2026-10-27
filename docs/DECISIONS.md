@@ -3561,3 +3561,24 @@ D154) relit les sept derniers jours du journal, à côté des sept d'avant :
 
 Rien de nouveau n'est enregistré : `turn.finished`, `tool.executed`, `spend.recorded` et les
 signaux d'adaptation suffisent. Rien ne quitte son serveur.
+
+## D159 — Son carnet d'adresses (chantier 6, deuxième source)
+
+*27/10/2026 · acceptée*
+
+Orion ne connaissait les gens de sa vie que par ce qu'il en disait. Son téléphone les connaît
+tous : leurs numéros, leurs adresses, leurs anniversaires. Il exporte ses contacts en un
+fichier `.vcf` (iPhone : Contacts, tout sélectionner, partager ; Android : Contacts, exporter)
+et le donne à Orion depuis l'app (`POST /api/contacts/import`, Réglages) ou avec
+`orion contacts import <fichier>`.
+
+Le module `contacts` (actif par défaut, vide tant qu'il n'a rien importé) lit les vCard 2.1 à
+4.0 (lignes repliées, échappements, quoted-printable des vieux Android, année absente d'iOS
+écrite 1604) : nom, surnoms, numéros, adresses, anniversaire, organisation ; le reste (photos,
+notes) est ignoré. Chaque fiche est journalisée une fois (`contact.card`), puis seulement si
+elle change ; réimporter le même fichier ne fait rien. `contacts` (dans le tiroir) retrouve
+quelqu'un par son nom, un surnom ou un numéro. Un anniversaire sur une fiche devient un
+anniversaire suivi par le module des proches (`relation.birthday`), sauf sur sa propre fiche.
+
+Le carnet reste un carnet : rien n'en devient un fait de la mémoire, et rien ne part. Pas de
+synchronisation CardDAV pour l'instant : l'export suffit, et réimporter met à jour.

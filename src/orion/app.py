@@ -128,6 +128,7 @@ DRAWER_TOOLS = frozenset(
         "chronicle",
         "configure_change",
         "configure_show",
+        "contacts",
         "console_link",
         "contain_source",
         "doubt",

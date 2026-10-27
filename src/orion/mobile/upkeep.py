@@ -8,6 +8,7 @@ in the app's Serveur screen:
 - **the phone's token** (D153): a new one for the Shortcuts automations, with the addresses;
 - **his ChatGPT plan** (D62): signed in or not, the sign-in itself (the address to open, then
   the one the browser was sent back to), signing out;
+- **his address book** (D159): the `.vcf` his phone exports;
 - **his notes** (`orion library import`): files picked on the phone, kept whole in the library;
 - **a machine** (D1): the one-time code to pair it. A hand's answers count as his own, so this
   one is signed with Face ID for this very machine: a stolen session cannot add one.
@@ -32,6 +33,7 @@ import structlog
 
 from orion.adaptation.misses import misses
 from orion.adaptation.week import weeks
+from orion.contacts.module import Contacts
 from orion.core.events import Event, Provenance
 from orion.core.journal import EventStore
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
@@ -125,6 +127,7 @@ class Upkeep:
     hands: Callable[[], HandsDesk | None] = lambda: None
     places: Callable[[], Places | None] = lambda: None
     library: Callable[[], Library | None] = lambda: None
+    contacts: Callable[[], Contacts | None] = lambda: None
     signer: Signer | None = None
 
     @property
@@ -193,6 +196,16 @@ class Upkeep:
                 added.append(name)
         log.info("upkeep.library_import", added=len(added), skipped=len(skipped))
         return {"added": added, "skipped": skipped}
+
+    # -- his address book (D159) ------------------------------------------------------------
+
+    async def contacts_import(self, vcf: str) -> dict[str, Any]:
+        contacts = self.contacts()
+        if contacts is None:
+            raise UpkeepError("the contacts module is off")
+        if "BEGIN:VCARD" not in vcf.upper():
+            raise UpkeepError("not a contacts export (.vcf)")
+        return (await contacts.import_vcards(vcf, "app")).payload()
 
     # -- his ChatGPT plan (D62) ---------------------------------------------------------------
 
