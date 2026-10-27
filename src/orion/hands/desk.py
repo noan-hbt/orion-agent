@@ -41,7 +41,9 @@ PAIRED = "hands.paired"
 REVOKED = "hands.revoked"
 CODE_TTL = timedelta(minutes=10)
 CALL_TIMEOUT = 30.0
-ACTIONS = ("notify", "open_url", "find_files", "read_file", "get_file")
+ACTIONS = ("notify", "open_url", "find_files", "read_file", "get_file", "exit")
+EXIT_TIMEOUT = 10.0
+"""How long a machine may take to open a way out for the browser (`orion.hands.exit`)."""
 
 
 def _hash(value: str) -> str:
@@ -95,6 +97,19 @@ class Connection:
     pending: dict[str, asyncio.Future[dict[str, Any]]] = field(
         default_factory=dict[str, asyncio.Future[dict[str, Any]]]
     )
+    exits: dict[str, asyncio.Future[Stream]] = field(
+        default_factory=dict[str, asyncio.Future["Stream"]]
+    )
+    """Ways out asked of this machine, until it dials back for them."""
+
+
+@dataclass
+class Stream:
+    """One TCP connection the owner's machine opened for the browser, carried by a WebSocket
+    it dialled back on (`/hands/exit/<id>`): bytes in, bytes out, until either side ends."""
+
+    socket: WebSocket
+    done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class HandsDesk:
@@ -170,6 +185,29 @@ class HandsDesk:
             raise HandError(str(result.get("error", "refused")))
         return result
 
+    def exit_device(self) -> str | None:
+        """A machine online that lets the browser go out through it."""
+        return next((d for d, c in sorted(self.connected.items()) if "exit" in c.actions), None)
+
+    async def open_exit(self, host: str, port: int) -> Stream:
+        """A connection to host:port from the owner's machine, which checks it itself."""
+        device = self.exit_device()
+        connection = self.connected.get(device) if device else None
+        if device is None or connection is None:
+            raise HandError("no machine lets the browser out")
+        stream_id = secrets.token_hex(12)
+        future: asyncio.Future[Stream] = asyncio.get_running_loop().create_future()
+        connection.exits[stream_id] = future
+        try:
+            await connection.socket.send_text(
+                json.dumps({"type": "exit", "stream": stream_id, "host": host, "port": port})
+            )
+            return await asyncio.wait_for(future, EXIT_TIMEOUT)
+        except TimeoutError as exc:
+            raise HandError(f"{device} did not open the way to {host}") from exc
+        finally:
+            connection.exits.pop(stream_id, None)
+
     # -- the web side -------------------------------------------------------------------------
 
     def app(self) -> Starlette:
@@ -177,6 +215,7 @@ class HandsDesk:
             routes=[
                 Route("/hands/pair", self._pair, methods=["POST"]),
                 WebSocketRoute("/hands/connect", self.connect),
+                WebSocketRoute("/hands/exit/{stream}", self.exit),
             ]
         )
 
@@ -221,6 +260,10 @@ class HandsDesk:
                     future = connection.pending.get(str(message.get("id")))
                     if future is not None and not future.done():
                         future.set_result(dict(message))
+                elif message.get("type") == "exit_refused":
+                    way = connection.exits.get(str(message.get("stream")))
+                    if way is not None and not way.done():
+                        way.set_exception(HandError(str(message.get("error", "refused"))))
         except (WebSocketDisconnect, ValueError):
             log.info("hands.disconnected", device=device)
         finally:
@@ -229,6 +272,24 @@ class HandsDesk:
             for future in connection.pending.values():
                 if not future.done():
                     future.set_exception(HandError(f"{device} went offline"))
+            for way in connection.exits.values():
+                if not way.done():
+                    way.set_exception(HandError(f"{device} went offline"))
+
+    async def exit(self, socket: WebSocket) -> None:
+        """A machine dialling back with the connection it opened for the browser."""
+        await self._runner.catch_up()
+        auth = socket.headers.get("authorization", "")
+        device = self._device_for(auth.removeprefix("Bearer ").strip()) if auth else None
+        connection = self.connected.get(device) if device else None
+        way = connection.exits.get(socket.path_params["stream"]) if connection else None
+        if way is None or way.done():
+            await socket.close(code=1008)
+            return
+        await socket.accept()
+        stream = Stream(socket)
+        way.set_result(stream)
+        await stream.done.wait()  # the browser's side carries the bytes, then lets go
 
     async def _record(self, kind: str, payload: dict[str, object]) -> None:
         await self._journal.append(

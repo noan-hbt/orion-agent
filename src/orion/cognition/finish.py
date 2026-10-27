@@ -49,6 +49,8 @@ _PROMISE = re.compile(
             r"me renseigner|surveiller)\b",
             r"\bje (?:garde|garderai) (?:un )?(?:œil|oeil)\b",
             r"\bje m'en occupe\b(?!\s*\?)",
+            r"\bje (?:te )?(?:programme|programmerai|mets|mettrai|cale|calerai) un rappel\b",
+            r"\bje te (?:rappelle|rappellerai|relance|relancerai) (?:de|d'|avant|quand|le|la)\b",
         )
     ),
     re.IGNORECASE,
@@ -100,8 +102,17 @@ FILLER_NOTE = (
 )
 
 
+_LAST_OFFER = re.compile(
+    r"(?:^|[.!?…]\s+)(?:je (?:peux|pourrais)|si tu veux,? je)\b[^.!?…]*[.!?…]?\s*$",
+    re.IGNORECASE,
+)
+"""The last sentence offers to do something, question mark or not (« Je peux aussi te
+programmer un rappel. »): seen for real, it went out as the end of the reply."""
+
+
 def ends_on_offer(text: str) -> bool:
-    return _OFFER.search(text.strip()[-TAIL_CHARS:]) is not None
+    tail = text.strip()[-TAIL_CHARS:]
+    return _OFFER.search(tail) is not None or _LAST_OFFER.search(tail) is not None
 
 
 def promises_later(text: str) -> bool:

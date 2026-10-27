@@ -13,9 +13,10 @@ of what was already said, so nothing is repeated and a restart never re-sends. T
 wait waits for a break (the end of a meeting). On Sunday evening, Orion tells the owner what it
 held back that week.
 
-The rhythm (D144): what Orion says of its own accord interrupts only when it cannot wait
-(`URGENT`, or it would be stale before the next point). The rest waits for the next point, the
-morning's or the evening's, and goes in that one message. A kind of message the owner has not
+The rhythm (D144, D146): what Orion has to say of its own accord goes as soon as the arbiter
+lets it (`GOES_NOW`); only small things (a find, a question to get to know him, a memory to
+check) wait for the next point, unless they would be stale by then, and go in that one
+message. A kind of message the owner has not
 answered for a while (`IGNORED_AFTER` in a row) is no longer sent: it shows in the Sunday
 « ce que j'ai failli te dire », where he can say it should not have stopped. The model only
 writes the message (or answers `SILENCE`); it does not decide whether to interrupt. Every
@@ -52,8 +53,9 @@ from orion.runtime import Orion, is_silence
 
 log = structlog.get_logger(__name__)
 
-URGENT = 0.75
-"""From this importance, what Orion has to say goes now; below, it waits for the next point."""
+GOES_NOW = 0.45
+"""From this importance, what Orion has to say goes as soon as the arbiter lets it; below, a
+small thing waits for the next point. 0.75 in D144 held back too much: he found Orion passive."""
 IGNORED_AFTER = 4
 """Deliveries of a kind, in a row and within `IGNORED_FOR`, he never engaged with: it stops."""
 IGNORED_FOR = timedelta(days=30)
@@ -160,11 +162,11 @@ class DigestSource(Protocol):
 class InitiativeSettings:
     timezone: str = "Europe/Paris"
     thread_id: str = "owner"
-    digests: tuple[time, ...] = (time(8, 30), time(19, 0))
+    digests: tuple[time, ...] = (time(8, 30), time(13, 0), time(19, 0))
     digest_window: timedelta = timedelta(hours=2)
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
-    daily_budget: int = 6
+    daily_budget: int = 12
     heads_up: timedelta = timedelta(minutes=60)
     paused_until: datetime | None = None
     """He paused Orion (from the app): nothing on its own until then, but the reminders he
@@ -504,7 +506,7 @@ class InitiativeEngine:
     def _ignored(self, candidate: Candidate, now: datetime) -> bool:
         return (
             candidate.budgeted
-            and candidate.importance < URGENT
+            and candidate.importance < GOES_NOW
             and not candidate.key.startswith(DIGEST_KEY)
             and self.ledger.ignored(candidate.kind, now)
         )
@@ -512,7 +514,7 @@ class InitiativeEngine:
     def _holds(self, candidate: Candidate, now: datetime, point: Candidate | None) -> bool:
         """What Orion says of its own accord and can wait waits for the point: now if one is
         open, else the next, unless it would be stale by then."""
-        if not candidate.budgeted or candidate.importance >= URGENT or not self._settings.digests:
+        if not candidate.budgeted or candidate.importance >= GOES_NOW or not self._settings.digests:
             return False
         if point is not None:
             return True

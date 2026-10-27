@@ -232,6 +232,10 @@ class BrowserDesk:
             return False
         if live.closer is not None and live.closer is not asyncio.current_task():
             live.closer.cancel()
+        if not self._live and self._session is not None:
+            # Before the last tab goes: the full Chromium ends its session with it, and its
+            # session cookies (a school's sign-in) with them.
+            await self._session.keep_cookies()
         await live.page.close()
         log.info("browser.closed", thread=thread)
         if not self._live and self._session is not None:  # the last tab: the browser goes
@@ -743,7 +747,7 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
             "Bloqué (une adresse du serveur lui-même ou de son réseau, jamais atteinte) : "
             + "; ".join(blocked[:3]),
         ]
-    return "\n".join(lines)
+    return snapshot.wall() + "\n".join(lines)
 
 
 # -- tools --------------------------------------------------------------------------------------

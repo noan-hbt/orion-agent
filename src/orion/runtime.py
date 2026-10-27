@@ -16,7 +16,7 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -152,6 +152,16 @@ class Activity:
     """Orion's plan for this turn, if it keeps one: (step, todo | doing | done)."""
 
 
+class SituationSource(Protocol):
+    async def situation(self, now: datetime) -> list[str]:
+        """Lines for the `<maintenant>` block: what is coming, what is under way."""
+        ...
+
+
+SITUATION_DAYS = 3
+"""Commitments due within this many days are shown as he writes."""
+SITUATION_LINES = 14
+
 Watch = Callable[[Activity], Awaitable[None]]
 """(text, correlation id) → delivered to the owner now: what Orion writes beside a tool call,
 mid-turn, instead of holding everything for the final answer."""
@@ -194,6 +204,8 @@ class Orion:
         is up and talking (`initiative.engine`)."""
         self._projections = ProjectionRunner(journal, [self.threads, self.portrait])
         self._locks: dict[str, asyncio.Lock] = {}
+        self.situation: list[SituationSource] = []
+        """What modules know of where his life stands (his agenda, the missions), D146."""
 
     @property
     def registry(self) -> ToolRegistry:
@@ -477,6 +489,10 @@ class Orion:
             new_base = self._compiler.rebase_point(thread, incoming)
         window = thread.messages[new_base if new_base is not None else thread.base :]
         blocks = await self._memory_blocks(memory_query, window)
+        if thread_id == OWNER_THREAD and kind == "message.received":
+            situation = await self._situation(when, window)
+            if situation:
+                blocks.append(situation)
         if thread_id == OWNER_THREAD and kind == "message.received" and thread.last_seq:
             elsewhere = meanwhile(
                 await self._journal.read(thread.last_seq, READ_AT_MOST),
@@ -846,6 +862,30 @@ class Orion:
             and thread.window_trust() < TRUSTED_FLOOR
             and self._idle(thread, when, self._agent.untrusted_idle_minutes)
         )
+
+    async def _situation(self, when: datetime, window: list[Message]) -> str | None:
+        """Where his life stands as he writes (D146): what is coming on his agenda, what falls
+        due, what Orion follows for him. Shown when it changed since the window last showed
+        it, so Orion can link what he says to it without being asked."""
+        lines: list[str] = []
+        if self._memory is not None:
+            soon = when.date() + timedelta(days=SITUATION_DAYS)
+            for c in await self._memory.store.commitments():
+                due = (c.due or "")[:10]
+                if c.debtor in ("owner", "orion") and due and due <= soon.isoformat():
+                    who = "à faire" if c.debtor == "owner" else "à toi de faire"
+                    lines.append(f"- {who} pour le {due} : {c.what}")
+        for source in self.situation:
+            try:
+                lines += await source.situation(when)
+            except Exception:
+                log.exception("runtime.situation_failed", source=type(source).__name__)
+        if not lines:
+            return None
+        block = "<maintenant>\n" + "\n".join(lines[:SITUATION_LINES]) + "\n</maintenant>"
+        shown = [str(m.get("content") or "") for m in window if m.get("role") == "user"]
+        last = next((s for s in reversed(shown) if "<maintenant>" in s), "")
+        return None if block in last else block
 
     async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
         """Memory to attach to this message: core memory and the playbook when a window starts,

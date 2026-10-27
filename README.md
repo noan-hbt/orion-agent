@@ -107,7 +107,9 @@ d'autres personnes.
 - **Voix v1** (D40) : au téléphone, c'est Orion lui-même qui répond, avec sa mémoire et ses
   outils pendant l'appel.
 - **Mains sur tes appareils** (D41) : `orion hand` sur ton Mac ou ton PC. Il peut t'envoyer des
-  notifications et trouver ou lire des fichiers dans les dossiers que tu partages.
+  notifications et trouver ou lire des fichiers dans les dossiers que tu partages. Avec
+  `orion hand exit on` (D145), le navigateur d'Orion sort par ta connexion quand la machine
+  est allumée : les sites qui refusent les serveurs (Leboncoin…) le laissent passer.
 - **Il conduit son navigateur** (D42) : il ouvre une page, la lit, clique, utilise la recherche
   d'un site, et décide de chaque étape lui-même. Rien ne part de ce navigateur.
 - **Une boucle qui finit proprement** (D43) : à court d'étapes ou de budget, il te dit où il en

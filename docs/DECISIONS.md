@@ -3196,7 +3196,7 @@ dans un dossier où systemd interdit d'écrire ; ils le sont maintenant à côt�
 
 ## D144 — Orion revu : sa voix, son rythme, ce qu'il sait de lui, aller au bout (révise D15, D20, D36)
 
-*27/10/2026 · acceptée*
+*27/10/2026 · acceptée, son rythme révisé par D146*
 
 Le propriétaire trouvait à redire sur les quatre fronts à la fois : le ton (trop assistant, des
 blagues qui tombent à plat, trop long), les prises d'initiative (trop, au mauvais moment, pour
@@ -3248,3 +3248,74 @@ s'arrêtent en route. Une refonte d'ensemble plutôt que quatre rustines.
 Évals ajoutées : `meteo_en_deux_phrases`, `ce_quil_sait_de_lea`, `surveiller_cest_programmer`
 (2/2, 3/3, 2/2 sur `anthropic/claude-haiku-5.5`) ; les garde-fous `salut`, `un_truc_avec_paul`,
 `se_lance_seul_sur_un_but`, `va_au_bout_au_lieu_de_proposer` et `quels_outils` passent toujours.
+
+## D145 — Un navigateur qu'on ne prend plus pour un robot, et la sortie par sa connexion
+
+*27/10/2026 · acceptée*
+
+Orion restait souvent bloqué sur les sites : « Un instant… nous devons vérifier que vous êtes
+humain » (Doctolib), « Accès temporairement restreint » (Leboncoin). Deux causes, mesurées ici :
+
+- **Le navigateur se dénonçait.** Le Chromium « headless shell » de Playwright se présente comme
+  `HeadlessChrome`, avec `navigator.webdriver` vrai, sans plugins, une seule langue, les
+  notifications refusées d'office, une carte graphique logicielle. Désormais (`orion.computer.
+  disguise`), c'est le Chromium complet dans son nouveau mode sans écran, sans les drapeaux
+  d'automatisation. Chaque page reçoit la même histoire cohérente, celle d'un Chrome sur un
+  téléphone Android, de la version réelle du moteur : identifiant et Client Hints (`Sec-CH-UA`)
+  par `Emulation.setUserAgentOverride`, langues françaises, notifications « à demander »,
+  carte graphique et mémoire d'un téléphone. Le texte est tapé touche par touche plutôt que
+  collé d'un coup. Mesuré : tous les contrôles de bot.sannysoft.com passent ; Doctolib, qui
+  bloquait l'ancien navigateur, s'ouvre ; la page de test Cloudflare nowsecure.nl passe.
+- **L'adresse du serveur est refusée**, quoi que fasse le navigateur (DataDome sur Leboncoin :
+  « un robot est sur le même réseau »). Le remède est d'en sortir par une connexion domestique :
+  celle du propriétaire. `orion hand exit on` sur sa machine la laisse servir de sortie
+  (`orion.hands.exit`). Un relais SOCKS5 sur le serveur (127.0.0.1 seulement) confie chaque
+  connexion du navigateur à la machine, qui l'ouvre elle-même et renvoie les octets par une
+  WebSocket qu'elle compose (`/hands/exit/<id>`). La machine refuse tout sauf les ports du web
+  et toute adresse de son propre réseau (sa box, un NAS), vérifiée après sa propre résolution
+  de nom, en se connectant à l'adresse vérifiée. WebRTC ne passe pas à côté du relais. Machine
+  éteinte ou sortie non permise : le relais sort directement du serveur, avec les mêmes
+  gardes ; le navigateur ne casse jamais pour ça.
+- **Un mur se reconnaît** (`disguise.BLOCKED` : DataDome, Cloudflare, PerimeterX, Akamai, les
+  captchas). La vérification de Cloudflare qui laisse passer seule est attendue (15 s). Un
+  captcha qu'une personne peut passer : Orion lui passe la main (`hand_over`), le site le
+  laisse ensuite passer. Un refus de l'adresse : réessayer ne sert à rien. Orion passe par une
+  autre source, ou propose une fois de relier son ordinateur comme sortie.
+
+Constaté au passage : le Chromium complet efface les cookies de session quand son dernier
+onglet se ferme. Ils sont désormais gardés juste avant, et la fermeture ne les écrase plus.
+
+## D146 — Plus d'initiative et d'intuition (révise D144)
+
+*27/10/2026 · acceptée*
+
+« Il manque d'initiative et d'intuition quand je l'utilise. » D144 avait lu la gêne du
+propriétaire dans le mauvais sens et bridé Orion : ce qui ne pouvait pas attendre partait
+seul, tout le reste attendait le point du matin ou du soir.
+
+- **Le rythme** : ce qui a de la substance repart dès que l'arbitre le permet (importance de
+  0,45 et plus : un mail important, une nouvelle d'une mission, un suivi, une veille de
+  départ). Seules les petites choses attendent le prochain point : une trouvaille, une question
+  pour faire connaissance, un souvenir à vérifier, un retour sur un conseil. Les trois points
+  par jour reviennent (8 h 30, 13 h, 19 h), et douze messages de lui-même au plus. Un genre de
+  message auquel il ne répond plus cesse toujours de partir (D144).
+- **Ce qu'il voit quand on lui parle** : un bloc `<maintenant>` accompagne le message du
+  propriétaire quand il a changé depuis la dernière fois. Il contient son agenda d'aujourd'hui
+  et de demain, ce qui arrive à échéance dans les trois jours, ce qu'Orion suit pour lui. Les
+  modules l'alimentent (`Orion.situation`). Orion peut ainsi faire les liens sans les chercher :
+  « tu sors ce soir, mais tu as le dentiste à 8 h ».
+- **La constitution** dit ce qu'est l'intuition : entendre ce qu'il cherche derrière sa
+  demande, faire les liens avec ce qu'Orion sait, faire la suite évidente sans attendre, une
+  idée de plus quand elle est concrète. Un souci ou une envie dits en passant sont une occasion
+  de s'en charger. La relecture finale demande ce qu'un ami attentif aurait vu. « Sans conseils
+  ni questions en plus » (D118) n'y est plus. Budget du message système : 43,4 k.
+
+Évals ajoutées (sur `anthropic/claude-haiku-5.5`) : `voit_venir_le_dentiste` (3/4 ; le raté
+programme un rappel à 7 h sans nommer le dentiste), `prend_en_charge_un_souci_en_passant` (0/4
+avec la seule consigne, 4/4 avec un exemple dans la constitution), `passeport_en_passant`
+(variante : il cherche dans ses papiers et donne la démarche, mais ne note pas la tâche de
+lui-même : la généralisation reste partielle). `salut` est passé à 1/2 avec la première
+version de l'intuition (il récitait ce qu'il savait), puis 4/4 une fois précisé qu'un salut
+appelle un salut. La relecture finale renvoie aussi « je te programme un rappel » quand aucun
+rappel n'est posé, et une dernière phrase qui commence par « Je peux… », même sans point
+d'interrogation.

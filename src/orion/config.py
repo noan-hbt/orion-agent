@@ -290,11 +290,11 @@ class InitiativeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    digests: list[time] = Field(default_factory=lambda: [time(8, 30), time(19, 0)])
+    digests: list[time] = Field(default_factory=lambda: [time(8, 30), time(13, 0), time(19, 0)])
     quiet_start: time = time(22, 30)
     quiet_end: time = time(8, 0)
     daily_budget: int = Field(
-        default=6,
+        default=12,
         ge=0,
         description="What Orion says of its own accord per day, max (what people write to "
         "the owner is passed on outside it)",

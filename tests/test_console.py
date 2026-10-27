@@ -258,7 +258,7 @@ async def test_the_dashboard_tells_attention_silences_actions_and_cost(
     )  # fmt: skip
     await logged_in(http, gate)
     page = (await http.get("/console/dashboard")).text
-    assert "1 message(s) de moi-même sur 6" in page  # neither the reminder nor Victor counts
+    assert "1 message(s) de moi-même sur 12" in page  # neither the reminder nor Victor counts
     assert "Victor t&#x27;a écrit" in page and "demandé" in page and "on t&#x27;a écrit" in page
     assert "Le loyer est dû lundi" in page and "budget du jour épuisé" in page
     alone = page.split("sans te demander")[1]

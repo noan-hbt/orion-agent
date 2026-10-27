@@ -20,6 +20,7 @@ from tests.test_runtime_cache import assert_prefix_stable, at, make_orion
         "Pour l'assurance, je te compare les offres ?",
         "Dis-moi si tu veux que je lance la recherche.",
         "Ça te dit qu'on regarde ça ensemble ?",
+        "Je te prépare la lettre. Je peux aussi te programmer un rappel avant la date limite.",
     ],
 )
 def test_an_offer_at_the_end_is_seen(text: str) -> None:
@@ -47,6 +48,7 @@ def test_a_finished_reply_or_a_real_choice_goes(text: str) -> None:
         ("Je regarde les annonces et je te tiens au courant.", [], True),
         ("Je regarde les annonces et je te tiens au courant.", ["mission"], False),
         ("C'est noté, je reviens vers toi demain.", ["remind_me"], False),
+        ("Je te prépare la lettre et je te rappelle de l'envoyer avant l'échéance.", [], True),
         ("Bien sûr ! Le train part à 8 h 12.", [], True),
         ("Le train part à 8 h 12. N'hésite pas si tu veux autre chose.", [], True),
         ("## Horaires\nLe train part à 8 h 12.", [], True),

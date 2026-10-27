@@ -383,7 +383,7 @@ async def test_what_orion_almost_said_keeps_the_trust_of_where_it_came_from(
 async def test_what_can_wait_waits_for_the_point_and_what_he_ignores_stops(
     world: World,
 ) -> None:
-    """D144: only what cannot wait goes alone; the rest goes in the evening point, in one
+    """D144, D146: what matters goes at once; a small thing goes in the evening point, in one
     message; a kind of message he never answers stops."""
     from orion.core.events import NewEvent
 
@@ -393,7 +393,13 @@ async def test_what_can_wait_waits_for_the_point_and_what_he_ignores_stops(
                 return []
             idea = f"idea:{now.day}"
             return [
-                Alert(idea, "Une piste sur les vélos cargo", "ça peut te servir", "Vélos cargo"),
+                Alert(
+                    idea,
+                    "Une piste sur les vélos cargo",
+                    "ça peut te servir",
+                    "Vélos cargo",
+                    importance=0.3,
+                ),
                 Alert("rdv:1", "Dentiste à 10 h 40", "c'est bientôt", "Dentiste", importance=0.9),
             ]
 
@@ -405,9 +411,9 @@ async def test_what_can_wait_waits_for_the_point_and_what_he_ignores_stops(
     assert await engine.tick() == []  # the morning point: nothing to say
     world.clock.now = at(20, 10)
     world.provider.extend(reply("Dentiste à 10 h 40."))
-    assert await engine.tick() == ["rdv:1"]  # it cannot wait: alone, now
+    assert await engine.tick() == ["rdv:1"]  # it matters: alone, now
     world.clock.now = at(20, 15)
-    assert await engine.tick() == []  # the idea waits
+    assert await engine.tick() == []  # the small idea waits
     world.clock.now = at(20, 19, 5)
     world.provider.extend(reply("Ce soir : une piste sur les vélos cargo."))
     assert sorted(await engine.tick()) == ["digest:2026-10-20:19:00", "idea:20"]

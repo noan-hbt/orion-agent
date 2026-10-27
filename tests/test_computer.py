@@ -10,6 +10,7 @@ from playwright.async_api import Route
 from orion.computer.browser import BrowserError, Session
 from orion.computer.module import ComputerModule
 from orion.config import OrionConfig
+from orion.core.journal import SqliteJournal
 from orion.modules.registry import load
 from orion.tools.base import Effect
 from orion.web.fetch import FetchError
@@ -116,3 +117,49 @@ async def test_a_browser_that_cannot_start_leaves_nothing_running(tmp_path: Path
     with pytest.raises(Exception, match="no-such-chromium"):  # Playwright's own error
         await session.__aenter__()
     assert session._pw is None  # pyright: ignore[reportPrivateUsage]  # the driver was stopped
+
+
+async def test_a_wall_put_up_by_an_anti_bot_is_named_and_a_way_round_given() -> None:
+    """D145: Orion is told who turned the browser away and what can be done about it."""
+    walls = {
+        "/refused": "<html><title>leboncoin.fr</title><body>Accès temporairement restreint"
+        "</body></html>",
+        "/puzzle": "<html><body><iframe src='https://geo.captcha-delivery.com/captcha/?x=1'>"
+        "</iframe></body></html>",
+    }
+
+    async def wall(route: Route) -> None:
+        body = next(b for path, b in walls.items() if route.request.url.endswith(path))
+        await route.fulfill(status=403, content_type="text/html; charset=utf-8", body=body)
+
+    async with Session(True, only_the_test_site, {"annonces.test": wall}) as browser:
+        assert await browser.page.evaluate("navigator.webdriver") is False  # pyright: ignore[reportOptionalMemberAccess]
+        await browser.goto("https://annonces.test/refused")
+        refused = await browser.snapshot()
+        assert refused.blocked == {"by": "DataDome", "puzzle": False}
+        assert "réessayer n'y changera rien" in refused.render() and "--exit" in refused.render()
+        await browser.goto("https://annonces.test/puzzle")
+        assert "hand_over" in (await browser.snapshot()).render()
+
+
+async def test_orion_reads_the_wall_in_his_browser(journal: SqliteJournal) -> None:
+    """What the desk shows Orion says it too (D145)."""
+    from orion.computer.direct import BrowserDesk, browser_tools
+    from orion.tools.base import ToolContext
+
+    async def wall(route: Route) -> None:
+        await route.fulfill(
+            status=403,
+            content_type="text/html; charset=utf-8",
+            body="Accès temporairement restreint",
+        )
+
+    desk = BrowserDesk(journal, lambda: Session(False, only_the_test_site, {"annonces.test": wall}))
+    tools = {t.name: t for t in browser_tools(desk)}
+    try:
+        page = await tools["browser_open"].handler(
+            tools["browser_open"].parse('{"url": "https://annonces.test/"}'), ToolContext("o", "t")
+        )
+        assert page.content.startswith("[Ce site refuse ce navigateur (DataDome)")
+    finally:
+        await desk.aclose()
