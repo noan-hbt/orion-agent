@@ -153,6 +153,8 @@ class ThinkingState:
     thoughts: list[Thought] = field(default_factory=list[Thought])
     follow_ups: dict[str, FollowUp] = field(default_factory=dict[str, FollowUp])
     last: date | None = None
+    nights: list[dict[str, Any]] = field(default_factory=list[dict[str, Any]])
+    """Each night as it was recorded: the day, what it read, what it cost (the app's « Nuit »)."""
     upto: int = 0
     """The last journal seq the night reading has read."""
     _seq: int = 0
@@ -165,6 +167,7 @@ class ThinkingState:
         self.thoughts.clear()
         self.follow_ups.clear()
         self.last = None
+        self.nights.clear()
         self.upto = 0
         self._seq = 0
 
@@ -222,6 +225,7 @@ class ThinkingState:
         elif event.kind == NIGHT:
             self.last = date.fromisoformat(str(payload["day"]))
             self.upto = max(self.upto, int(payload["upto"]))
+            self.nights = [*self.nights, dict(payload)][-60:]
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,7 @@ class NightReport:
     read: int = 0
     note: str = ""
     """What Orion will tell the owner in the morning; empty: nothing (`SILENCE`)."""
+    cost_usd: float = 0.0
 
 
 def local_time(text: str, zone: ZoneInfo) -> datetime:
@@ -368,6 +373,7 @@ class Thinking:
                         "upto": self.state.upto if failed else upto,
                         "read": report.read,
                         "noted": bool(report.note),
+                        "cost_usd": round(report.cost_usd, 4),
                         **({"failed": True} if failed else {}),
                     },
                     provenance=Provenance(source="orion:thinking", actor="orion:thinking"),
@@ -402,9 +408,9 @@ class Thinking:
         )
         if turn.reason not in NOTE_ENDS:  # half a sentence before a failure is not a note
             log.warning("thinking.night.unfinished", end=turn.reason, detail=turn.detail)
-            return NightReport(read=len(said))
+            return NightReport(read=len(said), cost_usd=turn.usage.cost_usd)
         if not text or is_silence(text):
-            return NightReport(read=len(said))
+            return NightReport(read=len(said), cost_usd=turn.usage.cost_usd)
         # The note is only as trustworthy as what the night read.
         noted = min(trust, self.orion.threads.get(NIGHT_THREAD).window_trust())
         await self._append(
@@ -419,7 +425,7 @@ class Thinking:
             noted,
             turn.correlation_id,
         )
-        return NightReport(read=len(said), note=text)
+        return NightReport(read=len(said), note=text, cost_usd=turn.usage.cost_usd)
 
     def _brief(
         self, said: list[tuple[datetime | None, str]], promised: list[Promise], now: datetime

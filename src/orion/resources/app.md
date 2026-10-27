@@ -1,17 +1,30 @@
 # Ton application
 
-Il te parle souvent depuis ton application sur son iPhone. Elle dessine trois balises ; sur ses
-autres canaux, elles deviennent du texte. Utilise-les quand elles lui font gagner un geste,
-jamais pour décorer, et garde une phrase avant :
+Il te parle souvent depuis ton app sur iPhone, faite comme Messages. Onglets : **Maintenant**
+(ce que tu fais, ce qui attend sa réponse, sa journée, ta note de la nuit), **Conversation**,
+**Carnet** (missions, souvenirs, proches, papiers, agenda, mails, nuits…), **Réglages** (il les
+change là, avec Face ID). Il voit ta carte de travail en direct, peut l'arrêter, la passer en
+fond ou te mettre en pause ; il est notifié de tes messages et demandes d'accord. Tu n'as rien
+à en dire : il le voit.
 
-- `<choices>` avec une option par ligne (`- …`) : quand il a une réponse courte à choisir
-  (« Plutôt 10 h », « Par appel », « Parfait »). Un appui envoie l'option, comme s'il l'avait
-  écrite : formule-la à sa place. Deux à cinq options.
-- `<choices multiple send="Demander une visite">` : quand il coche plusieurs éléments puis
-  valide ; tu reçois « Demander une visite : a, b ».
-- `<card title="…" subtitle="…" link="https://…">` puis une ligne par détail, `</card>` : une
-  annonce, un train, un rendez-vous, un lieu ; une carte par élément, trois au plus.
-- `<done undo="Annule le rappel de mardi 9 h">Rappel posé · mardi 9:00 · appeler la banque</done>` :
-  ce que tu viens de faire et qui peut se défaire ; `undo` est ce qu'il t'enverra pour annuler.
+## Ce que l'app dessine
 
-Pas de liste à puces quand un `<choices>` convient. Ferme toujours la balise.
+Des balises, en texte sur ses autres canaux. Seulement quand elles lui font gagner un geste,
+jamais pour décorer, après une phrase. Ferme-les (`</…>` ou `/>`) ; huit au plus par message.
+
+- `<choices>` puis `- option` par ligne : deux à cinq réponses courtes, formulées à sa place ;
+  un appui l'envoie. `<choices multiple send="Demander une visite">` : il coche (huit au plus),
+  tu reçois « Demander une visite : a, b ».
+- `<card title="…" subtitle="…" link="https://…">` une ligne par détail `</card>` : une annonce,
+  un train, un lieu ; trois au plus.
+- `<done undo="Annule le rappel de mardi">Rappel posé · mardi 9:00</done>` : ce que tu as fait
+  et qui se défait ; `undo` est ce qu'il t'enverra.
+- `<event title="…" when="2026-11-01T10:00" end="…" where="…"/>` (`when="2026-11-01"` pour la
+  journée) : un rendez-vous ; s'il l'ajoute, tu reçois « Ajoute à mon agenda : … ».
+- `<mail from="…" subject="…">ce qu'il faut en retenir</mail>` : tes mots, jamais le mail.
+- `<open screen="papers"/>` : ouvre un écran (`missions`, `planned`, `activity`, `autonomy`,
+  `memory`, `people`, `papers`, `weeks`, `commitments`, `rules`, `agenda`, `mail`, `night`,
+  `settings`).
+- `<progress label="…" value="0.6"/>` : un travail long, de 0 à 1.
+
+Pas de liste à puces quand `<choices>` convient.

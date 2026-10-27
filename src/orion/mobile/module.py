@@ -29,6 +29,7 @@ from pydantic import Field
 
 import orion
 from orion.awaiting.module import AwaitingModule
+from orion.calendar.module import CalendarModule
 from orion.chronicle.module import ChronicleModule
 from orion.computer.module import ComputerModule
 from orion.configure.module import ConfigureModule, SignedSettings
@@ -36,6 +37,7 @@ from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
+from orion.mail.module import MailModule
 from orion.missions.module import MissionsModule
 from orion.mobile.channel import MobileChannel
 from orion.mobile.control import Control
@@ -48,6 +50,7 @@ from orion.papers.module import PapersModule
 from orion.providers.spending import Spending
 from orion.relations.module import RelationsModule
 from orion.tasks.module import TasksModule
+from orion.thinking.module import ThinkingModule
 
 log = structlog.get_logger(__name__)
 
@@ -165,6 +168,9 @@ class MobileModule(Module):
         relations = plate.module(RelationsModule)
         chronicle = plate.module(ChronicleModule)
         computer = plate.module(ComputerModule)
+        calendar = plate.module(CalendarModule)
+        mail = plate.module(MailModule)
+        thinking = plate.module(ThinkingModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -191,6 +197,9 @@ class MobileModule(Module):
             relations=lambda: relations.relations if relations is not None else None,
             chronicle=lambda: chronicle.chronicle if chronicle is not None else None,
             browser=lambda: computer.desk if computer is not None else None,
+            calendar=lambda: calendar.calendar if calendar is not None else None,
+            mailbox=lambda: mail.mailbox if mail is not None else None,
+            thinking=lambda: thinking.thinking if thinking is not None else None,
         )
         return []
 
@@ -247,6 +256,7 @@ class MobileModule(Module):
             desk.in_app = True  # a hand-over shows in Maintenant (D135)
         daemon.plate.approver.target = daemon.inbox  # it asks where he last wrote from
         self.app = channel
+        daemon.add_service("mobile.changes", channel.changes)  # the open app follows (D140)
         for name, app, port in apps:
             server = uvicorn.Server(
                 uvicorn.Config(

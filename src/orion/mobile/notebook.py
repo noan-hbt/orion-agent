@@ -1,5 +1,6 @@
 """The rest of his notebook in the app (D135): his papers, the people in his life, the pages of
-his weeks, and Orion's browser when a page needs him.
+his weeks, Orion's browser when a page needs him, and what Orion follows for him: his agenda,
+the mails that matter, Orion's nights (D140).
 
 Read from the same places as Orion's own tools; the few things he does here are his own, journaled
 as his (a meeting with someone noted), or go straight into the page (the browser hand-over, D116:
@@ -12,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orion.chronicle.module import Chronicle, week_title
 from orion.computer.browser import BrowserError
@@ -20,11 +21,17 @@ from orion.computer.direct import BrowserDesk, Refused
 from orion.computer.handover import act_on, focused
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
+from orion.mail.card import Importance
 from orion.memory.model import Category
 from orion.memory.store import name_key
 from orion.mobile.control import ControlError
 from orion.papers.module import Vault
 from orion.relations.module import CONTACT, Relations, next_birthday
+
+if TYPE_CHECKING:
+    from orion.calendar.service import Calendar
+    from orion.mail.service import Mailbox
+    from orion.thinking.module import Thinking
 
 FROM_APP = Provenance(source="app", actor="owner:main")
 EXPIRING = timedelta(days=90)
@@ -38,6 +45,9 @@ class Notebook:
     relations: Callable[[], Relations | None] = lambda: None
     chronicle: Callable[[], Chronicle | None] = lambda: None
     browser: Callable[[], BrowserDesk | None] = lambda: None
+    calendar: Callable[[], Calendar | None] = lambda: None
+    mailbox: Callable[[], Mailbox | None] = lambda: None
+    thinking: Callable[[], Thinking | None] = lambda: None
 
     # -- his papers -----------------------------------------------------------------------------
 
@@ -166,6 +176,77 @@ class Notebook:
             }
             for page in sorted(chronicle.state.pages.values(), key=lambda p: p.week, reverse=True)
         ][:60]
+
+    # -- what Orion follows for him (D140) ----------------------------------------------------
+
+    def agenda(self, days: int = 14) -> list[dict[str, Any]]:
+        """The next `days` of his calendars, as Orion reads them (read only: adding goes
+        through Orion and its approval)."""
+        calendar = self.calendar()
+        if calendar is None:
+            raise ControlError("the calendar is off")
+        now = self.clock()
+        return [
+            {
+                "key": o.key,
+                "account": account,
+                "title": o.title or "(sans titre)",
+                "start": o.start.isoformat(),
+                "end": o.end.isoformat(),
+                "all_day": o.all_day,
+                "location": o.location,
+            }
+            for account, o in calendar.between(now, now + timedelta(days=days))
+        ][:200]
+
+    def mails(self, days: int = 14) -> list[dict[str, Any]]:
+        """The mails worth it from the last `days`, as Orion filed them: who, what, a
+        summary. Never the mail's text: the app shows what Orion made of it."""
+        mailbox = self.mailbox()
+        if mailbox is None:
+            raise ControlError("mail is off")
+        since = self.clock() - timedelta(days=days)
+        shown: list[dict[str, Any]] = []
+        for m in mailbox.recent(since, worth_it=True)[:60]:
+            c = m.card
+            shown.append(
+                {
+                    "id": m.id,
+                    "sender": m.sender,
+                    "from": m.from_addr,
+                    "subject": m.subject or "(sans objet)",
+                    "at": m.received_at.isoformat(),
+                    "summary": c.summary,
+                    "category": c.category.value,
+                    "important": c.importance is Importance.HIGH,
+                    "needs_reply": c.needs_reply,
+                    "due": c.due.isoformat() if c.due else None,
+                    "amount": c.amount,
+                    "currency": c.currency or "",
+                }
+            )
+        return shown
+
+    async def nights(self) -> dict[str, Any]:
+        """Orion's nights (D117): his notes for the morning, what each night read and cost,
+        and the budget he has for one."""
+        thinking = self.thinking()
+        if thinking is None:
+            raise ControlError("the nights are off")
+        await thinking.sync()
+        notes = [t for t in thinking.state.thoughts if not t.question][-30:]
+        return {
+            "budget_usd": thinking.settings.budget_usd,
+            "nights": list(reversed(thinking.state.nights))[:30],
+            "notes": [
+                {
+                    "at": t.at.isoformat(),
+                    "note": t.text,
+                    "trusted": t.trust >= Trust.SYSTEM,
+                }
+                for t in reversed(notes)
+            ],
+        }
 
     # -- Orion's browser, handed to him (D116) ----------------------------------------------
 
