@@ -181,7 +181,7 @@ Le journal en ajout seul, les projections reconstruites, la provenance et la con
 gardien, l'outbox, le contrat du cache de prompt. La refonte change ce qu'Orion pense et
 voit, pas les garanties qui le rendent sûr.
 
-## 5. Où on en est (27/10/2026)
+## 5. Où on en est (27/10/2026, soir)
 
 | Chantier | État | Décision |
 |---|---|---|
@@ -203,6 +203,15 @@ bloqué dans l'environnement de mesure. Le reste des échecs est le même qu'ava
 (`demain_a_1h_du_matin`, `il_etait_coupe`, `veille_de_partiel`, `un_resto_ce_soir`,
 `il_a_deja_repondu`). Les cas propres à la refonte : `un_voyage_est_une_situation` 3/3,
 `la_veille_voit_le_passeport` 2/2, `la_veille_se_tait_sans_raison` 2/2.
+
+Après les chantiers 3 (un seul « plus tard », constitution courte) et 6 (D157–D161), hors
+cas web, un passage : 44/48 avant, 40/48 après ; les cinq cas en écart, rejoués trois fois de
+chaque côté, donnent les mêmes scores (D158) : du bruit. Les deux cas ajoutés pour les mails
+(`un_colis_en_route`, `un_essai_gratuit_devient_payant`) passent 3/3.
+
+Restent du chantier 6 : ses trajets (une API Navitia, SNCF ou PRIM d'Île-de-France
+Mobilités, avec sa clé) et son argent (GoCardless Bank Account Data, dans le gardien). Les deux
+demandent un compte chez un tiers pour être écrits et vérifiés contre le vrai service.
 
 Ce que ces chiffres ne mesurent pas : la refonte change surtout ce qu'Orion fait entre les
 conversations (veille, situations, tri de la mémoire), que les cas existants ne couvrent pas.
