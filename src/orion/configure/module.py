@@ -193,21 +193,25 @@ def write(source: Path, before: str, after: str) -> None:
     """Atomically, keeping the previous file beside it. Raises ConfigureError.
 
     Beside the real file: on the server, `/srv/orion/orion.toml` is a link to
-    `config/orion.toml`, and only `config/` may be written by the guardian (systemd)."""
+    `config/orion.toml`, and only `config/` may be written by the guardian (systemd). Both files
+    are replaced, never written into: one left by root (`orion setup` in install.sh) is still
+    replaced, the folder being the guardian's (D148)."""
     source = source.resolve()
     try:
         if source.read_text("utf-8") != before:
             raise ConfigureError(f"{source} changed meanwhile: read it again and redo the change")
         mode = source.stat().st_mode & 0o777  # the core reads what the guardian writes
-        previous = source.with_name(f"{source.name}.previous")
-        previous.write_text(before, "utf-8")
-        previous.chmod(mode)
-        tmp = source.with_name(f".{source.name}.{os.getpid()}.tmp")
-        tmp.write_text(after, "utf-8")
-        tmp.chmod(mode)
-        tmp.replace(source)
+        _replace(source.with_name(f"{source.name}.previous"), before, mode)
+        _replace(source, after, mode)
     except OSError as exc:
         raise ConfigureError(f"cannot write {source}: {exc}") from exc
+
+
+def _replace(path: Path, text: str, mode: int) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, "utf-8")
+    tmp.chmod(mode)
+    tmp.replace(path)
 
 
 def editable_sections(config: OrionConfig) -> dict[str, Any]:

@@ -87,13 +87,14 @@ done
 if grep -q "^OPENROUTER_API_KEY=$" /etc/orion/core.env && [ -t 0 ]; then
     echo "==> setup"
     "$ROOT/app/.venv/bin/orion" --config "$CONFIG" setup --server --secrets /etc/orion
-    chown orion-guardian:orion "$CONFIG"
-    chmod 0640 "$CONFIG"
     for who in guardian core; do
         chown "orion-$who:orion" "/etc/orion/$who.env"
         chmod 0600 "/etc/orion/$who.env"
     done
 fi
+# Everything in config/ is the guardian's, the copy `orion setup` keeps beside it too (D148).
+chown -R orion-guardian:orion "$ROOT/config"
+chmod 0640 "$ROOT"/config/orion.toml*
 
 echo "==> services"
 install -m 0644 "$HERE"/orion-*.service "$HERE"/orion-*.timer /etc/systemd/system/

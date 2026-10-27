@@ -91,6 +91,13 @@ VISION_MODEL = "google/gemini-3.8-flash"
 IMAGE_MODEL = "google/gemini-3.1-flash-image"
 AUDIO_MODEL = "google/gemini-3.8-flash"
 SPEECH_MODEL = "openai/gpt-audio-mini"
+PLAN_ROLES = {
+    "chatgpt": ("extractor_model", "strong_model", "vision_model"),
+    "claude-code": ("extractor_model", "strong_model"),
+}
+"""What each plan does as well as OpenRouter's defaults; pictures made, voices, transcription,
+embeddings and the verifier (another family) stay where they are."""
+PLANS = set(PLAN_ROLES)
 
 
 class AgentConfig(BaseModel):
@@ -198,6 +205,18 @@ class AgentConfig(BaseModel):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"unknown timezone {value!r} (IANA name, e.g. Europe/Paris)") from exc
         return value
+
+    @model_validator(mode="after")
+    def _plan_follows(self) -> AgentConfig:
+        """On a plan (D62, D100), the roles left unset follow the main model (D147): otherwise
+        his background work keeps drawing on OpenRouter."""
+        plan, sep, _ = self.model.partition(":")
+        if not sep or plan not in PLANS:
+            return self
+        for role in PLAN_ROLES[plan]:
+            if role not in self.model_fields_set:
+                setattr(self, role, self.model)
+        return self
 
     @model_validator(mode="after")
     def _verifier_differs(self) -> AgentConfig:

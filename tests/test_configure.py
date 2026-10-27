@@ -276,6 +276,21 @@ def test_through_the_servers_link_the_real_file_is_written(tmp_path: Path) -> No
     assert sorted(p.name for p in tmp_path.iterdir()) == ["config", "orion.toml"]
 
 
+def test_a_copy_it_cannot_write_into_is_replaced(tmp_path: Path) -> None:
+    """`orion setup`, run as root by install.sh, left `orion.toml.previous` the guardian could
+    not write into: « permission denied » in the app (D148)."""
+    from orion.configure.module import write
+
+    source = tmp_path / "orion.toml"
+    source.write_text('[agent]\nmodel = "a"\n', "utf-8")
+    previous = tmp_path / "orion.toml.previous"
+    previous.write_text("root's\n", "utf-8")
+    previous.chmod(0o444)
+    write(source, source.read_text("utf-8"), '[agent]\nmodel = "b"\n')
+    assert 'model = "a"' in previous.read_text("utf-8")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["orion.toml", "orion.toml.previous"]
+
+
 async def test_the_way_to_change_comes_with_the_settings(
     journal: SqliteJournal, tmp_path: Path
 ) -> None:

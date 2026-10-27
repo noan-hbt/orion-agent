@@ -53,3 +53,16 @@ async def test_modules_take_their_model_from_the_config(tmp_path: Path) -> None:
         assert thinking is not None and thinking.model == "a/strong"
         assert chronicle is not None and chronicle.model == "a/writer"  # its own section wins
         assert photos is not None and photos.model == "a/eyes"
+
+
+def test_on_a_plan_the_background_follows_the_main_model() -> None:
+    from orion.config import STRONG_MODEL, AgentConfig
+
+    agent = AgentConfig(model="chatgpt:gpt-6-luna")
+    assert agent.extractor_model == agent.strong_model == agent.vision_model == agent.model
+    assert agent.verifier_model == "anthropic/claude-haiku-5.5"  # another family
+    named = AgentConfig(model="chatgpt:gpt-6-luna", strong_model="chatgpt:gpt-6")
+    assert named.strong_model == "chatgpt:gpt-6"
+    claude = AgentConfig(model="claude-code:sonnet")
+    assert claude.extractor_model == "claude-code:sonnet" != claude.vision_model
+    assert AgentConfig(model="deepseek/deepseek-v4.1-flash").strong_model == STRONG_MODEL

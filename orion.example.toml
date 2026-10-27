@@ -55,6 +55,8 @@ image_hosts = { "deepseek/deepseek-v4.1-flash" = ["deepinfra", "together"] }
 # `uv run orion chatgpt login` once, then name models `chatgpt:<model>` anywhere above, e.g.
 # model = "chatgpt:gpt-6-luna" (`orion chatgpt models` lists yours). Calls draw on the plan's
 # allowance, not on money. Not available through it: pictures (image_model) and embeddings.
+# With `model` on the plan, the background work you leave unset follows it (D147): memory,
+# the night, curiosity, the chronicle, the expert and the eyes. The verifier stays elsewhere.
 [providers.chatgpt]
 enabled = false
 reasoning_effort = "low"         # when a call asks nothing; "medium", "high"
