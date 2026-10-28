@@ -60,7 +60,7 @@ Une partie des outils est rangée dans un tiroir : l'outil `orion` les liste et 
 | `imessage` | `[channels.imessage]` | iMessage par une ligne Inkbox | canal |
 | `voice` | `[voice]` | Le téléphone sur la ligne Inkbox (D40) ; requiert `imessage` | `call_me`, `call_someone` |
 | `calendar` | `[modules.calendar]` | Tes agendas en iCal, écriture Google ou CalDAV (D25, D32) | `agenda`, `calendar_add` |
-| `mail` | `[modules.mail]` | Tes boîtes en IMAP, lues en direct (D75, D171) | `mail`, `mail_send`, `mail_tidy`, `mail_draft` |
+| `mail` | `[modules.mail]` | Tes boîtes en IMAP, lues en direct (D75, D171, D179) | `mail`, `mail_send`, `mail_tidy`, `mail_draft`, `mail_mark` |
 | `web` | `[modules.web]` | Recherche et lecture de pages (D31) | `web_search`, `web_read` |
 | `computer` | `[modules.computer]` | Son navigateur, persistant, passé au téléphone si besoin (D116) | `browser` |
 | `console` | `[modules.console]` | La page de contrôle dans le navigateur (D39) | `console_link` |

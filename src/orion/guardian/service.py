@@ -188,8 +188,16 @@ def _mail_send(params: dict[str, Any]) -> str:
     )
 
 
+_TIDY_VERBS = {
+    "archive": "archiver",
+    "trash": "mettre à la corbeille",
+    "unsubscribe": "me désabonner de",
+}
+
+
 def _mail_tidy(params: dict[str, Any]) -> str:
-    what = "archiver" if params.get("action") == "archive" else "me désabonner de"
+    action = str(params.get("action"))
+    what = _TIDY_VERBS.get(action) or f"déplacer vers « {params.get('folder')} »"
     cards = list(params.get("cards") or [])
     given: list[Any] = list(params.get("senders") or [])
     senders = ", ".join(str(s) for s in given) or "(non précisé)"
@@ -391,6 +399,7 @@ class GuardianService:
                 Route("/v1/mail/{account}/send", self._mail_send, methods=["POST"]),
                 Route("/v1/mail/{account}/tidy", self._mail_tidy, methods=["POST"]),
                 Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
+                Route("/v1/mail/{account}/mark", self._mail_mark, methods=["POST"]),
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
                 Route("/v1/config", self._configure, methods=["POST"]),
                 Route("/v1/mcp/{name}", self._mcp, methods=["POST"]),
@@ -1081,10 +1090,11 @@ class GuardianService:
         return JSONResponse({"message_id": message_id})
 
     async def _mail_tidy(self, request: Request) -> Response:
-        """Archiving or unsubscribing, by uid: the guardian reads the unsubscribe addresses
-        from the server itself. Approved as a batch (never more mails than approved), or done
-        alone within an autonomy the owner granted."""
-        from orion.mail.tidy import local_tidy
+        """Archiving, trashing, moving or unsubscribing, by uid: the guardian reads the
+        unsubscribe addresses from the server itself. Approved as a batch (never more mails than
+        approved), or, for archiving and unsubscribing, done alone within an autonomy the owner
+        granted."""
+        from orion.mail.tidy import TIDY_ACTIONS, local_tidy
 
         name = str(request.path_params["account"])
         settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
@@ -1095,10 +1105,12 @@ class GuardianService:
         action = str(params.get("action"))
         raw: list[Any] = list(params.get("uids") or [])
         uids = [int(u) for u in raw]
-        if action not in ("archive", "unsubscribe") or not uids:
+        folder = str(params["folder"]) if params.get("folder") else None
+        if action not in TIDY_ACTIONS or not uids or (action == "move") != bool(folder):
             return refused("malformed tidy request", 400)
         grant = request.headers.get(GRANT_HEADER)
-        if grant or not await self.autonomous("mail_tidy", {"action": action}):
+        alone = action in ("archive", "unsubscribe")
+        if grant or not alone or not await self.autonomous("mail_tidy", {"action": action}):
             # One yes covers the batch across the owner's accounts: never more mails in all than
             # the cards he approved, and it is spent once they are all done.
             if not grant:
@@ -1110,7 +1122,11 @@ class GuardianService:
                 def matches(p: dict[str, Any]) -> bool:
                     nonlocal approved
                     approved = len(p.get("cards") or [])
-                    return p.get("action") == action and done + len(uids) <= approved
+                    return (
+                        p.get("action") == action
+                        and (p.get("folder") or None) == folder
+                        and done + len(uids) <= approved
+                    )
 
                 reason = await self._use_grant(grant, "mail_tidy", matches, consume=False)
                 if reason is not None:
@@ -1118,7 +1134,7 @@ class GuardianService:
                 self._tidied[grant] = done + len(uids)
                 if done + len(uids) >= approved:
                     await self.ledger.record(APPROVAL_USED, {"approval_id": grant})
-        outcome = await local_tidy(account, cast(Any, action), uids)
+        outcome = await local_tidy(account, cast(Any, action), uids, None, folder)
         log.info("guardian.mail_tidied", account=name, action=action, done=outcome.done)
         return JSONResponse(outcome.payload())
 
@@ -1140,6 +1156,28 @@ class GuardianService:
             log.warning("guardian.draft_failed", account=name, error=repr(exc))
             return refused(f"draft not written: {exc}", 502)
         return JSONResponse({"ok": True})
+
+    async def _mail_mark(self, request: Request) -> Response:
+        """Read, unread, flagged or not: flags the owner can flip back, so no approval."""
+        from orion.mail.tidy import MARKS, local_mark
+
+        name = str(request.path_params["account"])
+        settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
+        account = next((a for a in settings.accounts if a.name == name), None)
+        if account is None:
+            return refused(f"no mail account {name!r}", 404)
+        params = await _body(request)
+        action = str(params.get("action"))
+        raw: list[Any] = list(params.get("uids") or [])
+        uids = [int(u) for u in raw]
+        if action not in MARKS or not uids:
+            return refused("malformed mark request", 400)
+        try:
+            done = await local_mark(account, cast(Any, action), uids)
+        except (LookupError, OSError, imaplib.IMAP4.error) as exc:
+            log.warning("guardian.mark_failed", account=name, error=repr(exc))
+            return refused(f"not marked: {exc}", 502)
+        return JSONResponse({"done": done})
 
     async def _mail(self, request: Request) -> Response:
         name = str(request.path_params["account"])

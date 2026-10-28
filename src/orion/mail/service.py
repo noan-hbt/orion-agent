@@ -63,6 +63,10 @@ class MailAccount(BaseModel):
     drafts_folder: str | None = Field(
         default=None, description="Where drafts go, e.g. '[Gmail]/Drafts', 'Drafts'"
     )
+    trash_folder: str | None = Field(
+        default=None,
+        description="Where deleted mail goes, e.g. '[Gmail]/Trash'; default: the server's own",
+    )
 
 
 class MailSettings(ModuleSettings):
@@ -326,6 +330,30 @@ class Mailbox:
                 await self._runner.catch_up()
                 log.info("mail.dug", new=len(events))
             return len(events)
+
+    async def text(self, card: MailCard) -> str:
+        """The card's text, or, when none was kept (bulk mail, cards made before D114), the
+        mail read again on the server, for this read only: it is not journaled."""
+        if card.text:
+            return card.text
+        account = next((a for a in self.settings.accounts if a.name == card.account), None)
+        if account is None:
+            return ""
+        day = timedelta(days=1)
+        try:
+            mails = await self._search(
+                account,
+                card.received_at - day,
+                card.received_at + day,
+                card.from_addr or None,
+                DIG_LIMIT,
+                self._clock(),
+            )
+        except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
+            log.warning("mail.reread_failed", account=account.name, error=repr(exc))
+            return ""
+        found = next((m for m in mails if m.message_id == card.message_id), None)
+        return found.body[:TEXT_CHARS] if found else ""
 
     async def _record(self, account: str, batch: Batch, now: datetime) -> int:
         events: list[NewEvent] = []

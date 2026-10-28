@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from orion.mail.service import Fetch, Mailbox, MailSettings
 from orion.mail.smtp import Postman, Send
-from orion.mail.tidy import local_draft, local_tidy
+from orion.mail.tidy import local_draft, local_mark, local_tidy
 from orion.mail.tools import mail_tools
 from orion.modules.base import Daemon, Module, Plate
 
@@ -66,6 +66,7 @@ class MailModule(Module):
             files=lookup,
             tidy=guardian.mail_tidy if guardian else local_tidy,
             draft=guardian.mail_draft if guardian else local_draft,
+            mark=guardian.mail_mark if guardian else local_mark,
         )
 
     async def serve(self, daemon: Daemon) -> None:

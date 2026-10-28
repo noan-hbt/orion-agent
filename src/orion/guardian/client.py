@@ -167,17 +167,28 @@ class GuardianClient:
         return str(data["message_id"])
 
     async def mail_tidy(
-        self, account: MailAccount, action: str, uids: list[int], grant: str | None
+        self,
+        account: MailAccount,
+        action: str,
+        uids: list[int],
+        grant: str | None,
+        folder: str | None = None,
     ) -> Any:
-        """Archived or unsubscribed by the guardian, if the owner approved this batch."""
+        """Archived, trashed, moved or unsubscribed by the guardian, if the owner approved this
+        batch."""
         from orion.mail.tidy import Tidied
 
         data = await self.post(
             f"/v1/mail/{account.name}/tidy",
-            {"action": action, "uids": uids},
+            {"action": action, "uids": uids, "folder": folder},
             headers={GRANT_HEADER: grant} if grant else None,
         )
         return Tidied.from_payload(data)
+
+    async def mail_mark(self, account: MailAccount, action: str, uids: list[int]) -> int:
+        """Read, unread, flagged or not: flags he can flip back, so no approval."""
+        data = await self.post(f"/v1/mail/{account.name}/mark", {"action": action, "uids": uids})
+        return int(data["done"])
 
     async def mail_draft(self, account: MailAccount, mail: Any) -> None:
         """A draft in the owner's drafts folder: it never leaves, so no approval."""

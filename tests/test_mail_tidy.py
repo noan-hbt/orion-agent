@@ -102,12 +102,20 @@ async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) ->
     account.smtp_host = "smtp.x"
     account.drafts_folder = "Drafts"
     asked: list[tuple[str, list[int], str | None]] = []
+    moved: list[str | None] = []
 
     async def fake_tidy(
-        _account: MailAccount, action: str, uids: list[int], grant: str | None
+        _account: MailAccount, action: str, uids: list[int], grant: str | None, folder: str | None
     ) -> Tidied:
         asked.append((action, uids, grant))
+        moved.append(folder)
         return Tidied(done=len(uids))
+
+    marked: list[tuple[str, list[int]]] = []
+
+    async def fake_mark(_account: MailAccount, action: str, uids: list[int]) -> int:
+        marked.append((action, uids))
+        return len(uids)
 
     drafts: list[Outgoing] = []
 
@@ -125,9 +133,11 @@ async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) ->
 
     tools = {
         t.name: t
-        for t in mail_tools(box, Postman(journal, box, send), lookup, fake_tidy, fake_draft)
+        for t in mail_tools(
+            box, Postman(journal, box, send), lookup, fake_tidy, fake_draft, fake_mark
+        )
     }
-    assert set(tools) == {"mail", "mail_send", "mail_tidy", "mail_draft"}
+    assert set(tools) == {"mail", "mail_send", "mail_tidy", "mail_draft", "mail_mark"}
 
     bulk = await tools["mail"].handler(tools["mail"].parse('{"bulk": true}'), CTX)
     [news] = [c for c in box.state.cards.values() if c.bulk]
@@ -139,6 +149,16 @@ async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) ->
     assert _mail_tidy(args) == "Je peux me désabonner de ces 1 mail(s) ? Expéditeurs : Shop"
 
     [paul] = [c for c in box.state.cards.values() if not c.bulk]
+    # Deleting is a move to the trash, approved like the rest; marking needs no approval.
+    trash = {"action": "trash", "cards": [paul.id], "senders": ["Paul"]}
+    await tools["mail_tidy"].handler(tools["mail_tidy"].parse(json.dumps(trash)), CTX)
+    assert asked[-1][0] == "trash" and "corbeille" in _mail_tidy(trash)
+    move = {"action": "move", "cards": [paul.id], "senders": ["Paul"], "folder": "Perso"}
+    await tools["mail_tidy"].handler(tools["mail_tidy"].parse(json.dumps(move)), CTX)
+    assert moved[-1] == "Perso" and "Perso" in _mail_tidy(move)
+    mark = tools["mail_mark"].parse(json.dumps({"action": "unread", "cards": [paul.id]}))
+    await tools["mail_mark"].handler(mark, CTX)
+    assert marked == [("unread", [paul.uid])]
     draft = {"to": ["paul@example.com"], "subject": "Re: Dîner", "body": "Carrément !",
              "reply_to": paul.id}  # fmt: skip
     await tools["mail_draft"].handler(tools["mail_draft"].parse(json.dumps(draft)), CTX)
