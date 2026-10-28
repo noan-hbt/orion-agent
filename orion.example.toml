@@ -29,7 +29,7 @@ strong_model = "anthropic/claude-opus-5.5"           # consulted when hard; Orio
 vision_model = "google/gemini-3.8-flash"             # looks at the photos you send
 image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask for
 # summary_model = "..."      # summarizes what leaves the window; default: extractor_model
-# reflection_model = "..."   # learns your playbook, tidies memory at night; default: extractor_model
+# reflection_model = "..."   # learns your playbook, sorts memory at night; default: extractor_model
 # Each module can also name its own, overriding these: [modules.expert] model, [modules.thinking]
 # model, [modules.chronicle] model, [modules.photos] model, [modules.secretary] model,
 # [modules.web] model, [modules.mail] quarantine_model, [modules.computer] model,
@@ -250,12 +250,11 @@ extract_idle_minutes = 5          # what to remember is read after a pause this 
 extract_min_messages = 3          # …once this many messages were exchanged…
 extract_max_wait_minutes = 60     # …or after this long anyway (D86)
 
-# Nightly consolidation: duplicates out, outdated facts replaced, names merged, contradictions
-# asked in the morning digest. On by default; never drops a fact for a less trusted one.
+# Nightly upkeep: what was not lasting becomes a situation, situations past their horizon
+# close, his portrait is rewritten. Reviewing memory itself is Orion's evening pass (thinking).
 [modules.consolidation]
 enabled = true
 at = "03:30:00"
-similarity = 0.5                      # how alike two facts must be to be compared
 
 # Third-party modules (Python packages exposing an `orion.modules` entry point) are configured
 # in their own section. A section for a module that is not installed stops Orion from starting.

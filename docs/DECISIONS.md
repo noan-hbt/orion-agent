@@ -3911,3 +3911,30 @@ message final là où il demandait un mot à chaque étape. GPT 6 Sol, lui, le f
   (« je vais maintenant ouvrir Bulletin »). La constitution et `tell` le disent ; la réponse
   finale ne redit pas ce qu'il a déjà reçu. Évaluation : `says_nothing_twice` et
   `no_narration` sur `plusieurs_etapes_plusieurs_messages_un_seul_tour`.
+
+## D174 — Chaque soir, Orion relit et remet d'aplomb tout ce qu'il sait
+
+*28/10/2026 · acceptée · remplace la consolidation par paires de D27 et D78*
+
+La consolidation de nuit comparait les faits deux à deux par embedding : 40 paires au plus, les
+plus proches d'abord, sans garder trace des paires déjà jugées. Avec une centaine de faits, elle
+rejugeait chaque nuit les mêmes paires et ne lisait jamais le reste ; un fait sans voisin proche
+n'était jamais relu. Et le code décidait de ce qui méritait un regard, pas Orion.
+
+- **La nuit d'Orion (D117) devient sa passe du soir**, à 23:30 par défaut (`[modules.thinking]
+  at`), et tourne chaque soir, même après une journée sans un mot : le temps seul date un
+  souvenir.
+- **Il a tout sous les yeux** : chaque fait de confiance avec son id, les situations, les
+  engagements, ce qui est à venir, la conversation du jour. Il trie lui-même avec ses outils :
+  `forget_fact` ce qui est dépassé, `remember` (`replaces`) pour réécrire ou fusionner, une
+  `situation` pour ce qui ne dure qu'un temps ; il ferme les engagements tenus, corrige les
+  rappels, missions et suivis que la journée a rendus faux, et note dans son `playbook` ce
+  qu'elle lui a appris sur la façon d'être avec lui. Puis il avance ce qui est resté en plan.
+- **Ce qui vient d'un mail ou d'une page n'est pas posé devant lui** (confiance sous le seuil) :
+  ça ne pilote pas le tri. Il ne change que ce dont il est sûr ; ce que le propriétaire a dit
+  ne s'efface que si la journée le dément ; un doute devient une question au réveil.
+- **La consolidation de nuit (03:30) ne garde que le mécanique** : trier ce qui n'était pas
+  durable en situations (D149), fermer les situations échues, réécrire le portrait (D144),
+  désormais après le tri du soir. `similarity` et `max_pairs` disparaissent de
+  `[modules.consolidation]` : une config qui les porte encore ne démarre plus (fail closed),
+  il faut les retirer.

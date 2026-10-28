@@ -1,5 +1,5 @@
-"""The nightly consolidation (D78): a night the model was out of reach is tried again; his
-portrait written from what is trusted, shown when a conversation starts (D144)."""
+"""The nightly upkeep: his portrait written from what is trusted, shown when a conversation
+starts (D144); what was not lasting becomes a situation."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ import pytest
 
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.memory.night import DONE, Consolidator, NightSettings
+from orion.memory.night import Consolidator, NightSettings
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
-from tests.fakes import ScriptedProvider, fail, reply
+from tests.fakes import ScriptedProvider, reply
 from tests.test_adaptation import json_reply
 
 OWNER = Origin("owner:main", "imessage:owner", Trust.OWNER)
@@ -26,25 +26,6 @@ async def memory(journal: SqliteJournal) -> AsyncIterator[MemoryService]:
     await store.open()
     yield MemoryService(journal, store)
     await store.close()
-
-
-async def test_a_night_the_model_was_out_of_reach_is_done_later(
-    journal: SqliteJournal, memory: MemoryService
-) -> None:
-    await memory.remember("Paul aime le vélo.", OWNER, about=["Paul"])
-    await memory.remember("Paul Durand habite à Dreux.", OWNER, about=["Paul Durand"])
-    now = datetime(2026, 10, 25, 3, 45, tzinfo=ZoneInfo("Europe/Paris"))  # after 03:30
-    judge = ScriptedProvider(fail("down", retryable=True))
-    consolidator = Consolidator(
-        journal, memory, judge, "judge", NightSettings(), "Europe/Paris", [], clock=lambda: now
-    )
-    await consolidator.start()
-    assert await consolidator.tick() is not None
-    assert not [e for e in await journal.read() if e.kind == DONE]  # not done: tried again
-    judge.extend(json_reply({"pairs": [], "same_people": []}), json_reply({"temporary": []}))
-    assert await consolidator.tick() is not None
-    assert len([e for e in await journal.read() if e.kind == DONE]) == 1
-    assert await consolidator.tick() is None  # once a night
 
 
 async def test_his_portrait_is_written_from_what_is_trusted_and_opens_a_conversation(
@@ -61,7 +42,7 @@ async def test_his_portrait_is_written_from_what_is_trusted_and_opens_a_conversa
         reply("Étudiant en droit, en pleins partiels jusqu'au 3/11."),
     )
     consolidator = Consolidator(
-        journal, memory, writer, "judge", NightSettings(), "Europe/Paris", [],
+        journal, memory, writer, "judge", NightSettings(), "Europe/Paris",
         clock=lambda: now, portrait_model="writer",
     )  # fmt: skip
     await consolidator.start()
@@ -97,14 +78,14 @@ async def test_what_was_not_lasting_becomes_a_situation_and_ends_on_its_own(
     lasting = await memory.remember("Il est allergique aux noix.", OWNER)
     paris = ZoneInfo("Europe/Paris")
     night = datetime(2026, 10, 27, 3, 45, tzinfo=paris)
-    sorter = ScriptedProvider(  # no names to compare, no embeddings: only the sorting asks
+    sorter = ScriptedProvider(  # only the sorting asks
         json_reply({"temporary": [
             {"fact": 1, "still_going": True, "title": "Lisbonne avec Léa",
              "summary": "Il part à Lisbonne avec Léa.", "until": "2026-11-02"},
         ]}),
     )  # fmt: skip
     consolidator = Consolidator(
-        journal, memory, sorter, "judge", NightSettings(), "Europe/Paris", [],
+        journal, memory, sorter, "judge", NightSettings(), "Europe/Paris",
         clock=lambda: night,
     )  # fmt: skip
     await consolidator.start()

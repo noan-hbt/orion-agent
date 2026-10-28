@@ -79,15 +79,3 @@ async def test_words_still_count_and_failures_fall_back(
     assert first.statement == "Le bureau de Noan est à Lyon."
     embedder.down = True
     assert [f.statement for f in await memory.search("Lyon")] == ["Le bureau de Noan est à Lyon."]
-
-
-async def test_similar_pairs_for_the_night(setup: tuple[MemoryService, Concepts]) -> None:
-    memory, _ = setup
-    assert memory.semantic is not None
-    await memory.remember("Paul ne peut pas manger de noix.", OWNER, about=["Paul"])
-    [(a, b, score)] = await memory.semantic.similar_pairs(threshold=0.9)
-    assert {a.statement, b.statement} == {
-        "Paul est allergique aux noix de cajou.",
-        "Paul ne peut pas manger de noix.",
-    }
-    assert score > 0.9
