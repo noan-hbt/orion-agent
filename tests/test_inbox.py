@@ -256,7 +256,7 @@ async def test_orion_can_say_a_word_before_it_has_finished(
     provider.extend(
         call_tools(("plan", {"steps": [{"text": "regarder"}]}), text="Je regarde l'heure."),
         call_tools(
-            ("plan", {"steps": [{"text": "répondre"}]})
+            ("plan", {"steps": [{"text": "répondre", "status": "done"}]})
         ),  # nothing written beside it: nothing sent
         reply("Il est 17h."),
     )
