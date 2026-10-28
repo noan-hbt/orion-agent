@@ -88,9 +88,9 @@ async def test_a_picture_and_a_pdf_are_made_kept_and_sent(
     doc = await run(tool, action="pdf", title="Liste de courses", text="- pain\n- lait")
     pdf_id = doc.content.split("(")[1].split(",")[0]
 
-    await run(tool, action="send", file=image_id, caption="Ton chat")
+    await run(tool, action="send", file=image_id)
     await run(tool, action="send", file=pdf_id)
-    assert [(p.read_bytes()[:4], c) for p, c in sent] == [(b"\x89PNG", "Ton chat"), (b"%PDF", "")]
+    assert [(p.read_bytes()[:4], c) for p, c in sent] == [(b"\x89PNG", ""), (b"%PDF", "")]
     listing = await run(tool, action="list")
     assert "image.png" in listing.content and "Liste de courses.pdf" in listing.content
 
@@ -198,13 +198,13 @@ async def test_any_file_on_the_web_is_kept_and_sent_as_it_is(
     tool = tool_for(store, sent, web=lambda: desk)
     try:
         file_id = made_id(await run(tool, action="download", url="https://x.example/dl/config.xml"))
-        await run(tool, action="send", file=file_id, caption="La config")
+        await run(tool, action="send", file=file_id)
         too_big = await run(tool, action="download", url="https://x.example/big.zip")
         assert too_big.is_error and "larger" in too_big.content
     finally:
         await desk.aclose()
     [(path, caption)] = sent
-    assert path.name == "config.xml" and path.read_bytes() == xml and caption == "La config"
+    assert path.name == "config.xml" and path.read_bytes() == xml and caption == ""
     events = await journal.read()
     [got] = [e for e in events if e.kind == DOWNLOADED]
     assert got.trust is Trust.WEB and "8080" not in str(got.payload)
