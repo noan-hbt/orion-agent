@@ -105,7 +105,7 @@ class AgentConfig(BaseModel):
 
     model: str = "deepseek/deepseek-v4.1-flash"
     timezone: str = "Europe/Paris"
-    max_window_tokens: int = Field(default=120_000, ge=4_000)
+    max_window_tokens: int = Field(default=60_000, ge=4_000)
     max_steps: int = Field(
         default=40, ge=1, description="Model calls per turn; browsing a site takes one per page"
     )
