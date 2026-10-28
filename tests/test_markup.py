@@ -56,6 +56,13 @@ def test_other_channels_read_the_same_thing_as_text() -> None:
     assert plain("Pas de balise ici.") == "Pas de balise ici."
 
 
+def test_other_channels_get_no_markdown_marks() -> None:
+    """Seen for real on Telegram: `**bold**` and `*italic*` showed their stars."""
+    text = plain("## Le point\n* C'est **important** et *urgent*, [ici](https://example.com).")
+    assert text == "Le point\n• C'est important et urgent, ici (https://example.com)."
+    assert plain("5 * 3, mon_fichier_test.py") == "5 * 3, mon_fichier_test.py"
+
+
 def test_what_is_malformed_stays_as_written() -> None:
     for text in (
         "<choices>\n- jamais fermée",

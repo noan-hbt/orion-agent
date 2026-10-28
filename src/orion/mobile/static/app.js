@@ -1086,9 +1086,14 @@ function size(bytes) {
 
 // An address may hold one level of parentheses (Wikipedia's `Paris_(France)`), never a space.
 const URL_BODY = String.raw`https?:\/\/(?:[^\s()<>"]|\([^\s()<>"]*\))+`;
-// [label](address), <address>, a bare address, **bold**, `code` (\x60 is the backquote): the
-// only markup the app reads.
-const RICH = new RegExp(String.raw`\[([^\]\n]+)\]\((${URL_BODY})\)|<(${URL_BODY})>|(${URL_BODY})|\*\*([^*\n]+)\*\*|\x60([^\x60\n]+)\x60`, "g");
+// [label](address), <address>, a bare address, **bold** or __bold__, *italic* or _italic_,
+// ~~struck~~, `code` (\x60 is the backquote): the only markup the app reads.
+const RICH = new RegExp(
+  String.raw`\[([^\]\n]+)\]\((${URL_BODY})\)|<(${URL_BODY})>|(${URL_BODY})` +
+    String.raw`|\*\*(?=\S)((?:[^*\n]|\*(?!\*))+?)\*\*|__(?=\S)([^_\n]+?)__|~~(?=\S)([^~\n]+?)~~|\x60([^\x60\n]+)\x60` +
+    String.raw`|(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])|(?<![\w_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![\w_])`,
+  "g",
+);
 // What closes a sentence is not part of the address it ends on.
 const URL_TAIL = /[.,;:!?'’"»\]*_]+$/;
 
@@ -1102,22 +1107,26 @@ function shortUrl(url) {
 }
 
 function rich(text) {
-  // Links, **bold** and `code`, nothing else: the text is never parsed as HTML.
+  // Links, emphasis and `code`, nothing else: the text is never parsed as HTML. A heading reads
+  // as a bold line, a starred item as a bullet.
+  text = text.replace(/^#{1,6}[ \t]+(.+?)[ \t#]*$/gm, "**$1**").replace(/^([ \t]*)[*+][ \t]+/gm, "$1• ");
   const out = [];
   let at = 0;
   const plain = (piece) => piece && out.push(piece);
   for (const match of text.matchAll(RICH)) {
-    const [whole, label, labelled, angled, bare, bold, code] = match;
+    const [whole, label, labelled, angled, bare, bold, under, struck, code, em, emUnder] = match;
     plain(text.slice(at, match.index));
     at = match.index + whole.length;
-    if (labelled) out.push(anchor(labelled, label.replace(/\*\*/g, "")));
+    if (labelled) out.push(anchor(labelled, label.replace(/\*\*|__/g, "")));
     else if (angled) out.push(anchor(angled, shortUrl(angled)));
     else if (bare) {
       const url = bare.replace(URL_TAIL, "");
       at -= bare.length - url.length;
       out.push(anchor(url, shortUrl(url)));
     } else if (code) out.push(h("code", {}, code));
-    else out.push(h("b", {}, ...rich(bold)));
+    else if (struck) out.push(h("s", {}, ...rich(struck)));
+    else if (em || emUnder) out.push(h("i", {}, ...rich(em || emUnder)));
+    else out.push(h("b", {}, ...rich(bold || under)));
   }
   plain(text.slice(at));
   return out;
@@ -4137,7 +4146,7 @@ function speak(message) {
   if (audio) {
     new Audio(fileUrl(audio)).play().catch((error) => console.warn("voice", error));
   } else if (message.text && window.speechSynthesis) {
-    const utterance = new SpeechSynthesisUtterance(message.text.replace(/\*\*/g, "").replace(/https?:\/\/\S+/g, "le lien"));
+    const utterance = new SpeechSynthesisUtterance(message.text.replace(/\*+|__|~~|\x60/g, "").replace(/https?:\/\/\S+/g, "le lien"));
     utterance.lang = "fr-FR";
     window.speechSynthesis.speak(utterance);
   }

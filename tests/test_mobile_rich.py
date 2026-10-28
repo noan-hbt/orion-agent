@@ -71,3 +71,20 @@ async def test_backquoted_text_is_drawn_as_code_not_shown_with_its_quotes() -> N
     assert drawn[0]["html"] == (
         "Lance <code>orion doctor</code> puis <code>https://example.com/x</code> ici."
     )
+
+
+async def test_every_common_emphasis_is_drawn_not_shown_with_its_stars() -> None:
+    """Seen for real: `*urgent*` and `__demain__` came through with their marks."""
+    drawn = await _draw(
+        [
+            "C'est *urgent*, **très *vraiment* important**, __demain__, _peut-être_, ~~non~~.",
+            "## Le point\n* un\n- deux",
+            "5 * 3 * 2, mon_fichier_test.py, https://example.com/a_b_c",
+        ]
+    )
+    assert drawn[0]["html"] == (
+        "C'est <i>urgent</i>, <b>très <i>vraiment</i> important</b>, <b>demain</b>, "
+        "<i>peut-être</i>, <s>non</s>."
+    )
+    assert drawn[1]["html"] == "<b>Le point</b>\n• un\n- deux"
+    assert drawn[2]["text"] == "5 * 3 * 2, mon_fichier_test.py, example.com/a_b_c"
