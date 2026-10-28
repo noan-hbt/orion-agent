@@ -3906,3 +3906,8 @@ message final là où il demandait un mot à chaque étape. GPT 6 Sol, lui, le f
 - Évaluation : `plusieurs_etapes_plusieurs_messages_un_seul_tour`, à passer sur Luna.
 - **Il s'appelle `tell`, pas `say`** : `say` est déjà le vocal du module `vocal`, et deux outils
   du même nom empêchent Orion de démarrer (c'est arrivé au premier déploiement).
+- **Chaque message ne dit que du neuf** (corrigé le jour même) : sur Hyperplanning, trois
+  messages redisaient chacun la reconnexion et les notes d'anglais, et annonçaient la suite
+  (« je vais maintenant ouvrir Bulletin »). La constitution et `tell` le disent ; la réponse
+  finale ne redit pas ce qu'il a déjà reçu. Évaluation : `says_nothing_twice` et
+  `no_narration` sur `plusieurs_etapes_plusieurs_messages_un_seul_tour`.
