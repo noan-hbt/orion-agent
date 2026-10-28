@@ -72,6 +72,28 @@ async def test_core_memory_opens_the_window_and_relevant_facts_follow(
     assert_prefix_stable(provider)
 
 
+async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """The next morning the window keeps only the last exchanges: what opened it yesterday
+    (portrait, his preferences) must open it again, or Orion forgets how to talk to him."""
+    from datetime import timedelta
+
+    await memory.remember(
+        "Noan veut des réponses très courtes.", OWNER, category=Category.PREFERENCE
+    )
+    provider = ScriptedProvider(*[reply("r" * 3000) for _ in range(11)])
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+    for i in range(10):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 3000, "terminal", now=at(i))
+
+    await orion.handle_owner_message("t1", "salut", "terminal", now=at(10) + timedelta(hours=9))
+    sent = provider.requests[-1].messages
+    assert "message 0" not in str(sent)  # the window was cut
+    assert "<memoire>" in str(sent[-1]["content"]) and "très courtes" in str(sent[-1]["content"])
+
+
 async def test_remember_tool_writes_memory_derived_from_the_owner_message(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:

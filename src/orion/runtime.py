@@ -487,7 +487,7 @@ class Orion:
         else:
             new_base = self._compiler.rebase_point(thread, incoming)
         window = thread.messages[new_base if new_base is not None else thread.base :]
-        blocks = await self._memory_blocks(memory_query, window)
+        blocks = await self._memory_blocks(memory_query, window, cut=new_base is not None)
         if thread_id == OWNER_THREAD and kind == "message.received":
             situation = await self._situation(when, window)
             if situation:
@@ -876,17 +876,18 @@ class Orion:
         last = next((s for s in reversed(shown) if "<maintenant>" in s), "")
         return None if block in last else block
 
-    async def _memory_blocks(self, text: str, window: list[Message]) -> list[str]:
-        """Memory to attach to this message: core memory and the playbook when a window starts,
-        then playbook changes and relevant facts not already visible in the window. Appended to
-        the user message, never to the system prompt, so the cached prefix is untouched."""
+    async def _memory_blocks(self, text: str, window: list[Message], cut: bool) -> list[str]:
+        """Memory to attach to this message: core memory and the playbook when a window starts
+        or was just cut (the opening that held them is gone), then playbook changes and
+        relevant facts not already visible in the window. Appended to the user message, never
+        to the system prompt, so the cached prefix is untouched."""
         if self._memory is None:
             return []
         store = self._memory.store
         rules = await store.rules(include_retired=True)
         settings = list((await store.settings()).values())
         blocks: list[str] = []
-        if not window:
+        if not window or cut:
             snapshot = snapshot_block(
                 await store.facts(),
                 await store.commitments(),
