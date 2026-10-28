@@ -133,3 +133,23 @@ async def test_his_corrections_are_found_and_become_a_case(journal: SqliteJourna
     assert miss.asked == "le resto est ouvert ce soir ?" and "toutes les 6 h" in miss.answered
     case = as_case(miss, "rate")
     assert "Say('le resto est ouvert ce soir ?')" in case and "judged(" in case
+
+
+async def test_say_reaches_him_while_the_turn_goes_on(journal: SqliteJournal) -> None:
+    provider = ScriptedProvider(
+        call_tools(("say", {"text": "Paris : 18°, soleil."}), ("echo", {"text": "Lyon"})),
+        call_tools(("say", {"text": "Lyon : 15°, pluie."}), ("echo", {"text": "Marseille"})),
+        reply("Marseille : 22°, grand bleu."),
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    heard: list[str] = []
+
+    async def progress(text: str, _cid: str) -> None:
+        heard.append(text)
+
+    turn = await orion.handle_owner_message(
+        OWNER_THREAD, "La météo à Paris, Lyon, Marseille ?", "t", now=at(1), progress=progress
+    )
+    assert heard == ["Paris : 18°, soleil.", "Lyon : 15°, pluie."]
+    assert turn.text == "Marseille : 22°, grand bleu."
