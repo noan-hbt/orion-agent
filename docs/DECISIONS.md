@@ -4055,3 +4055,17 @@ dossier courant, et ailleurs Orion partait sans un mot sur ses réglages par dé
 - Le serveur ne change pas : ses services passent `--config`.
 - Non retenu : un paquet publié (PyPI) ; `catalog/` et le code servi au téléphone vivent dans le
   dépôt.
+
+## D181 — Ses consignes reviennent quand la conversation s'en éloigne
+
+*28/10/2026 · acceptée · complète D178*
+
+Ses consignes (règles du manuel, préférences) n'étaient montrées qu'à l'ouverture de la fenêtre
+ou après une coupe. Dans une longue conversation, elles finissaient loin derrière, noyées sous
+les propres réponses d'Orion, qui reprenait peu à peu ses habitudes : « réponds en 1 à 5 mots »
+tenait au début, plus au bout d'une heure.
+
+- **Bloc `<rappel>`** : règles actives et préférences, rattaché au message du propriétaire dès
+  que plus de 6 000 tokens (`REMIND_AFTER_TOKENS`) le séparent du dernier `<memoire>` ou
+  `<rappel>`. Pas à chaque message : quelques rappels par fenêtre de 60k.
+- Rattaché au message, jamais au prompt système : le préfixe en cache reste intact.
