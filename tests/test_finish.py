@@ -5,8 +5,12 @@ from __future__ import annotations
 import pytest
 
 from orion.cognition.finish import OFFER_NOTE, ends_on_offer, finish_check
+from orion.config import OrionConfig
 from orion.core.journal import SqliteJournal
+from orion.files.module import FilesModule
 from orion.runtime import OWNER_THREAD
+from orion.tools.builtin import builtin_tools
+from orion.vocal.module import VocalSettings, vocal_tools
 from tests.fakes import ScriptedProvider, call_tools, reply
 from tests.test_runtime_cache import assert_prefix_stable, at, make_orion
 
@@ -135,10 +139,10 @@ async def test_his_corrections_are_found_and_become_a_case(journal: SqliteJourna
     assert "Say('le resto est ouvert ce soir ?')" in case and "judged(" in case
 
 
-async def test_say_reaches_him_while_the_turn_goes_on(journal: SqliteJournal) -> None:
+async def test_tell_reaches_him_while_the_turn_goes_on(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
-        call_tools(("say", {"text": "Paris : 18°, soleil."}), ("echo", {"text": "Lyon"})),
-        call_tools(("say", {"text": "Lyon : 15°, pluie."}), ("echo", {"text": "Marseille"})),
+        call_tools(("tell", {"text": "Paris : 18°, soleil."}), ("echo", {"text": "Lyon"})),
+        call_tools(("tell", {"text": "Lyon : 15°, pluie."}), ("echo", {"text": "Marseille"})),
         reply("Marseille : 22°, grand bleu."),
     )
     orion = make_orion(journal, provider)
@@ -153,3 +157,15 @@ async def test_say_reaches_him_while_the_turn_goes_on(journal: SqliteJournal) ->
     )
     assert heard == ["Paris : 18°, soleil.", "Lyon : 15°, pluie."]
     assert turn.text == "Marseille : 22°, grand bleu."
+
+
+def test_the_voice_has_a_tool_name_of_its_own() -> None:
+    # A built-in `say` (D173) kept Orion from starting: two tools of the same name.
+    class Speaker:
+        async def speak(self, model: str, text: str, voice: str) -> bytes:
+            return b""
+
+    voice = {
+        t.name for t in vocal_tools(FilesModule(OrionConfig()), Speaker(), VocalSettings(), "m")
+    }
+    assert not voice & {t.name for t in builtin_tools()}
