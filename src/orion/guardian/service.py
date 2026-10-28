@@ -25,6 +25,7 @@ core (`orion.guardian.policy`): the guardian only sees requests, never the agent
 from __future__ import annotations
 
 import asyncio
+import base64
 import imaplib
 import json
 import re
@@ -72,13 +73,15 @@ from orion.guardian.limits import Limits, missing, within
 from orion.guardian.policy import may_be_alone
 from orion.guardian.wire import (
     ApprovalRequest,
+    MailPick,
     MailSearch,
     batch_to_json,
     mail_request,
     mails_to_json,
 )
 from orion.mail.service import Fetch as MailFetch
-from orion.mail.service import MailAccount, MailSettings, imap_fetch, imap_search
+from orion.mail.service import MailAccount, MailSettings, imap_attachment, imap_fetch, imap_search
+from orion.mail.service import Pick as MailPickFn
 from orion.mail.service import Search as MailSearchFn
 from orion.mail.smtp import Outgoing, SendError, smtp_send
 from orion.secretary.settings import REPLY_WINDOW_HOURS, Contact, SecretarySettings
@@ -292,6 +295,7 @@ class GuardianService:
         fetch_calendar: CalendarFetch | None = None,
         fetch_mail: MailFetch | None = None,
         search_mail: MailSearchFn | None = None,
+        pick_mail: MailPickFn | None = None,
         clock: Callable[[], datetime] | None = None,
         write_calendar: CalendarWrite | None = None,
         send_mail: MailSend | None = None,
@@ -308,6 +312,7 @@ class GuardianService:
         self._fetch_calendar = fetch_calendar or self._http_calendar
         self._fetch_mail = fetch_mail or imap_fetch
         self._search_mail = search_mail or imap_search
+        self._pick_mail = pick_mail or imap_attachment
         self._write_calendar = write_calendar or self._http_calendar_write
         self._send_mail = send_mail or smtp_send
         self._sends: deque[float] = deque()
@@ -396,6 +401,7 @@ class GuardianService:
                 Route("/v1/calendar/{account}/events", self._calendar_add, methods=["POST"]),
                 Route("/v1/mail/{account}", self._mail, methods=["POST"]),
                 Route("/v1/mail/{account}/search", self._mail_search, methods=["POST"]),
+                Route("/v1/mail/{account}/attachment", self._mail_attachment, methods=["POST"]),
                 Route("/v1/mail/{account}/send", self._mail_send, methods=["POST"]),
                 Route("/v1/mail/{account}/tidy", self._mail_tidy, methods=["POST"]),
                 Route("/v1/mail/{account}/draft", self._mail_draft, methods=["POST"]),
@@ -1221,6 +1227,32 @@ class GuardianService:
             log.warning("guardian.mail_search_failed", account=name, error=repr(exc))
             return refused(f"mailbox {name!r} unreadable: {exc!r}", 502)
         return JSONResponse({"mails": mails_to_json(mails)})
+
+    async def _mail_attachment(self, request: Request) -> Response:
+        name = str(request.path_params["account"])
+        settings = MailSettings.model_validate(self.config.modules.get("mail", {}))
+        account = next((a for a in settings.accounts if a.name == name), None)
+        if account is None:
+            return refused(f"no mail account {name!r}", 404)
+        try:
+            query = MailPick.model_validate_json(await request.body())
+        except ValidationError:
+            return refused("malformed attachment request", 400)
+        try:
+            found = await self._pick_mail(account, query.uid, query.message_id, query.index)
+        except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
+            log.warning("guardian.mail_attachment_failed", account=name, error=repr(exc))
+            return refused(f"mailbox {name!r} unreadable: {exc!r}", 502)
+        if found is None:
+            return JSONResponse({"found": False})
+        return JSONResponse(
+            {
+                "found": True,
+                "name": found.name,
+                "type": found.content_type,
+                "data": base64.b64encode(found.data).decode(),
+            }
+        )
 
 
 def _same_event(params: dict[str, Any], event: NewCalendarEvent, zone: ZoneInfo) -> bool:
