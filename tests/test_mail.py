@@ -434,3 +434,53 @@ async def test_a_mail_whose_text_was_not_kept_is_read_on_the_server(
     [tool] = mail_tools(box)
     read = await tool.handler(tool.parse(json.dumps({"read": card.id})), ToolContext("o", "c"))
     assert news.body[:40] in read.content
+
+
+INVOICE = b"""From: Garage <garage@example.com>
+Subject: Votre devis
+Date: Mon, 19 Oct 2026 10:00:00 +0000
+Message-ID: <devis@garage.example>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="b"
+
+--b
+Content-Type: text/plain; charset=utf-8
+
+Ci-joint le devis.
+--b
+Content-Type: text/csv; name="devis.csv"
+Content-Disposition: attachment; filename="devis.csv"
+Content-Transfer-Encoding: base64
+
+UGllY2UsMTIwIEVVUgpUb3RhbCwzNDAgRVVSCg==
+--b--
+"""
+
+
+async def test_an_attached_file_is_listed_and_opened(journal: SqliteJournal) -> None:
+    server = Server(parse_message(20, INVOICE, NOW))
+    kept: list[tuple[str, bytes]] = []
+
+    async def pick(
+        account: MailAccount, uid: int, message_id: str, index: int
+    ) -> imap.Attached | None:
+        assert (uid, message_id) == (20, "<devis@garage.example>")
+        return imap.attachment_of(INVOICE, index)
+
+    async def keep(name: str, content_type: str, data: bytes, ctx: ToolContext) -> str:
+        kept.append((name, data))
+        return "fi_1"
+
+    box = Mailbox(journal, settings(), "Europe/Paris", server.fetch, lambda: NOW, pick=pick)
+    await box.start()
+    await box.sync_once()
+    [card] = box.state.cards.values()
+    [tool] = mail_tools(box, keep=keep)
+    read = await tool.handler(tool.parse(json.dumps({"read": card.id})), ToolContext("o", "c"))
+    assert "devis.csv" in read.content
+    opened = await tool.handler(
+        tool.parse(json.dumps({"read": card.id, "attachment": 1})), ToolContext("o", "c")
+    )
+    assert "Total,340 EUR" in opened.content and "fi_1" in opened.content
+    assert opened.trust is Trust.THIRD_PARTY
+    assert kept and kept[0][0] == "devis.csv"

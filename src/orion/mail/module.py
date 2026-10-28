@@ -12,7 +12,7 @@ from orion.modules.base import Daemon, Module, Plate
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
-    from orion.tools.base import Tool
+    from orion.tools.base import Tool, ToolContext
 
 
 class MailModule(Module):
@@ -40,6 +40,7 @@ class MailModule(Module):
             self.config.agent.timezone,
             self._fetch or (plate.guardian.mail if plate.guardian else None),
             search=plate.guardian.mail_search if plate.guardian else None,
+            pick=plate.guardian.mail_attachment if plate.guardian else None,
         )
         await self.mailbox.start()
         postman = Postman(
@@ -59,6 +60,12 @@ class MailModule(Module):
                 return None
             return made.name, made.content_type, made.path.read_bytes()
 
+        async def keep(name: str, content_type: str, data: bytes, ctx: ToolContext) -> str:
+            store = files.store if files is not None else None
+            if store is None:
+                raise ValueError("no file store")
+            return (await store.save(name, data, content_type, "mail.attachment", ctx)).id
+
         guardian = plate.guardian
         return mail_tools(
             self.mailbox,
@@ -67,6 +74,7 @@ class MailModule(Module):
             tidy=guardian.mail_tidy if guardian else local_tidy,
             draft=guardian.mail_draft if guardian else local_draft,
             mark=guardian.mail_mark if guardian else local_mark,
+            keep=keep,
         )
 
     async def serve(self, daemon: Daemon) -> None:

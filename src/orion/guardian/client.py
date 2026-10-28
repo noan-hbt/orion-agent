@@ -21,12 +21,13 @@ from orion.channels.inkbox import GRANT_HEADER, InkboxClient
 from orion.channels.telegram import TelegramClient
 from orion.guardian.wire import (
     ApprovalRequest,
+    MailPick,
     MailRequest,
     MailSearch,
     batch_from_json,
     mails_from_json,
 )
-from orion.mail.imap import Batch, RawMail
+from orion.mail.imap import Attached, Batch, RawMail
 from orion.mail.service import MailAccount
 
 BASE_URL = "http://guardian"
@@ -156,6 +157,17 @@ class GuardianClient:
         query = MailSearch(since=since, before=before, sender=sender, limit=limit, now=now)
         data = await self.post(f"/v1/mail/{account.name}/search", query.model_dump(mode="json"))
         return mails_from_json(data["mails"])
+
+    async def mail_attachment(
+        self, account: MailAccount, uid: int, message_id: str, index: int
+    ) -> Attached | None:
+        """One attached file of a mail, read by the guardian."""
+        query = MailPick(uid=uid, message_id=message_id, index=index)
+        data = await self.post(f"/v1/mail/{account.name}/attachment", query.model_dump())
+        if not data["found"]:
+            return None
+        raw = base64.b64decode(str(data["data"]))
+        return Attached(str(data["name"]), str(data["type"]), len(raw), raw)
 
     async def mail_send(self, account: MailAccount, mail: Any, grant: str | None) -> str:
         """Sent by the guardian, if the owner approved this very mail. Returns its Message-ID."""

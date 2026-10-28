@@ -24,7 +24,7 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.ledger import DENIED, OWNER_CONVERSATION
 from orion.guardian.policy import ActionProposal
 from orion.guardian.secrets import exposed
-from orion.mail.imap import Batch, RawMail
+from orion.mail.imap import Attached, Batch, RawMail
 from orion.mail.service import MailAccount
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
 from orion.voice.tools import CallSomeoneInput
@@ -348,8 +348,12 @@ async def test_calendars_and_mail_are_read_by_the_guardian(
         assert (since.month, before, sender, limit) == (5, None, "paul", 50)
         return [mail]
 
+    async def pick(account: MailAccount, uid: int, message_id: str, index: int) -> Attached:
+        assert (uid, message_id, index) == (7, "<m@x>", 1)
+        return Attached("devis.pdf", "application/pdf", 3, b"%PD")
+
     async with running_guardian(
-        config, fetch_calendar=feed, fetch_mail=mailbox, search_mail=search
+        config, fetch_calendar=feed, fetch_mail=mailbox, search_mail=search, pick_mail=pick
     ) as g:
         account = CalendarAccount(name="perso", url=SecretRef(env="NOT_IN_THE_CORE"))
         assert "VCALENDAR" in await g.client.calendar(account)
@@ -358,6 +362,9 @@ async def test_calendars_and_mail_are_read_by_the_guardian(
         assert batch == Batch(42, 7, [mail], skipped=1)
         since = datetime(2026, 5, 20, tzinfo=UTC)
         assert await g.client.mail_search(box, since, None, "paul", 50, since) == [mail]
+        assert await g.client.mail_attachment(box, 7, "<m@x>", 1) == Attached(
+            "devis.pdf", "application/pdf", 3, b"%PD"
+        )
         with pytest.raises(ConnectionError, match="no mail account"):
             await g.client.mail(
                 MailAccount(name="other", host="h", username="u", password=SecretRef(env="X")),

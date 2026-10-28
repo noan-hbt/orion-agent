@@ -18,7 +18,18 @@ from html.parser import HTMLParser
 from typing import Any, cast
 
 BODY_CHARS = 6000
+MAX_ATTACHMENTS = 20
 _BULK = {"bulk", "list", "junk"}
+
+
+@dataclass(frozen=True)
+class Attached:
+    """A file attached to a mail: what it is, and, when asked for, its bytes."""
+
+    name: str
+    content_type: str
+    size: int
+    data: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -32,6 +43,8 @@ class RawMail:
     body: str
     bulk: bool
     """Mailing list or bulk mail (List-Unsubscribe, Precedence): no need to read it closely."""
+    attachments: tuple[Attached, ...] = ()
+    """Its attached files, without their bytes."""
 
 
 class _Text(HTMLParser):
@@ -57,6 +70,33 @@ def html_to_text(html: str) -> str:
     parser = _Text()
     parser.feed(html)
     return " ".join(" ".join(parser.parts).split())
+
+
+def _files(message: EmailMessage) -> list[tuple[Attached, EmailMessage]]:
+    found: list[tuple[Attached, EmailMessage]] = []
+    for part in message.iter_attachments():
+        if part.is_multipart() or part.get_content_maintype() == "message":
+            continue  # a forwarded mail: its text is not a file to open
+        if part.get_content_disposition() != "attachment" and not part.get_filename():
+            continue  # an inline image of the signature
+        payload = part.get_payload(decode=True)
+        data = payload if isinstance(payload, bytes) else b""
+        name = " ".join(str(part.get_filename() or "").split())[:200] or "sans-nom"
+        found.append((Attached(name, part.get_content_type(), len(data)), part))
+    return found[:MAX_ATTACHMENTS]
+
+
+def attachment_of(raw: bytes, index: int) -> Attached | None:
+    """The mail's `index`-th attached file (from 1), with its bytes."""
+    message: EmailMessage = email.message_from_bytes(raw, policy=email.policy.default)
+    files = _files(message)
+    if not 1 <= index <= len(files):
+        return None
+    info, part = files[index - 1]
+    payload = part.get_payload(decode=True)
+    return Attached(
+        info.name, info.content_type, info.size, payload if isinstance(payload, bytes) else b""
+    )
 
 
 def parse_message(uid: int, raw: bytes, fallback_time: datetime) -> RawMail:
@@ -86,6 +126,7 @@ def parse_message(uid: int, raw: bytes, fallback_time: datetime) -> RawMail:
         received_at=received,
         body=" ".join(body.split())[:BODY_CHARS],
         bulk=message.get("List-Unsubscribe") is not None or precedence in _BULK,
+        attachments=tuple(info for info, _ in _files(message)),
     )
 
 
@@ -178,3 +219,35 @@ def search_window(
                         mails.append(parse_message(uid, parts[1], now))
                         break
         return mails
+
+
+def fetch_attachment(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    folder: str,
+    uid: int,
+    message_id: str,
+    index: int,
+) -> Attached | None:
+    """One attached file of the mail `uid`, if that uid is still the mail `message_id` (the
+    server may have renumbered the folder). Blocking: run it in a thread."""
+    with imaplib.IMAP4_SSL(host, port, timeout=60) as imap:
+        imap.login(username, password)
+        status, _ = imap.select(folder, readonly=True)
+        if status != "OK":
+            raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
+        _, fetched = imap.uid("FETCH", str(uid), "(BODY.PEEK[])")
+        for item in fetched:
+            if isinstance(item, tuple):
+                parts = cast(tuple[Any, ...], item)
+                if len(parts) > 1 and isinstance(parts[1], bytes):
+                    raw = parts[1]
+                    if (
+                        message_id
+                        and parse_message(uid, raw, datetime.now(UTC)).message_id != message_id
+                    ):
+                        return None
+                    return attachment_of(raw, index)
+        return None

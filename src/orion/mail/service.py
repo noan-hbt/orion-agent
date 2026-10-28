@@ -29,7 +29,7 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert, DigestLine
 from orion.mail.card import Card, Category, Importance, headers_card
-from orion.mail.imap import Batch, RawMail, fetch_since, search_window
+from orion.mail.imap import Attached, Batch, RawMail, fetch_attachment, fetch_since, search_window
 from orion.memory.model import COMMITMENT_CREATED
 from orion.modules.base import ModuleSettings
 
@@ -100,6 +100,8 @@ class MailCard:
     bulk: bool = False
     text: str = ""
     """The mail's text, clipped (`TEXT_CHARS`); empty for cards made before D114."""
+    attachments: tuple[Attached, ...] = ()
+    """Its attached files (name, type, size), read on the server when asked for."""
 
     @property
     def sender(self) -> str:
@@ -116,6 +118,8 @@ class MailCard:
             tags.append(f"échéance {c.due.isoformat()}")
         if c.amount is not None:
             tags.append(f"{c.amount:.2f} {c.currency or ''}".strip())
+        if self.attachments:
+            tags.append(f"{len(self.attachments)} pièce(s) jointe(s)")
         when = self.received_at.astimezone(zone)
         about = f" : {c.summary}" if c.summary else ""
         return (
@@ -163,6 +167,10 @@ class MailState:
                 uid=int(payload.get("uid", 0)),
                 bulk=bool(payload.get("bulk", False)),
                 text=str(payload.get("text", "")),
+                attachments=tuple(
+                    Attached(str(a["name"]), str(a["type"]), int(a["size"]))
+                    for a in payload.get("attachments", [])
+                ),
             )
             self.cards[card.id] = card
         elif event.kind == COMMITMENT_CREATED and (event.correlation_id or "").startswith("m_"):
@@ -233,6 +241,27 @@ async def imap_search(
     )
 
 
+Pick = Callable[[MailAccount, int, str, int], Awaitable[Attached | None]]
+"""(account, uid, message_id, index) → that attached file, with its bytes."""
+
+
+async def imap_attachment(
+    account: MailAccount, uid: int, message_id: str, index: int
+) -> Attached | None:
+    password = account.password.resolve().get_secret_value()
+    return await asyncio.to_thread(
+        fetch_attachment,
+        account.host,
+        account.port,
+        account.username,
+        password,
+        account.folder,
+        uid,
+        message_id,
+        index,
+    )
+
+
 DIG_LIMIT = 50
 """Mails read per account when Orion looks further back than the sync keeps."""
 
@@ -246,10 +275,12 @@ class Mailbox:
         fetch: Fetch | None = None,
         clock: Callable[[], datetime] | None = None,
         search: Search | None = None,
+        pick: Pick | None = None,
     ) -> None:
         self._journal = journal
         self.settings = settings
         self._search = search or imap_search
+        self._pick = pick or imap_attachment
         self._zone = ZoneInfo(timezone)
         self._fetch = fetch or imap_fetch
         self._clock = clock or (lambda: datetime.now(self._zone))
@@ -355,6 +386,13 @@ class Mailbox:
         found = next((m for m in mails if m.message_id == card.message_id), None)
         return found.body[:TEXT_CHARS] if found else ""
 
+    async def attachment(self, card: MailCard, index: int) -> Attached | None:
+        """The card's `index`-th attached file (from 1), read on the server: not journaled."""
+        account = next((a for a in self.settings.accounts if a.name == card.account), None)
+        if account is None or not card.uid:
+            return None
+        return await self._pick(account, card.uid, card.message_id, index)
+
     async def _record(self, account: str, batch: Batch, now: datetime) -> int:
         events: list[NewEvent] = []
         correlation = new_id()
@@ -398,6 +436,10 @@ class Mailbox:
                 "received_at": mail.received_at.isoformat(),
                 "card": card.payload(),
                 "text": "" if mail.bulk else mail.body[:TEXT_CHARS],
+                "attachments": [
+                    {"name": a.name, "type": a.content_type, "size": a.size}
+                    for a in mail.attachments
+                ],
             },
             provenance=Provenance(source=f"mail:{account}:{mail.message_id}", actor="orion:mail"),
             trust=Trust.THIRD_PARTY,
