@@ -408,3 +408,29 @@ def test_the_module_loads_and_reports_in_doctor(tmp_path: Path) -> None:
     )
     [module] = [m for m in load(cfg) if isinstance(m, MailModule)]
     assert module.doctor() == ["perso (noan on imap.gmail.com) ok"]
+
+
+async def test_a_mail_whose_text_was_not_kept_is_read_on_the_server(
+    journal: SqliteJournal,
+) -> None:
+    news = parse_message(12, NEWSLETTER, NOW)
+    server = Server(news)
+
+    async def search(
+        account: MailAccount,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        limit: int,
+        now: datetime,
+    ) -> list[RawMail]:
+        return [news]
+
+    box = Mailbox(journal, settings(), "Europe/Paris", server.fetch, lambda: NOW, search)
+    await box.start()
+    await box.sync_once()
+    [card] = box.state.cards.values()
+    assert not card.text  # bulk mail: the text is not journaled
+    [tool] = mail_tools(box)
+    read = await tool.handler(tool.parse(json.dumps({"read": card.id})), ToolContext("o", "c"))
+    assert news.body[:40] in read.content

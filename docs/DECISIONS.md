@@ -4021,3 +4021,21 @@ fenêtre en pesait souvent quatre à huit fois plus.
   petite, et chaque étape entre deux en porte moitié moins.
 - Non retenu : raccourcir encore les schémas ou la constitution sans évaluation pour le
   vérifier (D123, D158).
+
+## D179 — Orion range aussi sa boîte : corbeille, déplacer, marquer
+
+*28/10/2026 · acceptée · complète D75*
+
+Orion lisait, envoyait, rédigeait des brouillons, archivait et désabonnait. Il ne pouvait ni
+supprimer un mail, ni le ranger dans un dossier, ni le marquer lu ou suivi.
+
+- **`mail_tidy` prend `trash` et `move`** (avec `folder`). Supprimer, c'est déplacer vers la
+  corbeille du compte : `trash_folder`, sinon le dossier que le serveur marque `\Trash`
+  (RFC 6154), sinon refus. Rien n'est jamais effacé pour de bon par Orion : le serveur vide sa
+  corbeille comme il le ferait pour lui.
+- **Toujours approuvés**, par lot comme l'archivage. L'autonomie de `mail_tidy` ne couvre que
+  l'archivage et le désabonnement ; le gardien vérifie aussi que le dossier est celui approuvé.
+- **`mail_mark`** : lu, non lu, suivi, plus suivi. Ce ne sont que des drapeaux IMAP, défaits
+  par la marque inverse : pas d'approbation, comme un brouillon. Événement `mail.marked`.
+- Limites : un brouillon déjà posé ne se modifie pas (on en pose un autre) ; on ne crée pas de
+  dossier.

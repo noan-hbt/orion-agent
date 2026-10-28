@@ -49,7 +49,7 @@ LABELS = {
     "calendar_add": "ajouter des événements à ton agenda",
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
-    "mail_tidy": "archiver tes mails et te désabonner des newsletters",
+    "mail_tidy": "archiver tes mails et te désabonner des newsletters (jamais supprimer)",
     "configure_change": "changer tes propres réglages",
     "contact_message": "écrire à tes proches",
     "shell": "lancer des commandes sur mon serveur (en root)",

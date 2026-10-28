@@ -1,9 +1,16 @@
-"""Tidying the owner's mailbox (D75): archiving, unsubscribing, writing drafts.
+"""Tidying the owner's mailbox (D75): archiving, deleting, moving, marking, unsubscribing,
+writing drafts.
 
 Reading stays strictly read-only (`imap`). These are the only writes, each one explicit:
 
 - **archive**: the messages move from the account's folder to its `archive_folder` (UID MOVE,
   or COPY then delete where the server has no MOVE). Nothing is ever deleted for good;
+- **trash**: the same move, to the account's trash (`trash_folder`, else the folder the server
+  marks `\\Trash`). The server empties it later, as it would for the owner; Orion never expunges
+  a mail it has not moved first;
+- **move**: the same move, to a folder he named;
+- **mark**: read, unread, flagged or not: flags only, undone by the opposite mark, so no
+  approval;
 - **unsubscribe**: the List-Unsubscribe header is read here, from the server, by uid (not
   from anything the model wrote). A one-click HTTPS address (RFC 8058) gets its POST; a
   `mailto:` gets a short mail from the owner's account; a page to visit is returned for the
@@ -11,8 +18,9 @@ Reading stays strictly read-only (`imap`). These are the only writes, each one e
 - **draft**: a reply in the owner's voice is put in `drafts_folder`. It never leaves: he reads
   it, changes it, and sends it himself.
 
-Archiving and unsubscribing are approved by the owner, as one batch (`mail_tidy`), unless he
-let Orion do it alone. They run where the passwords are: in the guardian when Orion runs split.
+Archiving, trashing, moving and unsubscribing are approved by the owner, as one batch
+(`mail_tidy`); archiving and unsubscribing, unless he let Orion do them alone. They run
+where the passwords are: in the guardian when Orion runs split.
 """
 
 from __future__ import annotations
@@ -35,7 +43,15 @@ from orion.mail.smtp import ADDRESS, Outgoing, SendError, build, smtp_send
 
 log = structlog.get_logger(__name__)
 
-TidyAction = Literal["archive", "unsubscribe"]
+TidyAction = Literal["archive", "trash", "move", "unsubscribe"]
+TIDY_ACTIONS: tuple[TidyAction, ...] = ("archive", "trash", "move", "unsubscribe")
+MarkAction = Literal["read", "unread", "flag", "unflag"]
+MARKS: dict[MarkAction, tuple[str, str]] = {
+    "read": ("+FLAGS.SILENT", "(\\Seen)"),
+    "unread": ("-FLAGS.SILENT", "(\\Seen)"),
+    "flag": ("+FLAGS.SILENT", "(\\Flagged)"),
+    "unflag": ("-FLAGS.SILENT", "(\\Flagged)"),
+}
 
 
 @dataclass
@@ -57,8 +73,9 @@ class Tidied:
         )
 
 
-Tidy = Callable[[MailAccount, TidyAction, list[int], str | None], Awaitable[Tidied]]
-"""(account, action, uids, grant) → what was done."""
+Tidy = Callable[[MailAccount, TidyAction, list[int], str | None, str | None], Awaitable[Tidied]]
+"""(account, action, uids, grant, folder for `move`) → what was done."""
+Mark = Callable[[MailAccount, MarkAction, list[int]], Awaitable[int]]
 Draft = Callable[[MailAccount, Outgoing], Awaitable[None]]
 
 
@@ -93,23 +110,54 @@ def _quoted(folder: str) -> str:
     return '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def archive_uids(account: MailAccount, uids: list[int]) -> int:
-    """Blocking: run it in a thread."""
-    if not account.archive_folder:
-        raise SendError(f"mail account {account.name!r} has no archive_folder")
+def trash_folder(imap: imaplib.IMAP4, account: MailAccount) -> str:
+    """The configured trash, else the folder the server marks `\\Trash` (RFC 6154)."""
+    if account.trash_folder:
+        return account.trash_folder
+    status, listed = imap.list()
+    for line in listed if status == "OK" else []:
+        text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+        found = re.match(r'\((?P<flags>[^)]*)\) (?:"[^"]*"|NIL) (?P<name>.+)$', text)
+        if found and "\\trash" in found["flags"].lower():
+            return found["name"].strip().strip('"')
+    raise SendError(f"mail account {account.name!r} has no trash_folder")
+
+
+def move_uids(account: MailAccount, uids: list[int], target: str | None) -> int:
+    """Blocking: run it in a thread. `target` None means the trash."""
     with _login(account) as imap:
         status, _ = imap.select(account.folder)
         if status != "OK":
             raise imaplib.IMAP4.error(f"cannot open folder {account.folder!r}")
+        folder = target or trash_folder(imap, account)
         wanted = ",".join(str(u) for u in uids)
-        target = _quoted(account.archive_folder)
-        status, _ = imap.uid("MOVE", wanted, target)
+        status, _ = imap.uid("MOVE", wanted, _quoted(folder))
         if status != "OK":
-            status, _ = imap.uid("COPY", wanted, target)
+            status, _ = imap.uid("COPY", wanted, _quoted(folder))
             if status != "OK":
-                raise imaplib.IMAP4.error(f"cannot copy to {account.archive_folder!r}")
+                raise imaplib.IMAP4.error(f"cannot copy to {folder!r}")
             imap.uid("STORE", wanted, "+FLAGS.SILENT", "(\\Deleted)")
             imap.expunge()
+    return len(uids)
+
+
+def archive_uids(account: MailAccount, uids: list[int]) -> int:
+    """Blocking: run it in a thread."""
+    if not account.archive_folder:
+        raise SendError(f"mail account {account.name!r} has no archive_folder")
+    return move_uids(account, uids, account.archive_folder)
+
+
+def mark_uids(account: MailAccount, action: MarkAction, uids: list[int]) -> int:
+    """Blocking: flags only, nothing moves."""
+    with _login(account) as imap:
+        status, _ = imap.select(account.folder)
+        if status != "OK":
+            raise imaplib.IMAP4.error(f"cannot open folder {account.folder!r}")
+        how, flag = MARKS[action]
+        status, _ = imap.uid("STORE", ",".join(str(u) for u in uids), how, flag)
+        if status != "OK":
+            raise imaplib.IMAP4.error(f"cannot mark {action}")
     return len(uids)
 
 
@@ -186,6 +234,7 @@ async def local_tidy(
     action: TidyAction,
     uids: list[int],
     _grant: str | None = None,
+    folder: str | None = None,
     http: httpx.AsyncClient | None = None,
 ) -> Tidied:
     """Where the password is: in the guardian when split, else in the core."""
@@ -193,6 +242,12 @@ async def local_tidy(
     try:
         if action == "archive":
             outcome.done = await asyncio.to_thread(archive_uids, account, uids)
+            return outcome
+        if action == "move" and not folder:
+            outcome.failed.append("moving needs a folder")
+            return outcome
+        if action in ("trash", "move"):
+            outcome.done = await asyncio.to_thread(move_uids, account, uids, folder)
             return outcome
         targets = await asyncio.to_thread(unsubscribe_headers, account, uids)
     except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error, SendError) as exc:
@@ -228,6 +283,10 @@ async def local_tidy(
         if http is None:
             await client.aclose()
     return outcome
+
+
+async def local_mark(account: MailAccount, action: MarkAction, uids: list[int]) -> int:
+    return await asyncio.to_thread(mark_uids, account, action, uids)
 
 
 async def local_draft(account: MailAccount, mail: Outgoing) -> None:
