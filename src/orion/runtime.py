@@ -283,11 +283,13 @@ class Orion:
         halted: Halted | None = None,
         model: str | None = None,
         max_cost_usd: float | None = None,
+        max_steps: int | None = None,
+        max_tool_calls: int | None = None,
     ) -> TurnResult:
         """Orion speaks first: a notice from the initiative engine becomes a turn in the owner's
         thread, so the owner's answer has the context. The reply may be `SILENCE` (nothing worth
         sending), which callers must not deliver. `halted` stops work called off meanwhile.
-        `model` and `max_cost_usd` replace the agent's for this turn (Orion's night, D117): a
+        `model` and the limits replace the agent's for this turn (Orion's night, D117): a
         thread that always passes the same model keeps its prompt cache."""
         body = f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
         return await self._turn(
@@ -304,6 +306,8 @@ class Orion:
             halted=halted,
             model=model,
             max_cost_usd=max_cost_usd,
+            max_steps=max_steps,
+            max_tool_calls=max_tool_calls,
         )
 
     async def handle_contact(
@@ -404,6 +408,8 @@ class Orion:
         halted: Halted | None = None,
         model: str | None = None,
         max_cost_usd: float | None = None,
+        max_steps: int | None = None,
+        max_tool_calls: int | None = None,
     ) -> TurnResult:
         async with self.lock(thread_id):
             return await self._turn_locked(
@@ -424,6 +430,8 @@ class Orion:
                 halted,
                 model=model,
                 max_cost_usd=max_cost_usd,
+                max_steps=max_steps,
+                max_tool_calls=max_tool_calls,
             )
 
     async def _turn_locked(
@@ -446,6 +454,8 @@ class Orion:
         *,
         model: str | None = None,
         max_cost_usd: float | None = None,
+        max_steps: int | None = None,
+        max_tool_calls: int | None = None,
     ) -> TurnResult:
         correlation_id = new_id()
         when = now or datetime.now(ZoneInfo(self._agent.timezone))
@@ -565,8 +575,8 @@ class Orion:
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
             budget=Budget(
-                max_steps=self._agent.max_steps,
-                max_tool_calls=self._agent.max_tool_calls,
+                max_steps=max_steps or self._agent.max_steps,
+                max_tool_calls=max_tool_calls or self._agent.max_tool_calls,
                 max_cost_usd=max_cost_usd or self._agent.max_cost_usd_per_turn,
                 continuations=self._agent.max_continuations
                 if thread_id == OWNER_THREAD and kind == "message.received"

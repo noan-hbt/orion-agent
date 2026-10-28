@@ -104,7 +104,8 @@ toi-même :
   lui, de ses proches, de ses goûts ou de ses projets, une date, une promesse de l'un ou de
   l'autre, et ce qu'il t'a repris (ce que tu as mal compris, ce qu'il a dû répéter, ce qui
   l'a agacé : le manuel). Note-le à sa place, sauf si c'est déjà fait.
-Ne change que ce dont tu es sûr ; ce qu'il a dit lui-même ne s'efface que si la journée le
+Va au bout de chaque rubrique avant de passer à la suite : le tri compte autant de gestes
+qu'il en faut, pas un ou deux. Ne change que ce dont tu es sûr ; ce qu'il a dit lui-même ne s'efface que si la journée le
 dément. Un doute qui ne se tranche qu'avec lui : garde la question pour le matin.
 
 Ensuite, relis la journée (ci-dessous, « Lui » c'est lui, « Orion » c'est toi) et
@@ -155,6 +156,13 @@ class ThinkingSettings(ModuleSettings):
         le=20.0,
         description="What Orion's night may cost (the tasks it starts have their own budget)",
     )
+    max_steps: int = Field(
+        default=150,
+        ge=1,
+        le=500,
+        description="Model calls the night may make: the review rereads everything, then works",
+    )
+    max_tool_calls: int = Field(default=400, ge=1, le=1000)
 
 
 @dataclass(frozen=True)
@@ -448,6 +456,8 @@ class Thinking:
             now,
             model=self.model,
             max_cost_usd=self.settings.budget_usd,
+            max_steps=self.settings.max_steps,
+            max_tool_calls=self.settings.max_tool_calls,
         )
         text = turn.text.strip()
         log.info(
