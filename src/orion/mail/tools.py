@@ -170,7 +170,7 @@ def mail_tools(
         return uids
 
     async def open_attachment(card: MailCard, index: int, ctx: ToolContext) -> ToolResult:
-        if not 1 <= index <= len(card.attachments):
+        if not 1 <= index <= len(await mailbox.files(card)):
             return ToolResult(f"Mail {card.id} has no attachment {index}.", is_error=True)
         try:
             found = await mailbox.attachment(card, index)
@@ -215,7 +215,7 @@ def mail_tools(
                 return await open_attachment(found, args.attachment, ctx)
             files = "".join(
                 f"\n{i}. {a.name} ({a.content_type}, {_size(a.size)})"
-                for i, a in enumerate(found.attachments, 1)
+                for i, a in enumerate(await mailbox.files(found), 1)
             )
             if files:
                 files = "\nPièces jointes (`attachment` avec leur numéro pour les ouvrir) :" + files
