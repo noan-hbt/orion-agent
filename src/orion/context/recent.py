@@ -13,7 +13,7 @@ from orion.core.events import Trust
 from orion.core.journal import EventStore
 from orion.providers.base import Message
 
-_BLOCK = re.compile(r"<(memoire|souvenirs|manuel)>.*?</\1>\s*", re.DOTALL)
+_BLOCK = re.compile(r"<(memoire|souvenirs|manuel|consignes)>.*?</\1>\s*", re.DOTALL)
 _INITIATIVE = re.compile(r"<initiative[^>]*>\s*(.*?)\s*</initiative>", re.DOTALL)
 _CONTEXT_LINE = re.compile(r"^\[[^\]]*\]\s*")
 

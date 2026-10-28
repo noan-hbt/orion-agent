@@ -86,7 +86,9 @@ def reminder_block(rules: Sequence[Rule], facts: list[Fact]) -> str | None:
     if not lines:
         return None
     return (
-        "<rappel>\nCe qu'il t'a demandé, toujours en vigueur :\n" + "\n".join(lines) + "\n</rappel>"
+        "<consignes>\nCe qu'il t'a demandé, toujours en vigueur :\n"
+        + "\n".join(lines)
+        + "\n</consignes>"
     )
 
 
