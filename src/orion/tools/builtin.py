@@ -88,6 +88,8 @@ def builtin_tools() -> list[Tool]:
             description="Your plan, only for work that is long, ambiguous or costly, where "
             "you could lose track: every step with its status (todo, doing, done), the whole "
             "list each time you move on, one `doing` at a time. He does not see it. "
+            "You reply once every step is done or dropped: a reply with steps left is "
+            "sent back to you. "
             "Never for one action or a few obvious steps: do them, without announcing them.",
             input_model=PlanInput,
             handler=_plan,

@@ -293,6 +293,7 @@ async def test_a_plan_is_his_own_and_never_sent() -> None:
                 },
             ),
         ),
+        reply("Voilà."),  # held back once: the plan has steps left
         reply("Voilà."),
     )
     events, messages = await collect(provider)
@@ -591,3 +592,33 @@ async def test_a_tool_in_the_drawer_is_called_under_its_own_name() -> None:
     assert (done.call.name, done.result.content) == ("echo", "42")
     assert bad.result.is_error and "echo takes:" in bad.result.content  # its schema, to retry
     assert unknown.result.is_error and "it holds: echo" in unknown.result.content
+
+
+async def test_a_reply_with_plan_steps_left_is_sent_back_to_work() -> None:
+    steps = [{"text": "chercher", "status": "done"}, {"text": "comparer", "status": "todo"}]
+    provider = ScriptedProvider(
+        call_tools(("plan", {"steps": steps})),
+        reply("J'ai cherché."),  # stops halfway: held back
+        call_tools(
+            ("echo", {"text": "comparé"}),
+            ("plan", {"steps": [{**step, "status": "done"} for step in steps]}),
+        ),
+        reply("J'ai cherché et comparé."),
+        reply("never reached"),
+    )
+    events, _ = await collect(provider)
+    end = finished(events)
+    assert (end.reason, end.text) == (StopReason.COMPLETED, "J'ai cherché et comparé.")
+    assert "comparer" in str(provider.requests[2].messages[-1]["content"])
+
+
+async def test_a_model_that_insists_without_working_is_let_go() -> None:
+    steps = [{"text": "comparer", "status": "todo"}]
+    provider = ScriptedProvider(
+        call_tools(("plan", {"steps": steps})),
+        reply("Je m'arrête là."),
+        reply("Impossible de comparer : rien à comparer."),
+        reply("never reached"),
+    )
+    end = finished((await collect(provider))[0])
+    assert end.text == "Impossible de comparer : rien à comparer."

@@ -183,6 +183,15 @@ UNSENT = (
     "Réponds en tenant compte de tout.]"
 )
 GOING_ON = "C'est plus long que prévu, je continue."
+UNFINISHED = (
+    "[Orion · Ta réponse n'est pas encore partie : ton plan a encore {n} étape(s) à faire "
+    "({steps}). Fais-les maintenant, puis réponds. Une étape impossible ou devenue inutile : "
+    "remets le plan à jour sans elle, et dis pourquoi dans ta réponse.]"
+)
+MAX_UNFINISHED = 3
+"""Times a reply is held back because the plan still has steps to do. Seen for real: a model
+that stops halfway through a long task and reports, its own plan unfinished. Only after it
+worked since the last time: a model that answers again without a tool call has its reasons."""
 
 SWITCH_MODEL = "switch_model"
 """A tool result whose data names a model moves the rest of the turn to it (`think_harder`);
@@ -234,6 +243,9 @@ async def run_agent(
     segment = 0  # model calls since the turn started or last went on (`Budget.continuations`)
     continuations = budget.continuations
     called: list[str] = []
+    open_steps: list[str] = []  # the plan's steps not done yet, from its last call
+    held = 0  # replies held back for an unfinished plan
+    worked = False  # tools ran since the last time
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -353,6 +365,25 @@ async def run_agent(
                 parts.clear()  # the cut reply never left either
                 yield MessageEmitted(unsent, Trust.SYSTEM)
                 continue
+            if (
+                open_steps
+                and worked
+                and held < MAX_UNFINISHED
+                and reason is StopReason.COMPLETED
+                and room
+                and usage.cost_usd < max_cost
+            ):
+                log.info("loop.plan_unfinished", thread=settings.thread_id, left=len(open_steps))
+                held += 1
+                worked = False
+                parts.clear()
+                more = {
+                    "role": "user",
+                    "content": UNFINISHED.format(n=len(open_steps), steps=" ; ".join(open_steps)),
+                }
+                messages.append(more)
+                yield MessageEmitted(more, Trust.SYSTEM)
+                continue
             note = (
                 settings.finish_check(text, called)
                 if settings.finish_check is not None
@@ -426,7 +457,10 @@ async def run_agent(
             yield finished(StopReason.TOOL_ERROR, last_text, repr(exc))
             return
         tool_seconds += time.monotonic() - started
+        worked = True
         for call, result, reason in executions:
+            if call.name == "plan" and not result.is_error:
+                open_steps = _open_steps(call)
             switch = result.data.get(SWITCH_MODEL)
             if isinstance(switch, str) and switch and not result.is_error:
                 log.info("loop.model_switched", thread=settings.thread_id, model=switch)
@@ -461,6 +495,19 @@ async def run_agent(
                 message, trust = interjection
                 messages.append(message)
                 context_trust = min(context_trust, trust)
+
+
+def _open_steps(call: ToolCall) -> list[str]:
+    """The steps of a `plan` call not done yet."""
+    try:
+        arguments: object = json.loads(call.arguments or "{}")
+    except json.JSONDecodeError:
+        return []
+    steps = cast(dict[str, object], arguments).get("steps") if isinstance(arguments, dict) else None
+    if not isinstance(steps, list):
+        return []
+    entries = [cast(dict[str, object], s) for s in cast(list[object], steps) if isinstance(s, dict)]
+    return [str(e.get("text", "")) for e in entries if e.get("status") != "done"]
 
 
 def _called(call: ToolCall) -> str:
