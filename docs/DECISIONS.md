@@ -3889,3 +3889,18 @@ appartient à root. Reproduit avec `HOME=/` : `chrome_crashpad_handler: --databa
   (`/tmp/orion-chromium`, privé au service par `PrivateTmp`). Le drapeau de D171 est retiré.
 - **Un échec de lancement journalise les dernières lignes d'erreur de Chromium**, pas seulement
   la première ligne de Playwright, qui ne dit jamais pourquoi.
+
+## D173 — Un outil `say` pour parler en chemin
+
+*28/10/2026 · acceptée · revient sur le « pas d'outil `say` » de D162*
+
+D162 refusait un outil `say` : « le texte à côté d'un appel, il l'écrit déjà ». Pas tous les
+modèles : GPT 6 Luna n'écrit rien à côté de ses appels, et le propriétaire ne recevait qu'un
+message final là où il demandait un mot à chaque étape. GPT 6 Sol, lui, le faisait.
+
+- **`say` (texte) envoie un message tout de suite et le tour continue.** Le runtime l'envoie dès
+  que le modèle fait l'appel, comme le texte écrit à côté d'un appel (même outbox, sans sonner,
+  D169) ; l'outil lui-même ne fait rien. Il s'appelle avec l'outil suivant, pas seul.
+- **Le texte à côté d'un appel reste un message** : deux voies, celle que le modèle prend.
+- **Mêmes règles que D169** : ce qu'il vient de trouver ou de faire, jamais ce qu'il va faire.
+- Évaluation : `plusieurs_etapes_plusieurs_messages_un_seul_tour`, à passer sur Luna.

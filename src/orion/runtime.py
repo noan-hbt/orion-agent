@@ -19,6 +19,7 @@ from typing import Protocol
 from zoneinfo import ZoneInfo
 
 import structlog
+from pydantic import ValidationError
 
 from orion.cognition.finish import finish_check
 from orion.cognition.loop import (
@@ -57,9 +58,10 @@ from orion.memory.portrait import Portrait, portrait_block
 from orion.memory.render import playbook_delta, recall_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
-from orion.providers.base import Message, ModelProvider, Usage, cache_minutes
+from orion.providers.base import Message, ModelProvider, ToolCall, Usage, cache_minutes
 from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
+from orion.tools.builtin import SayInput
 
 log = structlog.get_logger(__name__)
 
@@ -136,6 +138,22 @@ def photo_block(photo: Photo) -> str:
 
 
 Progress = Callable[[str, str], Awaitable[None]]
+
+
+def said_on_the_way(calls: Sequence[ToolCall]) -> list[str]:
+    """The texts of `say` calls, sent as soon as the model makes them (D173). A call whose
+    arguments do not hold is left to the tool, which answers the model with the error."""
+    texts: list[str] = []
+    for call in calls:
+        if call.name != "say":
+            continue
+        try:
+            texts.append(SayInput.model_validate_json(call.arguments).text.strip())
+        except ValidationError:
+            log.warning("turn.say_invalid", arguments=call.arguments[:200])
+    return [t for t in texts if t]
+
+
 """(text, correlation id) → delivered to the owner now, mid-turn: what Orion writes beside a
 tool call, a message of its own (D162, D169)."""
 
@@ -629,6 +647,9 @@ class Orion:
                     said = (response.text or "").strip()
                     if progress is not None and response.tool_calls and said:
                         await progress(said, correlation_id)
+                    if progress is not None:
+                        for told in said_on_the_way(response.tool_calls):
+                            await progress(told, correlation_id)
                     await self._journal.append(
                         [
                             self._event(
