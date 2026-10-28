@@ -64,10 +64,10 @@ de `orion setup` ou de `orion.example.toml`. Les secrets passent par l'environne
 et `data/claude-code/`.
 
 ```
-uv sync
-uv run orion doctor
-uv run orion guardian    # si [guardian] enabled : les secrets et les canaux
-uv run orion serve       # le cœur, qui n'a que la clé du modèle
+uv tool install --editable .   # `orion` partout, config dans ~/.orion (D180)
+orion doctor
+orion guardian    # si [guardian] enabled : les secrets et les canaux
+orion serve       # le cœur, qui n'a que la clé du modèle
 ```
 
 En production, voir `deploy/README.md` : deux services systemd, `orion-guardian` et

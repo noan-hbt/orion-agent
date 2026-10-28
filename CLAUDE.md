@@ -12,7 +12,8 @@ in French; code, identifiers and comments are in English.
 - `uv run ruff format . && uv run ruff check .` — format and lint
 - `uv run pyright --pythonplatform Linux` — strict type check (must stay at 0 errors; Linux
   like CI and the server, even from Windows)
-- `uv run orion doctor` — check config and storage
+- `uv run orion doctor` — check config and storage (`uv tool install --editable .` puts `orion`
+  on PATH; without `--config` it reads `./orion.toml`, else `~/.orion/orion.toml`, D180)
 - `uv run python -m evals` — behavioural evaluations on the real model (costs cents; `--model`,
   `--case`, `--repeat`, `--offline`). Add a case when Orion gets something wrong for real.
 

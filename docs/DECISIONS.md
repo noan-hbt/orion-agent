@@ -4040,7 +4040,23 @@ supprimer un mail, ni le ranger dans un dossier, ni le marquer lu ou suivi.
 - Limites : un brouillon déjà posé ne se modifie pas (on en pose un autre) ; on ne crée pas de
   dossier.
 
-## D180 — Ses consignes reviennent quand la conversation s'en éloigne
+## D180 — `orion` se lance de n'importe où
+
+*28/10/2026 · acceptée*
+
+Les commandes demandaient `uv run orion …` depuis le dépôt : la config était cherchée dans le
+dossier courant, et ailleurs Orion partait sans un mot sur ses réglages par défaut.
+
+- **`uv tool install --editable .`** met `orion` dans le PATH. Éditable, il suit le dépôt après
+  un `git pull` et garde l'accès à `catalog/` (skills, modules), qui n'est pas dans le paquet.
+- **Où est la config sans `--config`** : `$ORION_CONFIG`, sinon `orion.toml` du dossier courant
+  (un clone, le serveur), sinon `$ORION_HOME/orion.toml`, `~/.orion` par défaut. `data/` et les
+  secrets suivent le fichier, comme avant ; `orion setup` écrit là aussi.
+- Le serveur ne change pas : ses services passent `--config`.
+- Non retenu : un paquet publié (PyPI) ; `catalog/` et le code servi au téléphone vivent dans le
+  dépôt.
+
+## D181 — Ses consignes reviennent quand la conversation s'en éloigne
 
 *28/10/2026 · acceptée · complète D178*
 

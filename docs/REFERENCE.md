@@ -102,7 +102,9 @@ Au sommet : `app.py` assemble Orion pour chaque point d'entrée, `serve.py` est 
 
 ## Les commandes
 
-`orion [--config orion.toml] <commande>`. Sur le serveur, `deploy/orion-admin` les lance sous
+`orion [--config orion.toml] <commande>`, depuis n'importe quel dossier après
+`uv tool install --editable .`. Sans `--config` : `$ORION_CONFIG`, sinon `orion.toml` du dossier
+courant, sinon `$ORION_HOME/orion.toml` (`~/.orion` par défaut, D180). Sur le serveur, `deploy/orion-admin` les lance sous
 l'utilisateur du gardien (ou du cœur avec `--core`).
 
 | Commande | Ce qu'elle fait |
