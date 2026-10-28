@@ -522,6 +522,25 @@ class RelationsModule(Module):
             )
         ]
 
+    async def review(self, now: datetime) -> list[str]:
+        relations = self.relations
+        if relations is None:
+            return []
+        await relations.sync()
+        state = relations.state
+        lines = [
+            f"- anniversaire de {person} : {day} {_MONTHS[month - 1]}"
+            + (f" {year}" if year else "")
+            for month, day, year, person in state.birthdays.values()
+        ]
+        for key, (every, person) in state.rhythms.items():
+            seen = state.contacts.get(key)
+            lines.append(
+                f"- voir {person} tous les {every} jours"
+                + (f" (vus le {seen:%d/%m})" if seen else " (pas vus depuis qu'il l'a demandé)")
+            )
+        return lines
+
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         relations = self.relations
         if relations is None:

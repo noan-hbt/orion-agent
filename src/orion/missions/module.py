@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.loop import StopReason
 from orion.core.events import Provenance
+from orion.guardian.policy import TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.missions.service import Mission, Missions
 from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
@@ -402,6 +403,17 @@ class MissionsModule(Module):
         if self.missions is None:
             return []
         return [f"- tu suis pour lui : {m.goal}" for m in await self.missions.active()]
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.missions is None:
+            return []
+        return [
+            f"- ({m.id}) {m.goal} — critères : {m.criteria or '(aucun)'} ; tous les "
+            f"{m.every_hours} h, {m.runs} passes"
+            # What a page said (in the notes) never steers the review: the goal is his.
+            + (f" ; dernière note : {m.notes[-1]}" if m.notes and m.trust >= TRUSTED_FLOOR else "")
+            for m in await self.missions.active()
+        ]
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         if self.missions is None:

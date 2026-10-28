@@ -3955,3 +3955,30 @@ comme maintenant, et payait un appel d'outil pour l'heure.
   registre une fois, au déploiement.
 - Limite : pendant un long tour, l'heure n'avance pas. Les tâches longues repartent à chaque
   tour, donc avec une ligne neuve.
+
+## D176 — La passe du soir voit toutes les rubriques, et chaque chose n'a qu'une place
+
+*28/10/2026 · acceptée · complète D174*
+
+Premier retour sur D174 : la réécriture des souvenirs est juste, mais beaucoup restent non
+triés, et les rubriques se répètent (souvenirs, manuel, proches, à venir, missions). La passe
+ne voyait que les souvenirs, situations et engagements ; le manuel, les rappels, les missions
+et les proches, elle devait penser à les ouvrir, et ne le faisait pas : un doublon entre deux
+rubriques lui était invisible. Au-delà de 400 souvenirs, elle ne relisait que les plus anciens.
+
+- **Tout est posé côte à côte, avec les ids** : `<manuel>` (règles du playbook), `<prevu>`
+  (tout ce qui est prévu sur 30 jours, D78, avec comment l'annuler), et ce que chaque module
+  tient via un crochet `Module.review(now)` (missions : but, critères, rythme ; relations :
+  anniversaires, rythmes, dernier contact). Un nouveau module s'y branche sans toucher la
+  passe (D24).
+- **Chaque chose n'a qu'une place**, dit la consigne : un fait qui dure est un souvenir, ce qui
+  passe une situation, une dette un engagement, une date un rappel, une façon d'être le manuel,
+  un but long une mission, un anniversaire ou un rythme `relations`. Un souvenir qui redit une
+  autre rubrique est oublié, avec la raison ; mal rangé, il est rangé puis oublié.
+- **Ce qui a échappé sur le moment** : la passe relit la journée pour ce qu'il a dit en passant
+  (lui, ses proches, ses goûts, une date, une promesse) et ce qu'il a repris à Orion (le
+  manuel).
+- **Au-delà de 400 souvenirs, chaque soir prend la part suivante**, du plus récent au plus
+  ancien : tout est relu en quelques soirs, sans curseur à journaliser.
+- Limite : les notes d'une mission qui a lu le web ne sont pas posées (confiance) ; son but
+  l'est. Les anniversaires et rythmes ne portent pas de confiance propre.

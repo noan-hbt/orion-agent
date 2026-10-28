@@ -140,6 +140,12 @@ class Module:
         can see it all in one place and call any of it off (D78)."""
         return []
 
+    async def review(self, now: datetime) -> list[str]:
+        """What the module holds for the owner, one line each with the id to act on, laid out
+        for Orion's evening review (D176): he rereads it and sets it right with the module's
+        own tools. Trusted content only."""
+        return []
+
 
 class LateApprover:
     """Approver chosen after assembly (a channel needs Orion to exist first). Until one is set,
