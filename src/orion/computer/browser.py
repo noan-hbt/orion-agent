@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import tempfile
 import time
@@ -50,9 +51,10 @@ TEXT_CHARS = 10_000
 MAX_ELEMENTS = 150
 MAX_IMAGES = 8
 KEPT_COOKIES = "cookies.json"
-CRASH_DIR = Path(tempfile.gettempdir()) / "orion-chromium-crashes"
-"""Chromium's crash handler wants a database; without one it aborts the browser at start
-(SIGTRAP) where no home directory gives it its own (D171)."""
+CONFIG_HOME = Path(tempfile.gettempdir()) / "orion-chromium"
+"""Chromium's own config folder (`XDG_CONFIG_HOME`). Its crash handler keeps its database
+there and aborts the browser at start when it cannot write it, as under a home it does not
+own (`/srv/orion` on the server): the session closes before it opens (D171, D172)."""
 HostCheck = Callable[[str, int], Awaitable[None]]
 
 _SNAPSHOT = """({textChars, start}) => {
@@ -295,7 +297,11 @@ class Session:
         try:
             return await self._enter()
         except Error as exc:
-            log.warning("computer.launch_failed", error=exc.message.splitlines()[0])
+            # Why Chromium went away is in its own last words, not in Playwright's first line.
+            said = [line for line in exc.message.splitlines() if "[err]" in line]
+            log.warning(
+                "computer.launch_failed", error=exc.message.splitlines()[0], chromium=said[-5:]
+            )
             await self.discard()  # no browser or driver left behind
             raise BrowserError(f"the browser did not start: {exc.message.splitlines()[0]}") from exc
         except BaseException:
@@ -372,10 +378,11 @@ class Session:
     def _launch(self) -> dict[str, Any]:
         """The full Chromium in its new headless mode (the bundled headless shell gives itself
         away), automation flags off, out through `proxy` if set."""
-        CRASH_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_HOME.mkdir(parents=True, exist_ok=True)
         options: dict[str, Any] = {
             "headless": True,
-            "args": [*LAUNCH_ARGS, f"--crash-dumps-dir={CRASH_DIR}", "--disable-crash-reporter"],
+            "args": list(LAUNCH_ARGS),
+            "env": {**os.environ, "XDG_CONFIG_HOME": str(CONFIG_HOME)},
         }
         if self._executable:
             options["executable_path"] = self._executable

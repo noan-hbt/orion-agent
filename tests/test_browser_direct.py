@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from orion.computer.browser import CRASH_DIR, Session
+from orion.computer.browser import CONFIG_HOME, Session
 from orion.computer.direct import PAGE, BrowserDesk, browser_tools
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
@@ -131,7 +131,7 @@ async def test_a_browser_that_died_is_opened_again(journal: SqliteJournal) -> No
 
 async def test_a_browser_that_cannot_start_says_so(journal: SqliteJournal) -> None:
     started = Session()._launch()  # pyright: ignore[reportPrivateUsage]
-    assert f"--crash-dumps-dir={CRASH_DIR}" in started["args"]  # Chromium's crash handler
+    assert started["env"]["XDG_CONFIG_HOME"] == str(CONFIG_HOME)  # a home it cannot write
     desk = BrowserDesk(journal, lambda: Session(executable="/nowhere/chromium"))
     tools = {t.name: t for t in browser_tools(desk)}
     said = await use(tools, "browser_open", url="https://annonces.test/")

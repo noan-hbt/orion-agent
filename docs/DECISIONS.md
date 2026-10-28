@@ -3875,3 +3875,17 @@ Chromium réclamait `--database`, absent, et le processus finit en SIGTRAP.
 - **Un navigateur qui ne démarre pas le dit** au lieu de faire tomber l'outil, et **un
   navigateur mort se relance** : la session se sait perdue quand son contexte se ferme sans
   qu'on l'ait demandé ; l'appel suivant en ouvre une neuve, ses onglets étant partis avec.
+
+## D172 — Chromium a un dossier de config à lui
+
+*28/10/2026 · acceptée · corrige D171*
+
+Le navigateur se fermait toujours à l'ouverture (`computer.launch_failed`, `TargetClosedError`).
+Le correctif de D171 (`--crash-dumps-dir`) ne changeait rien : le gestionnaire de crash de
+Chromium range sa base dans `~/.config/chromium`, et le home d'`orion-core` (`/srv/orion`)
+appartient à root. Reproduit avec `HOME=/` : `chrome_crashpad_handler: --database is required`.
+
+- **Chromium reçoit `XDG_CONFIG_HOME`**, un dossier temporaire inscriptible
+  (`/tmp/orion-chromium`, privé au service par `PrivateTmp`). Le drapeau de D171 est retiré.
+- **Un échec de lancement journalise les dernières lignes d'erreur de Chromium**, pas seulement
+  la première ligne de Playwright, qui ne dit jamais pourquoi.
