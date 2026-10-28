@@ -100,8 +100,9 @@ class MailCard:
     bulk: bool = False
     text: str = ""
     """The mail's text, clipped (`TEXT_CHARS`); empty for cards made before D114."""
-    attachments: tuple[Attached, ...] = ()
-    """Its attached files (name, type, size), read on the server when asked for."""
+    attachments: tuple[Attached, ...] | None = ()
+    """Its attached files (name, type, size), read on the server when asked for; None for cards
+    made before attachments were recorded (`Mailbox.files` reads the mail again)."""
 
     @property
     def sender(self) -> str:
@@ -167,9 +168,11 @@ class MailState:
                 uid=int(payload.get("uid", 0)),
                 bulk=bool(payload.get("bulk", False)),
                 text=str(payload.get("text", "")),
-                attachments=tuple(
+                attachments=None
+                if "attachments" not in payload
+                else tuple(
                     Attached(str(a["name"]), str(a["type"]), int(a["size"]))
-                    for a in payload.get("attachments", [])
+                    for a in payload["attachments"]
                 ),
             )
             self.cards[card.id] = card
@@ -367,9 +370,21 @@ class Mailbox:
         mail read again on the server, for this read only: it is not journaled."""
         if card.text:
             return card.text
+        found = await self._reread(card)
+        return found.body[:TEXT_CHARS] if found else ""
+
+    async def files(self, card: MailCard) -> tuple[Attached, ...]:
+        """The card's attached files, or, for cards made before they were recorded, those of the
+        mail read again on the server (not journaled)."""
+        if card.attachments is not None:
+            return card.attachments
+        found = await self._reread(card)
+        return found.attachments if found else ()
+
+    async def _reread(self, card: MailCard) -> RawMail | None:
         account = next((a for a in self.settings.accounts if a.name == card.account), None)
         if account is None:
-            return ""
+            return None
         day = timedelta(days=1)
         try:
             mails = await self._search(
@@ -382,9 +397,8 @@ class Mailbox:
             )
         except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
             log.warning("mail.reread_failed", account=account.name, error=repr(exc))
-            return ""
-        found = next((m for m in mails if m.message_id == card.message_id), None)
-        return found.body[:TEXT_CHARS] if found else ""
+            return None
+        return next((m for m in mails if m.message_id == card.message_id), None)
 
     async def attachment(self, card: MailCard, index: int) -> Attached | None:
         """The card's `index`-th attached file (from 1), read on the server: not journaled."""

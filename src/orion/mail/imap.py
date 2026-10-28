@@ -10,6 +10,7 @@ from __future__ import annotations
 import email
 import email.policy
 import imaplib
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -72,17 +73,30 @@ def html_to_text(html: str) -> str:
     return " ".join(" ".join(parser.parts).split())
 
 
+def _leaves(part: EmailMessage) -> Iterator[EmailMessage]:
+    if part.get_content_maintype() == "message":
+        return  # a forwarded mail: its text is not a file to open
+    if part.is_multipart():
+        for sub in part.iter_parts():
+            yield from _leaves(cast(EmailMessage, sub))
+    else:
+        yield part
+
+
 def _files(message: EmailMessage) -> list[tuple[Attached, EmailMessage]]:
+    """Every attached file, however deep (Apple Mail nests them in the alternative)."""
+    body = message.get_body(preferencelist=("plain", "html"))
     found: list[tuple[Attached, EmailMessage]] = []
-    for part in message.iter_attachments():
-        if part.is_multipart() or part.get_content_maintype() == "message":
-            continue  # a forwarded mail: its text is not a file to open
-        if part.get_content_disposition() != "attachment" and not part.get_filename():
-            continue  # an inline image of the signature
-        payload = part.get_payload(decode=True)
-        data = payload if isinstance(payload, bytes) else b""
-        name = " ".join(str(part.get_filename() or "").split())[:200] or "sans-nom"
-        found.append((Attached(name, part.get_content_type(), len(data)), part))
+    for part in message.iter_parts() if message.is_multipart() else ():
+        for leaf in _leaves(cast(EmailMessage, part)):
+            if leaf is body:
+                continue
+            if leaf.get_content_disposition() != "attachment" and not leaf.get_filename():
+                continue  # an inline image of the signature, or another body
+            payload = leaf.get_payload(decode=True)
+            data = payload if isinstance(payload, bytes) else b""
+            name = " ".join(str(leaf.get_filename() or "").split())[:200] or "sans-nom"
+            found.append((Attached(name, leaf.get_content_type(), len(data)), leaf))
     return found[:MAX_ATTACHMENTS]
 
 

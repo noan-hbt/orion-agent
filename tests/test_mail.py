@@ -484,3 +484,37 @@ async def test_an_attached_file_is_listed_and_opened(journal: SqliteJournal) -> 
     assert "Total,340 EUR" in opened.content and "fi_1" in opened.content
     assert opened.trust is Trust.THIRD_PARTY
     assert kept and kept[0][0] == "devis.csv"
+
+
+def test_a_file_nested_in_the_alternative_is_found() -> None:
+    """Apple Mail puts an inline PDF inside the alternative's html side."""
+    raw = b"""From: a@example.com
+Subject: Contrat
+Message-ID: <c@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="a"
+
+--a
+Content-Type: text/plain; charset=utf-8
+
+Voici le contrat.
+--a
+Content-Type: multipart/mixed; boundary="m"
+
+--m
+Content-Type: text/html; charset=utf-8
+
+<p>Voici le contrat.</p>
+--m
+Content-Type: application/pdf; name="contrat.pdf"
+Content-Disposition: inline; filename="contrat.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQK
+--m--
+--a--
+"""
+    mail = parse_message(1, raw, NOW)
+    assert [a.name for a in mail.attachments] == ["contrat.pdf"]
+    found = imap.attachment_of(raw, 1)
+    assert found is not None and found.data.startswith(b"%PDF")
