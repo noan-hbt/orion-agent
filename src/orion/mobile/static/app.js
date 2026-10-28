@@ -2750,7 +2750,7 @@ async function settingsFill(refresh) {
         row("spark", "ChatGPT", "", chatgptPanel, "", "ton forfait pour mes modèles"),
         row("where", "Raccourcis du téléphone", "", phoneTokenPanel, "", "lieux, sommeil, concentration"),
         kept ? row("people", "Autres Orions", kept.federation ? plural(kept.federation.peers.length, "relié", "reliés") : "éteint", () => peersPanel(refresh), "", "caler des rendez-vous entre nous") : null,
-        row("wrong", "Mes ratés", "", missesPanel, "", "tes 👎 et tes corrections"),
+        row("wrong", "Mes ratés", "", missesPanel, "", "ce que j'ai relevé le soir"),
         row("book", "Bibliothèque", "", importNotes, "", "ajouter tes notes (.md, .txt)"),
       ),
       h("p", { class: "hint" }, `Tu changes un réglage ici en le signant avec Face ID, sans passer par la conversation. ${plural(owner, "réglage te protège", "réglages te protègent")} : eux ne changent jamais sans ta signature.`),
@@ -3925,7 +3925,7 @@ function missesPanel() {
   panel("Mes ratés", async () => {
     const { misses } = await api("api/misses");
     return [
-      h("p", { class: "hint" }, "Chaque fois que tu mets 👎 ou que tu me corriges, c'est noté ici, avec ce que j'avais répondu. C'est ce qui sert à me corriger pour de bon."),
+      h("p", { class: "hint" }, "Chaque soir, je relis la journée et tes 👎, et je note ici ce que j'ai raté, avec ce que j'avais répondu. Une règle que j'en tire va dans mon manuel."),
       misses.length
         ? h(
             "div",
@@ -3938,7 +3938,7 @@ function missesPanel() {
                 h(
                   "span",
                   {},
-                  h("small", {}, `${MAIL_WHEN.format(new Date(m.at))} · ${m.how}`),
+                  h("small", {}, `${MAIL_WHEN.format(new Date(m.at))} · ${m.why}`),
                   m.asked ? h("span", { class: "text" }, `Toi : ${excerpt(m.asked, 160)}`) : null,
                   h("small", {}, `Moi : ${excerpt(m.answered, 220)}`),
                   m.said ? h("small", {}, `Puis toi : ${excerpt(m.said, 160)}`) : null,
@@ -3946,7 +3946,7 @@ function missesPanel() {
               ),
             ),
           )
-        : h("p", { class: "empty" }, "Aucun raté repéré."),
+        : h("p", { class: "empty" }, "Aucun raté relevé."),
     ];
   });
 }

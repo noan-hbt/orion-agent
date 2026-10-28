@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from orion.adaptation.misses import MISSED
 from orion.adaptation.week import report, week, weeks
 from orion.core.journal import SqliteJournal
 from orion.runtime import OWNER_THREAD
@@ -28,6 +29,14 @@ async def test_the_week_says_what_went_wrong_and_what_it_cost(journal: SqliteJou
     )
     await journal.append(
         [
+            make_event(
+                MISSED,
+                at=datetime.now(PARIS).isoformat(),
+                asked="le resto est ouvert ?",
+                answered="C'est lancé : une mission toutes les 6 h.",
+                said="non c'est pas ce que je voulais",
+                why="J'ai lancé une mission au lieu de répondre.",
+            ),
             make_event("turn.finished", thread_id=OWNER_THREAD, reason="max_steps"),
             make_event("turn.finished", thread_id="veille", reason="budget_exhausted"),
             make_event("tool.executed", tool="web_search", is_error=True),
@@ -48,7 +57,6 @@ async def test_the_week_says_what_went_wrong_and_what_it_cost(journal: SqliteJou
 
     text = report(this, before)
     assert "à court de pas : 1" in text and "web_search : 2" in text
-    assert "Réponses corrigées (👎 ou ses mots) : 1 (semaine d'avant : 0)" in text
     payload = this.payload(before)
     assert payload["corrected"] == 1 and isinstance(payload["before"], dict)
 

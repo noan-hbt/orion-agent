@@ -18,13 +18,15 @@ A conversation ends, and an assistant usually stops there. Orion does not:
   medical appointment, a visit, an exam), Orion plans to ask how it went (`follow_up`, during
   the day or at night). At that time it asks once; the answer is in the conversation, and
   memory keeps what came of it.
+- **His misses (D177).** Rereading the day and the owner's 👎, the evening pass notes each
+  exchange Orion got wrong (`missed`): the app's « Mes ratés », and evaluation cases to write.
 
 Both reach the owner as alerts through the initiative engine (quiet hours, the daily budget,
 the verifier). Only trusted turns are reread: what a page or a mail said never steers a
 night's work.
 
     thinking.promised  thinking.night.note  followup.planned  followup.cancelled
-    thinking.night.done  (thinking.thought: written by the night before D117)
+    thinking.night.done  adaptation.missed  (thinking.thought: written by the night before D117)
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.adaptation.misses import MISSED, dislikes
 from orion.cognition.loop import StopReason
 from orion.config import STRONG_MODEL
 from orion.context.recent import conversation_since
@@ -104,6 +107,9 @@ toi-même :
   lui, de ses proches, de ses goûts ou de ses projets, une date, une promesse de l'un ou de
   l'autre, et ce qu'il t'a repris (ce que tu as mal compris, ce qu'il a dû répéter, ce qui
   l'a agacé : le manuel). Note-le à sa place, sauf si c'est déjà fait.
+- Chaque échange où tu t'es trompé (il t'a repris, a dû répéter, s'est agacé, ou a mis 👎 :
+  `<pouces-baisses>`) : note le raté (`missed`), une fois chacun, avec ce qui n'allait pas.
+  Ce qui n'est qu'un « non » ordinaire ou un changement d'avis de sa part n'est pas un raté.
 Va au bout de chaque rubrique avant de passer à la suite : le tri compte autant de gestes
 qu'il en faut, pas un ou deux. Ne change que ce dont tu es sûr ; ce qu'il a dit lui-même
 ne s'efface que si la journée le dément. Un doute qui ne se tranche qu'avec lui : garde la
@@ -365,6 +371,34 @@ class Thinking:
         )
         return True
 
+    async def miss(
+        self,
+        at: datetime,
+        asked: str,
+        answered: str,
+        said: str,
+        why: str,
+        provenance: Provenance,
+        trust: Trust,
+        cid: str | None,
+    ) -> str:
+        miss_id = f"m_{new_id()}"
+        await self._append(
+            MISSED,
+            {
+                "miss_id": miss_id,
+                "at": at.isoformat(),
+                "asked": asked,
+                "answered": answered,
+                "said": said,
+                "why": why,
+            },
+            provenance,
+            trust,
+            cid,
+        )
+        return miss_id
+
     async def _append(
         self,
         kind: str,
@@ -569,6 +603,9 @@ class Thinking:
             *await self._review(now),
             f"<journee>\n{transcript or '(rien de neuf)'}\n</journee>",
         ]
+        thumbs = await self._dislikes(now)
+        if thumbs:
+            parts.append("<pouces-baisses>\n" + "\n".join(thumbs) + "\n</pouces-baisses>")
         if promised:
             parts.append(
                 "<promis>\n"
@@ -576,6 +613,15 @@ class Thinking:
                 + "\n</promis>"
             )
         return "\n\n".join(parts)
+
+    async def _dislikes(self, now: datetime) -> list[str]:
+        """His 👎 since the last night, each with the message it was on."""
+        events: list[Event] = []
+        after = 0
+        while page := await self._journal.read(after, 1000):
+            events.extend(page)
+            after = page[-1].seq
+        return dislikes(events, self.zone, now, self.state.upto)
 
     async def _planned(self, now: datetime) -> list[str]:
         """What is planned over the coming weeks, each with how to call it off."""
@@ -675,6 +721,18 @@ class CancelInput(BaseModel):
     follow_up: str = Field(description="The follow-up id (fu_…)")
 
 
+class MissInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    at: str = Field(description="When it happened, local time 'YYYY-MM-DD HH:MM'")
+    asked: str = Field(default="", max_length=600, description="What he asked, in his words")
+    answered: str = Field(min_length=1, max_length=800, description="What you answered")
+    said: str = Field(
+        min_length=1, max_length=600, description="How he showed it: his words, or « 👎 »"
+    )
+    why: str = Field(min_length=5, max_length=300, description="What went wrong, in a sentence")
+
+
 class ListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -715,6 +773,25 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             return ToolResult("Annulé.")
         return ToolResult(f"No follow-up {args.follow_up}.", is_error=True)
 
+    async def missed(args: Any, ctx: ToolContext) -> ToolResult:
+        try:
+            at = local_time(args.at, thinking.zone)
+        except ValueError:
+            return ToolResult("`at` must be 'YYYY-MM-DD HH:MM'.", is_error=True)
+        if at > thinking.clock():
+            return ToolResult("`at` must be in the past.", is_error=True)
+        await thinking.miss(
+            at,
+            args.asked,
+            args.answered,
+            args.said,
+            args.why,
+            provenance(ctx),
+            ctx.context_trust,
+            ctx.correlation_id,
+        )
+        return ToolResult("Noté dans tes ratés.")
+
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
         await thinking.sync()
         now = thinking.clock()
@@ -735,6 +812,16 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             "morning.",
             input_model=PromiseInput,
             handler=promise,
+            effect=Effect.INTERNAL,
+            reversibility=Reversibility.REVERSIBLE,
+        ),
+        Tool(
+            name="missed",
+            description="Note an exchange you got wrong (he corrected you, had to repeat, was "
+            "annoyed, or put 👎), once each: what he will see in « Mes ratés », and what your "
+            "evaluations are written from. A lesson on how to be with him goes in `playbook`.",
+            input_model=MissInput,
+            handler=missed,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
         ),
@@ -793,14 +880,14 @@ class ThinkingModule(Module):
         )
         await self.thinking.sync()
         tools = thinking_tools(self.thinking)
-        promise = [t for t in tools if t.name == "think_later"]
+        alone = [t for t in tools if t.name in ("think_later", "missed")]
         return [
-            *promise,
+            *alone,
             grouped(
                 "follow_up",
                 "Asking the owner how a moment that matters went (an interview, a medical "
                 "appointment, a visit, an exam), a few hours after it, once.",
-                [t for t in tools if t.name != "think_later"],
+                [t for t in tools if t not in alone],
                 {"follow_up": "plan", "follow_up_cancel": "cancel", "follow_ups": "list"},
             ),
         ]
