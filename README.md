@@ -86,14 +86,16 @@ signés par Face ID (D154). Les mises à jour se font seules. Détails dans
 ### Sur ta machine
 
 ```bash
-uv sync
-uv run orion setup     # prénom, fuseau, clé OpenRouter, bot Telegram en option
-uv run orion chat      # lui parler dans ce terminal, sans aucun canal
-uv run orion serve     # le démon (avec `uv run orion guardian` à côté si le gardien est séparé)
+uv tool install --editable .   # une fois, depuis le dépôt : `orion` marche ensuite partout
+orion setup     # prénom, fuseau, clé OpenRouter, bot Telegram en option
+orion chat      # lui parler dans ce terminal, sans aucun canal
+orion serve     # le démon (avec `orion guardian` à côté si le gardien est séparé)
 ```
 
-`orion setup` écrit `orion.toml`, et les secrets dans `core.env` et `guardian.env` (jamais dans
-`orion.toml`). Toutes les options sont décrites dans [`orion.example.toml`](orion.example.toml).
+`orion setup` écrit `~/.orion/orion.toml`, et les secrets dans `core.env` et `guardian.env` à
+côté (jamais dans `orion.toml`). Un `orion.toml` dans le dossier courant passe avant ;
+`ORION_HOME` ou `ORION_CONFIG` changent l'emplacement (D180). Après un `git pull`, rien à
+refaire : l'installation suit le dépôt. Toutes les options sont décrites dans [`orion.example.toml`](orion.example.toml).
 Ensuite, dis-lui « active le mail » ou « mets tes points à 9 h » : il change ses réglages
 lui-même, avec ton accord sur le changement exact (D92).
 
@@ -123,10 +125,10 @@ lui-même, avec ton accord sur le changement exact (D92).
 ### Vérifier
 
 ```bash
-uv run orion doctor                 # configuration, stockage, état de chaque module
-uv run orion simulate --days 7      # ce qu'il enverrait cette semaine, sans rien envoyer
-uv run orion week                   # tours interrompus, erreurs d'outils, corrections, coût
-uv run orion misses                 # ses ratés : tes 👎 et tes corrections
+orion doctor                 # configuration, stockage, état de chaque module
+orion simulate --days 7      # ce qu'il enverrait cette semaine, sans rien envoyer
+orion week                   # tours interrompus, erreurs d'outils, corrections, coût
+orion misses                 # ses ratés : tes 👎 et tes corrections
 ```
 
 ## Développer

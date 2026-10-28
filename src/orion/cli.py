@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from orion import __version__
-from orion.config import DEFAULT_CONFIG_PATH, OrionConfig, load_config
+from orion.config import OrionConfig, default_config_path, load_config
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.memory.store import MemoryStore
@@ -985,7 +985,7 @@ def _setup(config: Path | None, secrets: Path | None, server: bool) -> int:
     from orion.configure.paths import ConfigureError
     from orion.setup import Setup, SetupError
 
-    target = (config or DEFAULT_CONFIG_PATH).resolve()
+    target = (config or default_config_path()).resolve()
     wizard = Setup(
         target,
         secrets.resolve() if secrets else target.parent,
@@ -1169,7 +1169,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "setup":
         return _setup(args.config, args.secrets, args.server)
 
-    folder = (args.config or DEFAULT_CONFIG_PATH).resolve().parent
+    folder = (args.config or default_config_path()).resolve().parent
     load_env_files(folder, args.command)
     if args.command in CORE_COMMANDS:
         load_core_vault(folder)
