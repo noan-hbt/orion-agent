@@ -1,4 +1,5 @@
-"""Places: a reminder goes off when the owner's phone says they arrived somewhere."""
+"""Places: the owner's phone says they arrived somewhere; Orion hears of it, and does what
+they asked for that place."""
 
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ def test_places_match_loosely() -> None:
     assert same_place("la boulangerie", "Boulangerie Paul")
     assert not same_place("boulangerie", "bureau")
     assert not same_place("la", "le")
+    assert same_place("chez maman", "Maison maman")
 
 
 async def test_the_phone_says_where_and_the_reminder_goes_off(journal: SqliteJournal) -> None:
@@ -52,9 +54,9 @@ async def test_the_phone_says_where_and_the_reminder_goes_off(journal: SqliteJou
         assert left.json()["reminders"] == 1
 
     first, second = await places.reports()
-    assert "Il arrive à « boulangerie »" in first.notice and "acheter du pain" in first.notice
-    assert "Il quitte « bureau »" in second.notice and first.key != second.key
-    assert first.trust == Trust.OWNER_INSTANCE
+    assert "boulangerie" in first.notice and "acheter du pain" in first.notice
+    assert "bureau" in second.notice and first.key != second.key
+    assert first.trust >= Trust.SYSTEM  # his words: the phone only says when
     listing = await call(tools, "places")
     assert "Boulangerie Paul" in listing and "bureau" in listing
     events = await journal.read()
@@ -120,3 +122,27 @@ async def test_what_the_phone_knows_is_shown_where_orion_looks(journal: SqliteJo
     assert any("arrivé à « bureau »" in line for line in lines)
     assert any("sommeil : 5 h 10, réveillé 3 fois" in line for line in lines)
     assert not await places.situation(now + timedelta(days=1))  # yesterday's night is old news
+
+
+async def test_every_arrival_wakes_orion_and_standing_wishes_hold(journal: SqliteJournal) -> None:
+    """D187: an arrival with nothing asked reaches Orion, who decides; « à chaque fois » goes
+    off every time; « aujourd'hui » is not for next week."""
+    from datetime import date, datetime, timedelta
+
+    places = Places(journal)
+    tools = {t.name: t for t in place_tools(places)}
+    token = await places.new_token()
+    await places.signal(token, "Maison maman", "arrive")
+    now = datetime.now().astimezone()
+    (alert,) = await places.alerts(now)
+    assert "Maison maman" in alert.notice and alert.trust == Trust.OWNER_INSTANCE
+    assert not await places.alerts(now + timedelta(hours=2))  # old news by then
+
+    await call(tools, "remind_at_place", place="chez maman", what="lui écrire", every=True)
+    yesterday = (date.today() - timedelta(days=2)).isoformat()
+    await call(tools, "remind_at_place", place="école", what="le goûter", until=yesterday)
+    assert len(await places.signal(token, "Maison maman", "arrive")) == 1
+    assert len(await places.signal(token, "Maison maman", "arrive")) == 1  # again
+    assert await places.signal(token, "école", "arrive") == []  # that day is past
+    assert len(await places.reports()) == 2
+    assert len(await places.alerts(datetime.now().astimezone())) == 2  # the first, and école

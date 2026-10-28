@@ -5,11 +5,13 @@ where they are; Orion does not need to. A Shortcuts automation (« Quand j'arriv
 Orion only the name of the place the owner chose, and only for the places they set up:
 no coordinates, no track.
 
-- `remind_at_place`: a reminder for when the owner arrives at (or leaves) a place;
 - the phone posts `{"place": "boulangerie", "event": "arrive"}` to `/places/event`, with the
   token made in the app, D154 (only its digest is journaled);
-- the reminders for that place go off at once, quiet hours or not, like the ones the owner set
-  by time: they asked for them.
+- every arrival or departure wakes Orion (D187), who decides what to make of it, most often
+  nothing: an alert, under quiet hours and the day's budget;
+- `remind_at_place`: what to do when the owner arrives at (or leaves) a place, once (until a
+  day, if he said « aujourd'hui ») or every time; it goes off at once, quiet hours or not, like
+  a reminder set by time: he asked for it.
 
     place.token  place.reminder  place.reminder.cancelled  place.event  place.fired
 """
@@ -21,8 +23,9 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Literal
+from zoneinfo import ZoneInfo
 
 import structlog
 import uvicorn
@@ -37,7 +40,7 @@ from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.initiative.engine import Report
+from orion.initiative.engine import Alert, Report
 from orion.memory.store import name_key
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import grouped
@@ -61,6 +64,12 @@ SENSE_KEPT = timedelta(hours=18)
 Sense = Literal["sleep", "focus", "battery", "workout", "health", "music", "other"]
 SIGNAL_TRUST = Trust.OWNER_INSTANCE
 """The owner's phone, saying where they are: theirs, but a signal, not their words."""
+FRESH = timedelta(minutes=30)
+"""An arrival Orion has not got to by then is old news."""
+FIRED_KEPT = timedelta(hours=12)
+KEPT = 50
+"""Arrivals and fired reminders the projection keeps: the recent ones are all that matter."""
+_FILLERS = {"la", "le", "les", "l", "du", "de", "des", "d", "chez", "au", "aux", "a"}
 
 Moment = Literal["arrive", "leave"]
 
@@ -77,14 +86,29 @@ class PlaceReminder:
     when: Moment
     what: str
     trust: Trust
+    every: bool = False
+    """Every time (« à chaque fois que j'arrive à l'école »), until cancelled; else once."""
+    until: datetime | None = None
+    """Once, but not after this (« aujourd'hui » ends tonight)."""
+
+    def holds(self, now: datetime) -> bool:
+        return self.until is None or now <= self.until
+
+
+@dataclass(frozen=True)
+class Arrival:
+    id: str
+    place: str
+    when: Moment
+    at: datetime
+    flow: str
+    """Its correlation id: a reminder fired by it shares it."""
 
 
 def same_place(a: str, b: str) -> bool:
-    """« boulangerie » is « la boulangerie » and « Boulangerie Paul »."""
-    x, y = (
-        set(name_key(a).split()) - {"la", "le", "les", "l", "du", "de"},
-        set(name_key(b).split()) - {"la", "le", "les", "l", "du", "de"},
-    )
+    """« boulangerie » is « la boulangerie » and « Boulangerie Paul »; « chez maman » is
+    « Maison maman »."""
+    x, y = set(name_key(a).split()) - _FILLERS, set(name_key(b).split()) - _FILLERS
     return bool(x) and bool(y) and (x <= y or y <= x)
 
 
@@ -94,7 +118,13 @@ class PlaceState:
     token: str = ""
     """The digest of the phone's current token."""
     reminders: dict[str, PlaceReminder] = field(default_factory=dict[str, PlaceReminder])
-    fired: list[tuple[str, PlaceReminder]] = field(default_factory=list[tuple[str, PlaceReminder]])
+    fired: list[tuple[str, PlaceReminder, datetime]] = field(
+        default_factory=list[tuple[str, PlaceReminder, datetime]]
+    )
+    arrivals: list[Arrival] = field(default_factory=list[Arrival])
+    """The latest arrivals and departures, to wake Orion with."""
+    answered: set[str] = field(default_factory=set[str])
+    """The flows of arrivals that fired a reminder: the reminder tells Orion, not the arrival."""
     known: dict[str, str] = field(default_factory=dict[str, str])
     """Places the phone has reported: key → name as set up."""
     last_place: tuple[str, str, datetime] | None = None
@@ -110,6 +140,8 @@ class PlaceState:
         self.token = ""
         self.reminders.clear()
         self.fired.clear()
+        self.arrivals.clear()
+        self.answered.clear()
         self.known.clear()
         self.last_place = None
         self.sensed.clear()
@@ -123,26 +155,41 @@ class PlaceState:
         if event.kind == TOKEN:
             self.token = str(payload["digest"])
         elif event.kind == REMINDER:
+            until = payload.get("until")
             reminder = PlaceReminder(
                 str(payload["reminder_id"]),
                 str(payload["place"]),
                 "leave" if payload.get("when") == "leave" else "arrive",
                 str(payload["what"]),
                 event.trust,
+                every=bool(payload.get("every")),
+                until=datetime.fromisoformat(str(until)) if until else None,
             )
             self.reminders[reminder.id] = reminder
         elif event.kind == CANCELLED:
             self.reminders.pop(str(payload["reminder_id"]), None)
         elif event.kind == ARRIVED:
             place = str(payload["place"])
+            moment: Moment = "leave" if payload.get("event") == "leave" else "arrive"
             self.known[name_key(place)] = place
-            self.last_place = (place, str(payload.get("event") or "arrive"), _at(event))
+            self.last_place = (place, moment, _at(event))
+            self.arrivals.append(
+                Arrival(event.id, place, moment, _at(event), event.correlation_id or "")
+            )
+            del self.arrivals[:-KEPT]
+            self.answered &= {a.flow for a in self.arrivals}
         elif event.kind == SENSED:
             self.sensed[str(payload["kind"])] = (str(payload["value"]), _at(event))
         elif event.kind == FIRED:
-            reminder = self.reminders.pop(str(payload["reminder_id"]), None)
+            reminder_id = str(payload["reminder_id"])
+            reminder = self.reminders.get(reminder_id)
             if reminder is not None:
-                self.fired.append((event.id, reminder))
+                if not reminder.every:
+                    del self.reminders[reminder_id]
+                self.fired.append((event.id, reminder, _at(event)))
+                del self.fired[:-KEPT]
+            if event.correlation_id:
+                self.answered.add(event.correlation_id)
 
 
 def _at(event: Event) -> datetime:
@@ -226,17 +273,21 @@ class Places:
         if not self.state.token or not hmac.compare_digest(digest(token), self.state.token):
             raise PermissionError("bad token")
         source = Provenance(source="phone:places", actor="owner:phone")
+        flow = new_id()
         async with self._signalling:  # the phone posting twice at once: one reminder
             await self.sync()
-            await self.append(ARRIVED, {"place": place, "event": moment}, source, SIGNAL_TRUST)
+            now = datetime.now(UTC)
             due = [
                 r
                 for r in self.state.reminders.values()
-                if r.when == moment and same_place(r.place, place)
+                if r.when == moment and same_place(r.place, place) and r.holds(now)
             ]
+            await self.append(
+                ARRIVED, {"place": place, "event": moment}, source, SIGNAL_TRUST, flow
+            )
             for reminder in due:
                 await self.append(
-                    FIRED, {"reminder_id": reminder.id, "place": place}, source, SIGNAL_TRUST
+                    FIRED, {"reminder_id": reminder.id, "place": place}, source, SIGNAL_TRUST, flow
                 )
         log.info("places.event", moment=moment, reminders=len(due))
         return [r.id for r in due]
@@ -269,18 +320,48 @@ class Places:
         return lines
 
     async def reports(self) -> list[Report]:
+        """What he asked for at a place, now that he is there. Only his own words are in it
+        (the place as he named it, what to do), not the phone's: the phone says when, he said
+        what, so it is done as he would have it (D187)."""
         await self.sync()
+        now = datetime.now(UTC)
         return [
             Report(
                 key=f"place:{event_id}",
-                notice=f"Il {'arrive à' if r.when == 'arrive' else 'quitte'} « {r.place} », "
-                f"et il t'avait demandé de lui rappeler à ce moment-là : {r.what}\n"
-                "Rappelle-le-lui en une phrase.",
-                why=f"le rappel de « {r.place} »",
+                notice=f"Son téléphone dit qu'il {'arrive à' if r.when == 'arrive' else 'quitte'}"
+                f" « {r.place} ». Il t'avait demandé "
+                f"{'de le faire à chaque fois' if r.every else 'pour cette fois'} : {r.what}\n"
+                "Fais-le maintenant : un rappel, dis-le-lui en une phrase ; une action, fais-la, "
+                "puis dis-lui en une phrase ce que tu as fait.",
+                why=f"ce qu'il t'a demandé pour « {r.place} »",
                 fallback=f"Rappel ({r.place}) : {r.what}",
-                trust=min(r.trust, SIGNAL_TRUST),
+                trust=min(r.trust, Trust.SYSTEM),
             )
-            for event_id, r in self.state.fired
+            for event_id, r, at in self.state.fired
+            if now - at <= FIRED_KEPT
+        ]
+
+    async def alerts(self, now: datetime) -> list[Alert]:
+        """Every arrival or departure that fired nothing: Orion hears of it, and most often
+        lets it be (D187)."""
+        await self.sync()
+        zone = now.tzinfo
+        return [
+            Alert(
+                key=f"place:arrival:{a.id}",
+                notice=f"Son téléphone dit qu'il {'arrive à' if a.when == 'arrive' else 'quitte'}"
+                f" « {a.place} » ({a.at.astimezone(zone):%H:%M}). Il ne t'a rien demandé pour ce "
+                "moment-là. Si ça change quelque chose pour lui maintenant (son agenda, ce qu'il "
+                "attend, ce qu'il t'a dit), dis-le-lui en une phrase ; sinon réponds SILENCE.",
+                why=f"son téléphone : {'arrivé à' if a.when == 'arrive' else 'parti de'} "
+                f"« {a.place} »",
+                fallback="",
+                trust=SIGNAL_TRUST,
+                expires_at=a.at + FRESH,
+                importance=0.3,
+            )
+            for a in self.state.arrivals
+            if a.flow not in self.state.answered and now - a.at <= FRESH
         ]
 
     def app(self) -> Starlette:
@@ -321,9 +402,23 @@ class Places:
 class RemindInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    place: str = Field(min_length=2, max_length=80, description="The place, as he names it")
-    what: str = Field(min_length=2, max_length=300, description="What to remind him of")
+    place: str = Field(
+        min_length=2, max_length=80, description="The place, as his phone names it (`list`)"
+    )
+    what: str = Field(
+        min_length=2,
+        max_length=500,
+        description="Self-contained: what to remind him of, or what to do (« écris à maman "
+        "que je suis arrivé »)",
+    )
     when: Moment = Field(default="arrive", description="'arrive' or 'leave'")
+    every: bool = Field(
+        default=False, description="Every time (« à chaque fois que… »), until cancelled"
+    )
+    until: str = Field(
+        default="",
+        description="Once, not after this local day 'YYYY-MM-DD' (« aujourd'hui »: today)",
+    )
 
 
 class CancelInput(BaseModel):
@@ -346,23 +441,42 @@ def place_tools(places: Places) -> list[Tool]:
 
     async def remind(args: Any, ctx: ToolContext) -> ToolResult:
         await places.sync()
-        reminder_id = f"pl_{new_id()}"
+        payload: dict[str, Any] = {
+            "reminder_id": f"pl_{new_id()}",
+            "place": args.place,
+            "what": args.what,
+            "when": args.when,
+        }
+        if args.every:
+            payload["every"] = True
+        elif args.until.strip():
+            try:
+                day = date.fromisoformat(args.until.strip())
+            except ValueError:
+                return ToolResult("`until` must be a local day, 'YYYY-MM-DD'.", is_error=True)
+            end = datetime.combine(day + timedelta(days=1), time(), ZoneInfo(ctx.timezone))
+            payload["until"] = end.isoformat()
         await places.append(
-            REMINDER,
-            {"reminder_id": reminder_id, "place": args.place, "what": args.what, "when": args.when},
-            provenance(ctx),
-            ctx.context_trust,
-            ctx.correlation_id,
+            REMINDER, payload, provenance(ctx), ctx.context_trust, ctx.correlation_id
         )
         known = [n for n in places.state.known.values() if same_place(n, args.place)]
+        others = ", ".join(f"« {n} »" for n in sorted(places.state.known.values()))
         hint = (
             ""
             if known
-            else " Son téléphone ne m'a encore jamais signalé ce lieu : dis-lui d'ajouter une "
-            "automatisation Raccourcis pour lui (voir `places`)."
+            else " Son téléphone ne m'a encore jamais signalé ce lieu"
+            + (
+                f" (il signale {others} : si c'est l'un d'eux, refais-le sous ce nom)"
+                if others
+                else ""
+            )
+            + " : sinon dis-lui d'ajouter une automatisation Raccourcis pour lui (voir `list`)."
         )
         verb = "arrivera à" if args.when == "arrive" else "quittera"
-        return ToolResult(f"Noté ({reminder_id}) : quand il {verb} « {args.place} ».{hint}")
+        often = "à chaque fois" if args.every else "une fois"
+        return ToolResult(
+            f"Noté ({payload['reminder_id']}, {often}) : quand il {verb} « {args.place} ».{hint}"
+        )
 
     async def cancel(args: Any, ctx: ToolContext) -> ToolResult:
         await places.sync()
@@ -379,10 +493,14 @@ def place_tools(places: Places) -> list[Tool]:
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
         await places.sync()
+        now = datetime.now(UTC)
         lines = [
-            f"- ({r.id}) {'en arrivant à' if r.when == 'arrive' else 'en quittant'} "
-            f"« {r.place} » : {r.what}"
+            f"- ({r.id}) {'à chaque fois' if r.every else 'une fois'}, "
+            f"{'en arrivant à' if r.when == 'arrive' else 'en quittant'} « {r.place} »"
+            f"{f' (le {r.until - timedelta(days=1):%d/%m} au plus tard)' if r.until else ''}"
+            f" : {r.what}"
             for r in places.state.reminders.values()
+            if r.holds(now)
         ]
         known = ", ".join(sorted(places.state.known.values())) or "aucun encore"
         lines.append(f"Lieux que son téléphone signale : {known}.")
@@ -402,8 +520,9 @@ def place_tools(places: Places) -> list[Tool]:
     return [
         Tool(
             name="remind_at_place",
-            description="A reminder for when the owner arrives at, or leaves, a place (« quand je "
-            "passe à la boulangerie », « en partant du bureau »), not at a time.",
+            description="What to do when the owner arrives at, or leaves, a place (« quand je "
+            "passe à la boulangerie », « à chaque fois que je pars du bureau »), not at a time: "
+            "remind him, or do something.",
             input_model=RemindInput,
             handler=remind,
             effect=Effect.INTERNAL,
@@ -452,8 +571,8 @@ class PlacesModule(Module):
         return [
             grouped(
                 "places",
-                "Reminders for when the owner arrives at, or leaves, a place (« quand je passe à "
-                "la boulangerie »), not at a time.",
+                "What to do when the owner arrives at, or leaves, a place (« quand je passe à "
+                "la boulangerie », « à chaque fois que j'arrive à l'école »), not at a time.",
                 place_tools(self.places),
                 {"remind_at_place": "remind", "place_reminder_cancel": "cancel", "places": "list"},
             )
@@ -464,6 +583,7 @@ class PlacesModule(Module):
             return
         settings: PlaceSettings = self.settings
         daemon.reports.append(self.places)
+        daemon.alerts.append(self.places)
         daemon.orion.situation.append(self.places)
         server = uvicorn.Server(
             uvicorn.Config(

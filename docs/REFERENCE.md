@@ -65,7 +65,7 @@ Une partie des outils est rangée dans un tiroir : l'outil `orion` les liste et 
 | `computer` | `[modules.computer]` | Son navigateur, persistant, passé au téléphone si besoin (D116) | `browser` |
 | `console` | `[modules.console]` | La page de contrôle dans le navigateur (D39) | `console_link` |
 | `hands` | `[modules.hands]` | Tes machines : fichiers partagés, notifications (D41) | `hands`, `hand_*` |
-| `places` | `[modules.places]` | Rappels de lieu par les Raccourcis de l'iPhone (D57, D153) | `remind_at_place`, `places` |
+| `places` | `[modules.places]` | Arrivées, départs et consignes de lieu par les Raccourcis de l'iPhone (D57, D153, D187) | `remind_at_place`, `places` |
 | `secretary` | `[modules.secretary]` | Les proches qui peuvent écrire à Orion (D54) | `contact_note`, `contact_message` |
 | `federation` | `[federation]` | Les autres Orion (D29) ; requiert `calendar` et le gardien séparé | `peers`, `meeting_*`, `peer_message` |
 | `delegation` | `[delegation]` | Les longues tâches au CLI `claude` | `delegate`, `jobs_status` |
