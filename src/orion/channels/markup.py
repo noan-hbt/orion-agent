@@ -215,11 +215,29 @@ def _plain(piece: Piece) -> str:
     return f"✓ {data['text']}"
 
 
+UNMARK = (
+    (re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$", re.M), r"\1"),
+    (re.compile(r"^([ \t]*)[*+][ \t]+", re.M), "\\1• "),
+    (re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)"), r"\1 (\2)"),
+    (re.compile(r"(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\1"), r"\2"),
+    (re.compile(r"(?<![\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])"), r"\1"),
+    (re.compile(r"(?<![\w_])_(?=[^\s_])([^_\n]*?[^\s_])_(?![\w_])"), r"\1"),
+    (re.compile(r"`([^`\n]+)`"), r"\1"),
+)
+"""Markdown the model slips in, read as text: a channel that draws nothing shows no stars."""
+
+
+def _unmark(text: str) -> str:
+    for pattern, replacement in UNMARK:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def plain(text: str) -> str:
     """The message for a channel that draws nothing: the same content, as text."""
     if "<" not in text:
-        return text
-    return "\n\n".join(x for x in (_plain(p) for p in parse(text)) if x)
+        return _unmark(text)
+    return _unmark("\n\n".join(x for x in (_plain(p) for p in parse(text)) if x))
 
 
 def public(text: str) -> list[dict[str, Any]]:
