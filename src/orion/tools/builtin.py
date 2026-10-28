@@ -6,7 +6,7 @@ that take a date (`remind_me`) echo the exact weekday back so a mistake shows.
 
 During a long turn (D97), Orion keeps a plan (`plan`: every step with its status, the whole
 list each time, so the plan lives in the conversation and nowhere else). It is his own: the
-owner hears what he finds, never the plan (D169). What he finds on the way goes out with `say`
+owner hears what he finds, never the plan (D169). What he finds on the way goes out with `tell`
 or as text beside a tool call (D173).
 """
 
@@ -46,13 +46,13 @@ async def _current_time(args: Any, ctx: ToolContext) -> ToolResult:
     )
 
 
-class SayInput(BaseModel):
+class TellInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=2000, description="The message, as you'd text it")
 
 
-async def _say(_args: Any, _ctx: ToolContext) -> ToolResult:
+async def _tell(_args: Any, _ctx: ToolContext) -> ToolResult:
     # The runtime sends the text as soon as the call is made (D173): nothing left to do here.
     return ToolResult("Envoyé. Continue.")
 
@@ -108,12 +108,12 @@ def builtin_tools() -> list[Tool]:
             **common,
         ),
         Tool(
-            name="say",
+            name="tell",
             description="Send him a message now and keep working: what you just found or did "
             "that matters to him, never what you are about to do. Call it with your next tool, "
-            "not alone. Your last answer is your reply, not a `say`.",
-            input_model=SayInput,
-            handler=_say,
+            "not alone. Your last answer is your reply, not a `tell`.",
+            input_model=TellInput,
+            handler=_tell,
             **common,
         ),
         Tool(

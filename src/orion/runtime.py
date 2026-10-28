@@ -61,7 +61,7 @@ from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, ToolCall, Usage, cache_minutes
 from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry
-from orion.tools.builtin import SayInput
+from orion.tools.builtin import TellInput
 
 log = structlog.get_logger(__name__)
 
@@ -141,16 +141,16 @@ Progress = Callable[[str, str], Awaitable[None]]
 
 
 def said_on_the_way(calls: Sequence[ToolCall]) -> list[str]:
-    """The texts of `say` calls, sent as soon as the model makes them (D173). A call whose
+    """The texts of `tell` calls, sent as soon as the model makes them (D173). A call whose
     arguments do not hold is left to the tool, which answers the model with the error."""
     texts: list[str] = []
     for call in calls:
-        if call.name != "say":
+        if call.name != "tell":
             continue
         try:
-            texts.append(SayInput.model_validate_json(call.arguments).text.strip())
+            texts.append(TellInput.model_validate_json(call.arguments).text.strip())
         except ValidationError:
-            log.warning("turn.say_invalid", arguments=call.arguments[:200])
+            log.warning("turn.tell_invalid", arguments=call.arguments[:200])
     return [t for t in texts if t]
 
 
