@@ -1,20 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" role="img" aria-labelledby="a1-title">
+  <title id="a1-title">Orion avatar</title>
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#68B9FF"/>
-      <stop offset=".5" stop-color="#477DF5"/>
-      <stop offset="1" stop-color="#8061D8"/>
+    <linearGradient id="a1-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#2D8CFF"/>
+      <stop offset=".58" stop-color="#0872F0"/>
+      <stop offset="1" stop-color="#0050D8"/>
     </linearGradient>
-    <radialGradient id="light" cx=".3" cy=".15" r=".9">
-      <stop stop-color="#fff" stop-opacity=".3"/>
-      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    <radialGradient id="a1-light" cx=".16" cy=".06" r=".9">
+      <stop stop-color="#ACD8FF" stop-opacity=".25"/>
+      <stop offset="1" stop-color="#ACD8FF" stop-opacity="0"/>
     </radialGradient>
+    <radialGradient id="a1-pearl" cx=".3" cy=".23" r=".86">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".56" stop-color="#F7FBFF"/>
+      <stop offset=".82" stop-color="#E4EFFF"/>
+      <stop offset="1" stop-color="#BDD4F5"/>
+    </radialGradient>
+    <radialGradient id="a1-air">
+      <stop offset=".84" stop-color="#D8EEFF" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#D8EEFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="a1-thread" gradientUnits="userSpaceOnUse" x1="-62" y1="0" x2="62" y2="0">
+      <stop stop-color="#FFFFFF" stop-opacity=".8"/>
+      <stop offset=".2" stop-color="#E7F3FF" stop-opacity=".75"/>
+      <stop offset=".36" stop-color="#72A6EA" stop-opacity=".72"/>
+      <stop offset=".66" stop-color="#6C9FE4" stop-opacity=".64"/>
+      <stop offset=".83" stop-color="#DFEEFF" stop-opacity=".8"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".9"/>
+    </linearGradient>
   </defs>
-  <circle cx="90" cy="90" r="90" fill="url(#sky)"/>
-  <circle cx="90" cy="90" r="90" fill="url(#light)"/>
-  <g fill="#fff">
-    <path d="m57 102 3-9 3 9 9 3-9 3-3 9-3-9-9-3Z"/>
-    <path d="m87 87 3-9 3 9 9 3-9 3-3 9-3-9-9-3Z"/>
-    <path d="m117 72 3-9 3 9 9 3-9 3-3 9-3-9-9-3Z"/>
-  </g>
+  <circle cx="90" cy="90" r="90" fill="url(#a1-bg)"/>
+  <circle cx="90" cy="90" r="90" fill="url(#a1-light)"/>
+  <ellipse cx="86" cy="99" rx="62" ry="22.8" transform="rotate(-27 86 99)" fill="none" stroke="#E3F2FF" stroke-opacity=".48" stroke-width=".82"/>
+  <circle cx="86" cy="99" r="47" fill="url(#a1-air)"/>
+  <circle cx="86" cy="99" r="43" fill="url(#a1-pearl)"/>
+  <path d="M-62 0A62 22.8 0 0 0 62 0" transform="translate(86 99) rotate(-27)" fill="none" stroke="url(#a1-thread)" stroke-width=".88" stroke-linecap="round"/>
+  <circle cx="137.89" cy="67.24" r="6.8" fill="url(#a1-pearl)"/>
+  <path d="M51 42C51.7 45.5 52 45.8 55.5 46.5C52 47.2 51.7 47.5 51 51C50.3 47.5 50 47.2 46.5 46.5C50 45.8 50.3 45.5 51 42Z" fill="#FFFFFF" fill-opacity=".94"/>
 </svg>

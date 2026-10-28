@@ -1,1 +1,42 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><radialGradient id="g" cx="0.3" cy="0.2" r="1"><stop offset="0" stop-color="#2A2D3A"/><stop offset="1" stop-color="#0B0C10"/></radialGradient></defs><rect width="512" height="512" fill="url(#g)"/><circle cx="256" cy="256" r="118" fill="none" stroke="#FFFFFF" stroke-width="26"/><circle cx="366" cy="146" r="30" fill="#9DA6FF"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="o1-title">
+  <title id="o1-title">Orion</title>
+  <defs>
+    <linearGradient id="o1-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#2D8CFF"/>
+      <stop offset=".58" stop-color="#0872F0"/>
+      <stop offset="1" stop-color="#0050D8"/>
+    </linearGradient>
+    <radialGradient id="o1-light" cx=".16" cy=".06" r=".9">
+      <stop stop-color="#ACD8FF" stop-opacity=".25"/>
+      <stop offset="1" stop-color="#ACD8FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="o1-pearl" cx=".3" cy=".23" r=".86">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset=".56" stop-color="#F7FBFF"/>
+      <stop offset=".82" stop-color="#E4EFFF"/>
+      <stop offset="1" stop-color="#BDD4F5"/>
+    </radialGradient>
+    <radialGradient id="o1-air">
+      <stop offset=".84" stop-color="#D8EEFF" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#D8EEFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="o1-thread" gradientUnits="userSpaceOnUse" x1="-180" y1="0" x2="180" y2="0">
+      <stop stop-color="#FFFFFF" stop-opacity=".8"/>
+      <stop offset=".2" stop-color="#E7F3FF" stop-opacity=".75"/>
+      <stop offset=".36" stop-color="#72A6EA" stop-opacity=".72"/>
+      <stop offset=".66" stop-color="#6C9FE4" stop-opacity=".64"/>
+      <stop offset=".83" stop-color="#DFEEFF" stop-opacity=".8"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity=".9"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#o1-bg)"/>
+  <rect width="512" height="512" fill="url(#o1-light)"/>
+  <!-- Far orbit is naturally occluded by the planet. -->
+  <ellipse cx="246" cy="278" rx="180" ry="64" transform="rotate(-27 246 278)" fill="none" stroke="#E3F2FF" stroke-opacity=".48" stroke-width="2.2"/>
+  <circle cx="246" cy="278" r="127" fill="url(#o1-air)"/>
+  <circle cx="246" cy="278" r="116" fill="url(#o1-pearl)"/>
+  <!-- Near orbit crosses the pearl as a fine blue thread. -->
+  <path d="M-180 0A180 64 0 0 0 180 0" transform="translate(246 278) rotate(-27)" fill="none" stroke="url(#o1-thread)" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="396.84" cy="186.2" r="19.5" fill="url(#o1-pearl)"/>
+  <path d="M143 121C145 132 146 133 157 135C146 137 145 138 143 149C141 138 140 137 129 135C140 133 141 132 143 121Z" fill="#FFFFFF" fill-opacity=".94"/>
+</svg>
