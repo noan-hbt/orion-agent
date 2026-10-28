@@ -468,6 +468,10 @@ L'**évaluation** commence dès M1 et grossit à chaque jalon : chaque bug réel
 
 ## 17. Ce qui est construit (au 20/10/2026, jusqu'à D84)
 
+> Cette section s'arrête à D84. Pour l'état actuel des modules, des commandes et de la
+> configuration, voir [`../REFERENCE.md`](../REFERENCE.md) ; pour ce qui a changé depuis, voir
+> [`../PASSATION.md`](../PASSATION.md).
+
 Le plan des sections 1 à 16 tient dans ses principes : journal append-only, projections
 reconstructibles, provenance et confiance, gardien séparé, initiative gouvernée, cache de prompt.
 Le code s'en est écarté sur la forme, chaque fois par une décision.
