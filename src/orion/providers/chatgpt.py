@@ -41,7 +41,14 @@ _PLAN_EXHAUSTED = {
     "subscription_sharing_usage_limit_exceeded",
     "subscription_sharing_usage_unavailable",
 }
-_EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
+_EFFORT = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "xhigh",
+}
 RETENTION = "24h"
 """How long a conversation's prompt cache is kept. By default OpenAI drops it after 5 to 10
 minutes without requests: nearly every turn after a pause read the whole conversation again."""

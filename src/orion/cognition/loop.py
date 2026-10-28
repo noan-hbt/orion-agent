@@ -93,7 +93,7 @@ class LoopSettings:
     origin_event_id: str | None = None
     timezone: str = "Europe/Paris"
     max_tokens: int | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     """How long the model thinks before each step (`AgentConfig.reasoning_effort`)."""
     budget: Budget = field(default_factory=Budget)
     wrap_up: bool = True
