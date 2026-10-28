@@ -1086,8 +1086,9 @@ function size(bytes) {
 
 // An address may hold one level of parentheses (Wikipedia's `Paris_(France)`), never a space.
 const URL_BODY = String.raw`https?:\/\/(?:[^\s()<>"]|\([^\s()<>"]*\))+`;
-// [label](address), <address>, a bare address, **bold**: the only markup the app reads.
-const RICH = new RegExp(String.raw`\[([^\]\n]+)\]\((${URL_BODY})\)|<(${URL_BODY})>|(${URL_BODY})|\*\*([^*\n]+)\*\*`, "g");
+// [label](address), <address>, a bare address, **bold**, `code` (\x60 is the backquote): the
+// only markup the app reads.
+const RICH = new RegExp(String.raw`\[([^\]\n]+)\]\((${URL_BODY})\)|<(${URL_BODY})>|(${URL_BODY})|\*\*([^*\n]+)\*\*|\x60([^\x60\n]+)\x60`, "g");
 // What closes a sentence is not part of the address it ends on.
 const URL_TAIL = /[.,;:!?'’"»\]*_]+$/;
 
@@ -1101,12 +1102,12 @@ function shortUrl(url) {
 }
 
 function rich(text) {
-  // Links and **bold**, nothing else: the text is never parsed as HTML.
+  // Links, **bold** and `code`, nothing else: the text is never parsed as HTML.
   const out = [];
   let at = 0;
   const plain = (piece) => piece && out.push(piece);
   for (const match of text.matchAll(RICH)) {
-    const [whole, label, labelled, angled, bare, bold] = match;
+    const [whole, label, labelled, angled, bare, bold, code] = match;
     plain(text.slice(at, match.index));
     at = match.index + whole.length;
     if (labelled) out.push(anchor(labelled, label.replace(/\*\*/g, "")));
@@ -1115,7 +1116,8 @@ function rich(text) {
       const url = bare.replace(URL_TAIL, "");
       at -= bare.length - url.length;
       out.push(anchor(url, shortUrl(url)));
-    } else out.push(h("b", {}, ...rich(bold)));
+    } else if (code) out.push(h("code", {}, code));
+    else out.push(h("b", {}, ...rich(bold)));
   }
   plain(text.slice(at));
   return out;
@@ -2297,9 +2299,22 @@ function paintNowWork() {
     title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Rien en cours. Je garde un œil sur tout.";
     line = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "écris-moi quand tu veux";
   }
+  view.nowWork.classList.toggle("busy", !!work);
+  view.nowWork.classList.toggle("still", !work && !!o?.paused_until);
   view.nowWork.replaceChildren(
     h("div", { class: "state-head" }, orb, h("span", {}, h("b", {}, title), line ? h("small", {}, line) : null)),
     ...(acts.length ? [h("div", { class: "row2" }, acts)] : []),
+    ...(state.glance?.length ? [h("div", { class: "glance" }, state.glance)] : []),
+  );
+}
+
+// The day at a glance, under the state: each count leads to its section.
+function glanceChip(count, label, tone, target) {
+  return h(
+    "button",
+    { class: `chip ${tone}`, type: "button", onclick: () => target.scrollIntoView({ behavior: "smooth", block: "start" }) },
+    h("b", {}, String(count)),
+    label,
   );
 }
 
@@ -2313,7 +2328,6 @@ async function nowFill(refresh) {
   }
   state.questions = found.questions.length;
   paintBadge();
-  paintNowWork();
   const act = (path) => async () => {
     try {
       await api(path, {});
@@ -2324,6 +2338,7 @@ async function nowFill(refresh) {
   };
   const extras = await nowExtras();
   const sections = [view.nowWork, extras.night];
+  const glance = [];
   const { handovers } = await api("api/browser").catch(() => ({ handovers: [] }));
   for (const handover of handovers) {
     sections.push(
@@ -2340,8 +2355,10 @@ async function nowFill(refresh) {
   for (const offer of asked) sections.push(loginAskCard(offer));
   const approvals = [...state.approvals.values()];
   if (approvals.length || found.questions.length) {
+    const head = h("h2", { class: "section" }, "À toi de jouer", h("small", {}, String(approvals.length + found.questions.length)));
+    glance.push(glanceChip(approvals.length + found.questions.length, "pour toi", "orange", head));
     sections.push(
-      h("h2", { class: "section" }, "À toi de jouer", h("small", {}, String(approvals.length + found.questions.length))),
+      head,
       approvals.map(askCard),
       found.questions.length
         ? h(
@@ -2360,73 +2377,63 @@ async function nowFill(refresh) {
         : null,
     );
   }
-  if (found.tasks.length) {
-    sections.push(
-      h("h2", { class: "section" }, "En tâche de fond"),
+  if (extras.today.length) {
+    glance.push(glanceChip(extras.events, "aujourd'hui", "blue", extras.today[0]));
+    sections.push(...extras.today);
+  }
+  // What I carry on my side, in one list: tasks running, people I wait on, missions.
+  const mine = [
+    ...found.tasks.map((t) =>
       h(
         "div",
-        { class: "list items" },
-        found.tasks.map((t) =>
-          h(
-            "div",
-            { class: "item" },
-            h("span", { class: "ico" }, icon("spark", 16)),
-            h(
-              "span",
-              {},
-              h("span", { class: "text" }, t.goal),
-              h("small", {}, [t.waiting ? "attend mon tour" : t.passes ? plural(t.passes, "passage", "passages") : "démarre", `${money(t.spent)} sur ${money(t.budget)}`].join(" · ")),
-              t.budget ? meter(t.spent / t.budget, "") : null,
-              t.last ? h("small", { class: "last" }, excerpt(t.last, 140)) : null,
-            ),
-            h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/tasks/${t.id}/stop`) }, "Arrêter")),
-          ),
+        { class: "item" },
+        h("span", { class: "ico on" }, icon("spark", 16)),
+        h(
+          "span",
+          {},
+          h("span", { class: "text" }, t.goal),
+          h("small", {}, [t.waiting ? "attend mon tour" : t.passes ? plural(t.passes, "passage", "passages") : "démarre", `${money(t.spent)} sur ${money(t.budget)}`].join(" · ")),
+          t.budget ? meter(t.spent / t.budget, "") : null,
+          t.last ? h("small", { class: "last" }, excerpt(t.last, 140)) : null,
         ),
+        h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/tasks/${t.id}/stop`) }, "Arrêter")),
       ),
-    );
-  }
-  if (found.waiting_on.length) {
-    sections.push(
-      h("h2", { class: "section" }, "J'attends des autres"),
+    ),
+    ...found.waiting_on.map((w) =>
       h(
         "div",
-        { class: "list items" },
-        found.waiting_on.map((w) =>
-          h(
-            "div",
-            { class: "item" },
-            h("span", { class: "ico" }, icon("clock", 16)),
-            h("span", {}, h("span", { class: "text" }, `${w.who} · ${w.about}`), h("small", {}, `${w.round > 1 ? `relance ${w.round - 1} · ` : ""}j'y reviens ${SHORT.format(new Date(w.back_at))}`)),
-            h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/waits/${w.id}/drop`) }, "Laisser")),
-          ),
-        ),
+        { class: "item" },
+        h("span", { class: "ico" }, icon("clock", 16)),
+        h("span", {}, h("span", { class: "text" }, `${w.who} · ${w.about}`), h("small", {}, `j'attends sa réponse · ${w.round > 1 ? `relance ${w.round - 1} · ` : ""}j'y reviens ${SHORT.format(new Date(w.back_at))}`)),
+        h("span", { class: "acts" }, h("button", { class: "pill small ghost", type: "button", onclick: act(`api/waits/${w.id}/drop`) }, "Laisser")),
       ),
-    );
-  }
+    ),
+  ];
   const missions = await api("api/missions")
     .then((found) => found.missions.filter((m) => !m.closed))
     .catch((error) => {
       if (error instanceof ApiError && error.status === 404) return [];
       throw error;
     });
-  if (missions.length) {
-    sections.push(
-      h("h2", { class: "section" }, "Mes missions", h("small", {}, String(missions.length))),
-      h("div", { class: "list items" }, missions.map((m) => missionRow(m, refresh))),
-    );
+  mine.push(...missions.map((m) => missionRow(m, refresh)));
+  if (mine.length) {
+    const head = h("h2", { class: "section" }, "De mon côté", h("small", {}, String(mine.length)));
+    glance.push(glanceChip(mine.length, "en cours", "gray", head));
+    sections.push(head, h("div", { class: "list items" }, mine));
   }
-  sections.push(...extras.today);
   const next = state.overview?.next || [];
   if (next.length) {
     sections.push(
       h("h2", { class: "section" }, "Bientôt, de moi-même"),
       h(
         "div",
-        { class: "list items" },
-        next.map((p) => h("div", { class: "item" }, h("span", { class: "ico" }, icon("calendar", 16)), h("span", {}, h("span", { class: "text" }, p.what), h("small", {}, SHORT.format(new Date(p.at)))))),
+        { class: "list items soon" },
+        next.map((p) => h("div", { class: "item" }, h("span", { class: "when" }, SHORT.format(new Date(p.at))), h("span", {}, h("span", { class: "text" }, p.what)))),
       ),
     );
   }
+  state.glance = glance.length > 1 ? glance : [];
+  paintNowWork();
   return sections;
 }
 
@@ -2438,7 +2445,7 @@ async function nowExtras() {
     throw error;
   };
   const [agenda, nights] = await Promise.all([api("api/agenda").catch(off), api("api/nights").catch(off)]);
-  const out = { night: null, today: [] };
+  const out = { night: null, today: [], events: 0 };
   const note = nights?.notes?.[0];
   const now = new Date();
   if (note && now.getHours() < 12 && new Date(note.at).toDateString() === now.toDateString()) {
@@ -2454,6 +2461,7 @@ async function nowExtras() {
   }
   const today = (agenda?.events || []).filter((e) => new Date(e.start).toDateString() === now.toDateString() || (e.all_day && new Date(e.start) <= now && new Date(e.end) > now));
   if (today.length) {
+    out.events = today.length;
     out.today.push(
       h("h2", { class: "section" }, "Aujourd'hui", h("small", {}, String(today.length))),
       h("div", { class: "list items agenda" }, today.slice(0, 3).map(eventRow), today.length > 3 ? row("calendar", "Tout l'agenda", `+${today.length - 3}`, agendaPanel) : null),

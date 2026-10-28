@@ -4087,3 +4087,20 @@ la fin de la réponse (offres, promesses) : il ne voyait rien.
 - La description de `plan` le dit, pour qu'il ne soit pas surpris.
 - Non retenu : un second modèle qui juge « fini ou pas » à chaque réponse (coût et latence à
   chaque tour, pour un cas que le plan rend déjà visible).
+
+## D183 — Maintenant se lit d'un coup d'œil, et Orion a un logo de planète
+
+*28/10/2026 · acceptée · complète D138*
+
+L'écran Maintenant empilait cinq ou six sections de même poids. Il commençait par une phrase
+générique, et la barre de l'agenda mangeait la moitié de chaque ligne.
+
+- **La carte d'état porte la journée** : avatar plus grand, sur un léger fond bleu. Dessous, des
+  pastilles (« 2 pour toi · 2 aujourd'hui · 3 en cours ») qui mènent chacune à sa section.
+  Elles n'apparaissent qu'à partir de deux, sinon elles répètent la page.
+- **Ordre** : ce qui attend le propriétaire, puis son agenda, puis ce qu'Orion porte. Tâches,
+  attentes et missions forment une seule liste, « De mon côté ».
+- **Logo** : une planète nacrée sur fond bleu, avec une orbite fine, un satellite et une étoile.
+  Il remplace l'anneau et les trois étincelles. Le dessin a été fait par Codex, en trois séries
+  de variantes, et choisi par le propriétaire.
+- Le texte entre backquotes s'affiche en code dans les messages, au lieu de montrer les `.

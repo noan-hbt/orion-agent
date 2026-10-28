@@ -1,4 +1,4 @@
-"""How the app draws Orion's text: links and bold, run in a real browser."""
+"""How the app draws Orion's text: links, bold and code, run in a real browser."""
 
 from pathlib import Path
 
@@ -63,3 +63,11 @@ async def test_links_are_drawn_whole_and_nothing_is_parsed_as_html() -> None:
     assert drawn[7]["text"] == "<b>pas du html</b> [x](javascript:alert(1))"
     assert "<a" not in html[7]
     assert drawn[8]["text"].endswith("…") and len(drawn[8]["text"]) == 48
+
+
+async def test_backquoted_text_is_drawn_as_code_not_shown_with_its_quotes() -> None:
+    """Seen for real: `orion doctor` came through with its backquotes."""
+    drawn = await _draw(["Lance `orion doctor` puis `https://example.com/x` ici."])
+    assert drawn[0]["html"] == (
+        "Lance <code>orion doctor</code> puis <code>https://example.com/x</code> ici."
+    )

@@ -93,6 +93,8 @@ textarea:focus-visible,.search input:focus-visible { outline:none; }
 .bubble { position:relative; isolation:isolate; max-width:75%; padding:7px 12px; border-radius:18px; background:var(--gray-bubble); color:var(--label); font-size:17px; line-height:22px; white-space:pre-wrap; overflow-wrap:anywhere; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; transition:transform .35s var(--bounce),opacity .2s ease; }
 .msg.owner .bubble { background:linear-gradient(#1E8BFF,#0A7AFF); color:#fff; }
 .msg.owner .bubble a { color:#fff; }
+.bubble code,.page code,.panel code { padding:1px 5px; border-radius:6px; background:rgba(120,120,128,.14); font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:.88em; overflow-wrap:anywhere; }
+.msg.owner .bubble code { background:rgba(255,255,255,.22); }
 .msg.rich > .bubble,.msg > .checklist,.msg > .piece,.msg > .done,.msg > .quick { max-width:85%; }
 .msg.tail > .bubble-tail::before,.msg.tail > .bubble-tail::after { content:""; position:absolute; z-index:-1; bottom:0; height:18px; pointer-events:none; }
 .msg.orion.tail > .bubble-tail::before { left:-7px; width:20px; background:var(--gray-bubble); border-bottom-right-radius:15px; }
@@ -275,7 +277,7 @@ h2.section small { font-size:13px; font-weight:400; }
 .list .item:not(:has(.ico)) + .item::before { left:16px; }
 .list > button,.list .item { transition:background-color .4s ease; }
 .list > button:active,.list .item:active { background:rgba(0,0,0,.06); transition-duration:0s; }
-.list .item > span:not(.ico):not(.acts):not(.chev):not(.stepper):not(.switch) { flex:1; min-width:0; }
+.list .item > span:not(.ico):not(.acts):not(.chev):not(.stepper):not(.switch):not(.when):not(.bar) { flex:1; min-width:0; }
 .list .item .text { display:block; font-size:17px; line-height:22px; font-weight:400; overflow-wrap:anywhere; }
 .list .item small { display:block; margin-top:2px; color:var(--label-2); font-size:13px; line-height:18px; font-weight:400; }
 .list .item .value { flex:0 1 auto; max-width:45%; margin:0 0 0 auto; color:var(--label-2); text-align:right; font-size:17px; line-height:22px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -338,6 +340,25 @@ h2.section small { font-size:13px; font-weight:400; }
 .state-head > span:last-child { display:flex; flex:1; min-width:0; flex-direction:column; gap:3px; }
 .state-head b { font-size:17px; line-height:22px; font-weight:600; }
 .state-head small { color:var(--label-2); font-size:13px; line-height:18px; font-variant-numeric:tabular-nums; }
+/* Maintenant: the state of Orion on a soft wash of blue, the day at a glance under it */
+.hero { position:relative; overflow:hidden; gap:16px; padding:18px; background:linear-gradient(155deg,#EEF5FF 0%,#fff 62%); box-shadow:0 0 0 .5px rgba(0,122,255,.08),0 8px 24px -14px rgba(0,60,140,.25); }
+.hero::before { content:""; position:absolute; top:-70px; right:-60px; width:200px; height:200px; border-radius:50%; background:radial-gradient(circle,rgba(0,122,255,.13),rgba(0,122,255,0) 70%); pointer-events:none; }
+.hero.busy::before { animation:orb-breathe 2.2s ease-in-out infinite; }
+.hero.still { background:linear-gradient(155deg,#F2F2F7 0%,#fff 62%); }
+.hero.still::before { display:none; }
+.hero .state-head { gap:14px; }
+.hero .orb { width:56px; height:56px; box-shadow:0 6px 16px -6px rgba(0,80,200,.45); }
+.hero .state-head b { font-size:20px; line-height:25px; letter-spacing:-.4px; }
+.hero .state-head small { font-size:14px; line-height:19px; }
+.glance { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { display:inline-flex; align-items:baseline; gap:5px; padding:7px 12px; border-radius:999px; background:rgba(120,120,128,.1); color:var(--label); font-size:14px; line-height:18px; transition:transform .3s var(--bounce); }
+.chip:active { transform:scale(.94); }
+.chip b { font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; }
+.chip.orange b { color:#E07B00; }
+.chip.blue b { color:var(--blue); }
+.chip.gray b { color:var(--label-2); }
+.soon .item .when { flex:0 0 auto; min-width:86px; color:var(--blue); font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; }
+.soon .item .when::first-letter { text-transform:uppercase; }
 .state .dot { flex:0 0 10px; width:10px; height:10px; margin:0 6px; border-radius:50%; background:var(--green); box-shadow:0 0 0 5px rgba(52,199,89,.1); }
 .state.paused .dot { background:#8E8E93; box-shadow:0 0 0 5px var(--fill); }
 .row2 { display:flex; gap:8px; }
@@ -633,10 +654,10 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 
 /* the agenda: time on the left, a coloured bar, the event */
 .event-row { align-items:stretch !important; }
-.event-row .when { flex:0 0 46px; display:flex; flex-direction:column; justify-content:center; font-variant-numeric:tabular-nums; }
+.event-row .when { flex:0 0 48px; display:flex; flex-direction:column; justify-content:center; font-variant-numeric:tabular-nums; }
 .event-row .when b { font-size:15px; font-weight:600; }
 .event-row .when small { font-size:13px; color:var(--label-2); }
-.event-row .bar { flex:0 0 4px; border-radius:2px; background:var(--blue); }
+.event-row .bar { flex:0 0 4px; width:4px; border-radius:2px; background:var(--blue); }
 .day-head::first-letter { text-transform:uppercase; }
 
 /* mails: who and when on one line, the subject, Orion's summary, tags */
