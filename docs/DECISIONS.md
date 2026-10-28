@@ -4161,3 +4161,30 @@ nuit.
 - **Budget** : un seul pour la nuit ; chaque temps garde de quoi se réveiller. Un temps qui
   échoue arrête la nuit, sans note.
 - La consolidation de 3 h 30 (tri, portrait) et le réflecteur de la journée ne changent pas.
+
+## D187 — Chaque arrivée réveille Orion, et ses consignes de lieu durent
+
+*28/10/2026 · acceptée · révise D57*
+
+Le propriétaire avait relié « Maison maman » ; le téléphone envoyait bien l'arrivée, Orion
+répondait `"reminders": 0` et rien ne se passait. Le rappel avait été demandé « chez maman »,
+et un rappel de lieu ne servait qu'une fois. Il voyait les lieux autrement : le téléphone
+prévient Orion à chaque passage, et c'est Orion qui décide quoi en faire.
+
+- **Chaque arrivée ou départ réveille Orion** : une alerte de l'initiative, qu'il laisse le
+  plus souvent passer (SILENCE), et dont il ne parle que si ça change quelque chose pour lui
+  maintenant. Heures calmes et budget du jour s'appliquent ; passée une demi-heure, c'est trop
+  tard. Le signal reste une information (`OWNER_INSTANCE`), pas un ordre.
+- **Ses consignes de lieu** : une fois (comme avant), une fois jusqu'à un jour donné
+  (« aujourd'hui » ne vaut pas la semaine suivante), ou à chaque fois jusqu'à ce qu'il les
+  annule. Une consigne peut être une action, pas seulement un rappel : Orion la fait quand il
+  arrive, puis lui dit ce qu'il a fait.
+- **Ses mots, pas ceux du téléphone** : le message qui déclenche une consigne ne contient que
+  ce que le propriétaire a dit (le lieu sous son nom à lui, quoi faire) ; le téléphone ne dit
+  que quand. Il porte donc la confiance de la consigne, plafonnée à `SYSTEM`, et ce qu'elle
+  fait en interne se fait sans lui redemander. Agir dehors (écrire à sa mère) passe par le
+  gardien comme partout : Orion lui propose, en posant la consigne, de ne plus demander pour
+  cette action, bornée à qui elle vise (D168, `autonomy_grant`).
+- **Les noms** : « chez », « au », « des »… ne comptent plus (« chez maman » = « Maison
+  maman »), et une consigne pour un lieu que le téléphone n'a jamais signalé rappelle à Orion
+  les noms qu'il signale.

@@ -334,6 +334,14 @@ CASES: tuple[Case, ...] = (
         modules=("places",),
     ),
     Case(
+        name="a_chaque_fois_que_j_arrive_a_l_ecole",
+        origin="Une consigne de lieu permanente, pas un rappel unique (D187).",
+        at=paris(2026, 10, 28, 19, 0),
+        steps=(Say("À chaque fois que j'arrive à l'école, rappelle-moi de couper mon téléphone"),),
+        checks=(called_with("places", '"every":true'), avoids("remind_me")),
+        modules=("places",),
+    ),
+    Case(
         name="un_cadeau_pour_maman",
         origin="Ses goûts sont en mémoire : l'idée doit en partir.",
         at=paris(2026, 10, 20, 18, 0),
