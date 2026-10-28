@@ -4171,9 +4171,9 @@ répondait `"reminders": 0` et rien ne se passait. Le rappel avait été demand�
 et un rappel de lieu ne servait qu'une fois. Il voyait les lieux autrement : le téléphone
 prévient Orion à chaque passage, et c'est Orion qui décide quoi en faire.
 
-- **Chaque arrivée ou départ réveille Orion** : une alerte de l'initiative, qu'il laisse le
-  plus souvent passer (SILENCE), et dont il ne parle que si ça change quelque chose pour lui
-  maintenant. Heures calmes et budget du jour s'appliquent ; passée une demi-heure, c'est trop
+- **Chaque arrivée ou départ réveille Orion** : une alerte de l'initiative. Sans consigne, il
+  prend l'initiative de ce qui aiderait là (chercher, noter, poser un rappel), propose ce qui
+  touche le dehors sans le faire, et se tait quand rien ne vaut la peine. Heures calmes et budget du jour s'appliquent ; passée une demi-heure, c'est trop
   tard. Le signal reste une information (`OWNER_INSTANCE`), pas un ordre.
 - **Ses consignes de lieu** : une fois (comme avant), une fois jusqu'à un jour donné
   (« aujourd'hui » ne vaut pas la semaine suivante), ou à chaque fois jusqu'à ce qu'il les
