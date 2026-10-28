@@ -133,23 +133,3 @@ class SemanticIndex:
                 by_id[fact.id] = fact
         best = sorted(ranks, key=lambda fact_id: ranks[fact_id], reverse=True)
         return [by_id[fact_id] for fact_id in best[:limit]]
-
-    async def similar_pairs(
-        self, threshold: float = 0.8, limit: int = 40
-    ) -> list[tuple[Fact, Fact, float]]:
-        """Pairs of current facts that say nearly the same thing (duplicates, updates or
-        contradictions), most similar first. For the nightly consolidation."""
-        facts = await self._store.facts()
-        if len(facts) < 2:
-            return []
-        vectors = await self.vectors([f.statement for f in facts])
-        matrix = np.stack([vectors[f.statement] for f in facts])
-        similarity = matrix @ matrix.T
-        pairs: list[tuple[Fact, Fact, float]] = []
-        for i in range(len(facts)):
-            for j in range(i + 1, len(facts)):
-                score = float(similarity[i, j])
-                if score >= threshold:
-                    pairs.append((facts[i], facts[j], score))
-        pairs.sort(key=lambda item: item[2], reverse=True)
-        return pairs[:limit]
