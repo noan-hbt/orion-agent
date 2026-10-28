@@ -4039,3 +4039,17 @@ supprimer un mail, ni le ranger dans un dossier, ni le marquer lu ou suivi.
   par la marque inverse : pas d'approbation, comme un brouillon. Événement `mail.marked`.
 - Limites : un brouillon déjà posé ne se modifie pas (on en pose un autre) ; on ne crée pas de
   dossier.
+
+## D180 — Ses consignes reviennent quand la conversation s'en éloigne
+
+*28/10/2026 · acceptée · complète D178*
+
+Ses consignes (règles du manuel, préférences) n'étaient montrées qu'à l'ouverture de la fenêtre
+ou après une coupe. Dans une longue conversation, elles finissaient loin derrière, noyées sous
+les propres réponses d'Orion, qui reprenait peu à peu ses habitudes : « réponds en 1 à 5 mots »
+tenait au début, plus au bout d'une heure.
+
+- **Bloc `<rappel>`** : règles actives et préférences, rattaché au message du propriétaire dès
+  que plus de 6 000 tokens (`REMIND_AFTER_TOKENS`) le séparent du dernier `<memoire>` ou
+  `<rappel>`. Pas à chaque message : quelques rappels par fenêtre de 60k.
+- Rattaché au message, jamais au prompt système : le préfixe en cache reste intact.

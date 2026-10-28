@@ -94,6 +94,27 @@ async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     assert "<memoire>" in str(sent[-1]["content"]) and "très courtes" in str(sent[-1]["content"])
 
 
+async def test_his_instructions_come_back_as_a_long_conversation_drifts(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """Told once to answer in a few words, Orion slid back to long replies as the instruction
+    fell far behind in the window: it must be shown again, without breaking the cache."""
+    await memory.remember(
+        "Noan veut des réponses de 1 à 5 mots.", OWNER, category=Category.PREFERENCE
+    )
+    provider = ScriptedProvider(*[reply("r" * 2000) for _ in range(12)])
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+    for i in range(12):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 2000, "terminal", now=at(i))
+
+    contents = [str(r.messages[-1]["content"]) for r in provider.requests]
+    reminded = [c for c in contents[1:] if "<rappel>" in c]
+    assert reminded and "1 à 5 mots" in reminded[0]
+    assert len(reminded) < len(contents) - 1  # not on every message
+    assert_prefix_stable(provider)
+
+
 async def test_remember_tool_writes_memory_derived_from_the_owner_message(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:
