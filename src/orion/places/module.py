@@ -351,8 +351,12 @@ class Places:
                 key=f"place:arrival:{a.id}",
                 notice=f"Son téléphone dit qu'il {'arrive à' if a.when == 'arrive' else 'quitte'}"
                 f" « {a.place} » ({a.at.astimezone(zone):%H:%M}). Il ne t'a rien demandé pour ce "
-                "moment-là. Si ça change quelque chose pour lui maintenant (son agenda, ce qu'il "
-                "attend, ce qu'il t'a dit), dis-le-lui en une phrase ; sinon réponds SILENCE.",
+                "lieu : prends l'initiative. Regarde ce que tu sais (son agenda, ce qu'il attend, "
+                "ses engagements, ce qu'il t'a dit de ce lieu ou des gens qui y sont) et fais ce "
+                "qui l'aiderait maintenant : chercher une info, la noter, poser un rappel. Ce qui "
+                "touche le dehors (écrire à quelqu'un, son agenda), propose-le-lui sans le faire. "
+                "Puis dis-lui en une phrase ce que tu as fait ou proposes ; si rien ne vaut "
+                "vraiment la peine, réponds SILENCE.",
                 why=f"son téléphone : {'arrivé à' if a.when == 'arrive' else 'parti de'} "
                 f"« {a.place} »",
                 fallback="",
