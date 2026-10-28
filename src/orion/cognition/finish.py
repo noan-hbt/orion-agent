@@ -33,6 +33,8 @@ _OFFER = re.compile(
             r"trouve|vérifie|réserve|fais)\b[^.?!\n]*\?",
             r"\bje m'en occupe\s*\?",
             r"\b(?:on y va|on lance|je lance|j'y vais|je continue)\s*\?",
+            r"\b(?:envoie|écris|dis|tape|réponds)(?:-moi)?\s+[«\"'“ ]*"
+            r"(?:continue|go|ok|la suite)\b",
         )
     ),
     re.IGNORECASE,

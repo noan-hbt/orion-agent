@@ -28,6 +28,7 @@ from evals.harness import (
     reminder_within,
     says,
     silent_while_working,
+    spoke_while_working,
     uses,
     works_at_night,
 )
@@ -892,6 +893,21 @@ CASES: tuple[Case, ...] = (
         at=paris(2026, 10, 27, 18, 0),
         steps=(Say("Rappelle-moi demain à 9h d'appeler la mutuelle"),),
         checks=(reminder_on(date(2026, 10, 28), 9), silent_while_working()),
+    ),
+    Case(
+        name="plusieurs_etapes_plusieurs_messages_un_seul_tour",
+        origin="28/10 : il demande plusieurs étapes avec un mot à chacune ; Orion fait la "
+        "première puis « envoie 'continue' et je lance le tour 2 ». Ses mots écrits avec un "
+        "appel d'outil partent tout de suite : tout se fait dans le même tour.",
+        at=paris(2026, 10, 28, 18, 0),
+        steps=(
+            Say(
+                "Cherche la météo de demain à Paris, puis à Lyon, puis à Marseille, et "
+                "envoie-moi chaque ville dès que tu l'as"
+            ),
+        ),
+        checks=(spoke_while_working(2), never_says(r"\bcontinue\b", "asks him to say continue")),
+        live_web=True,
     ),
     Case(
         name="deux_messages_seulement_pour_deux_choses",
