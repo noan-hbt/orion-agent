@@ -4001,3 +4001,23 @@ pas.
   toujours dans le manuel (`playbook`), pas dans les ratés.
 - Limites : un raté n'apparaît que le lendemain de l'échange ; les ratés détectés avant ce
   changement ne sont pas repris. L'outil sert aussi le jour, si Orion se voit repris.
+
+## D178 — Une fenêtre de conversation deux fois plus courte
+
+*28/10/2026 · acceptée · complète D123*
+
+Pendant qu'on parle, la fenêtre montait jusqu'à 120 000 tokens estimés avant un rebase qui la
+ramenait à 60 000 : elle oscillait entre les deux, et chaque étape d'une boucle la relisait.
+La partie fixe (constitution 25 k caractères, schémas 32 k) pèse environ 15 000 tokens ; la
+fenêtre en pesait souvent quatre à huit fois plus.
+
+- **`max_window_tokens` passe à 60 000** : la fenêtre oscille entre 30 000 et 60 000, soit
+  plusieurs heures d'échanges. Ce qui sort est résumé (D43), regardé une dernière fois par la
+  mémoire (D44) et reste trouvable par `conversations_search`.
+- **Pourquoi la qualité ne baisse pas** : après une pause, Orion repart déjà de 16 000 tokens
+  et d'un résumé (D123) sans perte constatée ; 30 000 au plus bas, c'est presque deux fois
+  plus. Une fenêtre plus courte noie aussi moins la consigne du moment.
+- Le rebase revient deux fois plus souvent, mais chacun recharge une fenêtre deux fois plus
+  petite, et chaque étape entre deux en porte moitié moins.
+- Non retenu : raccourcir encore les schémas ou la constitution sans évaluation pour le
+  vérifier (D123, D158).

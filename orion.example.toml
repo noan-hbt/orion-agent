@@ -11,7 +11,7 @@ json_output = true
 [agent]
 model = "deepseek/deepseek-v4.1-flash"
 timezone = "Europe/Paris"
-max_window_tokens = 120000   # visible conversation window before a one-step rebase
+max_window_tokens = 60000    # visible conversation window before a one-step rebase
 max_steps = 40               # model calls per turn (cost and repeats stop it first)
 max_tool_calls = 80
 max_cost_usd_per_turn = 0.5

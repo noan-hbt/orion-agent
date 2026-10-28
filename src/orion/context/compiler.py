@@ -54,7 +54,7 @@ def night_hint(when: datetime) -> str:
 @dataclass(frozen=True)
 class ContextCompiler:
     constitution: str
-    max_window_tokens: int = 120_000
+    max_window_tokens: int = 60_000
     rebase_target_ratio: float = 0.5
 
     def system_message(self) -> Message:
