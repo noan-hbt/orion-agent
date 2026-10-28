@@ -3,7 +3,7 @@
 The owner can ask for a file, not only for words: « fais-moi une image de… », « envoie-moi une
 capture de la page », « mets ça dans un PDF », « télécharge le XML de leur config », « envoie-moi
 le index.php de mon dossier site ». Orion makes or fetches it, keeps it under the data directory,
-and sends it in the owner's conversation, with a short caption. Any type, 10 MiB at most.
+and sends it in the owner's conversation, alone: no caption. Any type, 10 MiB at most.
 
 - `image`: a picture made by the image model (`agent.image_model`);
 - `pdf`: a document from text Orion writes (titles, paragraphs, lists), printed to PDF by the
@@ -349,7 +349,6 @@ class SendInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     file: str = Field(description="The file id (fi_…)")
-    caption: str = Field(default="", max_length=300, description="A few words to go with it")
 
 
 class DownloadInput(BaseModel):
@@ -489,7 +488,7 @@ def file_tool(
             return ToolResult(
                 f"No channel can carry a file here; it is at {made.path}.", is_error=True
             )
-        await to_owner(made.path, args.caption, ctx.correlation_id)
+        await to_owner(made.path, "", ctx.correlation_id)
         return ToolResult(f"Envoyé : {made.name}.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
@@ -527,7 +526,7 @@ def file_tool(
             ),
             Action(
                 "send",
-                "Send a file to the owner, with a short caption.",
+                "Send a file to the owner, as it is: no caption.",
                 SendInput,
                 send,
                 accepts_untrusted_context=True,
