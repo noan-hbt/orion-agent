@@ -112,7 +112,7 @@ def may_be_alone(action: str, autonomable: list[str]) -> bool:
 
 WORKER_THREAD = "task:"
 WORKER_TOOLS = frozenset(
-    {"web_search", "web_read", "current_time", "task", "file:download", "file:pdf"}
+    {"web_search", "web_read", "task", "file:download", "file:pdf"}
     | {
         f"browser:{a}"
         for a in ("open", "click", "type", "select", "scroll", "back", "read", "close")

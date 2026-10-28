@@ -254,8 +254,10 @@ async def test_orion_can_say_a_word_before_it_has_finished(
     imessage = Outlet("imessage")
     inbox.register(imessage)
     provider.extend(
-        call_tools(("current_time", {}), text="Je regarde l'heure."),
-        call_tools(("current_time", {})),  # nothing written beside it: nothing sent
+        call_tools(("plan", {"steps": [{"text": "regarder"}]}), text="Je regarde l'heure."),
+        call_tools(
+            ("plan", {"steps": [{"text": "répondre"}]})
+        ),  # nothing written beside it: nothing sent
         reply("Il est 17h."),
     )
     worker = asyncio.create_task(inbox.run())

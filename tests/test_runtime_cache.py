@@ -52,7 +52,7 @@ def assert_prefix_stable(provider: ScriptedProvider) -> None:
 async def test_each_request_extends_the_previous_one(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
         reply("salut"),
-        call_tools(("current_time", {})),
+        call_tools(("plan", {"steps": [{"text": "un pas"}]})),
         reply("il est 17h"),
         reply("de rien"),
     )

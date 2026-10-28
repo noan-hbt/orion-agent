@@ -6,8 +6,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from orion.context.compiler import render_user_message
-from orion.tools.base import ToolContext
-from orion.tools.builtin import builtin_tools
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -22,12 +20,3 @@ def test_the_night_says_which_day_demain_is() -> None:
     )
     day = render_user_message("demain", datetime(2026, 10, 20, 9, 0, tzinfo=PARIS), "imessage")
     assert day["content"].splitlines()[0] == "[mardi 2026-10-20 09:00 · imessage]"
-
-
-async def test_current_time_says_it_too() -> None:
-    import time_machine
-
-    tool = next(t for t in builtin_tools() if t.name == "current_time")
-    with time_machine.travel(datetime(2026, 10, 20, 2, 30, tzinfo=PARIS), tick=False):
-        result = await tool.handler(tool.parse("{}"), ToolContext("owner", "c"))
-    assert result.content.endswith("· nuit : son « demain » est sans doute ce mardi 20")

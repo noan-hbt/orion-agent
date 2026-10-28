@@ -3938,3 +3938,20 @@ n'était jamais relu. Et le code décidait de ce qui méritait un regard, pas Or
   désormais après le tri du soir. `similarity` et `max_pairs` disparaissent de
   `[modules.consolidation]` : une config qui les porte encore ne démarre plus (fail closed),
   il faut les retirer.
+
+## D175 — Plus d'outil `current_time` : l'heure est dans chaque tour
+
+*28/10/2026 · acceptée*
+
+Chaque tour (propriétaire, initiative, tâche, contact) ouvre déjà son nouveau message sur
+`[mardi 2026-10-28 14:32 · canal]`, l'heure du début du tour. Mais la constitution disait
+« `current_time`, jamais deviné » : le modèle lisait cette ligne comme la date du message, pas
+comme maintenant, et payait un appel d'outil pour l'heure.
+
+- **L'outil est supprimé** ; la constitution dit que la ligne du dernier message, c'est
+  maintenant, et que celles d'avant datent les messages.
+- **Le cache ne bouge pas** : la ligne est en queue de requête, journalisée telle quelle, et le
+  message système reste fixe (`tests/test_runtime_cache.py`). Un outil de moins change le
+  registre une fois, au déploiement.
+- Limite : pendant un long tour, l'heure n'avance pas. Les tâches longues repartent à chaque
+  tour, donc avec une ligne neuve.

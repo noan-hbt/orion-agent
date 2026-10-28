@@ -12,8 +12,6 @@ from orion.guardian.policy import ActionProposal, Approval, Guardian, untrusted_
 from orion.tools.base import Effect, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 from orion.tools.builtin import builtin_tools
 
-CTX = ToolContext(thread_id="t", correlation_id="c")
-
 
 def tool(name: str) -> Tool:
     registry = ToolRegistry(builtin_tools())
@@ -22,29 +20,18 @@ def tool(name: str) -> Tool:
     return found
 
 
-async def run(name: str, **args: Any) -> ToolResult:
-    t = tool(name)
-    return await t.handler(t.input_model.model_validate(args), CTX)
-
-
-async def test_current_time_uses_requested_timezone() -> None:
-    result = await run("current_time", timezone="America/New_York")
-    assert "America/New_York" in result.content
-    assert (await run("current_time", timezone="Mars/Olympus")).is_error
-
-
 def test_registry_is_sorted_and_rejects_duplicates() -> None:
     registry = ToolRegistry(builtin_tools())
-    assert [s.name for s in registry.specs()] == ["current_time", "plan"]
+    assert [s.name for s in registry.specs()] == ["plan", "tell"]
     with pytest.raises(ValueError):
         ToolRegistry([*builtin_tools(), *builtin_tools()])
 
 
 def test_tool_parse_reports_bad_arguments() -> None:
     with pytest.raises(ToolInputError, match="JSON"):
-        tool("current_time").parse("{not json")
+        tool("plan").parse("{not json")
     with pytest.raises(ToolInputError, match="invalid arguments"):
-        tool("current_time").parse('{"timezone": 3, "extra": true}')
+        tool("plan").parse('{"steps": 3, "extra": true}')
 
 
 class _Args(BaseModel):
@@ -71,7 +58,7 @@ class _Approver:
 
 
 def proposal(t: Tool, trust: Trust = Trust.OWNER) -> ActionProposal:
-    return ActionProposal(t, _Args(to="x") if t is SEND else t.input_model(), trust, "t")
+    return ActionProposal(t, _Args(to="x") if t is SEND else t.parse('{"text": "x"}'), trust, "t")
 
 
 def test_tool_defaults_are_fail_closed() -> None:
@@ -82,7 +69,7 @@ def test_tool_defaults_are_fail_closed() -> None:
 
 async def test_guardian_allows_side_effect_free_tools_without_asking() -> None:
     approver = _Approver(answer=False)
-    decision = await Guardian(approver).decide(proposal(tool("current_time"), Trust.WEB))
+    decision = await Guardian(approver).decide(proposal(tool("tell"), Trust.WEB))
     assert decision.allowed
     assert approver.asked == []
 
