@@ -4039,3 +4039,21 @@ supprimer un mail, ni le ranger dans un dossier, ni le marquer lu ou suivi.
   par la marque inverse : pas d'approbation, comme un brouillon. Événement `mail.marked`.
 - Limites : un brouillon déjà posé ne se modifie pas (on en pose un autre) ; on ne crée pas de
   dossier.
+
+## D180 — Un plan inachevé ne laisse pas partir la réponse
+
+*28/10/2026 · acceptée · complète D97, D118*
+
+Sur une tâche longue, le modèle (GPT 6.1 vu en vrai) s'arrêtait à mi-chemin et rendait la main
+avec un compte rendu, son propre plan encore à moitié fait. Le contrôle de fin (D118) ne lit que
+la fin de la réponse (offres, promesses) : il ne voyait rien.
+
+- **Le plan est lu par la boucle** : à chaque appel de `plan`, elle garde les étapes pas encore
+  faites. Une réponse sans appel d'outil alors qu'il en reste ne part pas : Orion est renvoyé au
+  travail avec la liste, et fait les étapes ou les retire du plan en disant pourquoi.
+- **Trois fois au plus par tour, et seulement s'il a travaillé depuis** : un modèle qui répond
+  encore sans rien faire a ses raisons (étape impossible, question pour lui), sa réponse part.
+  Les plafonds de pas et de coût tiennent toujours.
+- La description de `plan` le dit, pour qu'il ne soit pas surpris.
+- Non retenu : un second modèle qui juge « fini ou pas » à chaque réponse (coût et latence à
+  chaque tour, pour un cas que le plan rend déjà visible).
