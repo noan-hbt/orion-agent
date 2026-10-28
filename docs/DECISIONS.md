@@ -4104,3 +4104,19 @@ générique, et la barre de l'agenda mangeait la moitié de chaque ligne.
   Il remplace l'anneau et les trois étincelles. Le dessin a été fait par Codex, en trois séries
   de variantes, et choisi par le propriétaire.
 - Le texte entre backquotes s'affiche en code dans les messages, au lieu de montrer les `.
+
+## D184 — Ses consignes, sous leur nom et plus tôt
+
+*28/10/2026 · acceptée · complète D181*
+
+Avec le `<rappel>` de D181 déployé, Orion lâchait encore son manuel (« réponds en 1 à 5 mots »)
+au fil de la conversation. Trois défauts :
+
+- **Le nom** : partout ailleurs, un « rappel » est un minuteur, et la constitution ne disait rien
+  du bloc. Il devient `<consignes>`, et la constitution dit qu'il remet le manuel sous les yeux
+  d'Orion, à appliquer à sa réponse.
+- **Le seuil** : 6 000 tokens, c'est des dizaines d'échanges quand les réponses sont courtes, et
+  la dérive commence bien avant. Le bloc revient aussi après 6 messages du propriétaire
+  (`REMIND_AFTER_MESSAGES`), au premier des deux seuils atteint.
+- **Les lecteurs hors conversation** (brief vocal, vérificateur) lisaient le bloc comme une parole
+  du propriétaire : il est retiré comme `<memoire>`.

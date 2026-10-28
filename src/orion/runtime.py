@@ -165,7 +165,9 @@ class SituationSource(Protocol):
 
 
 REMIND_AFTER_TOKENS = 6000
-"""His standing instructions come back once this much conversation separates them from now."""
+REMIND_AFTER_MESSAGES = 6
+"""His standing instructions come back once this much conversation, or this many of his
+messages, separate them from now: short replies drift long before the tokens add up (D184)."""
 SITUATION_DAYS = 3
 """Commitments due within this many days are shown as he writes."""
 SITUATION_LINES = 20
@@ -918,12 +920,15 @@ class Orion:
                     for i in range(len(window) - 1, -1, -1)
                     if window[i].get("role") == "user"
                     and any(
-                        t in str(window[i].get("content") or "") for t in ("<memoire>", "<rappel>")
+                        t in str(window[i].get("content") or "")
+                        for t in ("<memoire>", "<consignes>")
                     )
                 ),
                 0,
             )
-            if estimate_tokens(window[held:]) > REMIND_AFTER_TOKENS:
+            since = window[held + 1 :]
+            asked = sum(1 for m in since if m.get("role") == "user")
+            if asked >= REMIND_AFTER_MESSAGES or estimate_tokens(since) > REMIND_AFTER_TOKENS:
                 reminder = reminder_block(rules, await store.facts())
                 if reminder:
                     blocks.append(reminder)

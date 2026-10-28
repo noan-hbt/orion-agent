@@ -931,4 +931,25 @@ CASES: tuple[Case, ...] = (
             ),
         ),
     ),
+    Case(
+        name="consigne_tenue_jusqu_au_bout",
+        origin="28/10 : « réponds en 1 à 5 mots » tenait au début, plus au bout de quelques "
+        "échanges, même avec le rappel des consignes (D181, D184).",
+        at=paris(2026, 10, 28, 18, 0),
+        facts=("S'appelle Noan.",),
+        rules=("Réponds en 1 à 5 mots, jamais plus, sauf s'il demande des détails.",),
+        steps=(
+            Say("Salut"),
+            Say("Tu fais quoi ce soir ?"),
+            Say("C'est quoi la capitale de l'Australie ?"),
+            Say("Et pourquoi pas Sydney ?"),
+            Say("Tu préfères les chats ou les chiens ?"),
+            Say("Pourquoi ?"),
+            Say("Raconte-moi ta journée"),
+            Say("Qu'est-ce que tu penses de l'IA ?"),
+            Say("Tu me conseilles quoi comme film ce soir ?"),
+            Say("Pourquoi celui-là ?"),
+        ),
+        checks=(at_most(60),),
+    ),
 )

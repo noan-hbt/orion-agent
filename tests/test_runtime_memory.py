@@ -109,9 +109,28 @@ async def test_his_instructions_come_back_as_a_long_conversation_drifts(
         await orion.handle_owner_message("t1", f"message {i} " + "x" * 2000, "terminal", now=at(i))
 
     contents = [str(r.messages[-1]["content"]) for r in provider.requests]
-    reminded = [c for c in contents[1:] if "<rappel>" in c]
+    reminded = [c for c in contents[1:] if "<consignes>" in c]
     assert reminded and "1 à 5 mots" in reminded[0]
     assert len(reminded) < len(contents) - 1  # not on every message
+    assert_prefix_stable(provider)
+
+
+async def test_his_instructions_come_back_in_a_short_conversation_too(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """With short replies, 6k tokens took dozens of exchanges: the drift started long before
+    the reminder came (D184)."""
+    await memory.remember(
+        "Noan veut des réponses de 1 à 5 mots.", OWNER, category=Category.PREFERENCE
+    )
+    provider = ScriptedProvider(*[reply("ok") for _ in range(8)])
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+    for i in range(8):
+        await orion.handle_owner_message("t1", f"message {i}", "terminal", now=at(i))
+
+    contents = [str(r.messages[-1]["content"]) for r in provider.requests]
+    assert any("<consignes>" in c and "1 à 5 mots" in c for c in contents[1:])
     assert_prefix_stable(provider)
 
 
