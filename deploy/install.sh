@@ -98,6 +98,7 @@ chmod 0640 "$ROOT"/config/orion.toml*
 
 echo "==> services"
 install -m 0644 "$HERE"/orion-*.service "$HERE"/orion-*.timer /etc/systemd/system/
+ln -sfn "$ROOT/app/deploy/orion-admin" /usr/local/bin/orion  # `orion …` from any shell
 # Orion is root through sudo (D164); a sudoers file is checked before it is put in place.
 visudo -cqf "$HERE/orion-core.sudoers"
 install -m 0440 -o root -g root "$HERE/orion-core.sudoers" /etc/sudoers.d/orion-core

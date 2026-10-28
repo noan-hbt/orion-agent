@@ -4120,3 +4120,20 @@ au fil de la conversation. Trois défauts :
   (`REMIND_AFTER_MESSAGES`), au premier des deux seuils atteint.
 - **Les lecteurs hors conversation** (brief vocal, vérificateur) lisaient le bloc comme une parole
   du propriétaire : il est retiré comme `<memoire>`.
+
+## D185 — Le manuel entier, et sa façon de parler d'abord
+
+*28/10/2026 · acceptée · complète D21, D184*
+
+Son manuel réel comptait 36 règles, environ 7 000 caractères. Deux choses le faisaient perdre :
+
+- **Coupé à l'ouverture** : `<memoire>` était plafonné à 2 400 caractères, règles comprises, les
+  plus anciennes d'abord. Ses règles de style, les plus récentes, tombaient après le « - … » et
+  revenaient dans `<manuel>`, présentées comme des changements à signaler. Le manuel entre
+  maintenant toujours entier ; le plafond ne borne que les faits et les engagements.
+- **Contredit par la constitution** : « trois mots appellent une ou deux phrases », des
+  exemples en phrases complètes, « de l'humour seulement quand il vient tout seul ». La
+  façon de parler est désormais dite par son manuel ; la constitution ne donne qu'un défaut qui
+  cède à la moindre de ses règles, et ses exemples montrent quoi faire, plus quel style.
+
+Sur le serveur, `orion` lance `orion-admin` (sous le bon utilisateur, avec ses secrets).

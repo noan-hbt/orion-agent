@@ -134,6 +134,24 @@ async def test_his_instructions_come_back_in_a_short_conversation_too(
     assert_prefix_stable(provider)
 
 
+async def test_a_long_playbook_opens_the_window_whole(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """With 36 rules, the newest (his style) fell past the size cap of <memoire> and came back
+    in <manuel> as changes to mention, not as his instructions (D185)."""
+    for i in range(30):
+        await memory.learn_rule(f"Règle numéro {i} : " + "détail " * 20, OWNER)
+    await memory.learn_rule("Réponds en 1 à 5 mots.", OWNER)
+    provider = ScriptedProvider(reply("ok"))
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+    await orion.handle_owner_message("t1", "salut", "terminal", now=at(0))
+
+    first = str(provider.requests[0].messages[-1]["content"])
+    memoire = first[first.index("<memoire>") : first.index("</memoire>")]
+    assert "1 à 5 mots" in memoire and "<manuel>" not in first
+
+
 async def test_remember_tool_writes_memory_derived_from_the_owner_message(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:

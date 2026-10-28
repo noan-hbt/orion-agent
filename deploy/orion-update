@@ -32,6 +32,7 @@ deploy() {
     uv sync --frozen --no-dev -q
     chmod -R a+rX "$APP" "$ROOT/python"
     install -m 0644 "$APP"/deploy/orion-*.service "$APP"/deploy/orion-*.timer /etc/systemd/system/
+    ln -sfn "$APP/deploy/orion-admin" /usr/local/bin/orion
     # Root through sudo (D164), checked first; a version without it takes it away again.
     if [ -f "$APP/deploy/orion-core.sudoers" ]; then
         visudo -cqf "$APP/deploy/orion-core.sudoers" || return 1

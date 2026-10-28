@@ -51,19 +51,20 @@ def snapshot_block(
     portrait: str | None = None,
 ) -> str | None:
     """Core memory shown once at the start of a conversation window: his portrait (D144), then
-    the playbook, which changes how Orion behaves, then what it knows."""
+    the playbook, which changes how Orion behaves, then what it knows. The playbook is always
+    whole: `max_chars` bounds only the facts and commitments (D185)."""
     core = [f for f in facts if f.category in {Category.PROFILE, Category.PREFERENCE}]
-    lines: list[str] = []
+    lines = [*(format_rule(r) for r in rules), *(format_setting(c) for c in settings)]
+    known: list[str] = []
     for line in [
-        *(format_rule(r) for r in rules),
-        *(format_setting(c) for c in settings),
         *(format_fact(f) for f in core),
         *(format_commitment(c) for c in commitments),
     ]:
-        if sum(len(x) + 1 for x in lines) + len(line) > max_chars:
-            lines.append("- …")
+        if sum(len(x) + 1 for x in known) + len(line) > max_chars:
+            known.append("- …")
             break
-        lines.append(line)
+        known.append(line)
+    lines += known
     if portrait:
         lines.insert(0, portrait)
     if not lines:

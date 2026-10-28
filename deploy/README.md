@@ -71,8 +71,9 @@ depuis ton téléphone la commande de connexion qu'il affiche, et redémarre :
 `sudo systemctl restart orion-guardian orion-core`.
 
 `orion-admin` lance une commande `orion` sous l'utilisateur du gardien, avec ses secrets
-(`federation invite`, `inkbox calls`…). Avec `--core`, il la lance sous celui du cœur
-(`doctor`, `memory`, `chat`).
+(`federation invite`, `inkbox calls`…). Avec `--core`, il la lance sous celui du cœur, où vont
+d'office `doctor`, `memory` et `chat`. Il est installé comme `/usr/local/bin/orion` : sur le
+serveur, `orion memory` suffit.
 
 ## L'app sur l'iPhone
 
