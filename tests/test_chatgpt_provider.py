@@ -151,6 +151,7 @@ async def test_tool_call_is_returned_in_the_journaled_chat_shape(tmp_path: Path)
     body = sent[0]
     assert body["store"] is False and body["stream"] is True
     assert body["prompt_cache_key"] == "conv-1"
+    assert body["prompt_cache_retention"] == "24h"  # the cache outlives a pause
     assert body["reasoning"] == {"effort": "low"}
     assert body["tools"][0]["name"] == "weather"
     assert "temperature" not in body and "max_output_tokens" not in body  # refused by the plan
@@ -244,6 +245,26 @@ async def test_used_up_plan_is_not_retried_and_pictures_are_refused(tmp_path: Pa
     with pytest.raises(ProviderError, match="pictures"):
         await provider.complete(request.model_copy(update={"image_output": True}))
     await provider.aclose()
+
+
+async def test_model_refusing_long_cache_is_asked_without_it(tmp_path: Path) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if "prompt_cache_retention" in body:
+            return httpx.Response(400, json={"error": {"param": "prompt_cache_retention"}})
+        return _sse(_completed())
+
+    provider = _provider(tmp_path, handler)
+    request = ModelRequest(
+        model="gpt-6-luna", messages=[{"role": "user", "content": "hi"}], session_id="conv-1"
+    )
+    await provider.complete(request)
+    await provider.complete(request)
+    await provider.aclose()
+    assert ["prompt_cache_retention" in b for b in sent] == [True, False, False]
 
 
 async def test_rejected_token_is_refreshed_then_retried(tmp_path: Path) -> None:

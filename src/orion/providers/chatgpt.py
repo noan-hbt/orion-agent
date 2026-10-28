@@ -42,6 +42,9 @@ _PLAN_EXHAUSTED = {
     "subscription_sharing_usage_unavailable",
 }
 _EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
+RETENTION = "24h"
+"""How long a conversation's prompt cache is kept. By default OpenAI drops it after 5 to 10
+minutes without requests: nearly every turn after a pause read the whole conversation again."""
 
 
 def _content(content: object) -> object:
@@ -152,6 +155,8 @@ class ChatGPTProvider:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         self._max_attempts = max_attempts
         self._max_backoff = max_backoff
+        self._short_cache: set[str] = set()
+        """Models that refused the long cache retention: asked without it from then on."""
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -166,6 +171,16 @@ class ChatGPTProvider:
             try:
                 response = await self._stream(body, attempt)
             except ProviderError as exc:
+                if (
+                    exc.status == 400
+                    and "prompt_cache_retention" in body
+                    and "prompt_cache_retention" in str(exc)
+                ):
+                    log.warning("provider.short_cache", model=request.model, error=str(exc))
+                    self._short_cache.add(request.model)
+                    body.pop("prompt_cache_retention", None)
+                    attempt -= 1
+                    continue
                 if not exc.retryable or attempt >= self._max_attempts:
                     raise
                 base = min(self._max_backoff, 0.5 * 2 ** (attempt - 1))
@@ -213,6 +228,8 @@ class ChatGPTProvider:
                 body["tool_choice"] = "none"
         if request.session_id:
             body["prompt_cache_key"] = request.session_id
+            if request.model not in self._short_cache:
+                body["prompt_cache_retention"] = RETENTION
         effort = (
             _EFFORT[request.reasoning_effort] if request.reasoning_effort else self._default_effort
         )
