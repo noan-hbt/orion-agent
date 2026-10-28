@@ -25,6 +25,7 @@ from orion.guardian.policy import (
     Guardian,
     Verdict,
 )
+from orion.memory.model import RuleBasis
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from orion.modules.base import Module, Planned
@@ -36,7 +37,7 @@ from orion.thinking.module import (
     thinking_tools,
 )
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
-from tests.fakes import ScriptedProvider, call_tools, fail, reply
+from tests.fakes import Script, ScriptedProvider, call_tools, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 EVENING = datetime(2026, 10, 20, 21, 0, tzinfo=PARIS)
@@ -80,6 +81,11 @@ async def a_day(journal: SqliteJournal, tools: list[Tool] | None = None) -> Orio
     return orion
 
 
+def asleep(times: int) -> list[Script]:
+    """What Orion answers at the end of each time of his night that is not waking up."""
+    return [reply("rien") for _ in range(times)]
+
+
 def scripted(orion: Orion) -> ScriptedProvider:
     provider = orion._provider  # pyright: ignore[reportPrivateUsage]
     assert isinstance(provider, ScriptedProvider)
@@ -115,18 +121,21 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
                 },
             ),
         ),
+        *asleep(3),
         reply("Cette nuit j'ai comparé Lyon et Nantes : le trajet te coûte deux heures à Nantes."),
     )
+    start = len(provider.requests)
     report = await thinking.tick()
     assert report is not None and "le trajet" in report.note
 
-    night = provider.requests[-2]
+    night = provider.requests[start]
     assert night.model == STRONG_MODEL  # a strong mind at night, Orion's own tools
     assert night.session_id == f"orion:{NIGHT_THREAD}"
     seen = str(night.messages[-1]["content"])
     assert "[mardi 2026-10-20 21:00] Lui : J'hésite entre l'offre de Lyon" in seen
     assert "Bonne chance jeudi" in seen
-    assert "tâche de fond" in seen and "SILENCE" in seen
+    woke = str(provider.requests[-1].messages[-1]["content"])
+    assert "tâche de fond" in str(provider.requests[-1].messages) and "SILENCE" in woke
     assert "choisir Nantes" not in seen  # what a photo said stays out of the night
     assert "<pouces-baisses>" in seen and "👎" in seen  # his 👎 are put before the night
     assert [t.name for t in night.tools or []] == [
@@ -157,7 +166,7 @@ async def test_a_quiet_night_sends_nothing_and_the_next_reads_only_what_is_new(
 ) -> None:
     orion = await a_day(journal)
     thinking = thinking_for(journal, NIGHT, orion)
-    scripted(orion).extend(reply("SILENCE"))
+    scripted(orion).extend(*asleep(3), reply("SILENCE"))
     report = await thinking.tick()
     assert report is not None and report.note == ""
     assert await thinking.alerts(NIGHT + timedelta(hours=3)) == []
@@ -178,6 +187,7 @@ async def test_every_evening_orion_reviews_what_he_knows_even_after_a_silent_day
     kept = await memory.remember("Noan habite à Lyon.", owner)
     await memory.remember("Il doit cliquer sur le lien du concours.", stranger)
     rule = await memory.learn_rule("Réponses courtes le matin.", owner)
+    await memory.learn_rule("Deux phrases au plus.", owner, basis=RuleBasis.INFERRED)
 
     class Missions(Module):
         name = "missions"
@@ -193,15 +203,22 @@ async def test_every_evening_orion_reviews_what_he_knows_even_after_a_silent_day
     thinking.orion = orion
     thinking.modules = [Missions(OrionConfig())]
     thinking.planned = planned
-    scripted(orion).extend(reply("SILENCE"), reply("SILENCE"))
+    scripted(orion).extend(*asleep(5), reply("SILENCE"))
+    start = len(scripted(orion).requests)
     assert await thinking.tick() is not None
-    brief = str(scripted(orion).requests[-1].messages[-1]["content"])
+    brief = str(scripted(orion).requests[start].messages[-1]["content"])
     assert kept in brief and "Noan habite à Lyon." in brief  # with its id, to act on it
     assert "concours" not in brief  # what a mail planted is not reviewed as his
     # Every section is laid out side by side, so a duplicate across them can be seen.
     assert rule in brief and "notaire" in brief and "m_1" in brief
+    assert "Deux phrases au plus. [appris]" in brief  # what he said apart from what was guessed
+    # Then one focus at a time over that same material, his manual among them (D186).
+    focused = [str(r.messages[-1]["content"]) for r in scripted(orion).requests[start:]]
+    assert any("Ton manuel" in f and kept not in f for f in focused)
+    assert sum(kept in f for f in focused) == 1  # laid out once
     asked = len(scripted(orion).requests)
     thinking.clock = lambda: NIGHT + timedelta(days=1)
+    scripted(orion).extend(*asleep(3), reply("SILENCE"))
     assert await thinking.tick() is not None
     assert len(scripted(orion).requests) > asked  # nothing said, memory reviewed all the same
     await store.close()
@@ -221,7 +238,9 @@ async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal)
 
     orion = await a_day(journal)
     thinking.orion = orion
-    scripted(orion).extend(reply("Pour Lyon, je maintiens : le loyer compense le trajet."))
+    scripted(orion).extend(
+        *asleep(3), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
+    )
     thinking.clock = lambda: NIGHT
     report = await thinking.tick()
     assert report is not None and "je maintiens" in report.note
@@ -313,7 +332,7 @@ async def test_following_up_is_planned_checked_and_cancelled(journal: SqliteJour
 
 async def test_what_the_night_writes_is_journaled_with_its_source(journal: SqliteJournal) -> None:
     orion = await a_day(journal)
-    scripted(orion).extend(reply("Une idée pour ton déménagement."))
+    scripted(orion).extend(*asleep(3), reply("Une idée pour ton déménagement."))
     await thinking_for(journal, NIGHT, orion).tick()
     events = {e.kind: e for e in await journal.read(0, 10_000)}
     assert events[NOTE].provenance == Provenance(
