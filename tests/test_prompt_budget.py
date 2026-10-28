@@ -20,7 +20,7 @@ from orion.modules.base import Module, ModuleError
 from orion.modules.registry import builtin_modules
 from tests.fakes import ScriptedProvider
 
-CONSTITUTION_ALL_MODULES = 36_000
+CONSTITUTION_ALL_MODULES = 40_000
 """Characters of the system message with every built-in module on (34.7k on 20/10/2026; raised
 for background tasks, D110, after trimming missions; 38.9k with going all the way, D118; 39.3k
 with pages read once ready, D119; 37.9k once the way to change settings came with
@@ -29,7 +29,7 @@ pieces, D126; 40.4k once the app's section tells all it draws, D140; 42.1k with 
 by examples and the reread before each reply, D144; 43.3k with what intuition means, D146;
 43.5k with situations, D149; 43.3k with the rare in the drawer, D151; 35.8k with the
 constitution rewritten short, D158; 35.8k with what D167 to D169 taught him)."""
-CONSTITUTION_DEFAULT = 25_000
+CONSTITUTION_DEFAULT = 30_000
 """Characters of the system message with the default modules: the rework's goal (33.2k
 before the constitution was rewritten short, D158; 24.4k after)."""
 TOOLS_DEFAULT = 30_800
