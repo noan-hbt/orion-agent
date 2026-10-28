@@ -78,6 +78,18 @@ def recall_block(facts: list[Fact]) -> str | None:
     return "<souvenirs>\n" + "\n".join(format_fact(f) for f in facts) + "\n</souvenirs>"
 
 
+def reminder_block(rules: Sequence[Rule], facts: list[Fact]) -> str | None:
+    """His standing instructions shown again once the window has drifted far from where they
+    were last shown: a long conversation otherwise slides back to the model's own habits."""
+    lines = [format_rule(r) for r in rules if r.active]
+    lines += [format_fact(f) for f in facts if f.category == Category.PREFERENCE and f.current]
+    if not lines:
+        return None
+    return (
+        "<rappel>\nCe qu'il t'a demandé, toujours en vigueur :\n" + "\n".join(lines) + "\n</rappel>"
+    )
+
+
 def playbook_delta(
     rules: Sequence[Rule], settings: Sequence[SettingChange], shown: str
 ) -> str | None:

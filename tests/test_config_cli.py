@@ -12,7 +12,23 @@ from orion.config import OrionConfig, SecretRef, load_config
 
 def test_defaults_when_no_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ORION_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("ORION_CONFIG", raising=False)
     assert load_config() == OrionConfig()
+
+
+def test_orion_runs_from_any_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "orion.toml").write_text('instance = "orion-home"\n')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    monkeypatch.setenv("ORION_HOME", str(home))
+    monkeypatch.delenv("ORION_CONFIG", raising=False)
+    config = load_config()
+    assert config.instance == "orion-home"
+    assert config.data_dir == home / "data"
 
 
 def test_load_resolves_relative_data_dir(tmp_path: Path) -> None:

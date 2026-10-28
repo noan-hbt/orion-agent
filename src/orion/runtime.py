@@ -37,7 +37,7 @@ from orion.cognition.loop import (
     run_agent,
 )
 from orion.config import AgentConfig
-from orion.context.compiler import ContextCompiler, render_user_message
+from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
 from orion.context.summary import sides, summarize, summary_block
 from orion.context.threads import (
@@ -55,7 +55,7 @@ from orion.guardian.policy import TRUSTED_FLOOR, Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
 from orion.memory.portrait import Portrait, portrait_block
-from orion.memory.render import playbook_delta, recall_block, snapshot_block
+from orion.memory.render import playbook_delta, recall_block, reminder_block, snapshot_block
 from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, ToolCall, Usage, cache_minutes
@@ -164,6 +164,8 @@ class SituationSource(Protocol):
         ...
 
 
+REMIND_AFTER_TOKENS = 6000
+"""His standing instructions come back once this much conversation separates them from now."""
 SITUATION_DAYS = 3
 """Commitments due within this many days are shown as he writes."""
 SITUATION_LINES = 20
@@ -888,8 +890,9 @@ class Orion:
 
     async def _memory_blocks(self, text: str, window: list[Message], cut: bool) -> list[str]:
         """Memory to attach to this message: core memory and the playbook when a window starts
-        or was just cut (the opening that held them is gone), then playbook changes and
-        relevant facts not already visible in the window. Appended to the user message, never
+        or was just cut (the opening that held them is gone), his standing instructions again
+        once they lie far back, then playbook changes and relevant facts not already visible
+        in the window. Appended to the user message, never
         to the system prompt, so the cached prefix is untouched."""
         if self._memory is None:
             return []
@@ -908,6 +911,22 @@ class Orion:
             )
             if snapshot:
                 blocks.append(snapshot)
+        else:
+            held = next(
+                (
+                    i
+                    for i in range(len(window) - 1, -1, -1)
+                    if window[i].get("role") == "user"
+                    and any(
+                        t in str(window[i].get("content") or "") for t in ("<memoire>", "<rappel>")
+                    )
+                ),
+                0,
+            )
+            if estimate_tokens(window[held:]) > REMIND_AFTER_TOKENS:
+                reminder = reminder_block(rules, await store.facts())
+                if reminder:
+                    blocks.append(reminder)
         shown = "\n".join(str(m.get("content") or "") for m in window) + "\n".join(blocks)
         delta = playbook_delta(rules, settings, shown)
         if delta:
