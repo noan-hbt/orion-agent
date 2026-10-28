@@ -81,7 +81,7 @@ class ChatGPTConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = Field(
         default="low",
         description="How long the models think when a call asks nothing; none: the model's own",
     )
@@ -136,7 +136,7 @@ class AgentConfig(BaseModel):
         ge=0,
         description="Times an owner's turn out of steps goes on (he is told) instead of stopping",
     )
-    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = Field(
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = Field(
         default=None,
         description="How long the model thinks before each step of a turn; none: its own default",
     )
