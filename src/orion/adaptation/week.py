@@ -77,7 +77,12 @@ class Week:
             ],
             "corrected": self.corrected,
             "misses": [
-                {"at": m.at.isoformat(), "how": m.how, "asked": m.asked[:300], "said": m.said[:300]}
+                {
+                    "at": m.at.isoformat(),
+                    "why": m.why[:300],
+                    "asked": m.asked[:300],
+                    "said": m.said[:300],
+                }
                 for m in self.misses[-10:]
             ],
             "cost_usd": round(self.cost_usd, 2),
@@ -118,7 +123,7 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
                 found.background_usd += cost
             session = str(payload.get("session", "?")).removeprefix("orion:")
             found.cost_by[session] = found.cost_by.get(session, 0.0) + cost
-    found.misses = [m for m in misses(events, zone, end) if found.start <= m.at < end]
+    found.misses = [m for m in misses(events, zone) if found.start <= m.at < end]
     return found
 
 
@@ -147,11 +152,9 @@ def report(this: Week, before: Week) -> str:
         f"sur {this.tool_calls} appels."
     )
     lines += [f"  - {tool} : {count}" for tool, count in this.tool_errors.most_common(8)]
-    lines.append(
-        f"Réponses corrigées (👎 ou ses mots) : {versus(this.corrected, before.corrected)}."
-    )
+    lines.append(f"Ratés relevés le soir : {versus(this.corrected, before.corrected)}.")
     lines += [
-        f"  - {m.at:%a %d/%m %H:%M} · {m.how} : {(m.said or m.answered)[:120]}"
+        f"  - {m.at:%a %d/%m %H:%M} : {(m.why or m.said or m.answered)[:120]}"
         for m in this.misses[-5:]
     ]
     lines.append(

@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+from orion.adaptation.misses import as_case, misses
+from orion.adaptation.signals import reaction_event
 from orion.config import STRONG_MODEL, AgentConfig, OrionConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
@@ -91,6 +93,7 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
     orion = await a_day(journal, thinking_tools(thinking))
     thinking.orion = orion
     provider = scripted(orion)
+    await journal.append([reaction_event("remote-1", "dislike", None, "r1", "imessage:conv")])
     provider.extend(
         call_tools(
             (
@@ -100,7 +103,17 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
                     "at": "2026-10-22 15:00",
                     "question": "Alors, cet entretien ?",
                 },
-            )
+            ),
+            (
+                "missed",
+                {
+                    "at": "2026-10-20 21:00",
+                    "asked": "J'hésite entre l'offre de Lyon et celle de Nantes",
+                    "answered": "Les deux se valent sur le salaire.",
+                    "said": "👎",
+                    "why": "Je lui ai renvoyé la question au lieu de comparer.",
+                },
+            ),
         ),
         reply("Cette nuit j'ai comparé Lyon et Nantes : le trajet te coûte deux heures à Nantes."),
     )
@@ -115,12 +128,17 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
     assert "Bonne chance jeudi" in seen
     assert "tâche de fond" in seen and "SILENCE" in seen
     assert "choisir Nantes" not in seen  # what a photo said stays out of the night
+    assert "<pouces-baisses>" in seen and "👎" in seen  # his 👎 are put before the night
     assert [t.name for t in night.tools or []] == [
         "follow_up",
         "follow_up_cancel",
         "follow_ups",
+        "missed",
         "think_later",
     ]
+    (miss,) = misses(await journal.read(0, 100_000), PARIS)  # « Mes ratés », as the night saw it
+    assert "comparer" in miss.why and miss.at.hour == 21
+    assert "Say(\"J'hésite entre l'offre de Lyon" in as_case(miss, "rate")
     (follow_up,) = thinking.state.follow_ups.values()  # planned by Orion himself, with his tool
     assert follow_up.about == "son entretien"
     assert await thinking.tick() is None  # once a night

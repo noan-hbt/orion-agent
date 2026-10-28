@@ -3982,3 +3982,22 @@ rubriques lui était invisible. Au-delà de 400 souvenirs, elle ne relisait que 
   ancien : tout est relu en quelques soirs, sans curseur à journaliser.
 - Limite : les notes d'une mission qui a lu le web ne sont pas posées (confiance) ; son but
   l'est. Les anniversaires et rythmes ne portent pas de confiance propre.
+
+## D177 — Ses ratés, c'est Orion qui les relève le soir (remplace la détection de D152)
+
+*28/10/2026 · acceptée · complète D152 et D174*
+
+« Mes ratés » se remplissait par regex : un 👎, ou un message qui commençait par « non » ou
+disait « c'est pas ça » juste après une réponse. Un « non » ordinaire passait pour une
+correction, une correction tournée autrement passait à côté, et rien ne disait ce qui n'allait
+pas.
+
+- **La passe du soir juge** : elle relit la journée, et ses 👎 depuis la veille lui sont
+  posés avec le message visé (`<pouces-baisses>`). Pour chaque échange raté (repris, répété,
+  agacé, 👎), elle appelle `missed` : quand, ce qu'il avait demandé, ce qu'Orion a répondu,
+  comment il l'a montré, et ce qui n'allait pas. Un simple changement d'avis n'en est pas un.
+- **Événement `adaptation.missed`**, à la confiance du tour qui l'écrit. `orion misses`,
+  `orion week` et l'app lisent ces événements ; plus aucune regex. La leçon qu'il en tire va
+  toujours dans le manuel (`playbook`), pas dans les ratés.
+- Limites : un raté n'apparaît que le lendemain de l'échange ; les ratés détectés avant ce
+  changement ne sont pas repris. L'outil sert aussi le jour, si Orion se voit repris.

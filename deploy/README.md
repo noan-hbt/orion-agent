@@ -88,7 +88,7 @@ Réglages, et ce qui compte se signe avec Face ID :
 - les **téléphones** : en ajouter un, en retirer un ;
 - les **mots de passe** : un par un, ou l'import d'un export CSV ;
 - la **bibliothèque** : tes notes (.md, .txt) ;
-- **mes ratés** : tes 👎 et tes corrections ;
+- **mes ratés** : ce qu'Orion a relevé le soir de ce qu'il a raté (tes 👎, tes corrections) ;
 - la version et les mises à jour, qui se font seules.
 
 Une passkey est liée au nom du serveur (`public_url`) : avec `sslip.io`, si l'IP du VPS change

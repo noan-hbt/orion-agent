@@ -112,33 +112,6 @@ async def test_only_his_messages_are_checked(journal: SqliteJournal) -> None:
     assert len(provider.requests) == 1
 
 
-async def test_his_corrections_are_found_and_become_a_case(journal: SqliteJournal) -> None:
-    """D152: what went wrong for real, from his own words, as the start of an eval case."""
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-
-    from orion.adaptation.misses import as_case, corrects, misses
-
-    assert corrects("non, c'est pas ça que je voulais") and corrects("tu t'es trompé de jour")
-    assert not corrects("super, merci !")
-    provider = ScriptedProvider(
-        reply("C'est lancé : une mission toutes les 6 h."), reply("Pardon.")
-    )
-    orion = make_orion(journal, provider)
-    await orion.start()
-    await orion.handle_owner_message(
-        OWNER_THREAD, "le resto est ouvert ce soir ?", "app", now=at(0)
-    )
-    await orion.handle_owner_message(
-        OWNER_THREAD, "non c'est pas ce que je voulais, réponds juste", "app", now=at(1)
-    )
-    zone = ZoneInfo("Europe/Paris")
-    (miss,) = misses(await journal.read(0, 100_000), zone, datetime.now(zone))
-    assert miss.asked == "le resto est ouvert ce soir ?" and "toutes les 6 h" in miss.answered
-    case = as_case(miss, "rate")
-    assert "Say('le resto est ouvert ce soir ?')" in case and "judged(" in case
-
-
 async def test_tell_reaches_him_while_the_turn_goes_on(journal: SqliteJournal) -> None:
     provider = ScriptedProvider(
         call_tools(("tell", {"text": "Paris : 18°, soleil."}), ("echo", {"text": "Lyon"})),

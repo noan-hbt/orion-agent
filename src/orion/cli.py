@@ -317,8 +317,7 @@ async def _reminders(config: OrionConfig, args: argparse.Namespace) -> int:
 
 
 async def _misses(config: OrionConfig, case: int | None) -> int:
-    """What went wrong for real (D152): his 👎 and his corrections, with what Orion answered."""
-    from datetime import datetime
+    """What went wrong for real (D152, D177), as the evening pass noted it."""
     from zoneinfo import ZoneInfo
 
     from orion.adaptation.misses import as_case, misses
@@ -326,7 +325,7 @@ async def _misses(config: OrionConfig, case: int | None) -> int:
     zone = ZoneInfo(config.agent.timezone)
     async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
         events = await journal.read(0, 10_000_000)
-    found = misses(events, zone, datetime.now(zone))
+    found = misses(events, zone)
     if case is not None:
         if not 1 <= case <= len(found):
             print(f"Pas de raté n°{case} ({len(found)} en tout).")
@@ -334,10 +333,10 @@ async def _misses(config: OrionConfig, case: int | None) -> int:
         print(as_case(found[case - 1], f"rate_du_{found[case - 1].at:%d_%m}"))
         return 0
     if not found:
-        print("Aucun raté repéré (ni 👎, ni correction de sa part).")
+        print("Aucun raté relevé (la passe du soir les note).")
         return 0
     for index, miss in enumerate(found, 1):
-        print(f"{index}. {miss.at:%d/%m %H:%M} · {miss.how}")
+        print(f"{index}. {miss.at:%d/%m %H:%M} · {miss.why}")
         if miss.asked:
             print(f"   lui : {miss.asked[:200]}")
         print(f"   Orion : {miss.answered[:300]}")
@@ -1043,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
     revoke = federation_sub.add_parser("revoke", help="End a pairing")
     revoke.add_argument("peer", help="Name or instance")
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
-    missed = sub.add_parser("misses", help="What went wrong for real: his 👎 and corrections")
+    missed = sub.add_parser("misses", help="What went wrong for real, as the evening pass noted it")
     missed.add_argument("--case", type=int, help="Write miss N as an evaluation case")
     sub.add_parser("week", help="The week: turns stopped short, tool errors, corrections, cost")
     contacts = sub.add_parser("contacts", help="His address book")

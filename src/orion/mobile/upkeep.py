@@ -3,7 +3,7 @@
 The owner never logs in to his server any more. What only `orion …` on the server did is here,
 in the app's Serveur screen:
 
-- **his misses** (D152): his 👎 and his corrections, with what Orion had answered; and the
+- **his misses** (D152, D177): what the evening pass found Orion got wrong; and the
   week's report (D156): turns stopped short, tool errors, corrections and cost;
 - **the phone's token** (D153): a new one for the Shortcuts automations, with the addresses;
 - **his ChatGPT plan** (D62): signed in or not, the sign-in itself (the address to open, then
@@ -150,11 +150,11 @@ class Upkeep:
 
     async def misses(self) -> list[dict[str, Any]]:
         events = await self._events()
-        found = misses(events, self.zone, datetime.now(self.zone))[-MISSES_SHOWN:]
+        found = misses(events, self.zone)[-MISSES_SHOWN:]
         return [
             {
                 "at": miss.at.isoformat(),
-                "how": miss.how,
+                "why": miss.why,
                 "asked": miss.asked[:400],
                 "answered": miss.answered[:600],
                 "said": miss.said[:400],
