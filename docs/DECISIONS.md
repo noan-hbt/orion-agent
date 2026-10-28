@@ -4137,3 +4137,27 @@ Son manuel réel comptait 36 règles, environ 7 000 caractères. Deux choses le 
   cède à la moindre de ses règles, et ses exemples montrent quoi faire, plus quel style.
 
 Sur le serveur, `orion` lance `orion-admin` (sous le bon utilisateur, avec ses secrets).
+
+## D186 — Le sommeil d'Orion : tout revoir, un temps après l'autre
+
+*28/10/2026 · acceptée · complète D117, D174, D176*
+
+La passe du soir avait tout sous les yeux (D176), mais en un seul tour : la journée, le
+manuel, les souvenirs, ce qui est en cours, puis le travail à avancer, d'une traite. Le manuel
+n'y était qu'une ligne parmi d'autres, sans la marque [appris] : 36 règles, dont six qui
+redisaient le même style et trois apprises qui contredisaient les siennes, passaient nuit après
+nuit.
+
+- **Le sommeil** : tout le matériel est posé une fois, côte à côte comme en D176 (les doublons
+  d'une rubrique à l'autre restent visibles), puis Orion le reprend en temps successifs, un
+  tour chacun dans le fil `night` : la journée (ce qui a échappé, les ratés), le manuel, les
+  souvenirs, sa vie en cours (situations, engagements, prévu, missions, proches), puis il rêve
+  (l'inachevé, les promesses, la curiosité), et se réveille sur la note du matin. Chaque temps
+  finit sur une ligne de ce qu'il a changé, que les suivants voient : rien n'est refait.
+- **Le manuel, une idée par règle** : une [appris] qu'une de ses règles contredit ou couvre se
+  retire ; ses propres doublons se fondent en une seule règle qui garde ses mots et chacune de
+  ses précisions, et la note du matin le lui dit ; deux de ses règles qui se contredisent : la
+  plus récente si c'est clair, sinon une question au réveil.
+- **Budget** : un seul pour la nuit ; chaque temps garde de quoi se réveiller. Un temps qui
+  échoue arrête la nuit, sans note.
+- La consolidation de 3 h 30 (tri, portrait) et le réflecteur de la journée ne changent pas.

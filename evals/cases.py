@@ -952,4 +952,25 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(at_most(60),),
     ),
+    Case(
+        name="sommeil_range_le_manuel",
+        origin="28/10 : 36 règles, dont six qui redisent le même style ; la passe du soir les "
+        "laissait toutes (D186).",
+        at=paris(2026, 10, 28, 21, 0),
+        facts=("S'appelle Noan.",),
+        rules=(
+            "Garde les messages très courts, souvent 1 à 5 mots.",
+            "Réponds ultra court, souvent 1 à 5 mots ; ajoute des détails uniquement s'ils sont "
+            "indispensables ou demandés.",
+            "Écris comme un pote, naturel et direct ; évite les formulations qui sonnent comme "
+            "une IA.",
+            "Écris comme un pote sur Discord : très court, familier, minuscules sauf noms "
+            "propres, peu de ponctuation.",
+        ),
+        steps=(
+            Say("salut"),
+            Night(at=paris(2026, 10, 28, 23, 40)),
+        ),
+        checks=(works_at_night("adapt"),),
+    ),
 )
