@@ -131,7 +131,7 @@ async def test_unknown_tool_and_bad_arguments_are_reported_to_the_model() -> Non
 
 
 async def test_repeated_identical_calls_stall_the_loop() -> None:
-    same = call_tools(("current_time", {}))
+    same = call_tools(("plan", {"steps": [{"text": "un pas"}]}))
     provider = ScriptedProvider(same, same, same, same, reply("never reached"))
     events, _ = await collect(provider)
     assert finished(events).reason is StopReason.STALLED
@@ -197,7 +197,9 @@ async def test_calls_cut_by_a_budget_are_still_answered() -> None:
 
 
 async def test_cost_budget_is_enforced() -> None:
-    provider = ScriptedProvider(call_tools(("current_time", {}), cost=1.0), reply("x"))
+    provider = ScriptedProvider(
+        call_tools(("plan", {"steps": [{"text": "un pas"}]}), cost=1.0), reply("x")
+    )
     events, _ = await collect(provider)
     assert finished(events).reason is StopReason.BUDGET_EXHAUSTED
 
