@@ -8,11 +8,12 @@ A conversation ends, and an assistant usually stops there. Orion does not:
   duplicate ones rewritten, what the day changed carried over. Then he rereads the day's
   conversation with the owner and works on what was left: he picks up unfinished work
   (handing long searches to background tasks), thinks over decisions and problems and looks
-  up the facts they lack, advances missions, plans follow-ups, follows a lead of his own. Orion can also promise it during the day
-  (`think_later`: « laisse-moi y réfléchir »); a promised question always gets an answer,
-  even « je maintiens ». Nothing acts on the world at night and nothing is put to the owner
-  (the guardian refuses it): what needs his yes is proposed in the morning. What Orion says
-  at the end of the night is his note for the morning.
+  up the facts they lack, advances missions, plans follow-ups, follows a lead of his own.
+  Orion can also promise it during the day (`think_later`: « laisse-moi y réfléchir »); a
+  promised question always gets an answer, even « je maintiens ». Nothing acts on the world
+  at night and nothing is put to the owner (the guardian refuses it): what needs his yes is
+  proposed in the morning. What Orion says at the end of the night is his note for the
+  morning.
 - **Closing the loop.** When the owner mentions a moment that matters (an interview, a
   medical appointment, a visit, an exam), Orion plans to ask how it went (`follow_up`, during
   the day or at night). At that time it asks once; the answer is in the conversation, and
