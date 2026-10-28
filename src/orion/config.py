@@ -18,6 +18,26 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 DEFAULT_CONFIG_PATH = Path("orion.toml")
 
 
+def orion_home() -> Path:
+    """Where Orion lives when run from anywhere: `$ORION_HOME`, else `~/.orion`."""
+    home = os.environ.get("ORION_HOME")
+    return Path(home).expanduser() if home else Path.home() / ".orion"
+
+
+def default_config_path() -> Path:
+    """The config used without `--config` (D180).
+
+    `$ORION_CONFIG` if set, else `orion.toml` in the current folder if there is one (a checkout,
+    the server), else `orion.toml` in `orion_home()`, so `orion` works from any folder.
+    """
+    explicit = os.environ.get("ORION_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    if DEFAULT_CONFIG_PATH.exists():
+        return DEFAULT_CONFIG_PATH
+    return orion_home() / "orion.toml"
+
+
 class SecretRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -516,8 +536,8 @@ class OrionConfig(BaseModel):
 
 
 def load_config(path: Path | None = None) -> OrionConfig:
-    """Load config from `path`, or `orion.toml` if it exists, or fall back to defaults."""
-    target = path or DEFAULT_CONFIG_PATH
+    """Load config from `path`, or `default_config_path()` if it exists, or use the defaults."""
+    target = path or default_config_path()
     if not target.exists():
         if path is not None:
             raise FileNotFoundError(f"config file not found: {target}")
