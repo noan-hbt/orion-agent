@@ -32,16 +32,16 @@ constitution rewritten short, D158; 35.8k with what D167 to D169 taught him)."""
 CONSTITUTION_DEFAULT = 30_000
 """Characters of the system message with the default modules: the rework's goal (33.2k
 before the constitution was rewritten short, D158; 24.4k after)."""
-TOOLS_DEFAULT = 30_800
+TOOLS_DEFAULT = 36_000
 """Characters of the tool schemas with the default modules (35.2k on 20/10/2026; 40.6k with
 background tasks, D110, after trimming missions; 35.3k without pydantic's titles and null
 defaults, 26/10/2026; 36.4k with `awaiting`, D129; 38.6k once grouped tools show each field's
 type and allowed values, D132; 40k with `situation`, D149; 32.7k with the rare
 in the drawer, `orion`, D151; 30.3k with one way to say « later », D157; 30.4k with
-`contacts` in the drawer, D159; 30.6k with D166 to D169)."""
-ONE_TOOL = 2_000
+`contacts` in the drawer, D159; 30.6k with D166 to D169; 31.7k with D176 and D177)."""
+ONE_TOOL = 2_500
 """Characters of one tool's schema, actions included (the largest, `intention`: 1.6k; `later`:
-1.9k with repeating reminders, D166)."""
+1.9k with repeating reminders, D166; 2k by D177)."""
 DRAWER = 2_200
 """Characters of the drawer, `orion`, which lists a line per rare tool (1.9k with `contacts`,
 D159)."""
