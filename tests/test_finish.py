@@ -20,6 +20,7 @@ from tests.test_runtime_cache import assert_prefix_stable, at, make_orion
         "Pour l'assurance, je te compare les offres ?",
         "Dis-moi si tu veux que je lance la recherche.",
         "Ça te dit qu'on regarde ça ensemble ?",
+        "Tour 1 terminé : shell répond bien. Envoie 'continue' et je lance le tour 2.",
         "Je te prépare la lettre. Je peux aussi te programmer un rappel avant la date limite.",
     ],
 )

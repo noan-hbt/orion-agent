@@ -262,6 +262,17 @@ def silent_while_working() -> Check:
     return check
 
 
+def spoke_while_working(count: int) -> Check:
+    """Several steps asked with a word at each: the words go out on the way, one turn (D162)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        if len(o.spoken) >= count:
+            return None
+        return f"{len(o.spoken)} messages while working (min {count})"
+
+    return check
+
+
 def at_most(chars: int) -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         return None if len(o.last) <= chars else f"{len(o.last)} characters (max {chars})"
