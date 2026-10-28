@@ -27,6 +27,7 @@ from evals.harness import (
     reminder_on,
     reminder_within,
     says,
+    says_nothing_twice,
     silent_while_working,
     spoke_while_working,
     uses,
@@ -906,7 +907,12 @@ CASES: tuple[Case, ...] = (
                 "envoie-moi chaque ville dès que tu l'as"
             ),
         ),
-        checks=(spoke_while_working(2), never_says(r"\bcontinue\b", "asks him to say continue")),
+        checks=(
+            spoke_while_working(2),
+            never_says(r"\bcontinue\b", "asks him to say continue"),
+            no_narration(),
+            says_nothing_twice(),
+        ),
         live_web=True,
     ),
     Case(

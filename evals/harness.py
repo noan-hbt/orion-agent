@@ -228,6 +228,8 @@ def never_says(pattern: str, why: str) -> Check:
 NARRATION = (
     r"^\W*(?:je (?:vais |m'en )?(?:regarde|cherche|lance|lis|fouille|consulte|v[ée]rifie|"
     r"occupe|y mets)|je vais\b|laisse-moi|un instant|je jette)"
+    r"|\bje vais (?:maintenant |d'abord |ensuite )?(?!bien\b)[a-zéè]+(?:er|ir|re)\b"
+    r"|\bje (?:tente|essaie)\b"
 )
 """A mid-turn line that says what he does or will do rather than what he found or did
 (« Je regarde… », « Je vais comparer… »; D169)."""
@@ -241,6 +243,23 @@ def no_narration() -> Check:
     async def check(o: Observation, _j: Judge) -> str | None:
         found = [s for s in o.spoken if regex.search(s)]
         return f"announced his work: « {found[0]} »" if found else None
+
+    return check
+
+
+def says_nothing_twice() -> Check:
+    """His messages read one after the other: each one says something new (D173)."""
+
+    async def check(o: Observation, judge: Judge) -> str | None:
+        thread = "\n---\n".join([*o.spoken, o.last])
+        question = (
+            "Ces messages se lisent à la suite. Chacun apporte-t-il du neuf, sans redire ce "
+            "qu'un message précédent disait déjà ?"
+        )
+        verdict = await judge(question, thread)
+        if verdict is None:
+            return f"judge gave no verdict: {question}"
+        return None if verdict else "says the same thing twice"
 
     return check
 

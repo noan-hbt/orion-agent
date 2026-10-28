@@ -110,8 +110,9 @@ def builtin_tools() -> list[Tool]:
         Tool(
             name="tell",
             description="Send him a message now and keep working: what you just found or did "
-            "that matters to him, never what you are about to do. Call it with your next tool, "
-            "not alone. Your last answer is your reply, not a `tell`.",
+            "that matters to him and that your previous messages did not already say. Never "
+            "what you are about to do or try next. Call it with your next tool, not alone. "
+            "Your last answer is your reply, not a `tell`, and it does not repeat them.",
             input_model=TellInput,
             handler=_tell,
             **common,
