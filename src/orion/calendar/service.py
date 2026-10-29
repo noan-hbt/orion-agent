@@ -8,13 +8,15 @@ for an empty one.
 
     calendar.event.seen / calendar.event.gone / calendar.synced
     calendar.event.added   (Orion wrote it; shown until the feed carries it)
+    calendar.event.changed (Orion moved, edited or cancelled it; the feed's older copy is
+                            ignored until it catches up)
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -25,10 +27,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.ics import Occurrence, Standing, occurrences
 from orion.calendar.write import (
+    CalendarChange,
     CalendarWriteError,
+    ChangeEvent,
     NewCalendarEvent,
     WriteEvent,
     Writer,
+    change_event,
     write_event,
 )
 from orion.config import SecretRef
@@ -46,9 +51,10 @@ SEEN = "calendar.event.seen"
 GONE = "calendar.event.gone"
 SYNCED = "calendar.synced"
 ADDED = "calendar.event.added"
+CHANGED = "calendar.event.changed"
 FEED_LAG = timedelta(days=1)
-"""How long an event Orion added is kept while the feed does not show it yet (Google's iCal
-address lags by hours)."""
+"""How long an event Orion added or changed is trusted over a feed that does not show it yet
+(Google's iCal address lags by hours)."""
 _WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
@@ -97,6 +103,10 @@ class CalendarState:
     synced: dict[str, datetime] = field(default_factory=dict[str, datetime])
     added: dict[tuple[str, str], datetime] = field(default_factory=dict[tuple[str, str], datetime])
     """Events Orion wrote, and when: kept until the feed carries them."""
+    changed: dict[tuple[str, str], datetime] = field(
+        default_factory=dict[tuple[str, str], datetime]
+    )
+    """Occurrences Orion changed, and when: the feed's older copy is ignored meanwhile."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -106,6 +116,7 @@ class CalendarState:
         self.events.clear()
         self.synced.clear()
         self.added.clear()
+        self.changed.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -121,6 +132,15 @@ class CalendarState:
             where = (str(payload["account"]), occurrence.key)
             self.events[where] = occurrence
             self.added[where] = datetime.fromisoformat(str(payload["at"]))
+        elif event.kind == CHANGED:
+            account, at = str(payload["account"]), datetime.fromisoformat(str(payload["at"]))
+            self.events.pop((account, str(payload["key"])), None)
+            self.changed[(account, str(payload["key"]))] = at
+            if payload.get("occurrence"):
+                occurrence = Occurrence.from_payload(payload["occurrence"])
+                self.events[(account, occurrence.key)] = occurrence
+                self.added[(account, occurrence.key)] = at
+                self.changed[(account, occurrence.key)] = at
         elif event.kind == GONE:
             where = (str(payload["account"]), str(payload["key"]))
             self.events.pop(where, None)
@@ -143,6 +163,10 @@ async def fetch_feed(http: httpx.AsyncClient, account: CalendarAccount) -> str:
     if response.status_code >= 400:
         raise FeedError(f"calendar {account.name!r} answered HTTP {response.status_code}")
     return response.text
+
+
+def _or(new: str | None, old: str) -> str:
+    return old if new is None else new
 
 
 def _utc(moment: datetime) -> datetime:
@@ -181,10 +205,12 @@ class Calendar:
         fetch: Fetch | None = None,
         clock: Callable[[], datetime] | None = None,
         write: WriteEvent | None = None,
+        change: ChangeEvent | None = None,
     ) -> None:
         self._journal = journal
         self.settings = settings
         self._write = write or self._http_write
+        self._change = change or self._http_change
         self._zone = ZoneInfo(timezone)
         self._timezone = timezone
         self._http: httpx.AsyncClient | None = None
@@ -213,6 +239,14 @@ class Calendar:
         if self._http is None:
             self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
         return await write_event(self._http, found.write, event)
+
+    async def _http_change(self, account: str, change: CalendarChange, _grant: str | None) -> None:
+        found = next((a for a in self.settings.accounts if a.name == account), None)
+        if found is None or found.write is None:
+            raise CalendarWriteError(f"calendar {account!r} cannot be written to")
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
+        await change_event(self._http, found.write, change)
 
     # -- writing ------------------------------------------------------------------------------
 
@@ -257,6 +291,68 @@ class Calendar:
         )
         await self._runner.catch_up()
         return account.name, occurrence
+
+    def find(self, title: str, start: datetime) -> tuple[str, Occurrence]:
+        """The owner's own event with this title at this start, in a calendar Orion can write."""
+        matches = [
+            (account, o)
+            for (account, _), o in self.state.events.items()
+            if o.title == title and _utc(o.start) == _utc(start)
+        ]
+        if not matches:
+            raise CalendarWriteError(f"no event « {title} » at {start:%d/%m %H:%M}: see `agenda`")
+        account, occurrence = matches[0]
+        if occurrence.standing is not Standing.OWN:
+            raise CalendarWriteError("an invitation: only whoever sent it can change it")
+        found = next((a for a in self.settings.accounts if a.name == account), None)
+        if found is None or found.write is None:
+            raise CalendarWriteError(f"calendar {account!r} cannot be written to")
+        return account, occurrence
+
+    async def change(
+        self,
+        account: str,
+        occurrence: Occurrence,
+        change: CalendarChange,
+        grant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> Occurrence | None:
+        """Change or cancel one of the owner's events; shown at once, before the feed has it.
+        Returns the event as it now is (None once cancelled)."""
+        await self._change(account, change, grant)
+        changed: Occurrence | None = None
+        if not change.cancel:
+            start, end = change.times(occurrence.start, occurrence.end)
+            start, end = start.astimezone(self._zone), end.astimezone(self._zone)
+            moved = change.new_start is not None or change.new_end is not None
+            changed = replace(
+                occurrence,
+                key=f"{change.uid}@{start.isoformat()}" if moved else occurrence.key,
+                start=start,
+                end=end,
+                all_day=occurrence.all_day and not moved,
+                title=change.new_title or occurrence.title,
+                location=_or(change.new_location, occurrence.location),
+                description=_or(change.new_notes, occurrence.description),
+            )
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=CHANGED,
+                    payload={
+                        "account": account,
+                        "key": occurrence.key,
+                        "at": self._clock().isoformat(),
+                        **({"occurrence": changed.payload()} if changed else {}),
+                    },
+                    provenance=Provenance(source=f"calendar:{account}", actor="orion:core"),
+                    trust=Trust.SYSTEM,
+                    correlation_id=correlation_id,
+                )
+            ]
+        )
+        await self._runner.catch_up()
+        return changed
 
     # -- sync ---------------------------------------------------------------------------------
 
@@ -309,6 +405,9 @@ class Calendar:
         fresh = {o.key: o for o in found}
         events: list[NewEvent] = []
         for key, occurrence in fresh.items():
+            changed = self.state.changed.get((account, key))
+            if changed is not None and now - changed < FEED_LAG:
+                continue  # Orion changed it: the feed may still carry the older copy
             if self.state.events.get((account, key)) != occurrence:
                 events.append(
                     NewEvent(

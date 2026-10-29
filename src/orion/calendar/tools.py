@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.service import Calendar, describe_day
-from orion.calendar.write import CalendarWriteError, NewCalendarEvent
+from orion.calendar.write import CalendarChange, CalendarWriteError, NewCalendarEvent
 from orion.core.events import Trust
 from orion.guardian.client import GuardianUnavailableError
 from orion.memory.model import CommitmentStatus
@@ -39,6 +39,21 @@ class CalendarAddInput(BaseModel):
         description="Commitment ids (c_…) this event fulfils (e.g. 'book the dentist'): "
         "closed with the event as proof",
     )
+
+
+class CalendarChangeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(description="The event's title, exactly as `agenda` shows it")
+    start: datetime = Field(description="Its current start, local time, ISO")
+    new_title: str | None = Field(default=None, min_length=1, max_length=120)
+    new_start: datetime | None = Field(
+        default=None, description="Local time, ISO; without `new_end` it keeps its length"
+    )
+    new_end: datetime | None = Field(default=None, description="Local time, ISO")
+    new_location: str | None = Field(default=None, max_length=200, description="'' clears it")
+    new_notes: str | None = Field(default=None, max_length=1000, description="'' clears them")
+    cancel: bool = Field(default=False, description="Delete the event instead")
 
 
 def local(moment: datetime, timezone: str) -> datetime:
@@ -94,6 +109,36 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
                 )
         return ToolResult(f"Ajouté à l'agenda « {account} » : {args.title}, {start:%d/%m %H:%M}.")
 
+    async def calendar_change(args: Any, ctx: ToolContext) -> ToolResult:
+        def at(moment: datetime | None) -> datetime | None:
+            return None if moment is None else local(moment, ctx.timezone)
+
+        edits = (args.new_title, args.new_start, args.new_end, args.new_location, args.new_notes)
+        if args.cancel == any(edit is not None for edit in edits):
+            return ToolResult("Either cancel the event or give what changes.", is_error=True)
+        start = local(args.start, ctx.timezone)
+        await calendar.ensure_fresh()
+        try:
+            account, occurrence = calendar.find(args.title, start)
+            change = CalendarChange(
+                uid=occurrence.key.rsplit("@", 1)[0],
+                title=args.title,
+                start=start,
+                new_title=args.new_title,
+                new_start=at(args.new_start),
+                new_end=at(args.new_end),
+                new_location=args.new_location,
+                new_notes=args.new_notes,
+                cancel=args.cancel,
+            )
+            change.times(occurrence.start, occurrence.end)
+            now = await calendar.change(account, occurrence, change, ctx.grant, ctx.correlation_id)
+        except (CalendarWriteError, GuardianUnavailableError) as exc:
+            return ToolResult(f"Not changed: {exc}", is_error=True)
+        if now is None:
+            return ToolResult(f"Annulé : {args.title}, {start:%d/%m %H:%M}.")
+        return ToolResult(f"Modifié : {now.title}, {now.start:%d/%m %H:%M}-{now.end:%H:%M}.")
+
     tools = [
         Tool(
             name="agenda",
@@ -117,6 +162,18 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
                 handler=calendar_add,
                 effect=Effect.EXTERNAL,
                 reversibility=Reversibility.UNDO_WINDOW,
+                accepts_untrusted_context=True,
+            )
+        )
+        tools.append(
+            Tool(
+                name="calendar_change",
+                description="Move, rename, edit or cancel one of the owner's own events (not "
+                "an invitation, not a recurring one, none with guests). The owner approves it "
+                "first.",
+                input_model=CalendarChangeInput,
+                handler=calendar_change,
+                effect=Effect.EXTERNAL,
                 accepts_untrusted_context=True,
             )
         )

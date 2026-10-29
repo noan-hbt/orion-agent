@@ -12,9 +12,14 @@ import httpx
 import pytest
 
 from orion.calendar.service import ADDED, Calendar, CalendarAccount, CalendarSettings
+from orion.calendar.tools import calendar_tools
 from orion.calendar.write import (
+    CalDavWriter,
+    CalendarChange,
+    CalendarWriteError,
     GoogleWriter,
     NewCalendarEvent,
+    change_event,
     to_ics,
     write_event,
 )
@@ -285,7 +290,6 @@ async def test_the_google_consent_gives_a_refresh_token() -> None:
 
 
 async def test_an_event_closes_the_commitment_it_fulfils(journal: SqliteJournal) -> None:
-    from orion.calendar.tools import calendar_tools
     from orion.memory.model import CommitmentStatus
     from orion.memory.service import MemoryService, Origin
     from orion.memory.store import MemoryStore
@@ -328,3 +332,112 @@ async def test_an_event_closes_the_commitment_it_fulfils(journal: SqliteJournal)
     [done] = await store.commitments(CommitmentStatus.DONE)
     assert done.id == owed and "Dentiste, 23/10 14:00" in str(done.evidence)
     await store.close()
+
+
+MOVE = {"title": "Dentiste", "start": "2026-10-23T14:00:00", "new_start": "2026-10-24T10:00:00"}
+MOVED = CalendarChange(
+    uid="u1", title="Dentiste", start=START, new_start=START + timedelta(hours=20)
+)
+CALDAV = {"kind": "caldav", "url": "https://d/", "username": "n", "password": {"env": "P"}}
+
+
+async def test_an_event_is_changed_only_as_the_owner_approved_it(tmp_path: Path) -> None:
+    changed: list[CalendarChange] = []
+
+    async def rewrite(account: CalendarAccount, change: CalendarChange) -> None:
+        changed.append(change)
+
+    async with running_guardian(writable_config(tmp_path), rewrite_calendar=rewrite) as g:
+        g.fake.inbound("salut")
+        with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
+            await g.client.calendar_change("perso", MOVED, None)
+        grant, message_id = await g.client.request_approval(
+            "calendar_change", MOVE, "", CONVERSATION
+        )
+        assert "« Dentiste » du 23/10 14:00" in g.fake.texts()[-1]
+        g.fake.react(message_id, "like")
+        cancel = CalendarChange(uid="u1", title="Dentiste", start=START, cancel=True)
+        with pytest.raises(GuardianUnavailableError, match="not what the owner approved"):
+            await g.client.calendar_change("perso", cancel, grant)
+        await g.client.calendar_change("perso", MOVED, grant)
+        assert changed == [MOVED]
+
+
+async def test_a_moved_event_shows_at_once_and_invitations_stay_untouched(
+    journal: SqliteJournal,
+) -> None:
+    meeting = to_ics(EVENT.model_copy(update={"title": "Réunion"}), "inv-1", START)
+    meeting = (
+        meeting.split("BEGIN:VEVENT")[1]
+        .split("END:VEVENT")[0]
+        .replace(
+            "SUMMARY:",
+            "ORGANIZER:mailto:boss@x.fr\r\nATTENDEE;PARTSTAT=ACCEPTED:mailto:noan@x.fr\r\nSUMMARY:",
+        )
+    )
+    feed = to_ics(EVENT, "u1", START).replace(
+        "END:VCALENDAR", f"BEGIN:VEVENT{meeting}END:VEVENT\r\nEND:VCALENDAR"
+    )
+    changes: list[CalendarChange] = []
+
+    async def fetch(_account: CalendarAccount) -> str:
+        return feed  # stale: still the old time after the move
+
+    async def change(account: str, made: CalendarChange, grant: str | None) -> None:
+        changes.append(made)
+
+    settings = CalendarSettings.model_validate(
+        {
+            "enabled": True,
+            "owner_emails": ["noan@x.fr"],
+            "accounts": [{"name": "perso", "url": {"env": "X"}, "write": CALDAV}],
+        }
+    )
+    now = START - timedelta(days=1)
+    calendar = Calendar(journal, settings, "Europe/Paris", fetch, lambda: now, None, change)
+    await calendar.start()
+    await calendar.sync_once()
+    tool = {t.name: t for t in calendar_tools(calendar)}["calendar_change"]
+    result = await tool.handler(tool.parse(json.dumps(MOVE)), ToolContext("o", "c", grant="g"))
+    assert not result.is_error and changes == [MOVED]
+    await calendar.sync_once()
+    shown = calendar.between(START - timedelta(hours=14), START + timedelta(days=2))
+    assert [o.start for _, o in shown if o.title == "Dentiste"] == [MOVED.new_start]
+    refused = await tool.handler(
+        tool.parse(json.dumps({"title": "Réunion", "start": MOVE["start"], "cancel": True})),
+        ToolContext("o", "c", grant="g"),
+    )
+    assert refused.is_error and len(changes) == 1
+
+
+async def test_caldav_changes_the_event_in_place_and_never_one_with_guests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("P", "pw")
+    stored = [to_ics(EVENT, "u1", START)]
+    written: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "REPORT":
+            data = stored[0].replace("&", "&amp;").replace("<", "&lt;")
+            return httpx.Response(
+                207,
+                content='<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
+                "<d:response><d:href>/cal/u1.ics</d:href><d:propstat><d:prop>"
+                f'<d:getetag>"e1"</d:getetag><c:calendar-data>{data}</c:calendar-data>'
+                "</d:prop></d:propstat></d:response></d:multistatus>",
+            )
+        written.append(request)
+        return httpx.Response(204)
+
+    writer = CalDavWriter.model_validate(CALDAV)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await change_event(http, writer, MOVED)
+        [put] = written
+        assert put.method == "PUT" and put.headers["if-match"] == '"e1"'
+        assert b"DTSTART:20261024T080000Z" in put.content
+        assert b"DTEND:20261024T090000Z" in put.content  # it keeps its length
+        stored[0] = stored[0].replace("SUMMARY:", "ATTENDEE:mailto:paul@x.fr\r\nSUMMARY:")
+        with pytest.raises(CalendarWriteError, match="guests"):
+            await change_event(http, writer, MOVED)
+        assert len(written) == 1

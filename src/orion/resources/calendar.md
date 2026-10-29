@@ -11,3 +11,8 @@ un titre court, les heures locales, le lieu s'il est connu. Un rendez-vous calé
 de quelqu'un s'ajoute tout seul. Sans `calendar_add`, programme un rappel avec `later`.
 Si l'événement accomplit un engagement (« prendre rendez-vous chez le dentiste »), mets son
 id dans `closes` : il se clôt avec l'événement pour preuve.
+
+Avec `calendar_change`, tu gères ses propres événements : déplacer, renommer, changer le lieu
+ou la note, annuler. Consulte `agenda` d'abord et désigne l'événement par son titre et son
+début exacts ; ne donne que ce qui change. Une invitation, une série récurrente ou un
+événement avec invités ne se change pas : dis-le-lui, c'est à lui de le faire.

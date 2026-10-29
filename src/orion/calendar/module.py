@@ -28,8 +28,9 @@ class CalendarModule(Module):
         if any(account.write is not None for account in self.settings.accounts):
             return []
         return [
-            "Ajouter des événements à ses agendas (chacun avec son accord) : `orion google auth` "
-            "pour Google, ou un compte CalDAV dans `[modules.calendar.accounts.write]`."
+            "Ajouter, déplacer ou annuler des événements de ses agendas (chacun avec son "
+            "accord) : `orion google auth` pour Google, ou un compte CalDAV dans "
+            "`[modules.calendar.accounts.write]`."
         ]
 
     instructions = "calendar.md"
@@ -55,6 +56,7 @@ class CalendarModule(Module):
             fetch,
             self._clock,
             plate.guardian.calendar_add if plate.guardian else None,
+            plate.guardian.calendar_change if plate.guardian else None,
         )
         await self.calendar.start()
         return calendar_tools(self.calendar, plate.memory)

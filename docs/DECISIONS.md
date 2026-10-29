@@ -4234,3 +4234,26 @@ soir et l'extracteur s'en chargent), pas d'index vectoriel (le calcul exhaustif 
 de la milliseconde à l'échelle d'une vie), pas de table de personnes (elles restent dérivées des
 faits, D27).
 
+
+## D189 — Orion gère son agenda : déplacer, modifier, annuler
+
+*29/10/2026 · acceptée*
+
+L'adresse iCal secrète reste en lecture seule : c'est un flux, rien ne s'écrit par elle. Écrire
+passe par le même accès que `calendar_add` (CalDAV ou Google, D32), qui sert maintenant aussi à
+`calendar_change`.
+
+- **Désigné par ce qu'il a vu** : le modèle nomme l'événement par son titre et son début, tels
+  qu'`agenda` les montre. Le cœur retrouve son UID ; le gardien relit l'événement chez le
+  fournisseur et refuse s'il n'a plus ce titre ou ce début (il a changé depuis l'accord).
+- **Ses propres événements seulement** : pas une invitation (seul l'organisateur la change), pas
+  un événement avec invités (le déplacer le déplacerait pour eux, sans qu'on leur parle), pas une
+  série récurrente (la remodeler reste à lui). Fail closed : le gardien vérifie chez le
+  fournisseur, pas seulement dans le flux.
+- **Accord exact** : la demande dit l'événement et chaque changement ; le gardien ne laisse passer
+  que ce changement-là, une fois. Annuler est une suppression, dite comme telle. Sans fin donnée,
+  un déplacement garde la durée.
+- **Visible tout de suite** : `calendar.event.changed` remplace l'occurrence dans la projection, et
+  la copie plus ancienne du flux est ignorée un jour (`FEED_LAG`), le temps qu'il rattrape.
+- CalDAV : `REPORT` par UID, puis `PUT` ou `DELETE` avec `If-Match` (rien n'écrase une
+  modification faite entre-temps). Google : `iCalUID`, puis `PATCH` ou `DELETE`, `sendUpdates=none`.
