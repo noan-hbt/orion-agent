@@ -48,7 +48,9 @@ from orion.memory.portrait import Portrait
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Fact, name_key
 from orion.missions.service import Mission, Missions
+from orion.mobile.usage import UsageStats
 from orion.modules.base import Planned
+from orion.providers.router import Router
 from orion.providers.spending import Spending
 from orion.tasks.service import Tasks
 
@@ -109,6 +111,8 @@ class Control:
     """What may have changed since (D83), once its module is assembled."""
     _portrait: Portrait = field(default_factory=Portrait, init=False)
     _portrait_runner: ProjectionRunner | None = field(default=None, init=False)
+    _usage: UsageStats | None = field(default=None, init=False)
+    _usage_runner: ProjectionRunner | None = field(default=None, init=False)
 
     @property
     def zone(self) -> ZoneInfo:
@@ -534,6 +538,34 @@ class Control:
         awaiting = self.awaiting()
         if awaiting is None or not await awaiting.cancel(wait_id, FROM_APP, None):
             raise ControlError("no such wait")
+
+    # -- usage: tokens, messages, cost, the plans' windows -----------------------------------
+
+    async def usage(self) -> dict[str, Any]:
+        """The usage screen: counted from the journal, plus what is left on prepaid accounts
+        (asked of the provider now; one that cannot say is left out)."""
+        if self._usage_runner is None:
+            self._usage = UsageStats(zone=self.initiative.timezone)
+            self._usage_runner = ProjectionRunner(self.journal, [self._usage])
+        await self._usage_runner.catch_up()
+        assert self._usage is not None
+        found = self._usage.report(self.now().date())
+        credits: list[dict[str, Any]] = []
+        caps: dict[str, Any] | None = None
+        if self.spending is not None:
+            budget = self.spending.budget
+            await self.spending.sync()
+            day = self.now().date()
+            caps = {
+                "daily_cap": budget.daily_usd,
+                "monthly_cap": budget.monthly_usd,
+                "alone_today": round(self.spending.tally.background(day), 4),
+                "month": round(self.spending.tally.month(day), 4),
+                "over": self.spending.over(day),
+            }
+            if isinstance(self.spending.inner, Router):
+                credits = [c.model_dump() for c in await self.spending.inner.credits_all()]
+        return {**found, "caps": caps, "credits": credits}
 
     # -- the server: its settings and modules, read only --------------------------------------
 

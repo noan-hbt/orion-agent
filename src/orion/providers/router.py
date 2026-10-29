@@ -11,7 +11,9 @@ from __future__ import annotations
 import structlog
 
 from orion.providers.base import (
+    Credits,
     Embedder,
+    Metered,
     ModelProvider,
     ModelRequest,
     ModelResponse,
@@ -84,6 +86,21 @@ class Router:
         if not isinstance(provider, Speaker):
             raise ProviderError(f"provider {provider.name!r} cannot speak", retryable=False)
         return await provider.speak(name, text, voice)
+
+    async def credits_all(self) -> list[Credits]:
+        """What is left on each prepaid account; one that cannot say is left out (logged)."""
+        found: list[Credits] = []
+        for provider in self._providers.values():
+            if not isinstance(provider, Metered):
+                continue
+            try:
+                credits = await provider.credits()
+            except ProviderError as exc:
+                log.warning("router.credits_unavailable", provider=provider.name, error=str(exc))
+                continue
+            if credits is not None:
+                found.append(credits)
+        return found
 
     def _resolve(self, spec: str) -> tuple[ModelProvider, str]:
         name, model = parse_spec(spec, self._default)

@@ -16,7 +16,12 @@ Two kinds of calls:
 The owner hears about it once per period: at `warn_at` of the month's ceiling, and when the
 background stops (through the initiative engine: quiet hours apply).
 
+Every call is journaled, a plan's too (it costs nothing per token), with its tokens: the usage
+screen counts them. What a plan's windows have used, as the provider said with the answer, is
+journaled when it changes (`plan.quota`).
+
     spend.recorded
+    plan.quota
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResul
 log = structlog.get_logger(__name__)
 
 SPENT = "spend.recorded"
+QUOTA = "plan.quota"
 
 
 @dataclass
@@ -109,6 +115,8 @@ class Spending:
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.tally = Tally(zone=timezone)
         self._runner = ProjectionRunner(journal, [self.tally])
+        self._quota_seen: dict[str, list[tuple[str, float, str | None]]] = {}
+        """Each provider's windows as last journaled: a quota is journaled when it changes."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -123,23 +131,41 @@ class Spending:
                     f"spending ceiling reached ({over}): background paused", retryable=False
                 )
         response = await self.inner.complete(request)
-        if response.usage.cost_usd > 0:
-            await self._journal.append(
-                [
-                    NewEvent(
-                        kind=SPENT,
-                        payload={
-                            "at": self.clock().isoformat(),
-                            "model": response.model or request.model,
-                            "session": request.session_id or "",
-                            "foreground": owner_waiting,
-                            "cost_usd": round(response.usage.cost_usd, 6),
-                        },
-                        provenance=Provenance(source="orion:spending", actor="orion:spending"),
-                        trust=Trust.SYSTEM,
-                    )
-                ]
+        at = self.clock().isoformat()
+        usage = response.usage
+        provenance = Provenance(source="orion:spending", actor="orion:spending")
+        events = [
+            NewEvent(
+                kind=SPENT,
+                payload={
+                    "at": at,
+                    "model": response.model or request.model,
+                    "provider": response.provider or "",
+                    "session": request.session_id or "",
+                    "foreground": owner_waiting,
+                    "cost_usd": round(usage.cost_usd, 6),
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "cached_tokens": usage.cached_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
+                },
+                provenance=provenance,
+                trust=Trust.SYSTEM,
             )
+        ]
+        provider = response.provider or ""
+        windows = [w.model_dump() for w in response.quota]
+        if windows and self._quota_seen.get(provider) != _rounded(windows):
+            self._quota_seen[provider] = _rounded(windows)
+            events.append(
+                NewEvent(
+                    kind=QUOTA,
+                    payload={"at": at, "provider": provider, "windows": windows},
+                    provenance=provenance,
+                    trust=Trust.SYSTEM,
+                )
+            )
+        await self._journal.append(events)
         return response
 
     def over(self, day: date) -> str | None:
@@ -217,6 +243,11 @@ class Spending:
                 )
             )
         return found
+
+
+def _rounded(windows: list[dict[str, Any]]) -> list[tuple[str, float, str | None]]:
+    """A window by the percent: a call that moves it less is not news."""
+    return [(str(w["name"]), round(float(w["used"]), 2), w.get("resets_at")) for w in windows]
 
 
 class _NoArgs(BaseModel):

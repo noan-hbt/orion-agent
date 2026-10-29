@@ -758,6 +758,9 @@ def core_routes(
     async def server(_request: Request, c: Control) -> object:
         return await c.server()
 
+    async def usage(_request: Request, c: Control) -> object:
+        return await c.usage()
+
     async def missions(_request: Request, c: Control) -> object:
         return {"missions": await c.mission_list()}
 
@@ -914,6 +917,7 @@ def core_routes(
         api("react", react, post=True),
         api("stop", stop, post=True),
         api("control", controls(overview)),
+        api("usage", controls(usage)),
         api("control/pause", controls(pause), post=True),
         api("control/settings", controls(change), post=True),
         api("memory", controls(memory)),

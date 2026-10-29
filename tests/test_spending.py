@@ -9,11 +9,20 @@ import pytest
 
 from orion.config import BudgetConfig
 from orion.core.journal import SqliteJournal
-from orion.providers.base import Embedder, ModelRequest, ProviderError, Speaker
+from orion.core.projections import ProjectionRunner
+from orion.mobile.usage import UsageStats
+from orion.providers.base import (
+    Embedder,
+    ModelRequest,
+    ModelResponse,
+    ProviderError,
+    QuotaWindow,
+    Speaker,
+)
 from orion.providers.foreground import foreground
-from orion.providers.spending import SPENT, Spending, spending_tools, with_spending
+from orion.providers.spending import QUOTA, SPENT, Spending, spending_tools, with_spending
 from orion.tools.base import ToolContext
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import Script, ScriptedProvider, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 NOON = datetime(2026, 10, 20, 12, 0, tzinfo=PARIS)
@@ -37,9 +46,9 @@ async def test_each_call_is_journaled_and_tallied_by_who_was_waiting(
     await spending.complete(REQUEST)
     with foreground():
         await spending.complete(REQUEST)
-    await spending.complete(REQUEST)  # free: nothing to journal
+    await spending.complete(REQUEST)  # free (a plan): journaled for its tokens
     events = [e for e in await journal.read() if e.kind == SPENT]
-    assert [e.payload["foreground"] for e in events] == [False, True]
+    assert [e.payload["foreground"] for e in events] == [False, True, False]
     await spending.sync()
     assert spending.tally.days["2026-10-20"] == [0.5, 0.25]
     (tool,) = spending_tools(spending)
@@ -104,3 +113,26 @@ def test_the_wrapper_embeds_and_speaks_only_if_the_provider_does(journal: Sqlite
 
     both = with_spending(Both(), journal, BudgetConfig(), "Europe/Paris")
     assert isinstance(both, Embedder) and isinstance(both, Speaker)
+
+
+async def test_a_plans_calls_and_windows_reach_the_usage_screen(journal: SqliteJournal) -> None:
+    def plan(used: float) -> Script:
+        def make(request: ModelRequest) -> ModelResponse:
+            response = reply("ok", prompt_tokens=1000, cached=800, cost=0)(request)
+            window = QuotaWindow(name="five_hour", used=used, resets_at="2026-10-20T15:00:00+00:00")
+            return response.model_copy(update={"provider": "claude-code", "quota": [window]})
+
+        return make
+
+    provider = ScriptedProvider(plan(0.171), plan(0.172), plan(0.25))
+    spending = wallet(journal, provider, [NOON])
+    for _ in range(3):
+        await spending.complete(REQUEST)
+    stats = UsageStats()
+    await ProjectionRunner(journal, [stats]).catch_up()
+    seen = stats.report(NOON.date())
+    assert seen["today"]["calls"] == 3 and seen["today"]["prompt_tokens"] == 3000
+    assert seen["today"]["cache_share"] == 0.8
+    assert len([e for e in await journal.read() if e.kind == QUOTA]) == 2  # 17 % twice: once
+    [quota] = seen["quotas"]
+    assert quota["provider"] == "claude-code" and quota["windows"][0]["used"] == 0.25

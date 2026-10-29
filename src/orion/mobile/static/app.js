@@ -2735,6 +2735,7 @@ async function settingsFill(refresh) {
             h("div", { class: "tile" }, h("small", {}, "Ce mois-ci"), h("b", { class: "big" }, money(o.cost.month)), o.cost.monthly_cap ? meter(o.cost.month / o.cost.monthly_cap, `sur ${money(o.cost.monthly_cap)}`) : h("small", {}, "sans plafond")),
           )
         : null,
+      h("div", { class: "list items" }, row("wave", "Utilisation", "", usagePanel, "", "tokens, messages, forfaits")),
       h("p", { class: "label" }, "Quand je t'écris"),
       h(
         "div",
@@ -3284,6 +3285,151 @@ function versionPanel(server) {
       : null,
     h("p", { class: "hint" }, "Je me mets à jour seul : toutes les deux minutes, je regarde si le code a avancé. J'installe, je vérifie que je démarre, et je reviens en arrière si ça casse. Je te préviens dans les deux cas."),
   ]);
+}
+
+// -- usage: tokens, messages, what the plans have left ---------------------------------------------
+
+const COMPACT = new Intl.NumberFormat("fr-FR", { notation: "compact", maximumFractionDigits: 1 });
+const DAY_MONTH = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" });
+const PROVIDERS = { "claude-code": "Claude", chatgpt: "ChatGPT", openrouter: "OpenRouter" };
+const WINDOWS = { five_hour: "5 heures", seven_day: "7 jours", seven_day_opus: "7 jours · Opus", seven_day_sonnet: "7 jours · Sonnet" };
+const CHANNELS = { mobile: "l'app", telegram: "Telegram", imessage: "iMessage", terminal: "le terminal", inbox: "le mail", webhook: "un raccourci", line: "le téléphone" };
+
+function resets(at) {
+  const when = new Date(at);
+  const hours = (when - new Date()) / 3600000;
+  if (hours <= 0) return "repart à zéro";
+  return hours < 20 ? `repart à ${when.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}` : `repart ${UNTIL.format(when)}`;
+}
+
+function usageBars(series, key) {
+  const top = Math.max(...series.map((d) => d[key]), 0);
+  const show = (v) => (key === "cost" ? money(v) : COMPACT.format(v));
+  const bars = h(
+    "div",
+    { class: "bars", role: "img", "aria-label": `Sur ${series.length} jours, au plus ${show(top)} par jour` },
+    series.map((d) => {
+      const bar = h("span", { title: `${DAY_MONTH.format(new Date(d.day))} : ${show(d[key])}` });
+      bar.style.height = top > 0 && d[key] > 0 ? `${Math.max(3, Math.round((100 * d[key]) / top))}%` : "0";
+      return bar;
+    }),
+  );
+  return h(
+    "div",
+    { class: "card chart" },
+    h("small", {}, top > 0 ? `au plus ${show(top)} par jour` : "rien encore"),
+    bars,
+    h("div", { class: "chart-axis" }, h("small", {}, DAY_MONTH.format(new Date(series[0].day))), h("small", {}, "aujourd'hui")),
+  );
+}
+
+function usageTile(title, big, caption) {
+  return h("div", { class: "tile" }, h("small", {}, title), h("b", { class: "big" }, big), h("small", {}, caption));
+}
+
+function usagePanel() {
+  let shown = "tokens";
+  panel(
+    "Utilisation",
+    async (refresh) => {
+      const u = await api("api/usage");
+      const tokens = (p) => COMPACT.format(p.prompt_tokens + p.completion_tokens);
+      const t = u.today;
+      const parts = [
+        h(
+          "div",
+          { class: "grid" },
+          usageTile("Aujourd'hui", tokens(t), `tokens · ${plural(t.calls, "appel", "appels")} · ${money(t.cost)}`),
+          usageTile("Messages aujourd'hui", String(t.received), `de toi · ${t.answers} de moi · ${plural(t.tools, "outil", "outils")}`),
+          usageTile("7 jours", money(u.week.cost), `${tokens(u.week)} tokens · ${plural(u.week.received, "message", "messages")}`),
+          usageTile(`${u.span.days} jours`, money(u.span.cost), `${tokens(u.span)} tokens · ${plural(u.span.received, "message", "messages")}`),
+        ),
+      ];
+      if (u.quotas.length || u.credits.length) {
+        parts.push(
+          h("p", { class: "label" }, "Forfaits"),
+          h(
+            "div",
+            { class: "list items" },
+            u.quotas.flatMap((q) =>
+              q.windows.map((w) =>
+                h(
+                  "div",
+                  { class: "item quota" },
+                  h("span", { class: `ico ${tint("spark")}` }, icon("spark", 17)),
+                  h(
+                    "span",
+                    {},
+                    h("span", { class: "text" }, `${PROVIDERS[q.provider] || q.provider} · ${WINDOWS[w.name] || w.name.replaceAll("_", " ")}`),
+                    meter(w.used, `${Math.round(w.used * 100)} % utilisé${w.resets_at ? ` · ${resets(w.resets_at)}` : ""}`),
+                  ),
+                ),
+              ),
+            ),
+            u.credits.map((c) => row("key", PROVIDERS[c.provider] || c.provider, c.remaining !== null ? `${money(c.remaining)} restants` : `${money(c.used)} dépensés`, null, "", c.total ? `sur ${money(c.total)} de crédit` : "")),
+          ),
+          u.quotas.length ? h("p", { class: "hint" }, `Ce que le forfait m'a dit à mon dernier appel (${u.quotas.map((q) => SHORT.format(new Date(q.at))).join(", ")}).`) : null,
+        );
+      }
+      const pick = (key, text) => h("button", { type: "button", class: "chip", "aria-pressed": String(shown === key), onclick: () => ((shown = key), refresh()) }, text);
+      const s = u.span;
+      parts.push(
+        h("p", { class: "label" }, `Les ${s.days} derniers jours`),
+        h("div", { class: "chips" }, pick("tokens", "Tokens"), pick("cost", "Coût"), pick("messages", "Messages")),
+        usageBars(u.series, shown),
+        h("p", { class: "label" }, "Tokens"),
+        h(
+          "div",
+          { class: "list items" },
+          row("book", "Lus", COMPACT.format(s.prompt_tokens), null, "", "ce que je relis à chaque appel"),
+          row("wrong", "Écrits", COMPACT.format(s.completion_tokens), null),
+          row("check", "Relus du cache", s.cache_share !== null ? `${Math.round(s.cache_share * 100)} %` : "—", null, "", `${COMPACT.format(s.cached_tokens)} tokens, presque gratuits`),
+          s.cache_write_tokens ? row("pin", "Mis en cache", COMPACT.format(s.cache_write_tokens), null) : null,
+        ),
+      );
+      if (u.models.length) {
+        parts.push(
+          h("p", { class: "label" }, "Modèles"),
+          h("div", { class: "list items" }, u.models.map((m) => row("blocks", m.model.split("/").pop(), m.cost ? money(m.cost) : "forfait", null, "", `${plural(m.calls, "appel", "appels")} · ${COMPACT.format(m.tokens)} tokens`))),
+        );
+      }
+      if (u.channels.length) {
+        parts.push(
+          h("p", { class: "label" }, "Tu m'écris par"),
+          h("div", { class: "list items" }, u.channels.map((c) => row("chat", CHANNELS[c.channel] || c.channel, String(c.count), null))),
+        );
+      }
+      const caps = u.caps;
+      if (caps && (caps.daily_cap || caps.monthly_cap)) {
+        parts.push(
+          h("p", { class: "label" }, "Plafonds"),
+          h(
+            "div",
+            { class: "grid" },
+            caps.daily_cap ? h("div", { class: "tile" }, h("small", {}, "Seul, aujourd'hui"), h("b", { class: "big" }, money(caps.alone_today)), meter(caps.alone_today / caps.daily_cap, `sur ${money(caps.daily_cap)}`)) : null,
+            caps.monthly_cap ? h("div", { class: "tile" }, h("small", {}, "Ce mois-ci"), h("b", { class: "big" }, money(caps.month)), meter(caps.month / caps.monthly_cap, `sur ${money(caps.monthly_cap)}`)) : null,
+          ),
+          caps.over ? h("p", { class: "hint" }, `Plafond atteint (${caps.over}) : ce que je fais seul attend.`) : null,
+        );
+      }
+      const e = u.ever;
+      if (e.since) {
+        parts.push(
+          h("p", { class: "label" }, "Depuis le début"),
+          h(
+            "div",
+            { class: "list items" },
+            row("calendar", "Depuis le", LONG_DAY.format(new Date(e.since)), null),
+            row("chat", "Messages", `${e.received} de toi · ${e.answers} de moi`, null),
+            row("spark", "Dépensé", money(e.cost), null, "", `dont ${money(e.alone)} de moi-même`),
+          ),
+          h("p", { class: "hint" }, "Les tokens se comptent depuis que cet écran existe ; avant, seul le coût est connu."),
+        );
+      }
+      return parts;
+    },
+    ["cost"],
+  );
 }
 
 // -- papers, people, the pages of his weeks ------------------------------------------------------
