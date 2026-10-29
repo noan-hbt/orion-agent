@@ -794,6 +794,10 @@ async function older() {
 
 function retail() {
   // Two-minute groups and fifteen-minute separators follow Messages (D139).
+  // A separator left behind by a removed pending bubble no longer heads a message.
+  for (const day of view.list.querySelectorAll(".day")) {
+    if (!day.nextElementSibling?.classList.contains("msg")) day.remove();
+  }
   const items = [...view.list.querySelectorAll(".msg")];
   const latestOwner = items.findLast((el) => el.dataset.who === "owner");
   items.forEach((el, i) => {

@@ -77,3 +77,38 @@ async def test_a_thread_read_at_its_end_stays_there_as_it_grows() -> None:
         }""",
     )
     assert result == {"atEnd": 0, "readingAbove": 0}
+
+
+RETAIL = _piece("function retail() {", "\n}\n")
+
+
+async def test_a_message_sent_after_a_pause_shows_its_time_once() -> None:
+    """Seen for real: after a pause, the time above a sent message appeared twice."""
+    result = await _run(
+        RETAIL + "\nwindow.retail = retail;",
+        """() => {
+          const list = document.createElement("div");
+          document.body.append(list);
+          window.view = { list, older: document.createElement("button") };
+          window.state = { more: false };
+          window.timestamp = () => Object.assign(document.createElement("p"), { className: "day" });
+          const msg = (who, at) => {
+            const el = document.createElement("div");
+            el.className = `msg ${who}`;
+            el.dataset.who = who;
+            el.dataset.at = at;
+            return el;
+          };
+          const later = Date.now();
+          list.append(msg("orion", later - 3600000));
+          retail();
+          const pending = msg("owner", later);
+          list.append(pending);
+          retail();
+          pending.remove();  // the server's copy replaces the pending bubble
+          list.append(timestamp(), msg("owner", later));
+          retail();
+          return list.querySelectorAll(".day").length;
+        }""",
+    )
+    assert result == 2
