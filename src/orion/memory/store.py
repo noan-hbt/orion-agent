@@ -3,7 +3,11 @@
 Facts are bi-temporal. `valid_from` / `valid_to` say when a fact was true in the world;
 `known_from_seq` / `known_to_seq` say when Orion learned it and when it stopped believing it
 (the journal positions of the asserting and invalidating events). Nothing is overwritten: an
-invalidated fact stays queryable as history.
+invalidated fact stays queryable as history: a replaced fact names the fact that replaced it
+(`replaced_by`), so a fact's versions read as a chain.
+
+The schema is versioned (`SCHEMA_VERSION`): when it changes, the store drops its tables and is
+replayed from the journal, which it can always be.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    FACT_PINNED,
     PERSON_ALIASED,
     RULE_LEARNED,
     RULE_RETIRED,
@@ -33,6 +38,7 @@ from orion.memory.model import (
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    FactPinned,
     PersonAliased,
     RuleBasis,
     RuleLearned,
@@ -59,7 +65,10 @@ CREATE TABLE IF NOT EXISTS facts (
     invalid_reason  TEXT,
     trust           INTEGER NOT NULL,
     event_id        TEXT NOT NULL,
-    source          TEXT NOT NULL
+    source          TEXT NOT NULL,
+    actor           TEXT NOT NULL,
+    replaced_by     TEXT,
+    pinned          INTEGER NOT NULL DEFAULT 0
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
     fact_id UNINDEXED, statement, about, tokenize = 'unicode61 remove_diacritics 2'
@@ -111,6 +120,10 @@ CREATE TABLE IF NOT EXISTS setting_changes (
 );
 """
 
+SCHEMA_VERSION = 2
+"""Bumped when a table changes: the store is then rebuilt from the journal."""
+_TABLES = ("facts", "facts_fts", "commitments", "rules", "aliases", "setting_changes", "meta")
+
 _WORD = re.compile(r"\w{3,}", re.UNICODE)
 
 
@@ -133,6 +146,11 @@ class Fact:
     invalid_reason: str | None
     trust: Trust
     source: str
+    actor: str = ""
+    known_from_hlc: str = ""
+    """When Orion learned it (the asserting event's clock)."""
+    replaced_by: str | None = None
+    pinned: bool = False
 
     @property
     def current(self) -> bool:
@@ -218,6 +236,10 @@ def _fact(row: sqlite3.Row) -> Fact:
         invalid_reason=row["invalid_reason"],
         trust=Trust(row["trust"]),
         source=row["source"],
+        actor=row["actor"],
+        known_from_hlc=row["known_from_hlc"],
+        replaced_by=row["replaced_by"],
+        pinned=bool(row["pinned"]),
     )
 
 
@@ -255,6 +277,19 @@ class MemoryStore:
 
     async def open(self) -> None:
         await self._sql.open()
+        await self._sql.run(self._migrate_sync)
+
+    def _migrate_sync(self) -> None:
+        db = self._sql.db
+        version = int(db.execute("PRAGMA user_version").fetchone()[0])
+        if version == SCHEMA_VERSION:
+            return
+        for table in _TABLES:
+            db.execute(f"DROP TABLE IF EXISTS {table}")
+        db.executescript(_SCHEMA)
+        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        if version:
+            log.info("memory.store_rebuilding", schema=SCHEMA_VERSION, was=version)
 
     async def close(self) -> None:
         await self._sql.close()
@@ -357,6 +392,9 @@ class MemoryStore:
         elif event.kind == FACT_INVALIDATED:
             payload = FactInvalidated.model_validate(event.payload)
             self._invalidate(db, payload.fact_id, payload.reason, payload.valid_to, event.seq)
+        elif event.kind == FACT_PINNED:
+            pin = FactPinned.model_validate(event.payload)
+            db.execute("UPDATE facts SET pinned = ? WHERE id = ?", (int(pin.pinned), pin.fact_id))
         elif event.kind == COMMITMENT_CREATED:
             c = CommitmentCreated.model_validate(event.payload)
             db.execute(
@@ -447,12 +485,21 @@ class MemoryStore:
         )
 
     def _assert_fact(self, db: sqlite3.Connection, event: Event, fact: FactAsserted) -> None:
+        pinned = False
         for old in fact.supersedes:
+            row = db.execute(
+                "SELECT pinned FROM facts WHERE id = ? AND known_to_seq IS NULL", (old,)
+            ).fetchone()
+            if row is None:
+                continue
+            pinned = pinned or bool(row[0])  # a pinned fact stays pinned once corrected
             self._invalidate(db, old, f"superseded by {fact.fact_id}", fact.valid_from, event.seq)
+            db.execute("UPDATE facts SET replaced_by = ? WHERE id = ?", (fact.fact_id, old))
         about = [a.strip() for a in fact.about if a.strip()]
         inserted = db.execute(
             "INSERT OR IGNORE INTO facts (id, statement, about, category, valid_from, "
-            "known_from_seq, known_from_hlc, trust, event_id, source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "known_from_seq, known_from_hlc, trust, event_id, source, actor, pinned) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 fact.fact_id,
                 fact.statement,
@@ -464,6 +511,8 @@ class MemoryStore:
                 int(event.trust),
                 event.id,
                 event.provenance.source,
+                event.provenance.actor,
+                int(pinned),
             ),
         )
         if inserted.rowcount == 0:

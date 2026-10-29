@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from orion.core.events import Trust
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
-from orion.memory.service import MemoryService, Origin
+from orion.memory.service import MemoryRefused, MemoryService, Origin
 from orion.memory.situations import Ending
 from orion.memory.store import Fact
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
@@ -270,7 +270,10 @@ class MemoryExtractor:
             except ValidationError as exc:
                 report.rejected.append(f"invalid operation: {exc.errors(include_url=False)[:1]}")
                 continue
-            outcome = await self._apply_one(op, origin, fact_ids, commitment_ids, situation_ids)
+            try:
+                outcome = await self._apply_one(op, origin, fact_ids, commitment_ids, situation_ids)
+            except MemoryRefused as exc:
+                outcome = f"{op.op} refused: {exc}"
             (report.applied if outcome.startswith("ok") else report.rejected).append(outcome)
         if report.applied or report.rejected:
             log.info("memory.extracted", applied=report.applied, rejected=report.rejected)

@@ -52,8 +52,11 @@ def snapshot_block(
 ) -> str | None:
     """Core memory shown once at the start of a conversation window: his portrait (D144), then
     the playbook, which changes how Orion behaves, then what it knows. The playbook is always
-    whole: `max_chars` bounds only the facts and commitments (D185)."""
-    core = [f for f in facts if f.category in {Category.PROFILE, Category.PREFERENCE}]
+    whole: `max_chars` bounds only the facts and commitments (D185). What he pinned comes
+    first, whatever its kind (D188)."""
+    core = [f for f in facts if f.pinned] + [
+        f for f in facts if not f.pinned and f.category in {Category.PROFILE, Category.PREFERENCE}
+    ]
     lines = [*(format_rule(r) for r in rules), *(format_setting(c) for c in settings)]
     known: list[str] = []
     for line in [

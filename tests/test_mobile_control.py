@@ -169,6 +169,33 @@ async def test_he_reads_and_corrects_what_orion_knows(controlled: Controlled) ->
     assert (await http.get("/app/api/rules")).json()["rules"] == []
 
 
+async def test_he_corrects_pins_and_takes_back_a_memory_from_the_app(
+    controlled: Controlled,
+) -> None:
+    http = controlled.world.http
+    memory = controlled.memory
+    chat = Origin(actor="orion:extractor", source="thread:t1", trust=Trust.SYSTEM)
+    city = await memory.remember("Il habite à Paris", chat)
+    await memory.remember("L'annonce dit 42 m²", READ)
+    shown = {f["statement"]: f for f in (await http.get("/app/api/memory")).json()["facts"]}
+    assert shown["Il habite à Paris"]["origin"] == "conversation"  # he said it, in a chat
+    assert shown["L'annonce dit 42 m²"]["origin"] == "outside"
+
+    assert (await http.post(f"/app/api/memory/{city}/pin", json={"pinned": True})).is_success
+    fixed = await http.post(
+        f"/app/api/memory/{city}/correct", json={"statement": "Il habite à Lyon"}
+    )
+    lyon = fixed.json()["id"]
+    detail = (await http.get(f"/app/api/memory/{lyon}")).json()
+    assert [v["statement"] for v in detail["versions"]] == ["Il habite à Paris", "Il habite à Lyon"]
+    assert detail["pinned"]  # still pinned once corrected
+
+    assert (await http.post(f"/app/api/memory/{lyon}/forget")).is_success
+    back = (await http.post(f"/app/api/memory/{lyon}/restore")).json()["id"]
+    restored = await memory.store.fact(back)
+    assert restored is not None and restored.current and restored.statement == "Il habite à Lyon"
+
+
 async def test_he_takes_autonomy_back_and_sees_what_happened(controlled: Controlled) -> None:
     http = controlled.world.http
     await controlled.autonomy.grant("calendar_add", None, None)

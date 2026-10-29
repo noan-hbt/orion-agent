@@ -44,7 +44,8 @@ const ICONS = {
   where: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14M12 17v.5"/>',
   wrong: '<path d="M4 20l4-1 11-11-3-3L5 16zM14 6l3 3"/>',
   clock: '<circle cx="12" cy="13" r="7"/><path d="M12 10v3l2 2M9 3h6"/>',
-  forget: '<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>',
+  pin: '<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>',
+forget: '<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>',
   reply: '<path d="M10 8L4 13l6 5M4 13h10a6 6 0 0 1 6 6"/>',
   moon: '<path d="M20 14A8 8 0 0 1 10 4a8 8 0 1 0 10 10z"/>',
   door: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h9"/>',
@@ -4360,9 +4361,10 @@ function memoryPanel() {
   let query = "";
   let past = false;
   let timer = null;
+  let kind = "all";
   const search = h("input", {
     type: "search",
-    placeholder: "Chercher : loyer, maman, voiture…",
+    placeholder: "Chercher : loyer, ce que Paul aime…",
     "aria-label": "Chercher dans la mémoire",
     oninput: () => {
       clearTimeout(timer);
@@ -4372,113 +4374,228 @@ function memoryPanel() {
       }, 250);
     },
   });
-  const list = h("div", { class: "list items" });
-  const portrait = h("div");
-  let kind = "all";
-  const KINDS = { all: "Tout", you: "Toi", people: "Proches", projects: "Projets" };
-  const IN = { you: ["profile", "preference"], people: ["person"], projects: ["project"] };
-  const CATEGORY = { profile: "toi", preference: "tes goûts", person: "un proche", project: "un projet", other: "divers" };
+  const body = h("div");
+  const KINDS = { all: "Tout", profile: "Toi", preference: "Tes goûts", person: "Proches", project: "Projets", other: "Divers" };
+  const TITLES = { profile: "Toi", preference: "Tes goûts", person: "Tes proches", project: "Tes projets", other: "Divers" };
   const kinds = Object.entries(KINDS).map(([key, text]) =>
     h("button", { type: "button", class: "chip", "aria-pressed": String(key === kind), onclick: () => {
       kind = key;
-      for (const b of kinds) b.setAttribute("aria-pressed", String(b === kinds[Object.keys(KINDS).indexOf(key)]));
+      kinds.forEach((b, i) => b.setAttribute("aria-pressed", String(Object.keys(KINDS)[i] === key)));
       refreshList();
     } }, text),
   );
   const toggle = h("button", { type: "button", class: "chip", "aria-pressed": "false", onclick: () => ((past = !past), toggle.setAttribute("aria-pressed", String(past)), refreshList()) }, "Avec l'historique");
+  const day = (iso) => new Date(iso).toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
+  const section = (title, facts) => (facts.length ? [h("h2", { class: "section" }, title, h("small", {}, String(facts.length))), h("div", { class: "list items" }, facts.map(row))] : []);
+  function row(f) {
+    const line = f.current
+      ? [f.pinned ? "épinglé" : null, f.stale ? "à vérifier" : null, f.how, f.known ? day(f.known) : null].filter(Boolean).join(" · ")
+      : f.why_not;
+    return h(
+      "button",
+      { type: "button", class: `item ${f.current ? "" : "past"}`, onclick: () => factSheet(f, refreshList) },
+      h("span", {}, h("span", { class: "text" }, f.statement), h("small", { class: f.trusted && !f.stale ? "" : "warn" }, line)),
+    );
+  }
+  function portraitCard(found) {
+    if (!found.portrait) return [];
+    const when = found.portrait.day === new Date().toLocaleDateString("sv") ? "réécrit cette nuit" : `écrit le ${day(found.portrait.day)}`;
+    return [
+      h(
+        "article",
+        { class: "card night-note portrait" },
+        h("small", {}, `Comment je te vois · ${when}`),
+        ...found.portrait.text.split(/\n\s*\n/).map((part) => h("p", {}, part)),
+        h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ton portrait de moi, ") }, "Ce n'est pas tout à fait ça"),
+      ),
+    ];
+  }
+  function situationsCard(found) {
+    if (!found.situations.length) return [];
+    return [
+      h(
+        "article",
+        { class: "card night-note situations" },
+        h("small", {}, "En ce moment"),
+        ...found.situations.map((s) => h("p", {}, h("strong", {}, s.title), s.until ? ` · jusqu'au ${day(s.until)}` : "", h("br"), s.news || s.summary)),
+        h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ce que tu suis en ce moment, ") }, "Ce n'est plus d'actualité"),
+      ),
+    ];
+  }
+  function checkCard(stale) {
+    if (!stale.length) return [];
+    const answer = (f, still) => async () => {
+      try {
+        if (still) await api(`api/memory/${f.id}/confirm`, {});
+        else return factSheet(f, refreshList, true);
+        toast("Noté, c'est toujours vrai.");
+        refreshList();
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    return [
+      h(
+        "article",
+        { class: "card check" },
+        h("small", {}, "À vérifier · ça change souvent, et ça date"),
+        ...stale.slice(0, 3).map((f) =>
+          h(
+            "div",
+            { class: "check-item" },
+            h("p", {}, h("strong", {}, f.stale), ` tu m'as dit : « ${f.statement} »`),
+            h(
+              "div",
+              { class: "check-actions" },
+              h("button", { type: "button", class: "pill tinted", onclick: answer(f, true) }, "Toujours vrai"),
+              h("button", { type: "button", class: "pill", onclick: answer(f, false) }, "Ça a changé"),
+            ),
+          ),
+        ),
+        stale.length > 3 ? h("small", {}, `et ${plural(stale.length - 3, "autre", "autres")}`) : null,
+      ),
+    ];
+  }
+  function byPerson(facts) {
+    const people = new Map();
+    for (const f of facts) for (const name of f.people.length ? f.people : ["Sans nom"]) people.set(name, [...(people.get(name) || []), f]);
+    return [...people.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).flatMap(([name, own]) => section(name, own));
+  }
   async function refreshList() {
     const found = await api(`api/memory?q=${encodeURIComponent(query)}${past ? "&past=1" : ""}`);
-    const facts = found.facts.filter((f) => kind === "all" || IN[kind].includes(f.category));
-    const seen = found.portrait && (kind === "all" || kind === "you");
-    portrait.replaceChildren(
-      ...(seen
-        ? [
-            h(
-              "article",
-              { class: "card night-note portrait" },
-              h("small", {}, `Comment je te vois · ${found.portrait.day === new Date().toLocaleDateString("sv") ? "réécrit cette nuit" : `écrit le ${new Date(found.portrait.day).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}`}`),
-              ...found.portrait.text.split(/\n\s*\n/).map((part) => h("p", {}, part)),
-              h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ton portrait de moi, ") }, "Ce n'est pas tout à fait ça"),
-            ),
-          ]
-        : []),
-      ...(seen && found.situations.length
-        ? [
-            h(
-              "article",
-              { class: "card situations" },
-              h("small", {}, "En ce moment"),
-              ...found.situations.map((s) =>
-                h(
-                  "p",
-                  {},
-                  h("strong", {}, s.title),
-                  s.until ? ` · jusqu'au ${new Date(s.until).toLocaleDateString("fr-FR", { day: "numeric", month: "long" })}` : "",
-                  h("br"),
-                  s.news || s.summary,
-                ),
-              ),
-              h("button", { type: "button", class: "link", onclick: () => askOrion("Dans ce que tu suis en ce moment, ") }, "Ce n'est plus d'actualité"),
-            ),
-          ]
-        : []),
-    );
-    list.replaceChildren(
-      ...(facts.length
-        ? facts.map((f) =>
-            h(
-              "button",
-              { type: "button", class: `item ${f.current ? "" : "past"}`, onclick: () => factSheet(f, refreshList) },
-              h("span", {}, h("span", { class: "text" }, f.statement), h("small", { class: f.trusted ? "" : "warn" }, f.current ? `${CATEGORY[f.category] || f.category} · ${f.from_owner ? "tu le lui as dit" : f.source}` : f.why_not || "remplacé")),
-            ),
-          )
-        : [h("p", { class: "empty" }, query ? "Rien de tel." : "Je ne sais encore rien de toi.")]),
-    );
+    const facts = found.facts.filter((f) => kind === "all" || f.category === kind);
+    let parts;
+    if (!facts.length) {
+      parts = [h("p", { class: "empty" }, query ? "Rien de tel." : kind === "all" ? "Je ne sais encore rien de toi." : "Rien ici pour l'instant.")];
+    } else if (query) {
+      parts = [h("div", { class: "list items" }, facts.map(row))];
+    } else if (kind === "person") {
+      parts = byPerson(facts);
+    } else if (kind !== "all") {
+      parts = [...(kind === "profile" ? portraitCard(found) : []), h("div", { class: "list items" }, facts.map(row))];
+    } else {
+      const current = facts.filter((f) => f.current);
+      const fresh = current.filter((f) => f.new);
+      const pinned = current.filter((f) => f.pinned);
+      const rest = current.filter((f) => !f.new && !f.pinned);
+      parts = [
+        ...portraitCard(found),
+        ...situationsCard(found),
+        ...checkCard(current.filter((f) => f.stale)),
+        ...section("Épinglés", pinned),
+        ...section("Nouveau cette semaine", fresh.filter((f) => !f.pinned)),
+        ...Object.entries(TITLES).flatMap(([category, title]) => section(title, rest.filter((f) => f.category === category))),
+        ...section("Plus vrai", facts.filter((f) => !f.current)),
+      ];
+    }
+    body.replaceChildren(...parts);
   }
   panel("Ce que je sais de toi", async () => {
     await refreshList();
     return [
       h("label", { class: "search glass" }, icon("search", 18), search),
       h("div", { class: "chips" }, kinds, toggle),
-      portrait,
-      list,
-      h("p", { class: "hint" }, "Touche un souvenir pour le corriger ou l'oublier. Rien n'est effacé en silence : l'ancienne version reste dans l'historique."),
+      body,
+      h("p", { class: "hint" }, "Touche un souvenir pour le modifier, l'épingler ou l'oublier. Rien n'est effacé en silence : l'ancienne version reste dans l'historique."),
     ];
   });
 }
 
-function factSheet(fact, refresh) {
+function undoToast(text, undo) {
+  const el = h(
+    "div",
+    { class: "toast with-action", role: "status" },
+    text,
+    h("button", { type: "button", onclick: async () => {
+      el.remove();
+      await undo();
+    } }, "Annuler"),
+  );
+  layer.append(el);
+  setTimeout(() => {
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 200);
+  }, 6000);
+}
+
+function factSheet(fact, refresh, editing = false) {
+  const act = (path, data, done) => async () => {
+    try {
+      const result = await api(`api/memory/${fact.id}/${path}`, data);
+      close();
+      await refresh();
+      done?.(result);
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+  const edit = h("textarea", { rows: 3, maxlength: 1000, "aria-label": "Ce qui est vrai maintenant" });
+  edit.value = fact.statement;
+  const editor = h(
+    "div",
+    { class: "field-edit memory-edit", hidden: !editing },
+    edit,
+    h("button", { type: "button", class: "pill dark wide", onclick: () => act("correct", { statement: edit.value }, () => toast("Corrigé. L'ancienne version reste dans l'historique."))() }, "Enregistrer"),
+  );
+  const versions = h("div");
+  const when = fact.known ? `, le ${new Date(fact.known).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" })}` : "";
   const close = sheet(
     h("p", { class: "quote" }, fact.statement),
-    h("p", { class: "label" }, fact.from_owner ? "Tu le lui as dit" : `Vient de : ${fact.source}`),
+    h("p", { class: "label" }, `${fact.how.charAt(0).toUpperCase()}${fact.how.slice(1)}${when}.`),
+    fact.stale ? h("p", { class: "label warn" }, `Ça change souvent, et c'était ${fact.stale} : c'est peut-être plus vrai.`) : null,
+    fact.current ? null : h("p", { class: "label" }, `Plus vrai : ${fact.why_not}.`),
+    editor,
     fact.current
       ? h(
           "div",
           { class: "list" },
-          h("button", { type: "button", onclick: () => askOrion(`Corrige ce souvenir : « ${fact.statement} ». En fait, `) }, icon("wrong", 20), "Corriger"),
+          h("button", { type: "button", onclick: () => ((editor.hidden = false), edit.focus()) }, icon("wrong", 20), "Modifier"),
+          fact.stale ? h("button", { type: "button", onclick: act("confirm", {}, () => toast("Noté, c'est toujours vrai.")) }, icon("check", 20), "C'est toujours vrai") : null,
+          h("button", { type: "button", onclick: act("pin", { pinned: !fact.pinned }, () => toast(fact.pinned ? "Désépinglé." : "Épinglé : je l'aurai toujours en tête.")) }, icon("pin", 20), fact.pinned ? "Désépingler" : "Épingler"),
           h("button", { type: "button", onclick: () => askOrion(`D'où tu sais que « ${fact.statement} » ?`) }, icon("where", 20), "D'où ça vient"),
           h(
             "button",
             {
               type: "button",
               class: "danger",
-              onclick: async () => {
-                try {
-                  await api(`api/memory/${fact.id}/forget`, {});
-                  close();
-                  toast("Oublié.");
-                  refresh();
-                } catch (error) {
-                  toast(said(error));
-                }
-              },
+              onclick: act("forget", {}, () =>
+                undoToast("Oublié.", async () => {
+                  try {
+                    await api(`api/memory/${fact.id}/restore`, {});
+                    toast("Remis.");
+                    refresh();
+                  } catch (error) {
+                    toast(said(error));
+                  }
+                }),
+              ),
             },
             icon("forget", 20),
             "Oublier",
           ),
         )
       : null,
+    versions,
   );
+  api(`api/memory/${fact.id}`)
+    .then((detail) => {
+      const parts = [];
+      if (detail.versions.length > 1) {
+        parts.push(
+          h("h2", { class: "section" }, "Ses versions"),
+          h(
+            "div",
+            { class: "list items" },
+            detail.versions.map((v) =>
+              h("div", { class: `item ${v.current ? "" : "past"}` }, h("span", {}, h("span", { class: "text" }, v.statement), h("small", {}, [v.how, v.known ? new Date(v.known).toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" }) : null].filter(Boolean).join(" · ")))),
+            ),
+          ),
+        );
+      }
+      if (detail.restorable) parts.push(h("div", { class: "list" }, h("button", { type: "button", onclick: act("restore", {}, () => toast("Remis.")) }, icon("reply", 20), "Le remettre")));
+      versions.replaceChildren(...parts);
+    })
+    .catch((error) => console.warn("memory detail", error));
 }
 
 function commitmentsPanel() {

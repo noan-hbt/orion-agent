@@ -3,10 +3,16 @@
 Also implements forgetting by source: every event whose provenance matches the source is
 redacted, together with everything derived from or caused by those events (transitively),
 then the memory projection is rebuilt and checked against a fresh replay of the journal.
+
+Two guards hold here, in code rather than in a prompt: what comes from outside (a mail, the web,
+below SYSTEM trust) never replaces nor removes what Orion was told or worked out itself
+(`MemoryRefused`); and a fact asserted again, word for word, is not stored twice.
 """
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -22,6 +28,7 @@ from orion.memory.model import (
     COMMITMENT_CREATED,
     FACT_ASSERTED,
     FACT_INVALIDATED,
+    FACT_PINNED,
     PERSON_ALIASED,
     RULE_LEARNED,
     RULE_RETIRED,
@@ -32,6 +39,7 @@ from orion.memory.model import (
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
+    FactPinned,
     PersonAliased,
     RuleBasis,
     RuleLearned,
@@ -67,6 +75,18 @@ class Origin:
     trust: Trust
     derived_from: tuple[str, ...] = ()
     correlation_id: str | None = None
+
+
+class MemoryRefused(ValueError):
+    """A write that may not touch the facts it names (less trusted than they are)."""
+
+
+def same_statement(text: str) -> str:
+    """How two statements are compared for duplicates: case, accents, punctuation and spacing
+    do not matter."""
+    plain = unicodedata.normalize("NFKD", text.casefold())
+    plain = "".join(c for c in plain if not unicodedata.combining(c))
+    return " ".join(re.sub(r"[^\w]+", " ", plain).split())
 
 
 @dataclass(frozen=True)
@@ -106,6 +126,16 @@ class MemoryService:
         valid_from: str | None = None,
         supersedes: list[str] | None = None,
     ) -> str:
+        """The new fact's id, or the id of the same fact already known (nothing is written)."""
+        supersedes = list(supersedes or [])
+        await self._may_change(supersedes, origin)
+        key = same_statement(statement)
+        for known in await self.store.facts():
+            if known.id in supersedes or same_statement(known.statement) != key:
+                continue
+            if known.trust >= origin.trust:
+                return known.id  # already known, as surely
+            supersedes.append(known.id)  # said again by a surer source: it takes its place
         fact_id = f"f_{new_id()}"
         payload = FactAsserted(
             fact_id=fact_id,
@@ -113,10 +143,24 @@ class MemoryService:
             about=about or [],
             category=category,
             valid_from=valid_from,
-            supersedes=supersedes or [],
+            supersedes=supersedes,
         )
         await self._write(FACT_ASSERTED, payload, origin)
         return fact_id
+
+    async def pin(self, fact_id: str, pinned: bool, origin: Origin) -> None:
+        await self._write(FACT_PINNED, FactPinned(fact_id=fact_id, pinned=pinned), origin)
+
+    async def _may_change(self, fact_ids: list[str], origin: Origin) -> None:
+        """Content from outside may not replace or remove a fact surer than itself."""
+        if origin.trust >= Trust.SYSTEM:
+            return
+        for fact_id in fact_ids:
+            fact = await self.store.fact(fact_id)
+            if fact is not None and fact.trust > origin.trust:
+                raise MemoryRefused(
+                    f"{fact_id} is known at trust {fact.trust.name}, above {origin.trust.name}"
+                )
 
     async def alias_person(self, alias: str, canonical: str, reason: str, origin: Origin) -> None:
         await self._write(
@@ -126,6 +170,7 @@ class MemoryService:
     async def invalidate(
         self, fact_id: str, reason: str, origin: Origin, valid_to: str | None = None
     ) -> None:
+        await self._may_change([fact_id], origin)
         await self._write(
             FACT_INVALIDATED,
             FactInvalidated(fact_id=fact_id, reason=reason, valid_to=valid_to),

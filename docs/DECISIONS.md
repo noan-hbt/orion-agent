@@ -4194,3 +4194,43 @@ prévient Orion à chaque passage, et c'est Orion qui décide quoi en faire.
 - **Les noms** : « chez », « au », « des »… ne comptent plus (« chez maman » = « Maison
   maman »), et une consigne pour un lieu que le téléphone n'a jamais signalé rappelle à Orion
   les noms qu'il signale.
+
+## D188 — Ce qu'Orion sait de lui : lisible, daté, corrigeable sur place
+
+*29/10/2026 · acceptée · révise D11, D83, D125*
+
+« Mes souvenirs » montrait une liste à plat. Ce qu'il avait dit en discutant s'affichait
+« Vient de : thread:… », l'historique montrait « superseded by f_… », la recherche de l'app ne
+trouvait que les mots exacts quand Orion, lui, cherche par le sens, et corriger renvoyait au chat.
+La mémoire elle-même laissait passer deux choses : un contenu venu du dehors pouvait remplacer ce
+qu'il avait dit, et un même fait redit s'ajoutait une deuxième fois.
+
+- **D'où ça vient, en clair** : « tu me l'as dit », « tu me l'as dit en discutant », « j'en ai
+  déduit », « lu dans un mail », « vu sur le web »… et quand, à partir de la source, de l'acteur et
+  de la confiance de l'événement. La confiance d'un fait extrait reste plafonnée à `SYSTEM` :
+  seule l'étiquette change.
+- **Rangé par thème** : Toi, Tes goûts, Tes proches (un groupe par personne, alias suivis), Tes
+  projets, Divers ; en tête, ce qu'il a épinglé et ce qu'Orion a appris cette semaine.
+- **À vérifier** : ce que le module doute (D83) juge périmé est visible dans l'app, avec
+  « Toujours vrai » (`doubt.confirmed`) et « Ça a changé » (modifier sur place).
+- **Corriger sur place** : le texte se modifie dans l'app ; c'est un nouveau fait qui remplace
+  l'ancien (`supersedes`), jamais une réécriture. Chaque fait sait qui l'a remplacé
+  (`replaced_by`), donc ses versions se lisent en chaîne.
+- **Épingler** (`memory.fact.pinned`) : un fait épinglé ouvre toujours `<memoire>`, quelle que soit
+  sa catégorie, et le reste une fois corrigé.
+- **Oublier s'annule** : quelques secondes pour « Annuler », puis « Le remettre » depuis
+  l'historique. Remettre est un nouveau fait dit par lui, l'oubli reste au journal.
+- **Recherche de l'app = celle d'Orion** : par le sens et par les mots (D27).
+- **Gardes dans le code** : ce qui vient du dehors (sous `SYSTEM`) ne remplace ni ne retire un
+  fait plus sûr que lui (`MemoryRefused`) ; un fait redit mot pour mot (casse, accents,
+  ponctuation à part) n'est pas stocké deux fois, et s'il est redit par une source plus sûre, la
+  nouvelle version prend sa place.
+- **Le magasin se reconstruit seul** quand son schéma change (`SCHEMA_VERSION`) : il est
+  rejoué depuis le journal, ce qu'il peut toujours être.
+
+Pas fait, volontairement : pas de doublons « de sens » détectés par embeddings (« Paul aime le
+café » et « Paul n'aime pas le café » sont trop proches pour qu'un seuil tranche ; la passe du
+soir et l'extracteur s'en chargent), pas d'index vectoriel (le calcul exhaustif reste de l'ordre
+de la milliseconde à l'échelle d'une vie), pas de table de personnes (elles restent dérivées des
+faits, D27).
+

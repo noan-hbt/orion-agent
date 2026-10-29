@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
-from orion.memory.service import MemoryService, Origin
+from orion.memory.service import MemoryRefused, MemoryService, Origin
 from orion.memory.situations import Ending
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
@@ -112,20 +112,26 @@ class SituationListInput(BaseModel):
 
 def memory_tools(memory: MemoryService) -> list[Tool]:
     async def remember(args: Any, ctx: ToolContext) -> ToolResult:
-        fact_id = await memory.remember(
-            args.statement,
-            origin_of(ctx),
-            about=args.about,
-            category=args.category,
-            valid_from=args.valid_from,
-            supersedes=args.replaces,
-        )
+        try:
+            fact_id = await memory.remember(
+                args.statement,
+                origin_of(ctx),
+                about=args.about,
+                category=args.category,
+                valid_from=args.valid_from,
+                supersedes=args.replaces,
+            )
+        except MemoryRefused as exc:
+            return ToolResult(f"Refusé : {exc}", is_error=True)
         return ToolResult(f"Retenu ({fact_id}).", data={"fact_id": fact_id})
 
     async def forget_fact(args: Any, ctx: ToolContext) -> ToolResult:
         if await memory.store.fact(args.fact_id) is None:
             return ToolResult(f"No fact with id {args.fact_id}", is_error=True)
-        await memory.invalidate(args.fact_id, args.reason, origin_of(ctx), args.valid_to)
+        try:
+            await memory.invalidate(args.fact_id, args.reason, origin_of(ctx), args.valid_to)
+        except MemoryRefused as exc:
+            return ToolResult(f"Refusé : {exc}", is_error=True)
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")
 
     async def recall(args: Any, ctx: ToolContext) -> ToolResult:

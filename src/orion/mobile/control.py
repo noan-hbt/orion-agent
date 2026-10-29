@@ -35,14 +35,18 @@ from orion.awaiting.module import Awaiting
 from orion.console.app import ACTIVITY, activity_detail
 from orion.console.dashboard import moment
 from orion.core.events import Provenance, Trust
+from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.autonomy import Autonomy, label
 from orion.hands.desk import HandsDesk
 from orion.initiative.engine import InitiativeSettings, effective_settings
-from orion.memory.model import CommitmentStatus, SettingKey
+from orion.memory.doubt import CONFIRMED, Doubt
+from orion.memory.model import MAX_STATEMENT, Category, CommitmentStatus, SettingKey
+from orion.memory.people import canonical
 from orion.memory.portrait import Portrait
 from orion.memory.service import MemoryService, Origin
+from orion.memory.store import Fact, name_key
 from orion.missions.service import Mission, Missions
 from orion.modules.base import Planned
 from orion.providers.spending import Spending
@@ -57,6 +61,19 @@ log = structlog.get_logger(__name__)
 OWNER = Origin(actor="owner:app", source="app", trust=Trust.OWNER)
 FROM_APP = Provenance(source="app", actor="owner:main")
 MAX_PAUSE = timedelta(days=30)
+FORGOTTEN_HERE = "retiré par toi depuis l'app"
+NEW_FOR = timedelta(days=7)
+"""How long a memory counts as new in the app."""
+_OUTSIDE = {
+    "mail": "lu dans un mail",
+    "inbox": "lu dans un mail",
+    "web": "vu sur le web",
+    "browser": "vu sur le web",
+    "calendar": "vu dans ton agenda",
+    "contacts": "vu dans tes contacts",
+    "library": "lu dans un document",
+    "papers": "lu dans un document",
+}
 ACTIVITY_WINDOW = 3000
 
 
@@ -88,6 +105,8 @@ class Control:
     """Where Orion's code is checked out (the server updates it there, D94)."""
     upkeep: Upkeep | None = None
     """What used to need a shell on the server (D154), once the app is served."""
+    doubt: Callable[[], Doubt | None] = lambda: None
+    """What may have changed since (D83), once its module is assembled."""
     _portrait: Portrait = field(default_factory=Portrait, init=False)
     _portrait_runner: ProjectionRunner | None = field(default=None, init=False)
 
@@ -218,32 +237,167 @@ class Control:
         ]
 
     async def facts(self, query: str = "", past: bool = False) -> list[dict[str, Any]]:
-        """Newest first; matching `query` (best first) when he searches."""
-        store = self.memory.store
+        """Newest first; matching `query` by meaning and words (best first) when he searches,
+        as Orion itself recalls (D188)."""
         if query.strip():
-            found = await store.search(query, limit=60, include_past=past)
+            found = await self.memory.search(query, limit=60, include_past=past)
         else:
-            found = list(reversed(await store.facts(include_past=past)))
-        return [
-            {
-                "id": f.id,
-                "statement": f.statement,
-                "category": f.category,
-                "about": f.about,
-                "source": f.source,
-                "from_owner": f.trust >= Trust.OWNER,
-                "trusted": f.trust >= Trust.SYSTEM,
-                "current": f.current,
-                "why_not": f.invalid_reason,
-            }
-            for f in found
-        ]
+            found = list(reversed(await self.memory.store.facts(include_past=past)))
+        everything = {f.id: f for f in await self.memory.store.facts(include_past=True)}
+        aliases = await self.memory.store.aliases()
+        stale = await self._stale()
+        return [self._fact(f, everything, aliases, stale) for f in found]
+
+    async def fact(self, fact_id: str) -> dict[str, Any]:
+        """One memory with its versions, oldest first: what it said before, what replaced it."""
+        everything = {f.id: f for f in await self.memory.store.facts(include_past=True)}
+        fact = everything.get(fact_id)
+        if fact is None:
+            raise ControlError("no such memory")
+        before = {f.replaced_by: f.id for f in everything.values() if f.replaced_by is not None}
+        chain = [fact]
+        seen = {fact.id}
+        while (older := before.get(chain[0].id)) is not None and older not in seen:
+            seen.add(older)
+            chain.insert(0, everything[older])
+        while (newer := chain[-1].replaced_by) in everything and newer not in seen:
+            seen.add(newer)
+            chain.append(everything[newer])
+        aliases = await self.memory.store.aliases()
+        stale = await self._stale()
+        return {
+            **self._fact(fact, everything, aliases, stale),
+            "versions": [self._fact(f, everything, aliases, stale) for f in chain],
+            "restorable": fact.invalid_reason == FORGOTTEN_HERE,
+        }
 
     async def forget(self, fact_id: str) -> None:
+        await self._current(fact_id)
+        await self.memory.invalidate(fact_id, FORGOTTEN_HERE, OWNER)
+
+    async def restore(self, fact_id: str) -> str:
+        """Undo a forget made here: the same memory, said again by him."""
+        fact = await self.memory.store.fact(fact_id)
+        if fact is None or fact.invalid_reason != FORGOTTEN_HERE:
+            raise ControlError("no memory forgotten here")
+        new_id = await self.memory.remember(
+            fact.statement,
+            OWNER,
+            about=fact.about,
+            category=Category(fact.category),
+            valid_from=fact.valid_from,
+        )
+        if fact.pinned:
+            await self.memory.pin(new_id, True, OWNER)
+        return new_id
+
+    async def correct(self, fact_id: str, statement: str) -> str:
+        """What he wrote instead: a new version, the old one kept in its history."""
+        fact = await self._current(fact_id)
+        statement = " ".join(statement.split())
+        if not 0 < len(statement) <= MAX_STATEMENT:
+            raise ControlError(f"a memory holds 1 to {MAX_STATEMENT} characters")
+        if statement == fact.statement:
+            return fact.id
+        return await self.memory.remember(
+            statement,
+            OWNER,
+            about=fact.about,
+            category=Category(fact.category),
+            supersedes=[fact.id],
+        )
+
+    async def pin(self, fact_id: str, pinned: bool) -> None:
+        await self._current(fact_id)
+        await self.memory.pin(fact_id, pinned, OWNER)
+
+    async def confirm(self, fact_id: str) -> None:
+        """He says a memory that may have changed is still true (D83)."""
+        await self._current(fact_id)
+        doubt = self.doubt()
+        if doubt is None:
+            raise ControlError("nothing is checked here")
+        await doubt.sync()
+        if fact_id not in doubt.state.facts:
+            raise ControlError("this memory does not need checking")
+        await doubt.record(CONFIRMED, fact_id, FROM_APP, Trust.OWNER)
+
+    async def _current(self, fact_id: str) -> Fact:
         fact = await self.memory.store.fact(fact_id)
         if fact is None or not fact.current:
             raise ControlError("no such memory")
-        await self.memory.invalidate(fact_id, "retiré par toi depuis l'app", OWNER)
+        return fact
+
+    async def _stale(self) -> dict[str, str]:
+        """Fact id → since when, for what may no longer be true."""
+        doubt = self.doubt()
+        if doubt is None:
+            return {}
+        await doubt.sync()
+        return {k.fact_id: doubt.when(k) for k in doubt.stale(self.now())}
+
+    def _fact(
+        self, f: Fact, everything: dict[str, Fact], aliases: dict[str, str], stale: dict[str, str]
+    ) -> dict[str, Any]:
+        known = self._known_at(f)
+        kind, how = self._origin(f)
+        names = self.config.memory.owner_names if self.config else []
+        owner = {name_key(n) for n in names}
+        owner |= {"owner", "orion"}
+        people = list(
+            dict.fromkeys(
+                name
+                for name in (canonical(a, aliases) for a in f.about)
+                if name.strip() and name_key(name) not in owner
+            )
+        )
+        return {
+            "id": f.id,
+            "statement": f.statement,
+            "category": f.category,
+            "about": f.about,
+            "people": people,
+            "origin": kind,
+            "how": how,
+            "known": known.date().isoformat() if known else None,
+            "new": bool(known and self.now() - known < NEW_FOR),
+            "from_owner": f.trust >= Trust.OWNER,
+            "trusted": f.trust >= Trust.SYSTEM,
+            "current": f.current,
+            "pinned": f.pinned,
+            "stale": stale.get(f.id),
+            "why_not": None if f.current else self._why_not(f, everything),
+        }
+
+    def _known_at(self, f: Fact) -> datetime | None:
+        if not f.known_from_hlc:
+            return None
+        ms = Timestamp.decode(f.known_from_hlc).wall_ms
+        return datetime.fromtimestamp(ms / 1000, self.zone)
+
+    @staticmethod
+    def _origin(f: Fact) -> tuple[str, str]:
+        """Where a memory comes from, as he would say it."""
+        if f.trust >= Trust.OWNER:
+            return "owner", "tu me l'as dit"
+        if f.trust < Trust.SYSTEM:
+            return "outside", _OUTSIDE.get(f.source.split(":", 1)[0], "venu de l'extérieur")
+        if f.source.startswith("thread:") and f.actor in {"orion:extractor", "orion:core"}:
+            return "conversation", "tu me l'as dit en discutant"
+        return "deduced", "j'en ai déduit"
+
+    @staticmethod
+    def _why_not(f: Fact, everything: dict[str, Fact]) -> str:
+        if f.replaced_by is not None:
+            newer = everything.get(f.replaced_by)
+            return f"remplacé par « {newer.statement} »" if newer else "remplacé"
+        reason = f.invalid_reason or ""
+        if reason.startswith("retiré par toi"):
+            return "tu l'as retiré"
+        if reason.startswith("pas durable"):
+            return "c'était passager"
+        words = [w for w in reason.split() if not w.startswith(("f_", "si_"))]
+        return " ".join(words) or "plus vrai"
 
     async def commitments(self) -> list[dict[str, Any]]:
         return [

@@ -693,6 +693,27 @@ def core_routes(
         await c.forget(str(request.path_params["id"]))
         return {}
 
+    async def memory_one(request: Request, c: Control) -> object:
+        return await c.fact(str(request.path_params["id"]))
+
+    async def restore(request: Request, c: Control) -> object:
+        return {"id": await c.restore(str(request.path_params["id"]))}
+
+    async def correct(request: Request, c: Control) -> object:
+        sent = await body(request)
+        return {
+            "id": await c.correct(str(request.path_params["id"]), str(sent.get("statement", "")))
+        }
+
+    async def pin(request: Request, c: Control) -> object:
+        sent = await body(request)
+        await c.pin(str(request.path_params["id"]), bool(sent.get("pinned", True)))
+        return {}
+
+    async def confirm(request: Request, c: Control) -> object:
+        await c.confirm(str(request.path_params["id"]))
+        return {}
+
     async def commitments(_request: Request, c: Control) -> object:
         return {"commitments": await c.commitments()}
 
@@ -896,7 +917,12 @@ def core_routes(
         api("control/pause", controls(pause), post=True),
         api("control/settings", controls(change), post=True),
         api("memory", controls(memory)),
+        api("memory/{id}", controls(memory_one)),
         api("memory/{id}/forget", controls(forget), post=True),
+        api("memory/{id}/restore", controls(restore), post=True),
+        api("memory/{id}/correct", controls(correct), post=True),
+        api("memory/{id}/pin", controls(pin), post=True),
+        api("memory/{id}/confirm", controls(confirm), post=True),
         api("commitments", controls(commitments)),
         api("commitments/{id}/{how}", controls(close), post=True),
         api("rules", controls(rules)),
