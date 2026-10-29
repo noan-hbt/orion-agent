@@ -363,35 +363,17 @@ async def test_an_event_is_changed_only_as_the_owner_approved_it(tmp_path: Path)
         assert changed == [MOVED]
 
 
-async def test_a_moved_event_shows_at_once_and_invitations_stay_untouched(
-    journal: SqliteJournal,
-) -> None:
-    meeting = to_ics(EVENT.model_copy(update={"title": "Réunion"}), "inv-1", START)
-    meeting = (
-        meeting.split("BEGIN:VEVENT")[1]
-        .split("END:VEVENT")[0]
-        .replace(
-            "SUMMARY:",
-            "ORGANIZER:mailto:boss@x.fr\r\nATTENDEE;PARTSTAT=ACCEPTED:mailto:noan@x.fr\r\nSUMMARY:",
-        )
-    )
-    feed = to_ics(EVENT, "u1", START).replace(
-        "END:VCALENDAR", f"BEGIN:VEVENT{meeting}END:VEVENT\r\nEND:VCALENDAR"
-    )
+async def test_a_moved_event_shows_at_once(journal: SqliteJournal) -> None:
     changes: list[CalendarChange] = []
 
     async def fetch(_account: CalendarAccount) -> str:
-        return feed  # stale: still the old time after the move
+        return to_ics(EVENT, "u1", START)  # stale: still the old time after the move
 
     async def change(account: str, made: CalendarChange, grant: str | None) -> None:
         changes.append(made)
 
     settings = CalendarSettings.model_validate(
-        {
-            "enabled": True,
-            "owner_emails": ["noan@x.fr"],
-            "accounts": [{"name": "perso", "url": {"env": "X"}, "write": CALDAV}],
-        }
+        {"enabled": True, "accounts": [{"name": "perso", "url": {"env": "X"}, "write": CALDAV}]}
     )
     now = START - timedelta(days=1)
     calendar = Calendar(journal, settings, "Europe/Paris", fetch, lambda: now, None, change)
@@ -402,15 +384,10 @@ async def test_a_moved_event_shows_at_once_and_invitations_stay_untouched(
     assert not result.is_error and changes == [MOVED]
     await calendar.sync_once()
     shown = calendar.between(START - timedelta(hours=14), START + timedelta(days=2))
-    assert [o.start for _, o in shown if o.title == "Dentiste"] == [MOVED.new_start]
-    refused = await tool.handler(
-        tool.parse(json.dumps({"title": "Réunion", "start": MOVE["start"], "cancel": True})),
-        ToolContext("o", "c", grant="g"),
-    )
-    assert refused.is_error and len(changes) == 1
+    assert [o.start for _, o in shown] == [MOVED.new_start]
 
 
-async def test_caldav_changes_the_event_in_place_and_never_one_with_guests(
+async def test_caldav_changes_an_event_and_one_date_of_a_series(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("P", "pw")
@@ -433,11 +410,22 @@ async def test_caldav_changes_the_event_in_place_and_never_one_with_guests(
     writer = CalDavWriter.model_validate(CALDAV)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         await change_event(http, writer, MOVED)
-        [put] = written
+        put = written[-1]
         assert put.method == "PUT" and put.headers["if-match"] == '"e1"'
         assert b"DTSTART:20261024T080000Z" in put.content
         assert b"DTEND:20261024T090000Z" in put.content  # it keeps its length
-        stored[0] = stored[0].replace("SUMMARY:", "ATTENDEE:mailto:paul@x.fr\r\nSUMMARY:")
-        with pytest.raises(CalendarWriteError, match="guests"):
-            await change_event(http, writer, MOVED)
-        assert len(written) == 1
+
+        stored[0] = stored[0].replace("SUMMARY:", "RRULE:FREQ=WEEKLY\r\nSUMMARY:")
+        next_week = START.astimezone(UTC) + timedelta(days=7)  # the rule runs in UTC
+        await change_event(
+            http, writer, CalendarChange(uid="u1", title="Dentiste", start=next_week, cancel=True)
+        )
+        put = written[-1]
+        assert put.method == "PUT"  # the series stays
+        assert b"RRULE:FREQ=WEEKLY" in put.content and b"EXDATE:20261030T120000Z" in put.content
+        with pytest.raises(CalendarWriteError, match="no longer the one"):
+            await change_event(
+                http,
+                writer,
+                CalendarChange(uid="u1", title="Kiné", start=next_week, cancel=True),
+            )

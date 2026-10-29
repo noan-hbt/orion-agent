@@ -191,8 +191,11 @@ def _calendar_add(params: dict[str, Any]) -> str:
 
 def _calendar_change(params: dict[str, Any]) -> str:
     event = f"« {params.get('title')} » du {_when(params.get('start'))}"
+    if params.get("series"):
+        event += " (toute la série, s'il se répète)"
+    told = "\nS'il a des invités, ils seront prévenus."
     if params.get("cancel"):
-        return f"Avant que je supprime de ton agenda {event} :"
+        return f"Avant que je supprime de ton agenda {event}.{told}"
     changes: list[str] = []
     if params.get("new_title") is not None:
         changes.append(f"Titre : {params['new_title']}")
@@ -204,7 +207,7 @@ def _calendar_change(params: dict[str, Any]) -> str:
         changes.append(f"Lieu : {params['new_location'] or '(aucun)'}")
     if params.get("new_notes") is not None:
         changes.append(f"Note : {params['new_notes'] or '(aucune)'}")
-    return f"Avant que je modifie {event} dans ton agenda :\n" + "\n".join(changes)
+    return f"Avant que je modifie {event} dans ton agenda :\n" + "\n".join(changes) + told
 
 
 def _mail_send(params: dict[str, Any]) -> str:
@@ -1346,6 +1349,7 @@ def _same_change(params: dict[str, Any], change: CalendarChange, zone: ZoneInfo)
         and params.get("new_location") == change.new_location
         and params.get("new_notes") == change.new_notes
         and bool(params.get("cancel")) == change.cancel
+        and bool(params.get("series")) == change.series
     )
 
 

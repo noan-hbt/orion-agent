@@ -54,6 +54,11 @@ class CalendarChangeInput(BaseModel):
     new_location: str | None = Field(default=None, max_length=200, description="'' clears it")
     new_notes: str | None = Field(default=None, max_length=1000, description="'' clears them")
     cancel: bool = Field(default=False, description="Delete the event instead")
+    series: bool = Field(
+        default=False,
+        description="A recurring event: change every occurrence (moved by as much as this "
+        "one). Default: this occurrence alone",
+    )
 
 
 def local(moment: datetime, timezone: str) -> datetime:
@@ -130,6 +135,7 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
                 new_location=args.new_location,
                 new_notes=args.new_notes,
                 cancel=args.cancel,
+                series=args.series,
             )
             change.times(occurrence.start, occurrence.end)
             now = await calendar.change(account, occurrence, change, ctx.grant, ctx.correlation_id)
@@ -168,9 +174,9 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
         tools.append(
             Tool(
                 name="calendar_change",
-                description="Move, rename, edit or cancel one of the owner's own events (not "
-                "an invitation, not a recurring one, none with guests). The owner approves it "
-                "first.",
+                description="Move, rename, edit or cancel an event of the owner's calendar, "
+                "or a whole recurring series. Its guests are told by the calendar. The owner "
+                "approves it first, unless he let Orion do it alone.",
                 input_model=CalendarChangeInput,
                 handler=calendar_change,
                 effect=Effect.EXTERNAL,

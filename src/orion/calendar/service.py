@@ -293,17 +293,15 @@ class Calendar:
         return account.name, occurrence
 
     def find(self, title: str, start: datetime) -> tuple[str, Occurrence]:
-        """The owner's own event with this title at this start, in a calendar Orion can write."""
+        """The event he sees with this title at this start, in a calendar Orion can write."""
         matches = [
             (account, o)
             for (account, _), o in self.state.events.items()
-            if o.title == title and _utc(o.start) == _utc(start)
+            if o.standing.visible and o.title == title and _utc(o.start) == _utc(start)
         ]
         if not matches:
             raise CalendarWriteError(f"no event « {title} » at {start:%d/%m %H:%M}: see `agenda`")
         account, occurrence = matches[0]
-        if occurrence.standing is not Standing.OWN:
-            raise CalendarWriteError("an invitation: only whoever sent it can change it")
         found = next((a for a in self.settings.accounts if a.name == account), None)
         if found is None or found.write is None:
             raise CalendarWriteError(f"calendar {account!r} cannot be written to")

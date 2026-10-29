@@ -2,21 +2,23 @@
 
 Reading stays on the secret iCal address; writing needs its own credentials, which only the
 guardian holds when Orion runs split (D28). An event Orion adds has no attendees: it goes on the
-owner's calendar and invites nobody, so it speaks to no one on the owner's behalf. For the same
-reason Orion changes or cancels only the owner's own single events without guests (D189): moving
-a meeting with guests would move it for them, and a series is the owner's to reshape.
+owner's calendar and invites nobody, so it speaks to no one on the owner's behalf. Changing or
+cancelling an event he approved (D189) goes through the provider like his own click would:
+guests are told, and an invitation's organizer keeps the last word (the provider refuses).
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime, time, tzinfo
+from copy import deepcopy
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Annotated, Any, Literal, cast
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
 import httpx
 import icalendar
+import recurring_ical_events  # pyright: ignore[reportMissingTypeStubs]
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.calendar.ics import shown_title, span
@@ -71,7 +73,8 @@ class CalendarWriteError(RuntimeError):
 class CalendarChange(BaseModel):
     """What Orion asks to change on one of the owner's events, found by its UID and checked
     against the title and start the owner saw when he approved. `None` keeps a field as it is;
-    a new start without a new end keeps the event's length."""
+    a new start without a new end keeps the event's length. In a recurring event, `series`
+    changes every occurrence (moved by as much as this one), otherwise this one alone."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -84,6 +87,7 @@ class CalendarChange(BaseModel):
     new_location: str | None = Field(default=None, max_length=200)
     new_notes: str | None = Field(default=None, max_length=1000)
     cancel: bool = False
+    series: bool = False
 
     def times(self, start: datetime, end: datetime) -> tuple[datetime, datetime]:
         """The event's start and end once changed, from what they are now."""
@@ -203,14 +207,32 @@ _DAV = "{DAV:}"
 _CAL = "{urn:ietf:params:xml:ns:caldav}"
 
 
-def _check(change: CalendarChange, title: str, start: datetime, single: bool, guests: bool) -> None:
-    """Fail closed: only the very event the owner approved, his own, alone, without guests."""
-    if not single:
-        raise CalendarWriteError("a recurring event: Orion changes single events only")
-    if guests:
-        raise CalendarWriteError("it has guests: changing it would speak to them")
+def _same(change: CalendarChange, title: str, start: datetime) -> None:
+    """Only the very event the owner approved: if it changed since, nothing is written."""
     if title != change.title or start.astimezone(UTC) != change.start.astimezone(UTC):
         raise CalendarWriteError("the event is no longer the one the owner saw")
+
+
+def _answered(provider: str, status: int) -> CalendarWriteError:
+    if status == 403:
+        return CalendarWriteError(f"{provider} refused: only the organizer can change this event")
+    return CalendarWriteError(f"{provider} answered {status}")
+
+
+def _moved(change: CalendarChange) -> bool:
+    return change.new_start is not None or change.new_end is not None
+
+
+def _for_series(
+    change: CalendarChange, start: datetime, end: datetime, first: datetime
+) -> CalendarChange:
+    """The change of one occurrence, made to the whole series: moved by as much."""
+    if not _moved(change):
+        return change
+    begins, ends = change.times(start, end)
+    return change.model_copy(
+        update={"new_start": first + (begins - start), "new_end": first + (ends - start)}
+    )
 
 
 async def change_event(
@@ -237,7 +259,7 @@ async def _caldav_change(
         auth=auth,
     )
     if response.status_code != 207:
-        raise CalendarWriteError(f"CalDAV answered {response.status_code}")
+        raise _answered("CalDAV", response.status_code)
     found = [
         (str(item.findtext(f"{_DAV}href") or ""), item.findtext(f".//{_DAV}getetag"), data)
         for item in ElementTree.fromstring(response.content).iter(f"{_DAV}response")
@@ -248,21 +270,25 @@ async def _caldav_change(
     href, etag, data = found[0]
     url = str(httpx.URL(writer.url).join(href))
     calendar: Any = icalendar.Calendar.from_ical(data)
+    zone = change.start.tzinfo or UTC
     events: list[Any] = list(calendar.walk("VEVENT"))
-    event = events[0]
-    start, end, _ = span(event, change.start.tzinfo or UTC)
-    _check(
-        change,
-        shown_title(event.get("SUMMARY")),
-        start,
-        single=len(events) == 1 and event.get("RRULE") is None,
-        guests=event.get("ATTENDEE") is not None,
-    )
+    master = next((e for e in events if e.get("RECURRENCE-ID") is None), events[0])
+    overrides = [e for e in events if e.get("RECURRENCE-ID") is not None]
+    override = next((e for e in overrides if _utc(span(e, zone)[0]) == _utc(change.start)), None)
+    seen = override if override is not None else _occurrence(calendar, change)
+    start, end, _ = span(seen, zone)
+    _same(change, shown_title(seen.get("SUMMARY")), start)
+    recurring = master.get("RRULE") is not None or master.get("RDATE") is not None
     headers = {"if-match": etag} if etag else {}
-    if change.cancel:
+    if change.cancel and (change.series or not recurring):
         response = await http.delete(url, headers=headers, auth=auth)
     else:
-        _edit(event, change, start, end)
+        if not recurring:
+            _edit(master, change, start, end)
+        elif change.series:
+            _edit(master, _for_series(change, start, end, span(master, zone)[0]), start, end)
+        else:
+            _one_occurrence(calendar, master, override, change, start, end)
         response = await http.put(
             url,
             content=calendar.to_ical(),
@@ -270,7 +296,60 @@ async def _caldav_change(
             auth=auth,
         )
     if response.status_code not in (200, 201, 204):
-        raise CalendarWriteError(f"CalDAV answered {response.status_code}")
+        raise _answered("CalDAV", response.status_code)
+
+
+def _utc(moment: datetime) -> datetime:
+    return moment.astimezone(UTC)
+
+
+def _occurrence(calendar: Any, change: CalendarChange) -> Any:
+    """The occurrence the owner saw, whether the event repeats or not."""
+    zone = change.start.tzinfo or UTC
+    query: Any = recurring_ical_events.of(calendar)  # pyright: ignore[reportUnknownMemberType]
+    window = cast(list[Any], query.between(change.start, change.start + timedelta(minutes=1)))
+    for event in window:
+        if _utc(span(event, zone)[0]) == _utc(change.start):
+            return event
+    raise CalendarWriteError("the event is no longer the one the owner saw")
+
+
+def _like(reference: date | datetime, moment: datetime) -> date | datetime:
+    """`moment` written the way `reference` is (all day, floating, or in its zone)."""
+    if not isinstance(reference, datetime):
+        return moment.date()
+    if reference.tzinfo is None:
+        return moment.replace(tzinfo=None)
+    return moment.astimezone(reference.tzinfo)
+
+
+def _one_occurrence(
+    calendar: Any,
+    master: Any,
+    override: Any,
+    change: CalendarChange,
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Change or cancel one occurrence of a series, leaving the others as they are."""
+    original = master.decoded("DTSTART")
+    recurrence = (
+        override.decoded("RECURRENCE-ID") if override is not None else _like(original, start)
+    )
+    if change.cancel:
+        if override is not None:
+            calendar.subcomponents.remove(override)
+        master.add("EXDATE", recurrence)
+        return
+    if override is None:
+        override = deepcopy(master)
+        for name in ("RRULE", "RDATE", "EXDATE", "DTSTART", "DTEND", "DURATION"):
+            override.pop(name, None)
+        override.add("RECURRENCE-ID", recurrence)
+        override.add("DTSTART", _like(original, start))
+        override.add("DTEND", _like(original, end))
+        calendar.add_component(override)
+    _edit(override, change, start, end)
 
 
 def _edit(event: Any, change: CalendarChange, start: datetime, end: datetime) -> None:
@@ -279,11 +358,13 @@ def _edit(event: Any, change: CalendarChange, start: datetime, end: datetime) ->
         if value != "":
             event.add(name, value)
 
-    if change.new_start is not None or change.new_end is not None:
+    if _moved(change):
         begins, ends = change.times(start, end)
+        reference = event.decoded("DTSTART")
+        timed = isinstance(reference, datetime) and reference.tzinfo is not None
         event.pop("DURATION", None)
-        put("DTSTART", begins.astimezone(UTC))
-        put("DTEND", ends.astimezone(UTC))
+        put("DTSTART", _like(reference, begins) if timed else _utc(begins))
+        put("DTEND", _like(reference, ends) if timed else _utc(ends))
     for name, value in (
         ("SUMMARY", change.new_title),
         ("LOCATION", change.new_location),
@@ -309,33 +390,48 @@ async def _google_change(
     token = await google_access_token(http, writer)
     headers = {"authorization": f"Bearer {token}"}
     url = GOOGLE_EVENTS_URL.format(calendar=writer.calendar_id)
-    response = await http.get(url, params={"iCalUID": change.uid}, headers=headers)
-    if response.status_code != 200:
-        raise CalendarWriteError(f"Google Calendar answered {response.status_code}")
-    items = cast(list[dict[str, Any]], response.json().get("items") or [])
+    zone = change.start.tzinfo or UTC
+
+    async def listed(where: str, params: dict[str, str]) -> list[dict[str, Any]]:
+        response = await http.get(where, params=params, headers=headers)
+        if response.status_code != 200:
+            raise _answered("Google Calendar", response.status_code)
+        return cast(list[dict[str, Any]], response.json().get("items") or [])
+
+    items = await listed(url, {"iCalUID": change.uid})
     if not items:
         raise CalendarWriteError("that event is no longer in the calendar")
-    item = items[0]
-    zone = change.start.tzinfo or UTC
+    master = next((i for i in items if not i.get("recurringEventId")), items[0])
+    item = master
+    if master.get("recurrence"):
+        window = {
+            "timeMin": change.start.isoformat(),
+            "timeMax": (change.start + timedelta(minutes=1)).isoformat(),
+        }
+        instances = await listed(f"{url}/{master['id']}/instances", window)
+        item = next(
+            (i for i in instances if _utc(_google_time(i["start"], zone)) == _utc(change.start)),
+            master,
+        )
     start, end = _google_time(item["start"], zone), _google_time(item["end"], zone)
-    _check(
-        change,
-        shown_title(item.get("summary")),
-        start,
-        single=len(items) == 1 and not item.get("recurrence") and not item.get("recurringEventId"),
-        guests=bool(item.get("attendees")),
-    )
+    _same(change, shown_title(item.get("summary")), start)
+    if change.series and master.get("recurrence"):
+        change = _for_series(change, start, end, _google_time(master["start"], zone))
+        item = master
+        start, end = _google_time(master["start"], zone), _google_time(master["end"], zone)
     target = f"{url}/{item['id']}"
+    updates = {"sendUpdates": "all"}  # his guests learn of it, as from his own click
     if change.cancel:
-        response = await http.delete(target, params={"sendUpdates": "none"}, headers=headers)
+        response = await http.delete(target, params=updates, headers=headers)
         if response.status_code not in (200, 204, 410):
-            raise CalendarWriteError(f"Google Calendar answered {response.status_code}")
+            raise _answered("Google Calendar", response.status_code)
         return
     body: dict[str, object] = {}
-    if change.new_start is not None or change.new_end is not None:
+    if _moved(change):
         begins, ends = change.times(start, end)
-        body["start"] = {"dateTime": begins.isoformat(), "date": None}
-        body["end"] = {"dateTime": ends.isoformat(), "date": None}
+        kept = {"timeZone": item["start"]["timeZone"]} if item["start"].get("timeZone") else {}
+        body["start"] = {"dateTime": begins.isoformat(), "date": None, **kept}
+        body["end"] = {"dateTime": ends.isoformat(), "date": None, **kept}
     for name, value in (
         ("summary", change.new_title),
         ("location", change.new_location),
@@ -343,9 +439,9 @@ async def _google_change(
     ):
         if value is not None:
             body[name] = value
-    response = await http.patch(target, json=body, params={"sendUpdates": "none"}, headers=headers)
+    response = await http.patch(target, json=body, params=updates, headers=headers)
     if response.status_code != 200:
-        raise CalendarWriteError(f"Google Calendar answered {response.status_code}")
+        raise _answered("Google Calendar", response.status_code)
 
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
