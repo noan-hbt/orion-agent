@@ -47,6 +47,7 @@ RITUAL_EVERY = timedelta(days=30)
 
 LABELS = {
     "calendar_add": "ajouter des événements à ton agenda",
+    "calendar_change": "déplacer, modifier ou annuler tes propres événements",
     "delegate": "confier une tâche à l'agent de code",
     "mail_send": "envoyer des mails",
     "mail_tidy": "archiver tes mails et te désabonner des newsletters (jamais supprimer)",

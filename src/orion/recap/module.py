@@ -47,6 +47,10 @@ RENDER: dict[str, Callable[[dict[str, Any]], str]] = {
     "contact_message": lambda a: f"écrit à {a.get('contact')} : {_quote(a.get('text'))}",
     "mail_send": lambda a: f"envoyé un mail à {_names(a.get('to'))} : {_quote(a.get('subject'))}",
     "calendar_add": lambda a: f"ajouté à ton agenda : {_quote(a.get('title'), 60)}",
+    "calendar_change": lambda a: (
+        f"{'annulé' if a.get('cancel') else 'modifié'} dans ton agenda : "
+        f"{_quote(a.get('title'), 60)}"
+    ),
     "remind_me": lambda a: f"posé un rappel : {_quote(a.get('what'), 60)}",
     "configure_change": lambda a: (
         "changé mes réglages : "

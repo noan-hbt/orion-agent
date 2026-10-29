@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -91,10 +91,29 @@ def _address(value: Any) -> str:
     return str(value or "").removeprefix("mailto:").removeprefix("MAILTO:").strip().lower()
 
 
-def _moment(value: date | datetime, zone: ZoneInfo) -> datetime:
+def _moment(value: date | datetime, zone: tzinfo) -> datetime:
     if isinstance(value, datetime):
         return value.replace(tzinfo=zone) if value.tzinfo is None else value.astimezone(zone)
     return datetime.combine(value, time(0), zone)
+
+
+def span(event: Any, zone: tzinfo) -> tuple[datetime, datetime, bool]:
+    """A VEVENT's start, end and whether it lasts whole days, in `zone`."""
+    raw_start = event.decoded("DTSTART")
+    all_day = not isinstance(raw_start, datetime)
+    begins = _moment(raw_start, zone)
+    if event.get("DTEND") is not None:
+        ends = _moment(event.decoded("DTEND"), zone)
+    elif event.get("DURATION") is not None:
+        ends = begins + cast(timedelta, event.decoded("DURATION"))
+    else:
+        ends = begins + (timedelta(days=1) if all_day else timedelta(0))
+    return begins, ends, all_day
+
+
+def shown_title(summary: Any) -> str:
+    """A title as Orion shows it (and the owner approves it)."""
+    return _text(summary, MAX_TITLE) or "(sans titre)"
 
 
 def _standing(event: Any, owner_emails: frozenset[str]) -> tuple[Standing, str]:
@@ -135,15 +154,7 @@ def occurrences(
     for event in cast(list[Any], query.between(start, end)):
         if str(event.get("STATUS", "")).upper() == "CANCELLED":
             continue
-        raw_start = event.decoded("DTSTART")
-        all_day = not isinstance(raw_start, datetime)
-        begins = _moment(raw_start, zone)
-        if event.get("DTEND") is not None:
-            ends = _moment(event.decoded("DTEND"), zone)
-        elif event.get("DURATION") is not None:
-            ends = begins + cast(timedelta, event.decoded("DURATION"))
-        else:
-            ends = begins + (timedelta(days=1) if all_day else timedelta(0))
+        begins, ends, all_day = span(event, zone)
         standing, organizer = _standing(event, owners)
         uid = str(event.get("UID", "")) or f"{begins.isoformat()}:{event.get('SUMMARY', '')}"
         occurrence = Occurrence(
@@ -157,7 +168,7 @@ def occurrences(
         if standing.visible:
             occurrence = replace(
                 occurrence,
-                title=_text(event.get("SUMMARY"), MAX_TITLE) or "(sans titre)",
+                title=shown_title(event.get("SUMMARY")),
                 location=_text(event.get("LOCATION"), MAX_LOCATION),
                 description=_text(event.get("DESCRIPTION"), MAX_DESCRIPTION)
                 if standing is Standing.OWN

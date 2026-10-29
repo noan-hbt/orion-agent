@@ -46,7 +46,13 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import BaseRoute, Route
 
 from orion.calendar.service import CalendarAccount, CalendarSettings, FeedError, fetch_feed
-from orion.calendar.write import CalendarWriteError, NewCalendarEvent, write_event
+from orion.calendar.write import (
+    CalendarChange,
+    CalendarWriteError,
+    NewCalendarEvent,
+    change_event,
+    write_event,
+)
 from orion.channels.imessage import REACTION_NO, REACTION_YES, answer_word, normalize_number
 from orion.channels.inkbox import GRANT_HEADER, InkboxClient, InkboxError, verify_signature
 from orion.channels.telegram import TelegramError
@@ -59,6 +65,7 @@ from orion.guardian.ledger import (
     AUTONOMOUS,
     AUTONOMY_GRANTED,
     AUTONOMY_REVOKED,
+    CALENDAR_CHANGED,
     CONFIG_CHANGED,
     CORE_BACK,
     CORE_SILENT,
@@ -97,6 +104,7 @@ APP_CONVERSATION = "app:owner"
 """Where the core asks for an approval in Orion's app (D125)."""
 CalendarFetch = Callable[[CalendarAccount], Awaitable[str]]
 CalendarWrite = Callable[[CalendarAccount, NewCalendarEvent], Awaitable[str]]
+CalendarRewrite = Callable[[CalendarAccount, CalendarChange], Awaitable[None]]
 MailSend = Callable[[MailAccount, Outgoing, str | None], Awaitable[str]]
 Renderer = Callable[[dict[str, Any]], str]
 """Turns an approved action's parameters into the sentence the owner reads."""
@@ -179,6 +187,27 @@ def _calendar_add(params: dict[str, Any]) -> str:
         f"Avant que je l'ajoute à ton agenda : « {params.get('title')} », "
         f"du {_when(params.get('start'))} au {_when(params.get('end'))}.{where}{notes}"
     )
+
+
+def _calendar_change(params: dict[str, Any]) -> str:
+    event = f"« {params.get('title')} » du {_when(params.get('start'))}"
+    if params.get("series"):
+        event += " (toute la série, s'il se répète)"
+    told = "\nS'il a des invités, ils seront prévenus."
+    if params.get("cancel"):
+        return f"Avant que je supprime de ton agenda {event}.{told}"
+    changes: list[str] = []
+    if params.get("new_title") is not None:
+        changes.append(f"Titre : {params['new_title']}")
+    if params.get("new_start") is not None or params.get("new_end") is not None:
+        begins = _when(params["new_start"]) if params.get("new_start") is not None else "inchangé"
+        ends = _when(params["new_end"]) if params.get("new_end") is not None else "même durée"
+        changes.append(f"Début : {begins}, fin : {ends}")
+    if params.get("new_location") is not None:
+        changes.append(f"Lieu : {params['new_location'] or '(aucun)'}")
+    if params.get("new_notes") is not None:
+        changes.append(f"Note : {params['new_notes'] or '(aucune)'}")
+    return f"Avant que je modifie {event} dans ton agenda :\n" + "\n".join(changes) + told
 
 
 def _mail_send(params: dict[str, Any]) -> str:
@@ -298,6 +327,7 @@ class GuardianService:
         pick_mail: MailPickFn | None = None,
         clock: Callable[[], datetime] | None = None,
         write_calendar: CalendarWrite | None = None,
+        rewrite_calendar: CalendarRewrite | None = None,
         send_mail: MailSend | None = None,
     ) -> None:
         self.config = config
@@ -314,6 +344,7 @@ class GuardianService:
         self._search_mail = search_mail or imap_search
         self._pick_mail = pick_mail or imap_attachment
         self._write_calendar = write_calendar or self._http_calendar_write
+        self._rewrite_calendar = rewrite_calendar or self._http_calendar_rewrite
         self._send_mail = send_mail or smtp_send
         self._sends: deque[float] = deque()
         secretary = SecretarySettings.model_validate(config.modules.get("secretary", {}))
@@ -344,6 +375,7 @@ class GuardianService:
             "call_someone": _call_someone,
             "contact_message": _contact_message,
             "calendar_add": _calendar_add,
+            "calendar_change": _calendar_change,
             "mail_send": _mail_send,
             "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
@@ -399,6 +431,7 @@ class GuardianService:
                 Route("/v1/inkbox-webhook/verify", self._verify_webhook, methods=["POST"]),
                 Route("/v1/calendar/{account}", self._calendar, methods=["GET"]),
                 Route("/v1/calendar/{account}/events", self._calendar_add, methods=["POST"]),
+                Route("/v1/calendar/{account}/changes", self._calendar_change, methods=["POST"]),
                 Route("/v1/mail/{account}", self._mail, methods=["POST"]),
                 Route("/v1/mail/{account}/search", self._mail_search, methods=["POST"]),
                 Route("/v1/mail/{account}/attachment", self._mail_attachment, methods=["POST"]),
@@ -1019,6 +1052,46 @@ class GuardianService:
             self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
         return await write_event(self._http, account.write, event)
 
+    async def _http_calendar_rewrite(
+        self, account: CalendarAccount, change: CalendarChange
+    ) -> None:
+        if account.write is None:  # pragma: no cover - checked by the caller
+            raise CalendarWriteError(f"calendar {account.name!r} cannot be written to")
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=20.0, follow_redirects=True)
+        await change_event(self._http, account.write, change)
+
+    async def _calendar_change(self, request: Request) -> Response:
+        name = str(request.path_params["account"])
+        settings = CalendarSettings.model_validate(self.config.modules.get("calendar", {}))
+        account = next((a for a in settings.accounts if a.name == name), None)
+        if account is None or account.write is None:
+            return refused(f"calendar {name!r} cannot be written to", 404)
+        try:
+            change = CalendarChange.model_validate_json(await request.body())
+        except ValidationError:
+            return refused("malformed calendar change", 400)
+        await self.ledger.catch_up()
+        grant = request.headers.get(GRANT_HEADER)
+        if grant or not await self.autonomous("calendar_change"):
+            reason = await self.use_grant(
+                grant,
+                "calendar_change",
+                lambda p: _same_change(p, change, self._zone),
+                consume=True,
+            )
+            if reason is not None:
+                return await self.deny(f"calendar {name}", reason)
+        try:
+            await self._rewrite_calendar(account, change)
+        except (LookupError, CalendarWriteError) as exc:
+            log.warning("guardian.calendar_change_failed", account=name, error=str(exc))
+            return refused(f"calendar {name!r} not changed: {exc}", 502)
+        await self.ledger.record(
+            CALENDAR_CHANGED, {"account": name, "uid": change.uid, "cancel": change.cancel}
+        )
+        return JSONResponse({})
+
     def _confirmed_meeting(self, event: NewCalendarEvent) -> bool:
         """A meeting both Orions signed for this very slot (D29), not written yet."""
         state = self.ledger.state
@@ -1253,6 +1326,31 @@ class GuardianService:
                 "data": base64.b64encode(found.data).decode(),
             }
         )
+
+
+def _same_change(params: dict[str, Any], change: CalendarChange, zone: ZoneInfo) -> bool:
+    """The very change the owner read: every field, a missing one meaning "unchanged"."""
+
+    def at(value: object) -> datetime | None:
+        if value is None:
+            return None
+        try:
+            moment = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        return moment.replace(tzinfo=zone) if moment.tzinfo is None else moment
+
+    return (
+        params.get("title") == change.title
+        and at(params.get("start")) == change.start
+        and params.get("new_title") == change.new_title
+        and at(params.get("new_start")) == change.new_start
+        and at(params.get("new_end")) == change.new_end
+        and params.get("new_location") == change.new_location
+        and params.get("new_notes") == change.new_notes
+        and bool(params.get("cancel")) == change.cancel
+        and bool(params.get("series")) == change.series
+    )
 
 
 def _same_event(params: dict[str, Any], event: NewCalendarEvent, zone: ZoneInfo) -> bool:

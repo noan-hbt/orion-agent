@@ -1657,7 +1657,7 @@ const KEYS = {
 
 // What an action does, in his words; an unknown tool shows its name.
 const TOOL_NAMES = {
-  mail_send: "Envoyer un mail", mail_draft: "Préparer un mail", calendar_add: "Ajouter à ton agenda",
+  mail_send: "Envoyer un mail", mail_draft: "Préparer un mail", calendar_add: "Ajouter à ton agenda", calendar_change: "Changer ton agenda",
   contact_message: "Écrire à un proche", peer_message: "Écrire à un autre Orion", call_someone: "Appeler quelqu'un",
   meeting_propose: "Proposer un rendez-vous", meeting_accept: "Accepter un rendez-vous", configure_change: "Changer un réglage",
   autonomy_grant: "Me laisser faire seul", module_install: "Installer un module", module_remove: "Retirer un module",

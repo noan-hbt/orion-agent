@@ -4234,3 +4234,31 @@ soir et l'extracteur s'en chargent), pas d'index vectoriel (le calcul exhaustif 
 de la milliseconde à l'échelle d'une vie), pas de table de personnes (elles restent dérivées des
 faits, D27).
 
+
+## D189 — Orion gère son agenda : déplacer, modifier, annuler
+
+*29/10/2026 · acceptée*
+
+L'adresse iCal secrète reste en lecture seule : c'est un flux, rien ne s'écrit par elle. Écrire
+passe par le même accès que `calendar_add` (CalDAV ou Google, D32), qui sert maintenant aussi à
+`calendar_change`.
+
+- **Désigné par ce qu'il a vu** : le modèle nomme l'événement par son titre et son début, tels
+  qu'`agenda` les montre. Le cœur retrouve son UID ; le gardien relit l'événement chez le
+  fournisseur et refuse s'il n'a plus ce titre ou ce début (il a changé depuis l'accord).
+- **Comme s'il cliquait lui-même** : Orion ne s'interdit rien que l'agenda permet. Un événement
+  avec invités se change, et les invités sont prévenus par l'agenda (`sendUpdates=all`, ou
+  l'ordonnancement CalDAV). Une invitation se retire de son agenda ; si l'organisateur est seul à
+  pouvoir la changer, le fournisseur refuse (403) et Orion le dit.
+- **Séries** : par défaut, cette date seule (exception `RECURRENCE-ID` ou `EXDATE` en CalDAV,
+  instance chez Google) ; `series` change toute la série, décalée d'autant que cette date.
+- **Accord exact** : la demande dit l'événement et chaque changement ; le gardien ne laisse passer
+  que ce changement-là, une fois. Annuler est une suppression, dite comme telle. Sans fin donnée,
+  un déplacement garde la durée.
+- **Seul s'il le veut** : `calendar_change` fait partie des actions qu'Orion propose de faire
+  seul après cinq accords d'affilée, ou dès qu'il le demande (D167). Le récap du soir le dit.
+- **Visible tout de suite** : `calendar.event.changed` remplace l'occurrence dans la projection, et
+  la copie plus ancienne du flux est ignorée un jour (`FEED_LAG`), le temps qu'il rattrape.
+- CalDAV : `REPORT` par UID, puis `PUT` ou `DELETE` avec `If-Match` (rien n'écrase une
+  modification faite entre-temps). Google : `iCalUID` (et `instances` pour une série), puis
+  `PATCH` ou `DELETE`.

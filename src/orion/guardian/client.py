@@ -114,6 +114,14 @@ class GuardianClient:
         response.raise_for_status()
         return response.text
 
+    async def calendar_change(self, account: str, change: Any, grant: str | None) -> None:
+        """Changed or cancelled by the guardian, if the owner agreed."""
+        await self.post(
+            f"/v1/calendar/{account}/changes",
+            change.model_dump(mode="json"),
+            headers={GRANT_HEADER: grant} if grant else None,
+        )
+
     async def calendar_add(self, account: str, event: Any, grant: str | None) -> str:
         """Written by the guardian, if the owner agreed (or it is a meeting both Orions
         confirmed). Returns the event's UID."""
