@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 FACT_ASSERTED = "memory.fact.asserted"
 FACT_INVALIDATED = "memory.fact.invalidated"
+FACT_PINNED = "memory.fact.pinned"
 COMMITMENT_CREATED = "commitment.created"
 COMMITMENT_CLOSED = "commitment.closed"
 RULE_LEARNED = "playbook.rule.learned"
@@ -25,6 +26,7 @@ MEMORY_KINDS = frozenset(
     {
         FACT_ASSERTED,
         FACT_INVALIDATED,
+        FACT_PINNED,
         COMMITMENT_CREATED,
         COMMITMENT_CLOSED,
         RULE_LEARNED,
@@ -66,6 +68,15 @@ class FactInvalidated(BaseModel):
     fact_id: str
     reason: str
     valid_to: str | None = Field(default=None, description="ISO date the fact stopped being true")
+
+
+class FactPinned(BaseModel):
+    """The owner wants Orion to keep this fact in mind in every conversation (or no longer)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fact_id: str
+    pinned: bool
 
 
 class CommitmentStatus(StrEnum):

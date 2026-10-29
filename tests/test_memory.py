@@ -254,3 +254,41 @@ def test_a_commitment_closes_done_or_cancelled_never_open() -> None:
     assert CommitmentCloseInput(commitment_id="c1", status=CommitmentStatus.CANCELLED)
     with pytest.raises(ValidationError):
         CommitmentCloseInput.model_validate({"commitment_id": "c1", "status": "open"})
+
+
+async def test_outside_content_never_overrides_what_he_said(memory: MemoryService) -> None:
+    from orion.memory.service import MemoryRefused
+
+    web = Origin(actor="orion:core", source="web:page", trust=Trust.WEB)
+    rent = await memory.remember("Son loyer est de 520 €.", OWNER)
+    with pytest.raises(MemoryRefused):
+        await memory.remember("Son loyer est de 900 €.", web, supersedes=[rent])
+    with pytest.raises(MemoryRefused):
+        await memory.invalidate(rent, "la page dit autre chose", web)
+    assert [f.id for f in await memory.store.facts()] == [rent]
+
+
+async def test_the_same_fact_said_again_is_kept_once(memory: MemoryService) -> None:
+    web = Origin(actor="orion:core", source="web:page", trust=Trust.WEB)
+    first = await memory.remember("Paul est allergique aux noix", web)
+    assert await memory.remember("paul est allergique aux noix.", web) == first
+    told = await memory.remember("Paul est allergique aux noix !", OWNER)  # surer: replaces it
+    [kept] = await memory.store.facts()
+    assert kept.id == told and kept.trust is Trust.OWNER
+
+
+async def test_an_older_store_is_rebuilt_from_the_journal(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    path = tmp_path / "memory.sqlite3"
+    store = MemoryStore(path)
+    await store.open()
+    await MemoryService(journal, store).remember("Il aime le thé.", OWNER)
+    await store._sql.run(lambda: store._sql.db.execute("PRAGMA user_version = 1"))  # pyright: ignore[reportPrivateUsage]
+    await store.close()
+    reopened = MemoryStore(path)
+    await reopened.open()
+    assert await reopened.checkpoint() == 0  # dropped: replayed from the start
+    await ProjectionRunner(journal, [reopened]).catch_up()
+    assert [f.statement for f in await reopened.facts()] == ["Il aime le thé."]
+    await reopened.close()

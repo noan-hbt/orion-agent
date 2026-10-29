@@ -40,6 +40,7 @@ from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
 from orion.library.module import LibraryModule
 from orion.mail.module import MailModule
+from orion.memory.doubt import DoubtModule
 from orion.missions.module import MissionsModule
 from orion.mobile.channel import MobileChannel
 from orion.mobile.control import Control
@@ -177,6 +178,7 @@ class MobileModule(Module):
         mail = plate.module(MailModule)
         thinking = plate.module(ThinkingModule)
         places = plate.module(PlacesModule)
+        doubt = plate.module(DoubtModule)
         library = plate.module(LibraryModule)
         contacts = plate.module(ContactsModule)
         self.control = Control(
@@ -196,6 +198,7 @@ class MobileModule(Module):
             config=config,
             missions=lambda: missions.missions if missions is not None else None,
             hands=lambda: hands.desk if hands is not None else None,
+            doubt=lambda: doubt.doubt if doubt is not None else None,
             code=CODE,
         )
         self.control.upkeep = Upkeep(

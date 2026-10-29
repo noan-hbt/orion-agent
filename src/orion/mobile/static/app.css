@@ -681,9 +681,9 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 .night-note { display:flex; flex-direction:column; gap:6px; padding:14px 16px; border-radius:20px; background:#fff; }
 .night-note small { font-size:12px; color:var(--label-2); }
 .night-note small::first-letter { text-transform:uppercase; }
-.portrait { margin:4px 0 14px; }
+.portrait,.situations,.card.check { margin:4px 0 14px; }
 .portrait p { margin:0; line-height:1.45; }
-.portrait .link { align-self:flex-start; background:none; border:0; padding:4px 0 0; font:inherit; font-size:15px; color:var(--blue); }
+.portrait .link,.situations .link,.card.check .link { align-self:flex-start; background:none; border:0; padding:4px 0 0; font:inherit; font-size:15px; color:var(--blue); }
 .night-note p { margin:0; font-size:15px; line-height:21px; }
 
 /* a message or a request a notification opened: a short glow, then nothing */
@@ -693,3 +693,15 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 /* a repaint because something changed elsewhere: a quiet cross-fade, not the entrance cascade */
 body.live-refresh .page-body > *, body.live-refresh .panel-content > * { animation:live-fade .35s ease !important; }
 @keyframes live-fade { from { opacity:.55; } }
+
+.toast.with-action { display:flex; align-items:center; gap:14px; padding:8px 8px 8px 20px; }
+.toast.with-action button { padding:6px 14px; border-radius:999px; background:rgba(255,255,255,.18); color:#fff; font:inherit; }
+.card.check { display:flex; flex-direction:column; gap:10px; padding:14px 16px; border-radius:20px; background:#fff; }
+.card.check > small { font-size:12px; color:#A76100; }
+.check-item p { margin:0 0 8px; font-size:15px; line-height:20px; }
+.check-actions { display:flex; gap:8px; }
+.check-actions .pill { min-height:36px; padding:6px 14px; font-size:15px; color:var(--label); }
+.check-actions .pill.tinted { color:var(--blue); }
+.card.situations p { margin:0; font-size:15px; line-height:20px; }
+.memory-edit { display:flex; flex-direction:column; gap:10px; }
+.memory-edit textarea { font-family:inherit; font-size:16px; line-height:21px; }

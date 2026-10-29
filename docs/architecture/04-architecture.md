@@ -217,12 +217,12 @@ Règles :
 | Couche | Stockage | Rôle |
 |---|---|---|
 | Épisodes | Le journal lui-même | Vérité immuable |
-| Faits | Table `facts` bi-temporelle (`valid_from`, `valid_to`, `known_from`, `known_to`) + provenance + confiance | Ce qu'Orion croit, et depuis quand |
-| Personnes et entités | Tables `entities`, `aliases`, `relations` (temporelles) | Résolution des personnes, fusions réversibles |
+| Faits | Table `facts` bi-temporelle (`valid_from`, `valid_to`, `known_from`, `known_to`) + provenance + confiance + `replaced_by` + épinglé | Ce qu'Orion croit, et depuis quand (D188) |
+| Personnes | Dérivées des faits (`about`) + table `aliases` | Résolution des personnes, fusions réversibles (D27) |
 | Engagements | Table `commitments` : débiteur, créancier, objet, échéance, déclencheur (temps/événement/personne/lieu), état, preuve de clôture | Mémoire prospective |
-| Profil lisible | Fichiers Markdown (`profile.md`, `people/*.md`, `projects/*.md`) versionnés | Ce que tu peux lire et corriger toi-même |
+| Profil lisible | L'app (« Ce que je sais de toi ») et le portrait réécrit chaque nuit ; `orion memory` en Markdown | Ce que tu peux lire et corriger toi-même (D144, D188) |
 | Coffre | Détenu par le gardien | Identifiants, données sensibles, jamais rappelés par défaut |
-| Index | SQLite FTS5 + `sqlite-vec` + tables de graphe | Recherche hybride, reconstructible |
+| Index | SQLite FTS5 + embeddings en cache (calcul exhaustif) | Recherche hybride, reconstructible |
 
 ### 6.2 Écriture
 
@@ -231,8 +231,9 @@ Règles :
 - **Arrière-plan** (processus réflexif) : extraction des faits et engagements, résolution des
   personnes, détection des contradictions, invalidation datée (jamais d'écrasement), mise à jour du
   profil. Opérations `ADD / UPDATE / INVALIDATE / NOOP`, journalisées et réversibles.
-- **Contradictions** : classées (changement réel, correction, désaccord de sources, erreur
-  d'extraction, état temporaire) ; seules les deux premières invalident.
+- **Contradictions** : l'extracteur remplace (`supersedes`) ou invalide ; ce qui est temporaire
+  devient une situation la nuit (D149). Dans le code : un contenu du dehors ne remplace ni ne
+  retire un fait plus sûr, et un fait redit mot pour mot n'est pas stocké deux fois (D188).
 
 ### 6.3 Lecture
 
@@ -240,8 +241,8 @@ Règles :
   engagements ouverts, préférences clés.
 - **Récupération hybride** : mots-clés + vecteurs + graphe (personnes, projets) + filtre temporel
   déduit de la question, fusion, diversité. **Récupération agentique** pour les questions difficiles.
-- **Abstention** : la récupération renvoie un signal de couverture ; Orion dit « je ne sais pas »
-  plutôt que d'inventer.
+- **Épinglés** : ce qu'il a épinglé ouvre toujours la fenêtre (D188).
+- **Doute** : ce qui change souvent et date est « à vérifier » (D83), dans l'app aussi.
 
 ### 6.4 Oubli
 
