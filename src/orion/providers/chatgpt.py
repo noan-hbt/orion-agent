@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import httpx
@@ -28,6 +30,7 @@ from orion.providers.base import (
     ModelRequest,
     ModelResponse,
     ProviderError,
+    QuotaWindow,
     ToolCall,
     Usage,
 )
@@ -267,6 +270,7 @@ class ChatGPTProvider:
                     )
                 if session and (state := response.headers.get(TURN_STATE)):
                     self._turn_state[session] = state
+                quota = plan_windows(response.headers)
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -275,7 +279,10 @@ class ChatGPTProvider:
                     if kind == "response.output_item.done":
                         items.append(cast(dict[str, Any], event["item"]))
                     elif kind in ("response.completed", "response.incomplete"):
-                        return self._parse(cast(dict[str, Any], event["response"]), items, attempt)
+                        parsed = self._parse(
+                            cast(dict[str, Any], event["response"]), items, attempt
+                        )
+                        return parsed.model_copy(update={"quota": quota})
                     elif kind in ("response.failed", "error"):
                         raise self._failure(event)
         except (httpx.TimeoutException, httpx.TransportError) as exc:
@@ -356,3 +363,30 @@ class ChatGPTProvider:
             attempts=attempt,
             citations=citations,
         )
+
+
+_WINDOWS = {300: "five_hour", 10080: "seven_day"}
+
+
+def plan_windows(headers: Mapping[str, str]) -> list[QuotaWindow]:
+    """The plan's windows as Codex reads them: `x-codex-primary-*` (the short one) and
+    `x-codex-secondary-*` (the week), each a percentage used, its length and when it resets."""
+    found: list[QuotaWindow] = []
+    for which in ("primary", "secondary"):
+        prefix = f"x-codex-{which}-"
+        try:
+            used = float(headers[prefix + "used-percent"]) / 100
+        except (KeyError, ValueError):
+            continue
+        minutes = headers.get(prefix + "window-minutes", "")
+        name = _WINDOWS.get(int(minutes), f"{minutes}_min") if minutes.isdigit() else which
+        resets_at: str | None = None
+        try:
+            if (at := headers.get(prefix + "reset-at")) is not None:
+                resets_at = datetime.fromtimestamp(float(at), UTC).isoformat()
+            elif (after := headers.get(prefix + "reset-after-seconds")) is not None:
+                resets_at = (datetime.now(UTC) + timedelta(seconds=float(after))).isoformat()
+        except ValueError:
+            log.warning("chatgpt.quota_reset_unreadable", which=which)
+        found.append(QuotaWindow(name=name, used=used, resets_at=resets_at))
+    return found

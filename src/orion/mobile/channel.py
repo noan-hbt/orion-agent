@@ -78,6 +78,7 @@ CHANGES: tuple[tuple[str, str], ...] = (
     ("config.changed", "settings"),
     ("settings.changed", "settings"),
     ("spend.recorded", "cost"),
+    ("plan.quota", "cost"),
 )
 """Which journal events change which part of the app (D140): the open app repaints that part.
 Only the part is named, never what changed in it."""

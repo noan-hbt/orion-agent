@@ -168,3 +168,23 @@ async def test_a_cancelled_turn_leaves_no_claude_running(tmp_path: Path) -> None
         await turn
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
+
+
+def test_the_plans_windows_come_with_the_answer(tmp_path: Path) -> None:
+    lines: list[dict[str, Any]] = [
+        {"type": "system", "subtype": "init"},
+        {
+            "type": "rate_limit_event",
+            "rate_limit_info": {
+                "unifiedWindows": {
+                    "five_hour": {"utilization": 0.17, "resetsAt": 1793295000},
+                    "seven_day": {"utilization": 0.68, "resetsAt": 1793530800},
+                }
+            },
+        },
+        {"type": "result", "subtype": "success", "is_error": False, "result": "ok", "usage": {}},
+    ]
+    out = "\n".join(json.dumps(line) for line in lines).encode()
+    response = ClaudeCodeProvider(tmp_path).parse(ModelRequest(model="m", messages=[]), out, b"", 0)
+    assert response.text == "ok"
+    assert [(w.name, w.used) for w in response.quota] == [("five_hour", 0.17), ("seven_day", 0.68)]

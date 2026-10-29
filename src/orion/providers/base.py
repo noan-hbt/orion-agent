@@ -78,6 +78,34 @@ class Usage(BaseModel):
         return self.cached_tokens / self.prompt_tokens if self.prompt_tokens else 0.0
 
 
+class QuotaWindow(BaseModel):
+    """How much of a plan's allowance one window has used, as the provider said it last."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(description="`five_hour`, `seven_day`, ... or `<minutes>_min`")
+    used: float = Field(description="0 to 1")
+    resets_at: str | None = Field(default=None, description="ISO time, when known")
+
+
+class Credits(BaseModel):
+    """What is left on a prepaid account (OpenRouter), read when asked."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    total: float | None = None
+    used: float
+    remaining: float | None = None
+
+
+@runtime_checkable
+class Metered(Protocol):
+    """A provider that can say what is left on its account."""
+
+    async def credits(self) -> Credits | None: ...
+
+
 class ModelRequest(BaseModel):
     model: str
     messages: list[Message]
@@ -126,6 +154,10 @@ class ModelResponse(BaseModel):
     citations: list[Citation] = Field(default_factory=list[Citation])
     images: list[str] = Field(
         default_factory=list[str], description="Pictures an image model made, as data: URLs"
+    )
+    quota: list[QuotaWindow] = Field(
+        default_factory=list[QuotaWindow],
+        description="What the plan's windows have used, when the provider says (a plan only)",
     )
 
 

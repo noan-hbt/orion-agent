@@ -4262,3 +4262,21 @@ passe par le même accès que `calendar_add` (CalDAV ou Google, D32), qui sert m
 - CalDAV : `REPORT` par UID, puis `PUT` ou `DELETE` avec `If-Match` (rien n'écrase une
   modification faite entre-temps). Google : `iCalUID` (et `instances` pour une série), puis
   `PATCH` ou `DELETE`.
+
+## D190 — Utilisation : tokens, messages, forfaits
+
+Un écran « Utilisation » (Réglages) montre ce qu'Orion consomme, compté depuis le journal
+(`orion.mobile.usage`, `GET /app/api/usage`) : par jour sur trente jours, aujourd'hui, la
+semaine, depuis le début.
+
+- **Chaque appel journalisé** : `spend.recorded` est écrit pour tout appel, un forfait compris (0 $),
+  avec ses tokens (lus, écrits, relus du cache, mis en cache) et le fournisseur. Les appels plus
+  anciens ne comptent que pour leur coût.
+- **Messages** : les siens (`message.received`, par canal), les réponses d'Orion sur le fil du
+  propriétaire, les outils lancés.
+- **Forfaits** : ce que le fournisseur dit de ses fenêtres avec la réponse — Claude par le
+  `rate_limit_event` de `claude --output-format stream-json`, ChatGPT par les en-têtes
+  `x-codex-primary-*` / `x-codex-secondary-*`. Journalisé (`plan.quota`) quand ça bouge d'au moins
+  un point : l'écran montre la dernière valeur et quand la fenêtre repart.
+- **Crédit prépayé** : OpenRouter est interrogé à l'ouverture de l'écran (`/credits`, ou `/key`
+  pour une clé qui n'y a pas droit) ; ce n'est pas journalisé, c'est l'état du compte.

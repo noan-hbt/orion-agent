@@ -11,7 +11,9 @@ Anthropic caches stays the same from one call to the next.
 
 What it cannot do is refused here, so the router falls back: pictures in or out, web search.
 Calls cost nothing per token (`cost_usd` 0): the plan's own limits are the limit, and a plan
-used up is an error the router falls back on.
+used up is an error the router falls back on. The answer comes as a stream of JSON lines
+(`stream-json`) for the one that says how much of the plan's windows is used
+(`rate_limit_event`), which the usage screen shows.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import json
 import os
 import shutil
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +37,7 @@ from orion.providers.base import (
     ModelRequest,
     ModelResponse,
     ProviderError,
+    QuotaWindow,
     ToolCall,
     ToolSpec,
     Usage,
@@ -177,7 +181,8 @@ class ClaudeCodeProvider:
             "--system-prompt-file",
             str(system_file),
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
         ]
         if request.tools:
             schema = answer_schema(request.tools, allowed=not request.no_tools)
@@ -226,11 +231,23 @@ class ClaudeCodeProvider:
         return path
 
     def parse(self, request: ModelRequest, out: bytes, err: bytes, code: int) -> ModelResponse:
-        try:
-            result = cast(dict[str, Any], json.loads(out))
-        except json.JSONDecodeError as exc:
+        result: dict[str, Any] | None = None
+        quota: list[QuotaWindow] = []
+        for line in out.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a line that is not an event: the result is what matters
+            if not isinstance(event, dict):
+                continue
+            event = cast(dict[str, Any], event)
+            if event.get("type") == "result":
+                result = event
+            elif event.get("type") == "rate_limit_event":
+                quota = plan_windows(cast(dict[str, Any], event.get("rate_limit_info") or {}))
+        if result is None:
             detail = (err or out).decode(errors="replace").strip()[-300:]
-            raise ProviderError(f"Claude Code failed ({code}): {detail}", retryable=False) from exc
+            raise ProviderError(f"Claude Code failed ({code}): {detail}", retryable=False)
         if result.get("is_error") or result.get("subtype") != "success":
             status = result.get("api_error_status")
             text = str(result.get("result") or result.get("subtype") or "error")[:300]
@@ -293,7 +310,32 @@ class ClaudeCodeProvider:
             ),
             model=next(iter(models), request.model),
             provider=self.name,
+            quota=quota,
         )
+
+
+def plan_windows(info: dict[str, Any]) -> list[QuotaWindow]:
+    """The plan's windows (five hours, seven days...) from a `rate_limit_event`."""
+    windows = cast(dict[str, Any], info.get("unifiedWindows") or {})
+    found: list[QuotaWindow] = []
+    for name, window in sorted(windows.items()):
+        if not isinstance(window, dict):
+            continue
+        window = cast(dict[str, Any], window)
+        used = window.get("utilization")
+        if not isinstance(used, int | float):
+            continue
+        resets = window.get("resetsAt")
+        found.append(
+            QuotaWindow(
+                name=name,
+                used=float(used),
+                resets_at=datetime.fromtimestamp(resets, UTC).isoformat()
+                if isinstance(resets, int | float)
+                else None,
+            )
+        )
+    return found
 
 
 async def stop(process: asyncio.subprocess.Process) -> None:

@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from orion.providers.base import (
     Citation,
+    Credits,
     Message,
     ModelRequest,
     ModelResponse,
@@ -147,6 +148,47 @@ class OpenRouterProvider:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    async def credits(self) -> Credits | None:
+        """What is left on the account: the credits bought and used (`/credits`), or, for a
+        key that may not read them, the key's own limit (`/key`)."""
+        try:
+            data = cast(dict[str, Any], (await self._get("/credits")).get("data") or {})
+            try:
+                total, used = float(data["total_credits"]), float(data["total_usage"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderError(f"unreadable credits: {data}", retryable=False) from exc
+            return Credits(provider=self.name, total=total, used=used, remaining=total - used)
+        except ProviderError as exc:
+            if exc.status not in (401, 403):
+                raise
+        key = cast(dict[str, Any], (await self._get("/key")).get("data") or {})
+        limit, remaining = key.get("limit"), key.get("limit_remaining")
+        try:
+            return Credits(
+                provider=self.name,
+                total=float(limit) if limit is not None else None,
+                used=float(key.get("usage") or 0),
+                remaining=float(remaining) if remaining is not None else None,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProviderError(f"unreadable key: {key}", retryable=False) from exc
+
+    async def _get(self, path: str) -> dict[str, Any]:
+        try:
+            response = await self._client.get(path, timeout=10.0)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
+        if response.status_code >= 400:
+            raise ProviderError(
+                f"HTTP {response.status_code}: {response.text[:300]}",
+                retryable=False,
+                status=response.status_code,
+            )
+        try:
+            return cast(dict[str, Any], response.json())
+        except ValueError as exc:
+            raise ProviderError("invalid JSON from provider", retryable=False) from exc
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         body = self._body(request)
