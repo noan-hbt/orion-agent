@@ -3,7 +3,7 @@ and from there on the call is that mechanism's own (journal, guardian, evaluatio
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -65,16 +65,19 @@ def test_when_and_what_pick_the_mechanism() -> None:
 
 
 async def test_later_becomes_the_call_it_stands_for(tmp_path: Path) -> None:
+    # `remind_me` checks against the real clock: the moments must stay ahead of it.
+    now = datetime.now(PARIS).replace(second=0, microsecond=0)
+    day = (now + timedelta(days=2)).date()
     config = OrionConfig.model_validate({"data_dir": tmp_path})
     provider = ScriptedProvider(
         call_tools(
-            ("later", {"then": "tell", "what": "appeler le garage", "at": "2026-10-29 09:00"}),
+            ("later", {"then": "tell", "what": "appeler le garage", "at": f"{day} 09:00"}),
             (
                 "later",
                 {
                     "then": "ask",
                     "what": "Ton entretien, ça a donné quoi ?",
-                    "at": "2026-10-29 18:00",
+                    "at": f"{day} 18:00",
                 },
             ),
             ("later", {"then": "tell", "what": "appeler le garage"}),
@@ -86,7 +89,6 @@ async def test_later_becomes_the_call_it_stands_for(tmp_path: Path) -> None:
         assert "later" in menu and "remind_me" not in menu and "follow_up" not in menu
         (drawer,) = [s for s in app.orion.registry.specs() if s.name == "orion"]
         assert "remind_me" not in drawer.description  # reached through `later`, not listed
-        now = datetime(2026, 10, 27, 15, 0, tzinfo=PARIS)
         await app.orion.handle_owner_message(
             OWNER_THREAD,
             "rappelle-moi jeudi le garage ; et j'ai un entretien jeudi",
