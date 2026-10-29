@@ -8,8 +8,8 @@ from typing import Any
 import httpx
 import pytest
 
-from orion.providers.base import ModelRequest, ProviderError, ToolSpec
-from orion.providers.chatgpt import ChatGPTProvider, to_input
+from orion.providers.base import Message, ModelRequest, ProviderError, ToolSpec
+from orion.providers.chatgpt import TURN_STATE, ChatGPTProvider, to_input
 from orion.providers.chatgpt_auth import PLAN_SCOPE, ChatGPTAuth, Credentials
 from orion.providers.router import Router
 
@@ -151,7 +151,6 @@ async def test_tool_call_is_returned_in_the_journaled_chat_shape(tmp_path: Path)
     body = sent[0]
     assert body["store"] is False and body["stream"] is True
     assert body["prompt_cache_key"] == "conv-1"
-    assert body["prompt_cache_retention"] == "24h"  # the cache outlives a pause
     assert body["reasoning"] == {"effort": "low"}
     assert body["tools"][0]["name"] == "weather"
     assert "temperature" not in body and "max_output_tokens" not in body  # refused by the plan
@@ -247,24 +246,32 @@ async def test_used_up_plan_is_not_retried_and_pictures_are_refused(tmp_path: Pa
     await provider.aclose()
 
 
-async def test_model_refusing_long_cache_is_asked_without_it(tmp_path: Path) -> None:
-    sent: list[dict[str, Any]] = []
+async def test_a_turns_requests_stay_with_the_machine_that_holds_its_cache(
+    tmp_path: Path,
+) -> None:
+    seen: list[httpx.Headers] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        sent.append(body)
-        if "prompt_cache_retention" in body:
-            return httpx.Response(400, json={"error": {"param": "prompt_cache_retention"}})
-        return _sse(_completed())
+        seen.append(request.headers)
+        response = _sse(_completed())
+        response.headers[TURN_STATE] = f"route-{len(seen)}"
+        return response
 
     provider = _provider(tmp_path, handler)
-    request = ModelRequest(
-        model="gpt-6-luna", messages=[{"role": "user", "content": "hi"}], session_id="conv-1"
-    )
-    await provider.complete(request)
-    await provider.complete(request)
+    asked: list[Message] = [{"role": "user", "content": "Weather in Lyon?"}]
+    answered: list[Message] = [
+        *asked,
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+    ]
+    for messages in (asked, answered, [*answered, {"role": "user", "content": "And Paris?"}]):
+        await provider.complete(
+            ModelRequest(model="gpt-6-luna", messages=messages, session_id="conv-1")
+        )
     await provider.aclose()
-    assert ["prompt_cache_retention" in b for b in sent] == [True, False, False]
+    assert all(h["session-id"] == "conv-1" for h in seen)
+    assert seen[1][TURN_STATE] == "route-1"  # the same turn, the same machine
+    assert TURN_STATE not in seen[0] and TURN_STATE not in seen[2]  # a new turn starts fresh
 
 
 async def test_rejected_token_is_refreshed_then_retried(tmp_path: Path) -> None:

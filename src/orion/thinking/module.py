@@ -74,6 +74,10 @@ NOTE_ENDS = {StopReason.COMPLETED, StopReason.MAX_STEPS, StopReason.BUDGET_EXHAU
 FOLLOWUP = "followup.planned"
 FOLLOWUP_CANCELLED = "followup.cancelled"
 NIGHT = "thinking.night.done"
+RETRY_EVERY = timedelta(hours=1)
+RETRY_FOR = timedelta(hours=8)
+"""A night the model's provider cut short (a plan's allowance used up, an outage) is taken up
+again where it stopped, every hour until morning; past that, the next evening rereads it all."""
 
 THOUGHT_EXPIRES = timedelta(days=2)
 FOLLOWUP_EXPIRES = timedelta(hours=36)
@@ -213,6 +217,15 @@ class FollowUp:
     trust: Trust
 
 
+@dataclass(frozen=True)
+class Stopped:
+    """A night the provider cut short: whose day it was, when, and the times already done."""
+
+    day: date
+    at: datetime
+    done: tuple[str, ...]
+
+
 @dataclass
 class ThinkingState:
     name: str = "thinking"
@@ -224,6 +237,7 @@ class ThinkingState:
     """Each night as it was recorded: the day, what it read, what it cost (the app's « Nuit »)."""
     upto: int = 0
     """The last journal seq the night reading has read."""
+    stopped: Stopped | None = None
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -236,6 +250,7 @@ class ThinkingState:
         self.last = None
         self.nights.clear()
         self.upto = 0
+        self.stopped = None
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -290,9 +305,18 @@ class ThinkingState:
         elif event.kind == FOLLOWUP_CANCELLED:
             self.follow_ups.pop(str(payload["followup_id"]), None)
         elif event.kind == NIGHT:
+            self.nights = [*self.nights, dict(payload)][-60:]
+            if payload.get("interrupted"):
+                phases: dict[str, str] = payload.get("phases", {})
+                self.stopped = Stopped(
+                    date.fromisoformat(str(payload["day"])),
+                    datetime.fromisoformat(str(payload["at"])),
+                    tuple(name for name, end in phases.items() if end in NOTE_ENDS),
+                )
+                return
+            self.stopped = None
             self.last = date.fromisoformat(str(payload["day"]))
             self.upto = max(self.upto, int(payload["upto"]))
-            self.nights = [*self.nights, dict(payload)][-60:]
 
 
 @dataclass(frozen=True)
@@ -301,6 +325,10 @@ class NightReport:
     note: str = ""
     """What Orion will tell the owner in the morning; empty: nothing (`SILENCE`)."""
     cost_usd: float = 0.0
+    phases: dict[str, str] = field(default_factory=dict[str, str])
+    """How each time of the night ended."""
+    interrupted: bool = False
+    """The provider cut the night short: it is taken up again where it stopped."""
 
 
 def local_time(text: str, zone: ZoneInfo) -> datetime:
@@ -445,11 +473,18 @@ class Thinking:
         """Once a night, at or after `at` (a missed night is caught up)."""
         await self.sync()
         now = self.clock().astimezone(self.zone)
+        stopped = self.state.stopped
+        if stopped is not None and now - stopped.at < RETRY_FOR:
+            if now - stopped.at < RETRY_EVERY:
+                return None
+            return await self.night(now, stopped.day, stopped.done)
         if now.time() < self.settings.at or self.state.last == now.date():
             return None
         return await self.night(now)
 
-    async def night(self, now: datetime) -> NightReport:
+    async def night(
+        self, now: datetime, day: date | None = None, done: tuple[str, ...] = ()
+    ) -> NightReport:
         said, upto = await conversation_since(
             self._journal, OWNER_THREAD, self.state.upto, TRUSTED_FLOOR
         )
@@ -462,7 +497,7 @@ class Thinking:
             raise RuntimeError("Orion's night needs Orion: serve sets it before the night runs")
         if due:
             try:
-                report = await self._work(said, promised, now)
+                report = await self._work(said, promised, now, done)
             except Exception:
                 # Recorded all the same: a night that breaks is not run again (and paid
                 # again) at every tick until morning. What it read is read tomorrow.
@@ -473,12 +508,15 @@ class Thinking:
                 NewEvent(
                     kind=NIGHT,
                     payload={
-                        "day": now.date().isoformat(),
-                        "upto": self.state.upto if failed else upto,
+                        "day": (day or now.date()).isoformat(),
+                        "at": now.isoformat(),
+                        "upto": self.state.upto if failed or report.interrupted else upto,
                         "read": report.read,
                         "noted": bool(report.note),
                         "cost_usd": round(report.cost_usd, 4),
+                        "phases": {**dict.fromkeys(done, "completed"), **report.phases},
                         **({"failed": True} if failed else {}),
+                        **({"interrupted": True} if report.interrupted else {}),
                     },
                     provenance=Provenance(source="orion:thinking", actor="orion:thinking"),
                     trust=Trust.SYSTEM,
@@ -490,7 +528,11 @@ class Thinking:
         return report
 
     async def _work(
-        self, said: list[tuple[datetime | None, str]], promised: list[Promise], now: datetime
+        self,
+        said: list[tuple[datetime | None, str]],
+        promised: list[Promise],
+        now: datetime,
+        skip: tuple[str, ...] = (),
     ) -> NightReport:
         """Orion himself, in his night thread, with his tools (D117): what he says at the end
         is his note for the morning."""
@@ -508,11 +550,12 @@ class Thinking:
                 ("reves", bool(said or promised)),
                 ("reveil", True),
             )
-            if due
+            if due and name not in skip
         ]
         budget, steps = self.settings.budget_usd, self.settings.max_steps
         spent, used = 0.0, 0
         turn = None
+        ended: dict[str, str] = {}
         for i, name in enumerate(phases):
             last = name == "reveil"
             # Each time leaves enough for waking up: a night with no note is a night lost.
@@ -524,7 +567,7 @@ class Thinking:
             focus = PHASES[name].format(points=self.settings.points)
             done = await self.orion.handle_initiative(
                 NIGHT_THREAD,
-                f"{material}\n\n{focus}" if i == 0 else focus,
+                f"{material}\n\n{focus}" if i == 0 and not skip else focus,
                 "ta nuit",
                 trust,
                 now,
@@ -535,15 +578,21 @@ class Thinking:
             )
             spent += done.usage.cost_usd
             used += done.steps
+            ended[name] = str(done.reason)
             log.info("thinking.night.phase", phase=name, steps=done.steps, end=done.reason)
             if done.reason not in NOTE_ENDS:  # a failure ends the night; half a note is none
                 log.warning(
                     "thinking.night.unfinished", phase=name, end=done.reason, detail=done.detail
                 )
-                return NightReport(read=len(said), cost_usd=spent)
+                return NightReport(
+                    read=len(said),
+                    cost_usd=spent,
+                    phases=ended,
+                    interrupted=done.reason == StopReason.PROVIDER_ERROR,
+                )
             turn = done if last else None
         if turn is None:
-            return NightReport(read=len(said), cost_usd=spent)
+            return NightReport(read=len(said), cost_usd=spent, phases=ended)
         text = turn.text.strip()
         log.info("thinking.night.worked", steps=used, cost=spent, end=turn.reason)
         if not text or is_silence(text):
@@ -562,7 +611,7 @@ class Thinking:
             noted,
             turn.correlation_id,
         )
-        return NightReport(read=len(said), note=text, cost_usd=spent)
+        return NightReport(read=len(said), note=text, cost_usd=spent, phases=ended)
 
     async def _known(self) -> list[Fact]:
         """Trusted facts only: what a page or a mail planted never steers the review."""
