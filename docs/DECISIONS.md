@@ -1294,8 +1294,11 @@ serveur privé `chatgpt.com/backend-api`) : OpenAI l'interdit désormais explici
 Vérifié en vrai sur le forfait : appel d'outils aller-retour, images reçues, recherche web avec
 ses sources, réponse JSON. Limites constatées :
 - `temperature` est refusée, `max_output_tokens` aussi d'après la doc : on les ignore.
-- Le cache de prompt n'est pas appliqué : le serveur remplace `prompt_cache_key` à chaque
-  requête. Sans coût par jeton, cela ne coûte que de la latence.
+- Le cache de prompt ne tient que si la requête retombe sur la machine qui l'a : comme
+  Codex, chaque requête porte `session-id` et `thread-id`, et les appels d'un même tour
+  renvoient le jeton `x-codex-turn-state` reçu au premier. Sans cela, en vrai (28 octobre),
+  moins de la moitié des jetons étaient en cache, et le forfait s'épuisait plus vite.
+  `prompt_cache_retention` n'est pas envoyé (Codex ne l'envoie pas, sans effet constaté).
 - Pas de génération d'images ni d'embeddings : `image_model` et `embedding_model` restent sur
   OpenRouter, ou s'éteignent. Une demande d'image sur le forfait échoue, et le routeur passe
   au modèle de secours.
@@ -4159,7 +4162,10 @@ nuit.
   ses précisions, et la note du matin le lui dit ; deux de ses règles qui se contredisent : la
   plus récente si c'est clair, sinon une question au réveil.
 - **Budget** : un seul pour la nuit ; chaque temps garde de quoi se réveiller. Un temps qui
-  échoue arrête la nuit, sans note.
+  échoue arrête la nuit, sans note. Si c'est le fournisseur qui la coupe (forfait épuisé, en
+  vrai le 28 octobre), rien n'est compté comme lu : la nuit reprend au temps qui a échoué,
+  toutes les heures jusqu'au matin, puis le soir suivant relit tout. Chaque nuit garde
+  comment chaque temps a fini.
 - La consolidation de 3 h 30 (tri, portrait) et le réflecteur de la journée ne changent pas.
 
 ## D187 — Chaque arrivée réveille Orion, et ses consignes de lieu durent

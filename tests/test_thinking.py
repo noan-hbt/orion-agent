@@ -376,3 +376,28 @@ async def test_a_night_that_breaks_is_not_paid_again_at_every_tick(
     assert report is not None and not report.note
     assert await thinking.tick() is None  # recorded: not run (and paid) again tonight
     assert thinking.state.upto == 0  # what it read is read again tomorrow
+
+
+async def test_a_night_the_provider_cuts_short_is_taken_up_where_it_stopped(
+    journal: SqliteJournal,
+) -> None:
+    thinking = thinking_for(journal, NIGHT)
+    orion = await a_day(journal, thinking_tools(thinking))
+    thinking.orion = orion
+    scripted(orion).extend(reply("rien"), fail("ChatGPT plan allowance used up"))
+    report = await thinking.tick()
+    assert report is not None and not report.note
+    assert thinking.state.upto == 0  # nothing counted as read yet
+    thinking.clock = lambda: NIGHT + timedelta(minutes=20)
+    assert await thinking.tick() is None  # not hammered while the allowance is out
+
+    asked = len(scripted(orion).requests)
+    scripted(orion).extend(
+        *asleep(2), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
+    )
+    thinking.clock = lambda: NIGHT + timedelta(hours=1, minutes=10)
+    report = await thinking.tick()
+    assert report is not None and "je maintiens" in report.note
+    assert len(scripted(orion).requests) - asked == 3  # the day was not reread
+    assert thinking.state.upto > 0 and thinking.state.stopped is None
+    assert thinking.state.last == NIGHT.date()

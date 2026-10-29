@@ -49,9 +49,9 @@ _EFFORT = {
     "xhigh": "xhigh",
     "max": "xhigh",
 }
-RETENTION = "24h"
-"""How long a conversation's prompt cache is kept. By default OpenAI drops it after 5 to 10
-minutes without requests: nearly every turn after a pause read the whole conversation again."""
+TURN_STATE = "x-codex-turn-state"
+"""The plan's sticky routing: the server hands it out on a turn's first request, and the
+turn's next requests send it back to reach the machine that holds the prompt cache."""
 
 
 def _content(content: object) -> object:
@@ -162,8 +162,8 @@ class ChatGPTProvider:
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
         self._max_attempts = max_attempts
         self._max_backoff = max_backoff
-        self._short_cache: set[str] = set()
-        """Models that refused the long cache retention: asked without it from then on."""
+        self._turn_state: dict[str, str] = {}
+        """Each conversation's routing token for the turn under way (`TURN_STATE`)."""
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -178,16 +178,6 @@ class ChatGPTProvider:
             try:
                 response = await self._stream(body, attempt)
             except ProviderError as exc:
-                if (
-                    exc.status == 400
-                    and "prompt_cache_retention" in body
-                    and "prompt_cache_retention" in str(exc)
-                ):
-                    log.warning("provider.short_cache", model=request.model, error=str(exc))
-                    self._short_cache.add(request.model)
-                    body.pop("prompt_cache_retention", None)
-                    attempt -= 1
-                    continue
                 if not exc.retryable or attempt >= self._max_attempts:
                     raise
                 base = min(self._max_backoff, 0.5 * 2 ** (attempt - 1))
@@ -235,8 +225,6 @@ class ChatGPTProvider:
                 body["tool_choice"] = "none"
         if request.session_id:
             body["prompt_cache_key"] = request.session_id
-            if request.model not in self._short_cache:
-                body["prompt_cache_retention"] = RETENTION
         effort = (
             _EFFORT[request.reasoning_effort] if request.reasoning_effort else self._default_effort
         )
@@ -254,6 +242,14 @@ class ChatGPTProvider:
         except ChatGPTAuthError as exc:
             raise ProviderError(f"ChatGPT sign-in: {exc}", retryable=False) from exc
         headers = {"Authorization": f"Bearer {token}"}
+        session = cast(str | None, body.get("prompt_cache_key"))
+        if session:
+            # As Codex does: the session routes the request to where its cache lives.
+            headers["session-id"] = headers["thread-id"] = session
+            if cast(list[dict[str, Any]], body["input"])[-1].get("role") == "user":
+                self._turn_state.pop(session, None)  # a new turn gets a new token
+            elif state := self._turn_state.get(session):
+                headers[TURN_STATE] = state
         items: list[dict[str, Any]] = []
         try:
             async with self._client.stream(
@@ -269,6 +265,8 @@ class ChatGPTProvider:
                         or response.status_code == 401,
                         status=response.status_code,
                     )
+                if session and (state := response.headers.get(TURN_STATE)):
+                    self._turn_state[session] = state
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
