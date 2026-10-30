@@ -125,7 +125,7 @@ class AgentConfig(BaseModel):
 
     model: str = "deepseek/deepseek-v4.1-flash"
     timezone: str = "Europe/Paris"
-    max_window_tokens: int = Field(default=60_000, ge=4_000)
+    max_window_tokens: int = Field(default=200_000, ge=4_000)
     max_steps: int = Field(
         default=40, ge=1, description="Model calls per turn; browsing a site takes one per page"
     )
@@ -148,11 +148,12 @@ class AgentConfig(BaseModel):
         "shown shortened (sooner once they add up); 0 never does",
     )
     fresh_idle_minutes: int = Field(
-        default=60,
+        default=0,
         ge=0,
         description="After this long without messages (the model cache has expired), a "
         "conversation keeps only its latest exchanges, within fresh_window_tokens, and a "
-        "summary of the rest: otherwise the whole window is paid in full again; 0 never does",
+        "summary of the rest: otherwise the whole window is paid in full again; 0 never does "
+        "(the default, D200: a pause no longer costs the thread of the conversation)",
     )
     fresh_window_tokens: int = Field(default=16_000, ge=2_000)
     approvals: Literal["prudent", "equilibre"] = Field(
@@ -163,10 +164,11 @@ class AgentConfig(BaseModel):
         "asks only before acting on the world, saying why (D85, D90)",
     )
     untrusted_idle_minutes: int = Field(
-        default=120,
+        default=0,
         ge=0,
         description="After this long without messages, a window holding untrusted content "
-        "starts afresh (memory carries what matters); 0 never does",
+        "starts afresh, with a summary of it; 0 never does (the default, D200): the content "
+        "then leaves at a rebase",
     )
     extractor_model: str = "deepseek/deepseek-v4.1-flash"
     fallback_models: list[str] = Field(

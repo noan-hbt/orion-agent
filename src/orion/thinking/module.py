@@ -22,8 +22,8 @@ A conversation ends, and an assistant usually stops there. Orion does not:
   exchange Orion got wrong (`missed`): the app's « Mes ratés », and evaluation cases to write.
 
 Both reach the owner as alerts through the initiative engine (quiet hours, the daily budget,
-the verifier). Only trusted turns are reread: what a page or a mail said never steers a
-night's work.
+the verifier). The whole day is reread, Orion's replies included even after he read a page
+(D200); what a page or a mail said itself (tool results) never shows there.
 
     thinking.promised  thinking.night.note  followup.planned  followup.cancelled
     thinking.night.done  adaptation.missed  (thinking.thought: written by the night before D117)
@@ -81,7 +81,9 @@ again where it stopped, every hour until morning; past that, the next evening re
 
 THOUGHT_EXPIRES = timedelta(days=2)
 FOLLOWUP_EXPIRES = timedelta(hours=36)
-MAX_TRANSCRIPT = 40_000
+MAX_TRANSCRIPT = 400_000
+"""A safety ceiling, not a budget (D200): about 100 000 tokens, far beyond a real day of
+conversation, so a runaway journal cannot overflow the night's window and lose the night."""
 MAX_AHEAD = timedelta(days=90)
 _WEEKDAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
@@ -506,7 +508,7 @@ class Thinking:
         self, now: datetime, day: date | None = None, done: tuple[str, ...] = ()
     ) -> NightReport:
         said, upto = await conversation_since(
-            self._journal, OWNER_THREAD, self.state.upto, TRUSTED_FLOOR
+            self._journal, OWNER_THREAD, self.state.upto, TRUSTED_FLOOR, orion_always=True
         )
         promised = list(self.state.promised.values())
         report = NightReport(read=len(said))
@@ -715,7 +717,10 @@ class Thinking:
             else line
             for at, line in said
         ]
-        transcript = "\n".join(lines)[-MAX_TRANSCRIPT:]
+        transcript = "\n".join(lines)
+        if len(transcript) > MAX_TRANSCRIPT:
+            log.warning("thinking.night.transcript_cut", chars=len(transcript))
+            transcript = "(début de la journée coupé)\n" + transcript[-MAX_TRANSCRIPT:]
         parts = [
             SLEEP,
             f"Nous sommes {_WEEKDAYS[now.weekday()]} {now:%d/%m/%Y}, il est {now:%H:%M}.",

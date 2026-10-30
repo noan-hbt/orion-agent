@@ -11,14 +11,14 @@ json_output = true
 [agent]
 model = "deepseek/deepseek-v4.1-flash"
 timezone = "Europe/Paris"
-max_window_tokens = 60000    # visible conversation window before a one-step rebase
+max_window_tokens = 200000   # visible conversation window before a one-step rebase (D200)
 max_steps = 40               # model calls per turn (cost and repeats stop it first)
 max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
 max_continuations = 1        # out of steps, your turn goes on this many times (you are told)
 prune_idle_minutes = 10      # after a pause, old bulky tool results are shown shortened
-fresh_idle_minutes = 60      # after a longer pause, only the latest exchanges are carried on,
-fresh_window_tokens = 16000  # within this size, with a summary of the rest (D123)
+fresh_idle_minutes = 0       # > 0: after such a pause, only the latest exchanges are carried on,
+fresh_window_tokens = 16000  # within this size, with a summary of the rest (D123); 0: never (D200)
 approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
                              # acting on the world, saying why (D90); "prudent" refuses that, and
                              # asks before each memory, reminder or voice message (D85)
