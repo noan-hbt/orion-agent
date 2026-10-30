@@ -740,7 +740,12 @@ def release(code: Path) -> dict[str, Any] | None:
         return None
     try:
         done = subprocess.run(
-            ["git", "-C", str(code), "log", "-1", "--format=%h%x00%cI%x00%s"],
+            # Orion runs as its own user, the checkout belongs to another: without the
+            # exception git refuses it as of dubious ownership and the version never shows.
+            [
+                *("git", "-c", f"safe.directory={code}", "-C", str(code)),
+                *("log", "-1", "--format=%h%x00%cI%x00%s"),
+            ],
             capture_output=True,
             text=True,
             timeout=5,
