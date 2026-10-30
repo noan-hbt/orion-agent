@@ -4384,5 +4384,5 @@ ce qu'Orion lit pendant le tour était coupé à 12 000 caractères (début et f
 55 000 caractères (mémoire, pages des impôts, emploi du temps) perdait le milieu. À la
 réécriture, le contexte répété remplissait la fin à son tour.
 
-- **Plus aucune coupe** : le relecteur reçoit le tour entier, qui tenait déjà dans le contexte
-  du modèle qui l'a écrit. Le contexte qu'une réécriture répète n'y figure qu'une fois.
+- **Ce qu'Orion a consulté passe d'abord**, puis le contexte du tour, une seule fois même si
+  une réécriture le répète. Limites relevées : 40 000 caractères par morceau, 200 000 en tout.
