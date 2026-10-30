@@ -50,7 +50,9 @@ def thinking_for(journal: SqliteJournal, now: datetime, orion: Orion | None = No
     return thinking
 
 
-async def a_day(journal: SqliteJournal, tools: list[Tool] | None = None) -> Orion:
+async def a_day(
+    journal: SqliteJournal, tools: list[Tool] | None = None, window: int = 60_000
+) -> Orion:
     provider = ScriptedProvider(
         reply("Les deux se valent sur le salaire. Tu penches pour laquelle ?"),
         reply("Bonne chance jeudi !"),
@@ -61,7 +63,7 @@ async def a_day(journal: SqliteJournal, tools: list[Tool] | None = None) -> Orio
         provider=provider,
         registry=ToolRegistry(tools or []),
         guardian=Guardian(),
-        compiler=ContextCompiler("C"),
+        compiler=ContextCompiler("C", max_window_tokens=window),
         agent=AgentConfig(),
     )
     await orion.start()
@@ -121,7 +123,7 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
                 },
             ),
         ),
-        *asleep(3),
+        *asleep(4),
         reply("Cette nuit j'ai comparé Lyon et Nantes : le trajet te coûte deux heures à Nantes."),
     )
     start = len(provider.requests)
@@ -166,7 +168,7 @@ async def test_a_quiet_night_sends_nothing_and_the_next_reads_only_what_is_new(
 ) -> None:
     orion = await a_day(journal)
     thinking = thinking_for(journal, NIGHT, orion)
-    scripted(orion).extend(*asleep(3), reply("SILENCE"))
+    scripted(orion).extend(*asleep(4), reply("SILENCE"))
     report = await thinking.tick()
     assert report is not None and report.note == ""
     assert await thinking.alerts(NIGHT + timedelta(hours=3)) == []
@@ -203,7 +205,7 @@ async def test_every_evening_orion_reviews_what_he_knows_even_after_a_silent_day
     thinking.orion = orion
     thinking.modules = [Missions(OrionConfig())]
     thinking.planned = planned
-    scripted(orion).extend(*asleep(5), reply("SILENCE"))
+    scripted(orion).extend(*asleep(6), reply("SILENCE"))
     start = len(scripted(orion).requests)
     assert await thinking.tick() is not None
     brief = str(scripted(orion).requests[start].messages[-1]["content"])
@@ -224,6 +226,19 @@ async def test_every_evening_orion_reviews_what_he_knows_even_after_a_silent_day
     await store.close()
 
 
+async def test_a_time_of_the_night_still_sees_everything_when_the_window_is_cut(
+    journal: SqliteJournal,
+) -> None:
+    orion = await a_day(journal, window=800)
+    thinking = thinking_for(journal, NIGHT, orion)
+    scripted(orion).extend(*asleep(4), reply("SILENCE"))
+    start = len(scripted(orion).requests)
+    assert await thinking.tick() is not None
+    # The material (the day among it) is laid out again rather than left to a summary.
+    for request in scripted(orion).requests[start:]:
+        assert "J'hésite entre l'offre de Lyon" in str(request.messages[-1]["content"])
+
+
 async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal) -> None:
     thinking = thinking_for(journal, EVENING)
     tools = {t.name: t for t in thinking_tools(thinking)}
@@ -239,7 +254,7 @@ async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal)
     orion = await a_day(journal)
     thinking.orion = orion
     scripted(orion).extend(
-        *asleep(3), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
+        *asleep(4), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
     )
     thinking.clock = lambda: NIGHT
     report = await thinking.tick()
@@ -332,7 +347,7 @@ async def test_following_up_is_planned_checked_and_cancelled(journal: SqliteJour
 
 async def test_what_the_night_writes_is_journaled_with_its_source(journal: SqliteJournal) -> None:
     orion = await a_day(journal)
-    scripted(orion).extend(*asleep(3), reply("Une idée pour ton déménagement."))
+    scripted(orion).extend(*asleep(4), reply("Une idée pour ton déménagement."))
     await thinking_for(journal, NIGHT, orion).tick()
     events = {e.kind: e for e in await journal.read(0, 10_000)}
     assert events[NOTE].provenance == Provenance(
@@ -393,11 +408,11 @@ async def test_a_night_the_provider_cuts_short_is_taken_up_where_it_stopped(
 
     asked = len(scripted(orion).requests)
     scripted(orion).extend(
-        *asleep(2), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
+        *asleep(3), reply("Pour Lyon, je maintiens : le loyer compense le trajet.")
     )
     thinking.clock = lambda: NIGHT + timedelta(hours=1, minutes=10)
     report = await thinking.tick()
     assert report is not None and "je maintiens" in report.note
-    assert len(scripted(orion).requests) - asked == 3  # the day was not reread
+    assert len(scripted(orion).requests) - asked == 4  # the day was not reread
     assert thinking.state.upto > 0 and thinking.state.stopped is None
     assert thinking.state.last == NIGHT.date()
