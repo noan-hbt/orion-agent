@@ -425,6 +425,15 @@ def _read_while_writing(messages: Sequence[Message]) -> str:
     return "\n---\n".join(dict.fromkeys(looked_up + context))[:VERIFIER_READ_CHARS]
 
 
+def _after_review(fallback: str) -> str:
+    """What he asked for, once the review blocked Orion's wording: said as such. The raw text
+    alone read as Orion's own instruction (30/10, « Rappel (Ecole) : Te dire dans quelle
+    salle… » three times) and hid that the asked thing was not done."""
+    if not fallback:
+        return ""
+    return "Ma relecture a bloqué mon message, voici ce que tu m'avais demandé :\n" + fallback
+
+
 def _point(lines: str, extra: list[str]) -> str:
     """The point as the owner reads it when Orion's own wording failed: what is left to do,
     then what the sources wrote for him (`DigestLine.plain`)."""
@@ -996,7 +1005,7 @@ class InitiativeEngine:
                 break
             if is_silence(again.text):
                 return (
-                    (candidate.fallback, "fallback: silence after a rejection")
+                    (_after_review(candidate.fallback), "fallback: silence after a rejection")
                     if (candidate.explicit)
                     else (None, "silence")
                 )
@@ -1006,7 +1015,7 @@ class InitiativeEngine:
             # Twice wrong on something he never asked for: Orion keeps quiet rather than send
             # the raw text (seen for real, « Pour la suite : … » after two rejected points).
             return None, "rejected: " + issues
-        return candidate.fallback, "fallback: " + issues
+        return _after_review(candidate.fallback), "fallback: " + issues
 
     async def _record(
         self,

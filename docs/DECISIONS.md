@@ -4386,3 +4386,9 @@ réécriture, le contexte répété remplissait la fin à son tour.
 
 - **Ce qu'Orion a consulté passe d'abord**, puis le contexte du tour, une seule fois même si
   une réécriture le répète. Limites relevées : 40 000 caractères par morceau, 200 000 en tout.
+- **Le propriétaire est une seule personne** : le relecteur lisait « Noan » dans les faits et
+  « Lui » dans la conversation comme deux personnes, et rejetait « appelle le garage » parce
+  que c'était « à Noan » d'appeler (trois refus du 25 au 26/10). Son prompt le dit désormais.
+- **Après deux refus, ce qu'il a demandé part comme tel** : « Ma relecture a bloqué mon
+  message, voici ce que tu m'avais demandé : » puis le texte brut. Seul, ce texte se lisait
+  comme une consigne d'Orion (« Te dire dans quelle salle… ») et cachait que rien n'était fait.

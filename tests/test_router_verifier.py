@@ -159,7 +159,8 @@ async def test_proactive_drafts_are_checked_by_another_model(
         verifier=Verifier(checker, "verifier"),
     )
     await engine.tick()
-    assert inbox.messages == [expected]
+    [sent] = inbox.messages
+    assert sent.endswith(expected)
     facts = checker.requests[0].messages[1]["content"]
     assert "mardi 2026-10-20 à 09:01" in facts and "Appeler Paul" in facts
     [record] = [e for e in await journal.read() if e.kind == DELIVERED]
