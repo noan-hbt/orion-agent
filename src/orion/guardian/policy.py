@@ -193,7 +193,8 @@ class Guardian:
             f"It becomes possible again once the conversation starts afresh, after "
             f"{self._fresh_after} minutes without any message (each message pushes that back)"
             if self._fresh_after
-            else "It stays impossible in this conversation"
+            else "It becomes possible again once that content has left the conversation window, "
+            "as the conversation goes on"
         )
         return (
             f"{tool.name} cannot run in a context containing untrusted content "

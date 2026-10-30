@@ -4433,3 +4433,49 @@ travail commun. Désormais une mission peut être un **projet** :
   Écrire sans validation demande toujours l'autonomie `contact_message` pour ces noms (D93),
   que le gardien vérifie. Changer les personnes ou le mandat (`mission` update) depuis une
   conversation qui contient leurs messages est demandé au propriétaire.
+
+## D200 — Une pause ne coûte plus le fil de la conversation
+
+*30/10/2026 · acceptée · révise D123, D178, D198 et les relectures de confiance de D117*
+
+Le propriétaire a constaté que le rebase faisait perdre le fil : en cours, chiffres, ce qui
+était promis. Trois causes :
+
+- après une heure sans message, la fenêtre repartait de 16 000 tokens et d'un résumé de dix
+  lignes ; après deux heures, si une page avait été lue, de rien du tout et du résumé ;
+- chaque résumé (700 tokens au plus) était re-résumé au rebase suivant comme une ligne de
+  plus, et coupé en premier car le plus ancien : l'information s'érodait à chaque rebase ;
+- la nuit ne relisait que les tours de confiance. Or, une fois une page lue, toutes les réponses
+  d'Orion portent la confiance de la page jusqu'à ce que la fenêtre avance : la nuit voyait la
+  moitié du propriétaire, sans celle d'Orion. Elle coupait aussi la journée à 40 000
+  caractères (environ 10 000 tokens).
+
+Décision :
+
+- **Plus de rebase après une pause** : `fresh_idle_minutes` et `untrusted_idle_minutes` passent à
+  0 (jamais) par défaut. Relire une fenêtre dont le cache a expiré coûte une fois, quelques
+  centimes ; perdre le fil coûte plus. Seul le budget de fenêtre déclenche un rebase.
+- **`max_window_tokens` passe de 60 000 à 200 000**, comme dans `orion.example.toml`.
+- **Un résumé cumulatif et structuré** : le dernier résumé de la fenêtre est fondu avec les
+  tours qui sortent, au lieu d'être re-résumé ; sections fixes (en cours, décidé ou promis
+  avec les chiffres et identifiants exacts, en attente, fait, contexte), jusqu'à 20 000 tokens
+  ; jusqu'à 400 000 caractères de transcription en entrée.
+- **La nuit relit toute la journée** : les réponses d'Orion sont gardées quelle que soit leur
+  confiance, comme le résumé de D198. Le contenu des pages et des mails lui-même (résultats
+  d'outils, messages de tiers) n'y apparaît toujours pas. La limite de 40 000 caractères devient
+  un plafond de sécurité à 400 000, qui ne coupe qu'en le journalisant.
+- Les résumés de rebase n'apparaissent plus dans les relectures (nuit, mémoire) comme si le
+  propriétaire les avait écrits.
+
+Conséquences :
+
+- Un contenu non fiable reste dans la fenêtre jusqu'à ce qu'un rebase le sorte : avec 200 000
+  tokens, cela peut durer des jours. Pendant ce temps, le gardien applique les règles d'un
+  contexte non fiable (D85, D90) : en `equilibre`, Orion demande avant d'agir sur le monde. Le
+  propriétaire qui préfère l'ancien comportement remet `untrusted_idle_minutes = 120` ; la
+  fenêtre repart alors avec le résumé cumulatif. La vraie réponse reste la quarantaine (D199).
+- Chaque tour porte une fenêtre plus grosse : le cache la rend bon marché pendant qu'on parle,
+  le premier tour après une pause la paie en entier.
+- Un `orion.toml` qui fixe encore `max_window_tokens = 60000` ou `fresh_idle_minutes = 60` garde
+  l'ancien comportement : ces lignes sont à changer ou retirer.
+- Les modèles de repli doivent accepter une fenêtre de 200 000 tokens plus la partie fixe.

@@ -39,7 +39,7 @@ from orion.cognition.loop import (
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
-from orion.context.summary import sides, summarize, summary_block
+from orion.context.summary import previous, sides, summarize, summary_block
 from orion.context.threads import (
     MESSAGE_KIND,
     PRUNED_KIND,
@@ -835,7 +835,11 @@ class Orion:
         if not dropped:
             return None
         return await summarize(
-            self._provider, self._summary_model, dropped, f"orion:{thread.id}:summary"
+            self._provider,
+            self._summary_model,
+            dropped,
+            f"orion:{thread.id}:summary",
+            before=previous(thread.window()),
         )
 
     def _prunable(self, thread: Thread, when: datetime) -> list[int]:

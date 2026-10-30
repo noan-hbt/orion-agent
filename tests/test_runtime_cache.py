@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from orion.config import AgentConfig
-from orion.context.compiler import ContextCompiler, estimate_tokens
+from orion.context.compiler import ContextCompiler
 from orion.context.threads import MESSAGE_KIND, ThreadProjection
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
@@ -31,14 +31,19 @@ def at(minute: int) -> datetime:
     return datetime(2026, 10, 19, 17, minute, tzinfo=PARIS)
 
 
-def make_orion(journal: SqliteJournal, provider: ScriptedProvider, window: int = 120_000) -> Orion:
+def make_orion(
+    journal: SqliteJournal,
+    provider: ScriptedProvider,
+    window: int = 120_000,
+    agent: AgentConfig | None = None,
+) -> Orion:
     return Orion(
         journal=journal,
         provider=provider,
         registry=ToolRegistry([*builtin_tools(), echo_tool()]),
         guardian=Guardian(),
         compiler=ContextCompiler("CONSTITUTION", max_window_tokens=window),
-        agent=AgentConfig(),
+        agent=agent or AgentConfig(),
     )
 
 
@@ -127,12 +132,13 @@ async def test_turn_is_fully_journaled(journal: SqliteJournal) -> None:
 
 
 async def test_untrusted_content_leaves_the_window_after_a_pause(journal: SqliteJournal) -> None:
+    """Off by default since D200; still there for an owner who sets it."""
     from datetime import timedelta
 
     from orion.core.events import Trust
 
     provider = ScriptedProvider(reply("Paul t'a écrit."), reply("ok"), reply("ok"), reply("salut"))
-    orion = make_orion(journal, provider)
+    orion = make_orion(journal, provider, agent=AgentConfig(untrusted_idle_minutes=120))
     await orion.start()
     await orion.handle_initiative(
         "owner", "Mail de Paul : …", "nouveau mail", Trust.THIRD_PARTY, now=at(0)
@@ -171,8 +177,12 @@ async def test_a_rebase_carries_a_summary_of_what_it_drops(journal: SqliteJourna
     for i in range(12):
         await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
 
-    assert provider.summaries, "a rebase happened, so what it dropped was summarized"
+    assert len(provider.summaries) >= 2, "rebases happened, so what they dropped was summarized"
     assert "Personne : " in str(provider.summaries[0].messages[1]["content"])
+    # The next summary merges the previous one rather than summarizing it again (D200).
+    merged = str(provider.summaries[1].messages[1]["content"])
+    assert "<resume-precedent>\nTu cherchais un T2 à Lyon" in merged
+    assert "<plus-tot-dans-la-conversation>" not in merged
     # The summary rides in the message that opened the new window, after the turns kept.
     carried = [
         str(m["content"])
@@ -371,49 +381,22 @@ async def test_what_the_owner_said_in_a_turn_stopped_by_a_limit_is_remembered(
     await store.close()
 
 
-async def test_after_a_long_pause_only_the_latest_exchanges_are_carried(
-    journal: SqliteJournal,
-) -> None:
-    """Once the provider's cache is gone, the whole window would be paid in full again: the
-    conversation goes on from its latest exchanges and a summary of the rest."""
+async def test_a_pause_keeps_the_whole_conversation(journal: SqliteJournal) -> None:
+    """D200: after a pause, a long conversation used to go on from 16 000 tokens and ten lines
+    of summary, and Orion lost track of what was under way."""
     from datetime import timedelta
 
     provider = _Summarizing(*[reply("r" * 3000) for _ in range(12)])
     orion = make_orion(journal, provider)
     orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
     await orion.start()
-    for i in range(10):  # a lively conversation, well over the fresh window
+    for i in range(10):  # a lively conversation, well over what a pause used to keep
         await orion.handle_owner_message("t1", f"message {i} " + "x" * 3000, "terminal", now=at(i))
-    assert_prefix_stable(provider)
-    assert orion.threads.get("t1").base == 0
 
-    later = at(10) + timedelta(hours=2)
-    await orion.handle_owner_message("t1", "re", "terminal", now=later)
-    sent = provider.requests[-1].messages
-    assert estimate_tokens(sent[1:]) <= AgentConfig().fresh_window_tokens
-    assert sent[1]["role"] == "user"
-    assert "message 9" in str(sent) and "message 0" not in str(sent)
-    assert provider.summaries and "T2 à Lyon" in str(sent[-1]["content"])
-
-    await orion.handle_owner_message(
-        "t1", "et donc ?", "terminal", now=later + timedelta(minutes=1)
-    )
-    assert provider.requests[-1].messages[: len(sent)] == sent  # lively again: cache holds
-    rebuilt = ThreadProjection()
-    await ProjectionRunner(journal, [rebuilt]).catch_up()
-    assert rebuilt.get("t1").window() == orion.threads.get("t1").window()
-
-
-async def test_a_short_conversation_is_kept_whole_after_a_pause(journal: SqliteJournal) -> None:
-    from datetime import timedelta
-
-    provider = ScriptedProvider(reply("salut"), reply("re"))
-    orion = make_orion(journal, provider)
-    await orion.start()
-    await orion.handle_owner_message("t1", "hello", "terminal", now=at(0))
-    await orion.handle_owner_message("t1", "re", "terminal", now=at(1) + timedelta(hours=3))
-    assert_prefix_stable(provider)
+    await orion.handle_owner_message("t1", "re", "terminal", now=at(10) + timedelta(hours=3))
+    assert "message 0" in str(provider.requests[-1].messages)
     assert not [e for e in await journal.read() if e.kind == "thread.rebased"]
+    assert not provider.summaries
 
 
 async def test_old_bulky_results_that_add_up_are_shortened_without_a_pause(

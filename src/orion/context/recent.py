@@ -1,6 +1,6 @@
 """The last exchanges of a thread as plain lines, for readers outside the conversation (the
-voice brief, the verifier): memory blocks and context lines removed, initiative notices
-summarised."""
+voice brief, the verifier, the night): memory blocks, rebase summaries and context lines
+removed, initiative notices summarised."""
 
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from orion.core.events import Trust
 from orion.core.journal import EventStore
 from orion.providers.base import Message
 
-_BLOCK = re.compile(r"<(memoire|souvenirs|manuel|consignes)>.*?</\1>\s*", re.DOTALL)
+_BLOCK = re.compile(
+    r"<(memoire|souvenirs|manuel|consignes|plus-tot-dans-la-conversation)>.*?</\1>\s*", re.DOTALL
+)
 _INITIATIVE = re.compile(r"<initiative[^>]*>\s*(.*?)\s*</initiative>", re.DOTALL)
 _CONTEXT_LINE = re.compile(r"^\[[^\]]*\]\s*")
 
@@ -45,11 +47,16 @@ def recent_lines(messages: Sequence[Message], count: int, limit: int = 300) -> l
 
 
 async def conversation_since(
-    journal: EventStore, thread_id: str, after_seq: int, floor: Trust
+    journal: EventStore, thread_id: str, after_seq: int, floor: Trust, orion_always: bool = False
 ) -> tuple[list[tuple[datetime | None, str]], int]:
     """The thread's readable messages journaled after `after_seq`, with their time, keeping only
     those at `floor` trust or above (what was read from elsewhere stays out), and the last seq
-    read."""
+    read.
+
+    `orion_always`: Orion's own replies are kept whatever their trust (D200). Once he has read
+    a page, every reply after it carries the page's trust until the window moves on, and a
+    reader keeping only trusted turns saw the owner's half of the day without Orion's. Pages
+    and mails themselves (tool results) never show here."""
     said: list[tuple[datetime | None, str]] = []
     seq = after_seq
     while True:
@@ -61,9 +68,11 @@ async def conversation_since(
             if (
                 event.kind != MESSAGE_KIND
                 or event.redacted
-                or event.trust < floor
                 or event.payload.get("thread_id") != thread_id
             ):
+                continue
+            mine = orion_always and event.payload["message"].get("role") == "assistant"
+            if event.trust < floor and not mine:
                 continue
             line = clean(event.payload["message"])
             if line:
