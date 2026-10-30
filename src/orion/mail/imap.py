@@ -219,8 +219,11 @@ def search_window(
         if before is not None:
             # BEFORE is a day, exclusive: the day itself is in the window.
             criteria += ["BEFORE", (before + timedelta(days=1)).strftime("%d-%b-%Y")]
-        if sender:
+        if sender and sender.isascii():
             criteria += ["FROM", '"' + sender.replace("\\", "").replace('"', "") + '"']
+        elif sender:  # "Enchères": imaplib sends ASCII only, so the name goes as a literal
+            criteria = ["CHARSET", "UTF-8", *criteria, "FROM"]
+            imap.literal = sender.encode()  # pyright: ignore[reportAttributeAccessIssue]
         _, data = imap.uid("SEARCH", *criteria)
         found = sorted(int(u) for u in (data[0] or b"").split())
         mails: list[RawMail] = []

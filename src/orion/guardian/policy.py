@@ -118,9 +118,10 @@ WORKER_TOOLS = frozenset(
         for a in ("open", "click", "type", "select", "scroll", "back", "read", "close")
     }
 )
-"""What a background task may use (D110): it looks things up and reports to Orion, who acts
-and talks to the owner. Never an approval to the owner, a message to him, or an act on the
-world from a task: it asks Orion instead."""
+"""What a background task may use beyond reads (D110): it looks things up and reports to Orion,
+who acts and talks to the owner. Any read-only call (`Effect.NONE`: his mail, past
+conversations, agenda) is open to it too (D195). Never an approval to the owner, a message to
+him, or an act on the world from a task: it asks Orion instead."""
 NIGHT_THREAD = "night"
 """Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
 tasks and notes what he will say in the morning. Nothing that acts on the world, and nothing
@@ -216,7 +217,11 @@ class Guardian:
         effect = tool.effect_for(proposal.arguments)
         if proposal.thread_id.startswith(WORKER_THREAD):
             action = getattr(proposal.arguments, "action", "")
-            if tool.name not in WORKER_TOOLS and f"{tool.name}:{action}" not in WORKER_TOOLS:
+            if (
+                effect is not Effect.NONE
+                and tool.name not in WORKER_TOOLS
+                and f"{tool.name}:{action}" not in WORKER_TOOLS
+            ):
                 return Decision(
                     Verdict.DENY,
                     f"{tool.name} is not for a background task: you look things up and report to "
