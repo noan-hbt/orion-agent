@@ -17,6 +17,7 @@ book, read when needed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -204,6 +205,14 @@ class ContactsModule(Module):
         self.contacts = Contacts(plate.journal, self.config.memory.owner_names)
         await self.contacts.sync()
         return contacts_tools(self.contacts)
+
+    async def review(self, now: datetime) -> list[str]:
+        """His address book, for the night to check who is who against what Orion knows."""
+        contacts = self.contacts
+        if contacts is None:
+            return []
+        await contacts.sync()
+        return [f"- {c.line()}" for c in contacts.state.cards.values()]
 
     def doctor(self) -> list[str]:
         return ["his address book, imported from the app or with `orion contacts import`"]

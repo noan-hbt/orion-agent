@@ -374,6 +374,16 @@ class FeedsModule(Module):
             curiosity.curiosity.reading = self.feeds.candidates
         return feed_tools(self.feeds)
 
+    async def review(self, now: datetime) -> list[str]:
+        if self.feeds is None:
+            return []
+        await self.feeds.sync()
+        # A feed's title is the site's own words.
+        return [
+            f"- {self.feeds.title(url)} ({url}) [venu d'ailleurs : le web]"
+            for url in self.feeds.urls()
+        ]
+
     async def serve(self, daemon: Daemon) -> None:
         if self.feeds is not None:
             daemon.add_service("feeds", self.feeds.run)

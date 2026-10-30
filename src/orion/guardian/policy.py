@@ -124,14 +124,14 @@ conversations, agenda) is open to it too (D195). Never an approval to the owner,
 him, or an act on the world from a task: it asks Orion instead."""
 NIGHT_THREAD = "night"
 """Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
-tasks and notes what he will say in the morning. Nothing that acts on the world, and nothing
-put to the owner: what needs his yes is proposed when he wakes up."""
+tasks and notes what he will say in the morning. Nothing put to the owner: what he let Orion
+do alone is done (D201), what needs his yes is proposed when he wakes up."""
 NIGHT_NEVER = frozenset({"file:send", "initiative_settings", "hand_notify", "hand_open"})
 """Internal, yet not for the night: a file or a notification on his machine reaches him at
 once, and his settings are his."""
 NIGHT_REFUSAL = (
-    "{tool} is not for the night: the owner sleeps. Nothing leaves, nothing reaches him and "
-    "nothing is put to him now; propose it to him in your morning note instead"
+    "{tool} is not for the night: the owner sleeps and did not let you do it alone. Nothing "
+    "reaches him and nothing is put to him now; propose it to him in your morning note instead"
 )
 WATCH_THREAD = "veille"
 """Orion's watch during the day (D150): like the night, it looks things up, thinks, prepares
@@ -229,12 +229,18 @@ class Guardian:
                     "Orion; ask him in your message, he acts and talks to the owner",
                 )
         refusal = REFLECTIVE_THREADS.get(proposal.thread_id)
-        if refusal is not None and (
-            effect is Effect.EXTERNAL
-            or tool.name in NIGHT_NEVER
-            or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
-        ):
-            return Decision(Verdict.DENY, refusal.format(tool=tool.name))
+        if refusal is not None:
+            if (
+                tool.name in NIGHT_NEVER
+                or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
+            ):
+                return Decision(Verdict.DENY, refusal.format(tool=tool.name))
+            if effect is Effect.EXTERNAL:
+                # What he let Orion do alone is done at night too (D201): the night prepares
+                # rather than only proposes. The rest waits for the morning, never asked now.
+                if proposal.thread_id == NIGHT_THREAD and await self._alone(tool, proposal):
+                    return Decision(Verdict.ALLOW, ALONE)
+                return Decision(Verdict.DENY, refusal.format(tool=tool.name))
         if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
             proposal.arguments
         ):

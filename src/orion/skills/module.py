@@ -31,6 +31,7 @@ import json
 import re
 import tomllib
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
@@ -339,3 +340,10 @@ class SkillsModule(Module):
 
     async def assemble(self, plate: Plate) -> list[Tool]:
         return [skill_tool(self.skills)]
+
+    async def review(self, now: datetime) -> list[str]:
+        return [
+            f"- {s.name} : {s.description}"
+            + (f" [venu d'ailleurs : {s.source}]" if s.source else "")
+            for s in self.skills.all()
+        ]

@@ -216,6 +216,17 @@ class Departures:
             return "voyage"
         return None
 
+    async def lines(self, now: datetime) -> list[str]:
+        """The trips and exams coming, with ids."""
+        await self.sync()
+        upcoming = [*self.state.planned.values(), *self.from_calendar(now)]
+        return [
+            f"- ({d.key}) {d.kind} : {d.what}, {_DAYS[d.at.weekday()]} {d.at:%d/%m %H:%M}"
+            + (f", {d.where}" if d.where else "")
+            for d in sorted(upcoming, key=lambda d: d.at)
+            if d.at > now
+        ]
+
     def from_calendar(self, now: datetime, ahead: timedelta = LOOKAHEAD) -> list[Departure]:
         if self.calendar is None:
             return []
@@ -375,15 +386,7 @@ def departure_tools(departures: Departures) -> list[Tool]:
         return ToolResult("Annulé.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        await departures.sync()
-        now = departures.clock()
-        upcoming = [*departures.state.planned.values(), *departures.from_calendar(now)]
-        lines = [
-            f"- ({d.key}) {d.kind} : {d.what}, {_DAYS[d.at.weekday()]} {d.at:%d/%m %H:%M}"
-            + (f", {d.where}" if d.where else "")
-            for d in sorted(upcoming, key=lambda d: d.at)
-            if d.at > now
-        ]
+        lines = await departures.lines(departures.clock())
         return ToolResult("\n".join(lines) or "Aucun départ prévu dans les deux jours.")
 
     return [
@@ -458,6 +461,11 @@ class DepartureModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.departures is not None:
             daemon.alerts.append(self.departures)
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.departures is None:
+            return []
+        return await self.departures.lines(now)
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         departures = self.departures

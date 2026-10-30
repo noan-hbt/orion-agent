@@ -153,3 +153,17 @@ async def test_too_long_without_seeing_someone_is_said_once_a_week(
     assert await relations.alerts(evening + timedelta(days=16)) == []
     await call(tools, "keep_in_touch", person="Julien", every_days=0)
     assert relations.state.rhythms == {}
+
+
+async def test_a_birthday_noted_wrong_and_a_meeting_called_off_are_taken_back(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """D201: the night sees each one with its handle, and can take back what was noted wrong."""
+    now = [datetime(2026, 10, 20, 23, 0, tzinfo=PARIS)]
+    relations, tools = relations_for(journal, memory, now)
+    await call(tools, "person_birthday", person="Julie", month=3, day=4)
+    await call(tools, "meeting_soon", person="Paul", at="2026-10-23 12:30", about="déjeuner")
+    (meeting,) = relations.state.meetings
+    await call(tools, "relation_drop", birthday="Julie")
+    await call(tools, "relation_drop", meeting=meeting)
+    assert not relations.state.birthdays and not relations.state.meetings

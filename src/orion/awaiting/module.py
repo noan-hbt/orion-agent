@@ -308,6 +308,17 @@ class Awaiting:
         )
         await self.sync()
 
+    async def lines(self, now: datetime) -> list[str]:
+        """What Orion waits an answer for, with ids."""
+        await self.sync()
+        return [
+            f"- ({w.id}) {self.describe(w)} : {w.about}, à reprendre le "
+            f"{w.at.astimezone(self.zone):%d/%m %H:%M}"
+            + (f", relance {w.round - 1}" if w.round > 1 else "")
+            for w in self.state.pending()
+            if now < w.at + EXPIRES
+        ]
+
     def describe(self, wait: Wait) -> str:
         if wait.who == "owner":
             return "lui"
@@ -451,15 +462,7 @@ def awaiting_tools(awaiting: Awaiting) -> list[Tool]:
         return ToolResult("Aucune attente ouverte avec cet identifiant.", is_error=True)
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        await awaiting.sync()
-        now = awaiting.clock()
-        lines = [
-            f"- ({w.id}) {awaiting.describe(w)} : {w.about}, à reprendre le "
-            f"{w.at.astimezone(awaiting.zone):%d/%m %H:%M}"
-            + (f", relance {w.round - 1}" if w.round > 1 else "")
-            for w in awaiting.state.pending()
-            if now < w.at + EXPIRES
-        ]
+        lines = await awaiting.lines(awaiting.clock())
         return ToolResult("\n".join(lines) or "Rien en attente.")
 
     return [
@@ -519,6 +522,11 @@ class AwaitingModule(Module):
         if self.awaiting is None:  # pragma: no cover - assemble always runs first
             return
         daemon.alerts.append(self.awaiting)
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.awaiting is None:
+            return []
+        return await self.awaiting.lines(now)
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         awaiting = self.awaiting

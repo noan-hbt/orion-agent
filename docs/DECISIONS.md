@@ -4479,3 +4479,68 @@ Conséquences :
 - Un `orion.toml` qui fixe encore `max_window_tokens = 60000` ou `fresh_idle_minutes = 60` garde
   l'ancien comportement : ces lignes sont à changer ou retirer.
 - Les modèles de repli doivent accepter une fenêtre de 200 000 tokens plus la partie fixe.
+
+## D201 — Le sommeil remet tout en ordre, chaque nuit, et voit tout
+
+*30/10/2026 · acceptée · complète D117, D176, D186, D193 ; révise D200 et « rien ne part la nuit »
+de D117*
+
+Le propriétaire voulait que la nuit serve à tout remettre en ordre (missions, à venir, souvenirs,
+proches, engagements, manuel…) et à rattraper ce que la journée a raté, mal fait ou oublié. Une
+relecture du code a trouvé huit trous :
+
+1. une journée sans un mot sautait les besoins et les rêves : rien n'était préparé ;
+2. l'agenda n'était lu que pour aujourd'hui et demain ;
+3. aucun temps de la nuit n'était fait pour anticiper ;
+4. seules les missions et les proches posaient ce qu'ils tiennent (`Module.review`) : veilles,
+   flux, intérêts, lieux, tâches, papiers, attentes, bibliothèque, skills, carnet, mails
+   restaient hors de vue ;
+5. les proches n'avaient pas d'identifiant, et un anniversaire noté faux ne se retirait pas ;
+6. ce qui venait d'un mail, d'une page ou d'un document n'était jamais relu, donc jamais trié ;
+7. la journée relue se limitait à sa conversation, sans la veille, les tâches, les missions,
+   les contacts, ni ce que les outils avaient lu ;
+8. la nuit ne pouvait rien faire sur le monde, même ce qu'il laisse Orion faire seul.
+
+- **Tous les temps, chaque nuit** : besoins, rêves et le nouveau temps « anticiper » tournent même
+  après une journée muette ; seule une nuit où il n'y a vraiment rien à regarder est sautée. Le
+  temps de la journée ne tourne que s'il y a une journée ou des 👎 : le test voyait le nom
+  `<pouces-baisses>` dans la consigne elle-même, et le faisait tourner à chaque fois.
+- **Anticiper** (avant les rêves) : son agenda sur 14 jours (`<calendar>`), le prévu sur 30, les
+  échéances, départs et anniversaires. Pour chaque moment qui compte, ce qu'il faudra avoir prêt,
+  vérifié ou su : il le prépare, pose un rappel pour lui, prévoit d'en prendre des nouvelles.
+- **Chaque module pose ce qu'il tient**, une ligne par élément avec son identifiant : agenda,
+  lieux, flux, curiosité, tâches en cours, attentes, bibliothèque, intentions, départs, papiers,
+  skills, carnet d'adresses, mails des deux derniers jours (et ceux qui attendent une réponse
+  depuis deux semaines), faits à vérifier (`doubt`), missions, proches. Au-delà de 150 lignes, un
+  module est relu par parts, une part par soir, comme les faits.
+- **Les proches** : chaque ligne porte le nom ou l'identifiant à utiliser ; `relations` (drop)
+  retire un anniversaire noté faux ou une rencontre annulée.
+- **Tout est vu, avec sa source** : faits, situations, engagements, règles et notes de mission
+  venus d'ailleurs sont posés, marqués « venu d'ailleurs : le web / un mail ou un tiers / un
+  document / un autre Orion ». La consigne de la nuit dit de ne pas les fondre avec ce qu'il a
+  dit, de les oublier s'ils sont faux, et de ne les tenir pour sûrs que s'il les a confirmés.
+- **Toute la journée** : chaque fil sauf la nuit (`day_since`), avec son nom (sa veille, une
+  tâche de fond, une mission, un contact). Les consignes et les résultats d'outils (pages, mails,
+  recherches) sont coupés à 600 caractères et marqués comme venus d'ailleurs.
+- **Ce qu'il laisse faire seul se fait la nuit** : dans le fil `night`, une action sur le monde
+  que ses autonomies couvrent (`[guardian] autonomy`) passe. Le reste est toujours refusé et
+  proposé au réveil, sans rien lui demander. Les fichiers et notifications sur son Mac restent
+  interdits (`NIGHT_NEVER`), et la veille de jour ne change pas.
+- **Pas de doublon d'un temps à l'autre** : le matériel est posé une fois, côte à côte, et chaque
+  temps voit ce que les précédents ont fait. La consigne dit maintenant de vérifier avant
+  d'ajouter qu'une chose n'est pas déjà là, ailleurs dans le matériel ou posée plus tôt dans la
+  nuit.
+
+Conséquences :
+
+- **Risque accepté par le propriétaire** : une page ou un mail lu dans la journée est maintenant
+  devant la nuit, qui écrit en confiance `SYSTEM`. Un texte piégé peut donc l'orienter, par
+  exemple réécrire un souvenir ou, avec une autonomie, agir. La marque d'origine et la consigne
+  limitent ce risque sans l'annuler.
+- La nuit coûte plus : un temps de plus, un matériel plus gros, et elle tourne aussi après une
+  journée muette. Le budget (`budget_usd`) et le nombre d'étapes restent les plafonds.
+- `conversation_since` perd `orion_always` (D200) : seule la nuit s'en servait, et elle lit
+  maintenant tout.
+
+Éval `une_nuit_muette_prepare_ce_qui_vient` : sans un mot dans la journée, un voyage et un
+entretien trois jours après, la nuit les prépare.

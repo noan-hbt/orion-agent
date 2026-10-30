@@ -48,6 +48,8 @@ BIRTHDAY = "relation.birthday"
 RHYTHM = "relation.rhythm"
 CONTACT = "relation.contact"
 MEETING = "relation.meeting"
+DROPPED = "relation.dropped"
+"""A birthday noted wrong, or a meeting that will not happen (D201)."""
 
 _DAYS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 _MONTHS = [
@@ -143,6 +145,11 @@ class RelationState:
                 event.trust,
             )
             self.meetings[meeting.key] = meeting
+        elif event.kind == DROPPED:
+            if payload.get("meeting_id"):
+                self.meetings.pop(str(payload["meeting_id"]), None)
+            else:
+                self.birthdays.pop(key, None)
 
 
 def prepared_at(start: datetime, settings: RelationSettings) -> datetime:
@@ -376,6 +383,13 @@ class ContactInput(BaseModel):
     how: str = Field(default="", max_length=200, description="Lunch, a call, a message…")
 
 
+class DropInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    birthday: str = Field(default="", max_length=80, description="Whose birthday to forget")
+    meeting: str = Field(default="", max_length=40, description="A meeting's id (r_…)")
+
+
 class MeetingInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -447,6 +461,18 @@ def relation_tools(relations: Relations) -> list[Tool]:
             f"{_DAYS[when.weekday()]} à {when:%H:%M}."
         )
 
+    async def drop(args: Any, ctx: ToolContext) -> ToolResult:
+        await relations.sync()
+        if args.meeting:
+            if args.meeting not in relations.state.meetings:
+                return ToolResult(f"No meeting {args.meeting}.", is_error=True)
+            await relations.record(DROPPED, {"meeting_id": args.meeting}, ctx)
+            return ToolResult("Rencontre retirée.")
+        if name_key(args.birthday) not in relations.state.birthdays:
+            return ToolResult(f"No birthday noted for {args.birthday!r}.", is_error=True)
+        await relations.record(DROPPED, {"person": args.birthday}, ctx)
+        return ToolResult(f"Anniversaire de {args.birthday} retiré.")
+
     internal: dict[str, Any] = {
         "effect": Effect.INTERNAL,
         "reversibility": Reversibility.REVERSIBLE,
@@ -485,6 +511,13 @@ def relation_tools(relations: Relations) -> list[Tool]:
             handler=meeting,
             **internal,
         ),
+        Tool(
+            name="relation_drop",
+            description="Forget a birthday noted wrong, or a meeting that will not happen.",
+            input_model=DropInput,
+            handler=drop,
+            **internal,
+        ),
     ]
 
 
@@ -518,6 +551,7 @@ class RelationsModule(Module):
                     "person_birthday": "birthday",
                     "keep_in_touch": "keep_in_touch",
                     "saw_someone": "saw",
+                    "relation_drop": "drop",
                 },
             )
         ]
@@ -528,17 +562,24 @@ class RelationsModule(Module):
             return []
         await relations.sync()
         state = relations.state
+        # A birthday or a rhythm is known by the person's name: `birthday` or `keep_in_touch`
+        # again corrects it, `drop` (or `every_days` 0) removes it.
         lines = [
-            f"- anniversaire de {person} : {day} {_MONTHS[month - 1]}"
-            + (f" {year}" if year else "")
+            f"- ({person}) anniversaire : {day} {_MONTHS[month - 1]}" + (f" {year}" if year else "")
             for month, day, year, person in state.birthdays.values()
         ]
         for key, (every, person) in state.rhythms.items():
             seen = state.contacts.get(key)
             lines.append(
-                f"- voir {person} tous les {every} jours"
+                f"- ({person}) le voir tous les {every} jours"
                 + (f" (vus le {seen:%d/%m})" if seen else " (pas vus depuis qu'il l'a demandé)")
             )
+        lines += [
+            f"- ({m.key}) voir {m.person} le {m.at:%d/%m %H:%M}"
+            + (f" : {m.about}" if m.about else "")
+            for m in sorted(state.meetings.values(), key=lambda m: m.at)
+            if m.at > now
+        ]
         return lines
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
@@ -554,8 +595,13 @@ class RelationsModule(Module):
         ]:
             at = prepared_at(meeting.at, settings)
             if now <= at < until:
+                undo = (
+                    f"relations (drop, meeting {meeting.key})"
+                    if meeting.key in relations.state.meetings
+                    else ""
+                )
                 found.append(
-                    Planned(at, f"te rappeler ce qui compte avant de voir {meeting.person}")
+                    Planned(at, f"te rappeler ce qui compte avant de voir {meeting.person}", undo)
                 )
         for month, day, _, person in relations.state.birthdays.values():
             birthday = next_birthday(month, day, now.date())

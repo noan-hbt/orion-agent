@@ -597,6 +597,27 @@ CASES: tuple[Case, ...] = (
         live_web=True,
     ),
     Case(
+        name="une_nuit_muette_prepare_ce_qui_vient",
+        origin="Une journée sans un mot laissait la nuit sans rien préparer, même avec un voyage "
+        "et un entretien trois jours après (D201).",
+        at=paris(2026, 10, 26, 23, 0),
+        facts=(
+            *OWNER,
+            "Part à Marseille jeudi 29 octobre par le train de 7 h 10, pour un entretien chez "
+            "Airbus à 11 h.",
+        ),
+        steps=(Night(at=paris(2026, 10, 27, 5, 0)),),
+        checks=(
+            works_at_night("web_search", "web_read", "task:start", "later", "follow_up"),
+            judged(
+                "Ce message du matin aide-t-il concrètement à préparer le voyage à Marseille ou "
+                "l'entretien chez Airbus (horaires, trajet, ce qu'il faut emporter ou savoir, un "
+                "rappel posé), et pas seulement une remarque générale ?"
+            ),
+        ),
+        live_web=True,
+    ),
+    Case(
         name="va_au_bout_au_lieu_de_proposer",
         origin="Orion finissait sur « je peux te chercher ça si tu veux ? » quand la recherche "
         "était à lui de faire (D118).",
