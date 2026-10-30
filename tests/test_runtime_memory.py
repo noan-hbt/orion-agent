@@ -37,14 +37,19 @@ async def memory(journal: SqliteJournal) -> AsyncIterator[MemoryService]:
     await store.close()
 
 
-def make_orion(journal: SqliteJournal, memory: MemoryService, provider: ScriptedProvider) -> Orion:
+def make_orion(
+    journal: SqliteJournal,
+    memory: MemoryService,
+    provider: ScriptedProvider,
+    agent: AgentConfig | None = None,
+) -> Orion:
     return Orion(
         journal=journal,
         provider=provider,
         registry=ToolRegistry([*builtin_tools(), *memory_tools(memory)]),
         guardian=Guardian(),
         compiler=ContextCompiler("CONSTITUTION"),
-        agent=AgentConfig(),
+        agent=agent or AgentConfig(),
         memory=memory,
     )
 
@@ -75,15 +80,16 @@ async def test_core_memory_opens_the_window_and_relevant_facts_follow(
 async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:
-    """The next morning the window keeps only the last exchanges: what opened it yesterday
-    (portrait, his preferences) must open it again, or Orion forgets how to talk to him."""
+    """The next morning the window keeps only the last exchanges (when `fresh_idle_minutes` is
+    set; off by default since D200): what opened it yesterday (portrait, his preferences) must
+    open it again, or Orion forgets how to talk to him."""
     from datetime import timedelta
 
     await memory.remember(
         "Noan veut des réponses très courtes.", OWNER, category=Category.PREFERENCE
     )
     provider = ScriptedProvider(*[reply("r" * 3000) for _ in range(11)])
-    orion = make_orion(journal, memory, provider)
+    orion = make_orion(journal, memory, provider, AgentConfig(fresh_idle_minutes=60))
     await orion.start()
     for i in range(10):
         await orion.handle_owner_message("t1", f"message {i} " + "x" * 3000, "terminal", now=at(i))
