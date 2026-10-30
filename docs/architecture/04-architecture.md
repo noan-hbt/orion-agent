@@ -482,6 +482,7 @@ Le code s'en est écarté sur la forme, chaque fois par une décision.
 | Plan | Ce qui existe | Décision |
 |---|---|---|
 | Cinq processus (`guardian`, `core`, `voice`, `exec`, `negotiator`) | Deux : `orion guardian` (secrets, effets, canaux) et `orion serve` (le cœur, la seule clé du modèle). Deux services systemd sous deux utilisateurs | D28, D30 |
+| iMessage comme canal principal | L'application (PWA servie par le gardien) est le canal principal ; iMessage par Inkbox reste une ligne optionnelle, pour le propriétaire et ses proches | D125, D134, D88 |
 | Voix par Pipecat et Twilio | Voix par Inkbox : Orion répond lui-même au téléphone, avec sa mémoire et ses outils | D23, D40 |
 | Trois processus cognitifs | Une boucle d'agent (`cognition/loop.py`), des travaux de fond (extraction, nuit, réflexion) et un moteur d'initiative à règles | D20, D27, D43 |
 | Contexte recompilé à chaque appel | La mémoire voyage dans les messages, jamais dans le message système : chaque requête prolonge la précédente octet pour octet | D17, `tests/test_runtime_cache.py` |
