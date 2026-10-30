@@ -293,6 +293,5 @@ async def test_what_people_write_to_him_is_passed_on_outside_the_budget(
         clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
         alerts=[Contacts()],
     )
-    await engine.tick()
-    assert "Angèle t'a écrit : elle arrive." in inbox.messages
+    assert "secretary:1" in await engine.tick()
     assert engine.ledger.spent.get(datetime(2026, 10, 20).date(), 0) == 0

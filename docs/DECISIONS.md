@@ -4280,3 +4280,20 @@ semaine, depuis le début.
   un point : l'écran montre la dernière valeur et quand la fenêtre repart.
 - **Crédit prépayé** : OpenRouter est interrogé à l'ouverture de l'écran (`/credits`, ou `/key`
   pour une clé qui n'y a pas droit) ; ce n'est pas journalisé, c'est l'état du compte.
+
+## D191 — Moins de bruit : ses notes, les brouillons rejetés, un message par point
+
+Le 30/10 au matin, dix messages entre 6 h et 8 h 40 : des notes qu'Orion s'était laissées
+(« Tâche interne… Ne pas répéter ce rappel à Noan ») envoyées comme rappels, des points refusés
+deux fois par la relecture partis quand même en texte brut, deux rappels et le point de 8 h 30 en
+quatre minutes.
+
+- **Ses notes à lui** : `later` gagne `check` (« vérifie à 6 h si j'ai cours », un travail à
+  reprendre) ; le rappel porte `own`. À l'heure dite il réveille Orion, qui ne lui écrit que si ça
+  le concerne : pas de texte de secours, un SILENCE n'envoie rien, la série continue.
+- **Deux fois rejeté** : ce qu'il n'a pas demandé est abandonné (`initiative.suppressed`, raison
+  `rejected: …`), plus envoyé brut. Ce qu'il a demandé garde son texte de secours (D103).
+- **Un message par point** : un rappel ou un compte rendu qu'il a demandé, prêt moins de dix
+  minutes avant un point, l'attend ; prêt en même temps qu'autre chose, il part dans le même
+  message. Il passe toujours, heures calmes ou pas. Les appels, ses notes à lui et le réveil
+  après redémarrage restent à part.

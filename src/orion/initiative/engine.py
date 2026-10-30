@@ -70,6 +70,9 @@ POINT_HEAD = (
     "lignes par sujet ; laisse tomber ce qui ne vaut pas sa lecture."
 )
 
+JOIN_BEFORE = timedelta(minutes=10)
+"""A reminder or a report due this close before a point waits for it: one message, not two."""
+
 AWAKE = timedelta(minutes=20)
 """The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
 
@@ -484,12 +487,17 @@ class InitiativeEngine:
         candidates = await self._candidates(now)
         point = next((c for c in candidates if c.key.startswith(DIGEST_KEY)), None)
         held: list[Candidate] = []
+        owed: list[Candidate] = []
+        point_soon = self._point_soon(now)
         for candidate in candidates:
             if candidate is point:
                 continue
             if candidate.explicit:
-                if await self._deliver(candidate, now, None):
-                    delivered.append(candidate.key)
+                if not self._joins(candidate):
+                    if await self._deliver(candidate, now, None):
+                        delivered.append(candidate.key)
+                elif not point_soon:
+                    owed.append(candidate)
                 continue
             if self._ignored(candidate, now):
                 await self._record(
@@ -510,6 +518,12 @@ class InitiativeEngine:
             why_now = await self._admit(point, now)
             if why_now is not None:
                 ready.append((point, why_now))
+        if owed and (ready or len(owed) > 1):
+            # What he asked for goes now, quiet hours or not, but in the same message as what
+            # else is due: seen for real, two reminders and the 8:30 point in four minutes.
+            ready += [(c, "il me l'a demandé") for c in owed]
+        elif owed and await self._deliver(owed[0], now, None):
+            delivered.append(owed[0].key)
         if len(ready) == 1:
             candidate, why_now = ready[0]
             if await self._deliver(candidate, now, why_now):
@@ -534,6 +548,20 @@ class InitiativeEngine:
         if point is not None:
             return True
         return candidate.expires_at is None or candidate.expires_at > self._next_point(now)
+
+    @staticmethod
+    def _joins(candidate: Candidate) -> bool:
+        """What he asked for that may share a message: not a call, not a restart, not Orion's
+        own note (that is work for Orion, which mostly ends in silence)."""
+        if candidate.key.startswith(RESTART_KEY):
+            return False
+        return candidate.timer is None or not (candidate.timer.by_call or candidate.timer.own)
+
+    def _point_soon(self, now: datetime) -> bool:
+        """A point is due in a few minutes: what he asked for waits to go with it."""
+        if not self._settings.digests:
+            return False
+        return self._next_point(now) - now <= JOIN_BEFORE
 
     def _next_point(self, now: datetime) -> datetime:
         today = [datetime.combine(now.date(), slot, self._zone) for slot in self._settings.digests]
@@ -662,6 +690,18 @@ class InitiativeEngine:
 
     def _reminder(self, timer: Timer, now: datetime) -> Candidate:
         moment = describe_moment(timer.due_at, self._settings.timezone)
+        if timer.own:  # his own note: nothing goes out unless he writes it (no fallback)
+            return Candidate(
+                key=f"timer:{timer.id}",
+                notice=f"Note que tu t'étais laissée pour {moment} : {timer.text}\nFais ce "
+                "qu'elle dit. Écris-lui seulement si ça le concerne vraiment ; sinon, réponds "
+                "SILENCE. Ce n'est pas un rappel qu'il t'a demandé : ne lui recopie pas la note.",
+                why=f"je m'étais noté de m'en occuper {moment}",
+                fallback="",
+                trust=timer.trust,
+                explicit=True,
+                timer=timer,
+            )
         late = now - timer.due_at > timedelta(minutes=15)
         why = f"tu m'as demandé de te le rappeler {moment}" + (
             " (je le transmets en retard, j'étais arrêté)" if late else ""
@@ -780,17 +820,21 @@ class InitiativeEngine:
     ) -> list[str]:
         """Several messages due at once (the owner's focus just ended, a break after a long
         meeting): one message, most important first, that counts once against the budget."""
-        ready = sorted(ready, key=lambda pair: -pair[0].importance)
+        ready = sorted(ready, key=lambda pair: (not pair[0].explicit, -pair[0].importance))
         parts = [c for c, _ in ready]
         carried = [item for c in parts for item in c.carries]
+        asked = [c for c in parts if c.explicit]
         joined = Candidate(
             key=parts[0].key,
             notice="Plusieurs choses l'attendaient. Un seul message, court, de la plus "
             "importante à la moins importante :\n"
             + "\n".join(f"- {c.notice} (pourquoi : {c.why})" for c in parts),
             why="plusieurs choses t'attendaient",
-            fallback="\n".join(c.fallback for c in parts),
+            # What he asked for goes out even if Orion's wording fails; the rest does not.
+            fallback="\n".join(c.fallback for c in (asked or parts)),
             trust=min(c.trust for c in parts),
+            explicit=bool(asked),
+            timer=parts[0].timer,
             mentions=tuple(m for c in parts for m in c.mentions),
             importance=parts[0].importance,
         )
@@ -819,8 +863,9 @@ class InitiativeEngine:
         if not text:  # silence, or a failure with nothing the owner could read as it is
             for item in (candidate, *together):
                 await self._record(
-                    SUPPRESSED, item, now, reason="model chose silence" if text is None else how
+                    SUPPRESSED, item, now, reason="model chose silence" if how == "silence" else how
                 )
+            await self._fired((candidate, *together), None, now)
             return False
         correlation_id = new_id()
         await self._notifier.notify(text, correlation_id)
@@ -831,9 +876,16 @@ class InitiativeEngine:
             await self._record(
                 DELIVERED, item, now, correlation_id=correlation_id, how="together", bundled=True
             )
-        if candidate.timer is not None:
-            await self._timers.fired(candidate.timer.id, correlation_id, now)
+        await self._fired((candidate, *together), correlation_id, now)
         return True
+
+    async def _fired(
+        self, items: Sequence[Candidate], correlation_id: str | None, now: datetime
+    ) -> None:
+        """A reminder handled, said or not: a series schedules its next occurrence."""
+        for item in items:
+            if item.timer is not None:
+                await self._timers.fired(item.timer.id, correlation_id, now)
 
     async def _ring(self, candidate: Candidate) -> bool:
         """A reminder the owner wanted by phone: the voice says it. If the call cannot be
@@ -880,8 +932,9 @@ class InitiativeEngine:
 
     async def _compose(self, candidate: Candidate, now: datetime) -> tuple[str | None, str]:
         """Let Orion write the message in its own voice, then have a different model check it
-        against the facts. Any failure falls back to a plain, correct text. Explicit reminders
-        are always delivered, even if the model says SILENCE. Returns (text, how)."""
+        against the facts. A failure falls back to a plain, correct text, but a draft rejected
+        twice is dropped unless he asked for it. Explicit reminders are always delivered, even
+        if the model says SILENCE. Returns (text, how)."""
         earlier = list(self._orion.threads.get(self._settings.thread_id).messages)
         try:
             turn = await self._orion.handle_initiative(
@@ -943,7 +996,12 @@ class InitiativeEngine:
                     else (None, "silence")
                 )
             draft = again.text.strip()
-        return candidate.fallback, "fallback: " + "; ".join(verification.issues)[:300]
+        issues = "; ".join(verification.issues)[:300]
+        if not candidate.explicit:
+            # Twice wrong on something he never asked for: Orion keeps quiet rather than send
+            # the raw text (seen for real, « Pour la suite : … » after two rejected points).
+            return None, "rejected: " + issues
+        return candidate.fallback, "fallback: " + issues
 
     async def _record(
         self,

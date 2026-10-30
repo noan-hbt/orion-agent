@@ -44,6 +44,10 @@ class Timer:
     repeat: str = ""
     anchor: datetime | None = None
     """The series' first moment, in the owner's timezone; None for a one-off."""
+    own: bool = False
+    """A note Orion left itself (check something, pick work up): it wakes Orion, who tells the
+    owner only if it matters. Never sent to him as it is: seen for real, « Ne pas répéter ce
+    rappel à Noan » went out as his 8:30 reminder."""
 
 
 def _shift(anchor: datetime, repeat: str, n: int) -> datetime:
@@ -106,6 +110,7 @@ class TimerProjection:
                 by_call=bool(payload.get("by_call", False)),
                 repeat=str(payload.get("repeat", "")),
                 anchor=_anchor(payload),
+                own=bool(payload.get("own", False)),
             )
         elif event.kind in (TIMER_FIRED, TIMER_CANCELLED):
             self._pending.pop(str(payload["timer_id"]), None)
@@ -152,6 +157,7 @@ class Timers:
         by_call: bool = False,
         repeat: str = "",
         timezone: str = "",
+        own: bool = False,
     ) -> str:
         if due_at.tzinfo is None:
             raise ValueError("due_at must be timezone-aware")
@@ -162,7 +168,7 @@ class Timers:
         timer_id = f"r_{new_id()}"
         await self._append(
             TIMER_SCHEDULED,
-            _scheduled(timer_id, due_at, text, thread_id, by_call, repeat, due_at, timezone),
+            _scheduled(timer_id, due_at, text, thread_id, by_call, repeat, due_at, timezone, own),
             provenance,
             trust,
             correlation_id,
@@ -199,6 +205,7 @@ class Timers:
                         timer.repeat,
                         timer.anchor,
                         str(timer.anchor.tzinfo),
+                        timer.own,
                     ),
                     provenance=system,
                     trust=timer.trust,  # the owner's request, not the system's
@@ -235,6 +242,7 @@ class Timers:
             by_call=timer.by_call,
             repeat=timer.repeat,
             timezone=timezone,
+            own=timer.own,
         )
 
     async def _append(
@@ -270,6 +278,7 @@ def _scheduled(
     repeat: str,
     anchor: datetime,
     timezone: str,
+    own: bool = False,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "timer_id": timer_id,
@@ -280,4 +289,6 @@ def _scheduled(
     }
     if repeat:  # a one-off keeps the payload it always had
         payload |= {"repeat": repeat, "anchor": anchor.isoformat(), "timezone": timezone}
+    if own:
+        payload["own"] = True
     return payload

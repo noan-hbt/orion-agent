@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from orion.initiative.timers import Repeat
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
-Then = Literal["tell", "ask", "think", "work", "cancel"]
+Then = Literal["tell", "ask", "check", "think", "work", "cancel"]
 STANDS_FOR = ("remind_me", "follow_up", "think_later", "awaiting", "reminders")
 """The tools `later` replaces in the model's menu (they go to the drawer)."""
 
@@ -31,8 +31,8 @@ class LaterInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     then: Then = Field(
-        description="tell him; ask him how it went; think it over tonight; work on it at a "
-        "pace; cancel (`id`)"
+        description="tell him; ask him how it went; check something yourself at `at`, telling "
+        "him only if it matters; think it over tonight; work on it at a pace; cancel (`id`)"
     )
     what: str = Field(default="", max_length=1000, description="Self-contained")
     at: str = Field(
@@ -91,8 +91,8 @@ def route(args: BaseModel) -> tuple[str, dict[str, Any]]:
             "reminder_id": args.id.strip(),
             "when": f"{at:%Y-%m-%dT%H:%M}",
         }
-    if args.repeat and args.then != "tell":
-        raise ValueError("`repeat` is for tell; a pace of work is `every_hours`")
+    if args.repeat and args.then not in ("tell", "check"):
+        raise ValueError("`repeat` is for tell or check; a pace of work is `every_hours`")
     what = _needs_what(args)
     if args.reply_from:
         who, _, name = args.reply_from.partition(":")
@@ -128,12 +128,15 @@ def route(args: BaseModel) -> tuple[str, dict[str, Any]]:
             "at": f"{at:%Y-%m-%d %H:%M}",
             "question": what[:300],
         }
-    return "remind_me", {
+    if args.then == "check" and args.by_call:
+        raise ValueError("`by_call` is for tell: a check is yours, he hears of it only if needed")
+    reminder: dict[str, Any] = {
         "when": f"{at:%Y-%m-%dT%H:%M}",
         "what": what,
         "by_call": args.by_call,
         "repeat": args.repeat,
     }
+    return "remind_me", reminder | ({"own": True} if args.then == "check" else {})
 
 
 def later_tool() -> Tool:
@@ -151,9 +154,10 @@ def later_tool() -> Tool:
         description="The only way to come back to something later: never promise to remind "
         "him, come back or keep an eye without it. When (`at`, `every_hours`, or `reply_from` "
         "for an answer awaited), then what. « Rappelle-moi jeudi » → tell; « tous les lundis » "
-        "→ tell with repeat; how an interview or a doctor went → ask, hours after; « laisse-moi "
-        "y réfléchir » → think; following a search over days → work. What can be done now is "
-        "done now. Check the weekday it gives back.",
+        "→ tell with repeat; « vérifie à 6h si j'ai cours », or a note to yourself → check, "
+        "never tell (tell sends him `what` as it is); how an interview or a doctor went → ask, "
+        "hours after; « laisse-moi y réfléchir » → think; following a search over days → "
+        "work. What can be done now is done now. Check the weekday it gives back.",
         input_model=LaterInput,
         handler=unresolved,
         effect=Effect.INTERNAL,

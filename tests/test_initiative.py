@@ -549,3 +549,75 @@ async def test_what_can_wait_waits_for_the_point_and_what_he_ignores_stops(
     await engine.tick()
     [stopped] = [p for p in await kinds(world.journal, SUPPRESSED) if p["key"] == "idea:22"]
     assert stopped["reason"] == "il ne répond plus à ce genre de message"
+
+
+async def test_a_note_orion_left_itself_never_goes_out_as_it_is(world: World) -> None:
+    """30/10: « Tâche interne… Ne pas répéter ce rappel à Noan » went out as his reminder."""
+    await world.timers.schedule(
+        at(20, 8, 30),
+        "Ne pas répéter à Noan : relancer la recherche",
+        "night",
+        OWNER_PROVENANCE,
+        Trust.OWNER,
+        repeat="daily",
+        timezone="Europe/Paris",
+        own=True,
+    )
+    world.clock.now = at(20, 8, 31)
+    world.provider.extend(reply("SILENCE"))
+    await world.engine(InitiativeSettings(digests=())).tick()
+    world.clock.now = at(21, 8, 31)
+    world.provider.extend(fail("provider down"))
+    await world.engine(InitiativeSettings(digests=())).tick()
+    assert world.inbox.messages == []
+    assert "Ce n'est pas un rappel qu'il t'a demandé" in str(
+        world.provider.requests[0].messages[-1]["content"]
+    )
+    [series] = world.timers.projection.pending()  # handled, said or not: the series goes on
+    assert series.due_at == at(22, 8, 30)
+
+
+async def test_a_reminder_due_just_before_the_point_goes_in_the_same_message(
+    world: World,
+) -> None:
+    """30/10: two reminders and the 8:30 point, three messages in four minutes."""
+    await world.memory.add_commitment(
+        "Envoyer le devis à Paul", OWNER, debtor="owner", creditor="Paul", due="2026-10-20"
+    )
+    await world.timers.schedule(
+        at(20, 8, 25), "Appeler le garagiste", "owner", OWNER_PROVENANCE, Trust.OWNER
+    )
+    world.clock.now = at(20, 8, 26)
+    engine = world.engine()
+    assert await engine.tick() == []  # the point is due in four minutes: it waits
+    world.clock.now = at(20, 8, 31)
+    world.provider.extend(reply("Le garagiste, et le devis pour Paul aujourd'hui."))
+    assert len(await engine.tick()) == 2
+    assert world.inbox.messages == ["Le garagiste, et le devis pour Paul aujourd'hui."]
+    assert world.timers.projection.pending() == []
+
+
+async def test_a_draft_rejected_twice_is_dropped_unless_he_asked_for_it(world: World) -> None:
+    """30/10: rejected points went out anyway, as raw « Pour la suite : … » text."""
+    from orion.cognition.verifier import Verifier
+    from tests.test_router_verifier import json_reply
+
+    await world.memory.add_commitment(
+        "Envoyer le devis à Paul", OWNER, debtor="owner", creditor="Paul", due="2026-10-20"
+    )
+    no = json_reply({"ok": False, "issues": ["invented a room"]})
+    engine = InitiativeEngine(
+        world.orion,
+        world.journal,
+        world.timers,
+        world.inbox,
+        SETTINGS,
+        memory=world.memory.store,
+        clock=world.clock,
+        verifier=Verifier(ScriptedProvider(no, no), "verifier"),
+    )
+    world.clock.now = at(20, 8, 31)
+    world.provider.extend(reply("Salle NAMEK."), reply("Salle NAMEK, vraiment."))
+    assert await engine.tick() == []
+    assert world.inbox.messages == []
+    assert "invented a room" in str((await kinds(world.journal, SUPPRESSED))[-1]["reason"])
