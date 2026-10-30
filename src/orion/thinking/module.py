@@ -119,10 +119,15 @@ et sans contradiction : une idée, une règle.
   clair ; sinon, la question au réveil.
 - Une règle [appris] dépassée ou floue : retire-la ou réécris-la.""",
     "souvenirs": """\
-Ce que tu sais de lui (`<ce-que-tu-sais>`), ligne à ligne, avec la journée en tête.
-- Dépassé ou démenti par la journée : `forget_fact`, avec la raison. Flou, mal tourné, ou deux
-  qui disent la même chose : réécris-le en un seul, juste et complet (`remember`, avec les ids
-  qu'il remplace dans `replaces`).
+Ce que tu sais de lui (`<ce-que-tu-sais>`), sujet par sujet, avec la journée en tête.
+- Dépassé ou démenti par la journée : `forget_fact`, avec la raison. Flou ou mal tourné :
+  réécris-le, juste et complet (`remember`, avec son id dans `replaces`).
+- Un sujet, un souvenir : tout ce que tu sais d'une même chose (sa voiture, son sommeil, son
+  trajet, un trait de caractère), même dit en plusieurs fois et en d'autres mots, se fond en un
+  seul qui garde chaque précision (`remember`, avec tous leurs ids dans `replaces`). Deux qui se
+  contredisent : garde ce qui est le plus récent ou le plus précis.
+- Mal classé (un goût d'un proche rangé dans les siens, un trait de caractère dans ses goûts) :
+  réécris-le dans la bonne catégorie.
 - Chaque chose n'a qu'une place : un fait qui dure, un souvenir ; ce qui ne dure qu'un temps
   (un voyage, une recherche, une maladie), une situation ; ce que l'un doit à l'autre, un
   engagement ; une chose à faire à une date, un rappel ; la façon dont il veut que tu sois
