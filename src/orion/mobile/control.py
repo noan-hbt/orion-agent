@@ -20,6 +20,7 @@ are online and what each allows; one is cut off from here, and one is added sign
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -732,8 +733,9 @@ def mission_view(mission: Mission, now: datetime) -> dict[str, Any]:
 
 
 def release(code: Path) -> dict[str, Any] | None:
-    """The commit Orion runs and, when the server updates itself (D94), a commit it set aside:
-    `update.bad` beside the checkout. None when the code is not a git checkout."""
+    """The commit Orion runs, the pull request it merged (`(#114)` at the end of a squash
+    subject, the version the app shows) and, when the server updates itself (D94), a commit it
+    set aside: `update.bad` beside the checkout. None when the code is not a git checkout."""
     if not (code / ".git").exists():
         return None
     try:
@@ -754,4 +756,11 @@ def release(code: Path) -> dict[str, Any] | None:
     except OSError as exc:
         log.warning("control.update_bad_unreadable", error=str(exc))
         set_aside = None
-    return {"commit": commit, "at": at, "subject": subject, "set_aside": set_aside}
+    merged = re.search(r"\(#(\d+)\)$", subject)
+    return {
+        "commit": commit,
+        "pr": int(merged.group(1)) if merged else None,
+        "at": at,
+        "subject": subject,
+        "set_aside": set_aside,
+    }
