@@ -38,3 +38,7 @@ in French; code, identifiers and comments are in English.
   previous one byte for byte. Nothing volatile (time, retrieved memory) goes in the system
   message; journaled messages are replayed exactly as sent; the tool registry is fixed and
   sorted; every request carries a stable `session_id`. Never break these tests.
+- Parallel sessions: if another coding agent session is already working in this checkout
+  (uncommitted changes you did not make, a branch you did not create), do not touch it. Work in
+  your own git worktree (`git worktree add ../orion-<topic> -b <branch>`) and remove it once
+  merged.
