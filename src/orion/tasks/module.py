@@ -199,6 +199,15 @@ def _origin(ctx: ToolContext) -> Provenance:
     return Provenance(source=f"thread:{ctx.thread_id}", actor="orion:core")
 
 
+async def running_lines(tasks: Tasks) -> list[str]:
+    """The background tasks still running, with their ids."""
+    return [
+        f"- ({t.id}) {t.goal} : {t.passes} passage(s), {t.spent:.2f}/{t.budget_usd:.2f} $"
+        + (", attend ta réponse" if t.waiting else "")
+        for t in await tasks.running()
+    ]
+
+
 def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) -> list[Tool]:
     def inside(ctx: ToolContext) -> str:
         return ctx.thread_id.removeprefix("task:") if ctx.thread_id.startswith("task:") else ""
@@ -245,16 +254,7 @@ def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) ->
         return ToolResult("Tâche arrêtée : elle ne fait plus rien.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        running = await tasks.running()
-        if not running:
-            return ToolResult("Aucune tâche en cours.")
-        return ToolResult(
-            "\n".join(
-                f"- ({t.id}) {t.goal} : {t.passes} passage(s), {t.spent:.2f}/{t.budget_usd:.2f} $"
-                + (", attend ta réponse" if t.waiting else "")
-                for t in running
-            )
-        )
+        return ToolResult("\n".join(await running_lines(tasks)) or "Aucune tâche en cours.")
 
     async def wait(_args: Any, ctx: ToolContext) -> ToolResult:
         task_id = inside(ctx)
@@ -341,6 +341,11 @@ class TasksModule(Module):
         self.tasks = Tasks(plate.journal)
         await self.tasks.sync()
         return [task_tool(self.tasks, self._clock, settings.max_running)]
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.tasks is None:
+            return []
+        return await running_lines(self.tasks)
 
     async def serve(self, daemon: Daemon) -> None:
         if self.tasks is None:  # pragma: no cover - assemble always runs first

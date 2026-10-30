@@ -466,8 +466,9 @@ class MissionsModule(Module):
         return [
             f"- ({m.id}) {m.goal} — critères : {m.criteria or '(aucun)'} ; tous les "
             f"{m.every_hours} h, {m.runs} passes"
-            # What a page said (in the notes) never steers the review: the goal is his.
-            + (f" ; dernière note : {m.notes[-1]}" if m.notes and m.trust >= TRUSTED_FLOOR else "")
+            # What a page said may be in the notes: marked, not hidden (D201).
+            + (f" ; dernière note : {m.notes[-1]}" if m.notes else "")
+            + (" [la mission a lu le web ou des messages]" if m.trust < TRUSTED_FLOOR else "")
             for m in await self.missions.active()
         ]
 

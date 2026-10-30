@@ -251,6 +251,13 @@ class Intentions:
         )
         await self.sync()
 
+    async def lines(self, now: datetime) -> list[str]:
+        """The intentions he follows, where each stands, with ids."""
+        await self.sync()
+        return [
+            f"- ({i.id}) {i.what} : {self.progress(i, now)}" for i in self.state.active.values()
+        ]
+
     def progress(self, intention: Intention, now: datetime) -> str:
         recent = intention.since_last(now)
         kept = sum(1 for n in recent if n.kept)
@@ -402,12 +409,7 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
         return ToolResult("Intention retirée.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        await intentions.sync()
-        now = intentions.clock()
-        lines = [
-            f"- ({i.id}) {i.what} : {intentions.progress(i, now)}"
-            for i in intentions.state.active.values()
-        ]
+        lines = await intentions.lines(intentions.clock())
         return ToolResult("\n".join(lines) or "Aucune intention suivie.")
 
     return [
@@ -488,6 +490,11 @@ class IntentionsModule(Module):
                 },
             )
         ]
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.intentions is None:
+            return []
+        return await self.intentions.lines(now)
 
     async def serve(self, daemon: Daemon) -> None:
         if self.intentions is not None:

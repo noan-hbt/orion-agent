@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from orion.mail.service import Fetch, Mailbox, MailSettings
@@ -76,6 +77,11 @@ class MailModule(Module):
             mark=guardian.mail_mark if guardian else local_mark,
             keep=keep,
         )
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.mailbox is None:
+            return []
+        return await self.mailbox.review(now)
 
     async def serve(self, daemon: Daemon) -> None:
         mailbox = self.mailbox

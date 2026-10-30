@@ -86,6 +86,10 @@ class MailSettings(ModuleSettings):
     )
 
 
+REVIEW_RECENT = timedelta(days=2)
+REVIEW_REPLY = timedelta(days=14)
+
+
 @dataclass(frozen=True)
 class MailCard:
     id: str
@@ -489,6 +493,18 @@ class Mailbox:
 
     def describe(self, card: MailCard) -> str:
         return card.describe(self._zone)
+
+    async def review(self, now: datetime) -> list[str]:
+        """For Orion's night (D201): the mail of the last two days but newsletters and spam, and
+        any from the last two weeks still waiting for an answer."""
+        await self._runner.catch_up()
+        recent = {c.id for c in self.recent(now - REVIEW_RECENT, worth_it=True)}
+        cards = [
+            c
+            for c in self.recent(now - REVIEW_REPLY)
+            if c.id in recent or (c.card.needs_reply and not c.bulk)
+        ]
+        return [f"- {self.describe(c)} [venu d'ailleurs : un mail ou un tiers]" for c in cards]
 
     # -- initiative ---------------------------------------------------------------------------
 

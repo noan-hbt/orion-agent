@@ -398,6 +398,16 @@ class LibraryModule(Module):
             ),
         ]
 
+    async def review(self, now: datetime) -> list[str]:
+        library = self.library
+        if library is None:
+            return []
+        await library.sync()
+        return [
+            f"- ({d}) {t}, ajouté le {a[:10]}, {n} caractères"
+            for d, t, a, n in await library.store.docs()
+        ]
+
     async def close(self) -> None:
         if self._store is not None:
             await self._store.close()

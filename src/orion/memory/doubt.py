@@ -334,6 +334,14 @@ class DoubtModule(Module):
             )
         ]
 
+    async def review(self, now: datetime) -> list[str]:
+        """What may no longer be true: to confirm with him, or to date (`doubt` stale)."""
+        doubt = self.doubt
+        if doubt is None:
+            return []
+        await doubt.sync()
+        return [f"- ({k.fact_id}) {doubt.when(k)} : {k.statement}" for k in doubt.stale(now)]
+
     async def serve(self, daemon: Daemon) -> None:
         if self.doubt is not None:
             daemon.alerts.append(self.doubt)

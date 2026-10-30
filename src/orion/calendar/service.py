@@ -515,6 +515,17 @@ class Calendar:
             *([f"- agenda, demain : {' ; '.join(tomorrow)}"] if tomorrow else []),
         ]
 
+    async def ahead(self, now: datetime, days: int) -> list[str]:
+        """His agenda day by day over the next `days`, for Orion's night (D201)."""
+        await self._runner.catch_up()
+        lines: list[str] = []
+        for offset in range(days):
+            day = now.date() + timedelta(days=offset)
+            found = self.day(day, after=now if offset == 0 else None)
+            if found:
+                lines.append(f"- {describe_day(day)} : {' ; '.join(found)}")
+        return lines
+
     async def presence(self, now: datetime) -> Moment:
         """Busy during a timed event; otherwise, when the last one ended (today)."""
         await self._runner.catch_up()

@@ -10,6 +10,9 @@ from orion.calendar.service import Calendar, CalendarSettings, Fetch
 from orion.calendar.tools import calendar_tools
 from orion.modules.base import Daemon, Module, Plate
 
+AHEAD_DAYS = 14
+"""How far ahead the night reads his agenda, to prepare what is coming (D201)."""
+
 if TYPE_CHECKING:
     from orion.config import OrionConfig
     from orion.tools.base import Tool
@@ -70,6 +73,11 @@ class CalendarModule(Module):
         daemon.digests.append(calendar)
         daemon.presence.append(calendar)
         daemon.orion.situation.append(calendar)
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.calendar is None:
+            return []
+        return await self.calendar.ahead(now, AHEAD_DAYS)
 
     async def close(self) -> None:
         if self.calendar is not None:

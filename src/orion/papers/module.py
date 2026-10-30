@@ -534,6 +534,13 @@ class PapersModule(Module):
         if self.vault is not None:
             daemon.alerts.append(self.vault)
 
+    async def review(self, now: datetime) -> list[str]:
+        vault = self.vault
+        if vault is None:
+            return []
+        await vault.sync()
+        return [f"- {p.describe()}" for p in vault.state.papers.values()]
+
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         vault = self.vault
         if vault is None:

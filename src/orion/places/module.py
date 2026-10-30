@@ -301,6 +301,18 @@ class Places:
         await self.append(SENSED, {"kind": kind, "value": value}, source, SIGNAL_TRUST)
         log.info("places.sensed", kind=kind)
 
+    async def reminder_lines(self, now: datetime) -> list[str]:
+        """What waits for a place, one line each with its id."""
+        await self.sync()
+        return [
+            f"- ({r.id}) {'à chaque fois' if r.every else 'une fois'}, "
+            f"{'en arrivant à' if r.when == 'arrive' else 'en quittant'} « {r.place} »"
+            f"{f' (le {r.until - timedelta(days=1):%d/%m} au plus tard)' if r.until else ''}"
+            f" : {r.what}"
+            for r in self.state.reminders.values()
+            if r.holds(now)
+        ]
+
     async def situation(self, now: datetime) -> list[str]:
         """For `<maintenant>` and the watch: what his phone said lately."""
         await self.sync()
@@ -496,16 +508,7 @@ def place_tools(places: Places) -> list[Tool]:
         return ToolResult("Annulé.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        await places.sync()
-        now = datetime.now(UTC)
-        lines = [
-            f"- ({r.id}) {'à chaque fois' if r.every else 'une fois'}, "
-            f"{'en arrivant à' if r.when == 'arrive' else 'en quittant'} « {r.place} »"
-            f"{f' (le {r.until - timedelta(days=1):%d/%m} au plus tard)' if r.until else ''}"
-            f" : {r.what}"
-            for r in places.state.reminders.values()
-            if r.holds(now)
-        ]
+        lines = await places.reminder_lines(datetime.now(UTC))
         known = ", ".join(sorted(places.state.known.values())) or "aucun encore"
         lines.append(f"Lieux que son téléphone signale : {known}.")
         if not places.state.token:
@@ -581,6 +584,14 @@ class PlacesModule(Module):
                 {"remind_at_place": "remind", "place_reminder_cancel": "cancel", "places": "list"},
             )
         ]
+
+    async def review(self, now: datetime) -> list[str]:
+        places = self.places
+        if places is None:
+            return []
+        lines = await places.reminder_lines(now)
+        known = ", ".join(sorted(places.state.known.values()))
+        return [*lines, f"- lieux que son téléphone signale : {known}"] if known else lines
 
     async def serve(self, daemon: Daemon) -> None:
         if self.places is None:  # pragma: no cover - assemble always runs first

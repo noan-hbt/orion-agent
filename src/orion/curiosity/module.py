@@ -438,6 +438,14 @@ class Curiosity:
         facts = [f for f in await self._memory.store.facts() if f.trust >= TRUSTED_FLOOR]
         return "\n".join(f"- {f.statement}" for f in facts[-200:])
 
+    async def interest_lines(self) -> list[str]:
+        """The subjects he asked Orion to follow or to leave aside, with their ids."""
+        await self.sync()
+        return [
+            f"- ({i.id}) {'à suivre' if i.stance == 'plus' else 'à éviter'} : {i.subject}"
+            for i in self.state.interests.values()
+        ]
+
     def past(self) -> str:
         """What Orion brought him, with his verdict, and the leads that came to nothing."""
         finds = list(self.state.finds.values())
@@ -560,11 +568,7 @@ def curiosity_tools(curiosity: Curiosity) -> list[Tool]:
         return ToolResult("Noté : ta prochaine piste en tiendra compte.")
 
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
-        await curiosity.sync()
-        lines = [
-            f"- ({i.id}) {'à suivre' if i.stance == 'plus' else 'à éviter'} : {i.subject}"
-            for i in curiosity.state.interests.values()
-        ]
+        lines = await curiosity.interest_lines()
         past = curiosity.past()
         if past:
             lines += ["Déjà apporté :", past]
@@ -667,6 +671,11 @@ class CuriosityModule(Module):
             return
         daemon.alerts.append(self.curiosity)
         daemon.add_service("curiosity.hunt", self.curiosity.run)
+
+    async def review(self, now: datetime) -> list[str]:
+        if self.curiosity is None:
+            return []
+        return await self.curiosity.interest_lines()
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         settings: CuriositySettings = self.settings
