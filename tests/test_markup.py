@@ -65,13 +65,17 @@ def test_other_channels_get_no_markdown_marks() -> None:
 
 def test_what_is_malformed_stays_as_written() -> None:
     for text in (
-        "<choices>\n- jamais fermée",
+        "<choices>\n- jamais fermée\nPuis du texte.",
         "<card>sans titre</card>",
         "<choices>\n</choices>",
         "a < b et c > d",
     ):
         assert public(text) == []
         assert plain(text) == text
+
+    # Seen for real: the closer forgotten at the end of the message.
+    pieces = public("Je m'en occupe ?\n<choices>\n- je valide les 3\n- je le fais moi même\n")
+    assert pieces[-1]["options"] == ["je valide les 3", "je le fais moi même"]
     unsafe = parse('<card title="x" link="javascript:alert(1)">y</card>')
     assert unsafe[0].data["link"] == ""
 

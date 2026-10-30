@@ -27,7 +27,8 @@ and, since D140, records the app draws as iOS does (self-closing, or with a clos
 
 Tags rather than a tool: no extra model call, nothing that changes the tool registry (cache),
 and a message stays one message, journaled as sent. The app draws the pieces; every other
-channel gets `plain()`, which reads well as text. Anything malformed stays text, as written.
+channel gets `plain()`, which reads well as text. Anything malformed stays text, as written,
+except choices left open at the end of the message: they are closed there.
 """
 
 from __future__ import annotations
@@ -42,6 +43,10 @@ TAG = re.compile(
     r"(?:/>|>(.*?)</\1>)",
     re.S,
 )
+UNCLOSED = re.compile(
+    r"<choices(?:\s+[a-z]+(?:=\"[^\"]*\")?)*\s*>(?:[ \t]*\n[ \t]*(?:[-*•]|\d+[.)])[^\n]*)+\s*$"
+)
+"""Choices left open at the very end, only options after them: the model forgot the closer."""
 ATTRIBUTE = re.compile(r"([a-z]+)(?:=\"([^\"]*)\")?")
 MAX_OPTIONS = 5
 """Quick answers: two to five, as app.md tells Orion (D140: the parser and the doc agree)."""
@@ -168,6 +173,8 @@ def _piece(kind: str, attributes: dict[str, str], body: str) -> Piece | None:
 
 def parse(text: str) -> list[Piece]:
     """The message as pieces, in order; text between tags stays text."""
+    if UNCLOSED.search(text):
+        text = text.rstrip() + "\n</choices>"
     pieces: list[Piece] = []
     at = 0
     drawn = cards = 0
