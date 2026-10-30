@@ -55,7 +55,7 @@ def night_hint(when: datetime) -> str:
 class ContextCompiler:
     constitution: str
     max_window_tokens: int = 60_000
-    rebase_target_ratio: float = 0.5
+    rebase_target_ratio: float = 0.75
 
     def system_message(self) -> Message:
         return {"role": "system", "content": self.constitution}
@@ -72,24 +72,35 @@ class ContextCompiler:
         window = thread.window()
         if estimate_tokens([*window, *incoming]) <= self.max_window_tokens:
             return None
-        return _cut(thread, incoming, int(self.max_window_tokens * self.rebase_target_ratio))
+        return _moved(
+            thread, _cut(thread, incoming, int(self.max_window_tokens * self.rebase_target_ratio))
+        )
 
     def fresh_point(self, thread: Thread, incoming: list[Message], budget: int) -> int | None:
         """After a pause, the provider's cache is gone and the whole window would be paid in
         full: keep only the latest exchanges that fit `budget`, cut at a user message."""
         if estimate_tokens([*thread.window(), *incoming]) <= budget:
             return None
-        return _cut(thread, incoming, budget)
+        return _moved(thread, _cut(thread, incoming, budget))
+
+
+def _moved(thread: Thread, point: int) -> int | None:
+    """`point`, unless the window already starts there (only its last exchange is left)."""
+    return point if point > thread.base else None
 
 
 def _cut(thread: Thread, incoming: list[Message], target: int) -> int:
-    """The earliest user message after which the window and `incoming` fit `target`."""
+    """The earliest user message after which the window and `incoming` fit `target`.
+
+    The last exchange always stays: dropping it too left Orion answering a follow-up with no
+    idea what it had just done (a long browsing turn alone outweighed the target)."""
     window = thread.window()
     incoming_tokens = estimate_tokens(incoming)
+    last = None
     for offset, message in enumerate(window):
         if message.get("role") != "user":
             continue
         if estimate_tokens(window[offset:]) + incoming_tokens <= target:
             return thread.base + offset
-    # Even the last user turn is too large: drop the whole window.
-    return thread.base + len(window)
+        last = offset
+    return thread.base + (last if last is not None else len(window))

@@ -4392,3 +4392,23 @@ réécriture, le contexte répété remplissait la fin à son tour.
 - **Après deux refus, ce qu'il a demandé part comme tel** : « Ma relecture a bloqué mon
   message, voici ce que tu m'avais demandé : » puis le texte brut. Seul, ce texte se lisait
   comme une consigne d'Orion (« Te dire dans quelle salle… ») et cachait que rien n'était fait.
+
+## D198 — Un rebase garde le dernier échange et résume aussi le web
+
+*30/10/2026 · acceptée · révise D26 et le résumé des rebases*
+
+Le 30 octobre, après un tour de 37 étapes dans le navigateur, le message suivant a déclenché un
+rebase qui a vidé toute la fenêtre, sans résumé : Orion a répondu aux deux messages suivants
+sans savoir ce qu'il venait de faire. Deux causes : le dernier tour pesait à lui seul plus que la
+cible (la moitié de `max_window_tokens`), et le repli jetait alors tout ; et le résumé n'était
+fait que si tous les messages jetés étaient de confiance, or une seule page lue suffisait.
+
+- **Le dernier échange reste toujours** : faute de point de coupe qui tienne dans la cible, le
+  rebase coupe au dernier message du propriétaire. Les gros résultats d'outils s'y allègent
+  ensuite comme ailleurs.
+- **Un rebase garde plus** : la cible passe de 50 % à 75 % de `max_window_tokens`.
+- **Le résumé couvre aussi les pages et les mails**, y compris quand la fenêtre repart à neuf
+  après une pause : le résumeur garde le fil de la conversation, pas les consignes d'une page
+  (il n'en voit que les premières lignes). Le résumé compte comme de confiance : choix du
+  propriétaire, qui ne veut plus qu'une session lue sur le web reste « à risque » après coup.
+  La mémoire, elle, ne relit toujours que les échanges de confiance avant un rebase.

@@ -521,10 +521,11 @@ class Orion:
             if elsewhere:
                 blocks.insert(0, elsewhere)
         leaving: tuple[str, str] | None = None
-        if new_base is not None and not stale:
+        if new_base is not None:
             summary = await self._summarize_dropped(thread, new_base)
             if summary:
                 blocks.insert(0, summary_block(summary))
+        if new_base is not None and not stale:
             dropped = self._trusted_dropped(thread, new_base)
             if dropped:
                 leaving = sides(dropped)
@@ -825,10 +826,12 @@ class Orion:
         return dropped if trust >= TRUSTED_FLOOR else []
 
     async def _summarize_dropped(self, thread: Thread, new_base: int) -> str | None:
-        """What the turns leaving the window were about, if they were all trusted."""
+        """What the turns leaving the window were about, pages and mails included (D198):
+        without it, one page read was enough for a rebase to leave Orion with no idea what the
+        conversation was about."""
         if self._summary_model is None:
             return None
-        dropped = self._trusted_dropped(thread, new_base)
+        dropped = thread.messages[thread.base : new_base]
         if not dropped:
             return None
         return await summarize(
