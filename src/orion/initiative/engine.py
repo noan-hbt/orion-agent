@@ -90,8 +90,6 @@ _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
 VERIFIER_CONTEXT_MESSAGES = 8
-VERIFIER_READ_CHARS = 48_000
-VERIFIER_PIECE_CHARS = 8_000
 
 
 class Notifier(Protocol):
@@ -407,22 +405,17 @@ def digest_lines(
 
 
 def _read_while_writing(messages: Sequence[Message]) -> str:
-    """The tool results and memory of the turn that wrote a draft: what it may rest on.
+    """The memory and tool results of the turn that wrote a draft: what it may rest on.
 
-    What Orion looked up comes first, each piece capped, and the context repeated by a
-    rewrite only once: on 30/10 a 55 000-character turn was cut to its ends, the timetable
-    page Orion had read fell out, and « salle NAMEK » was rejected as invented twice."""
-    looked_up: list[str] = []
-    context: list[str] = []
-    for m in messages:
-        content = m.get("content")
-        if not isinstance(content, str) or not content:
-            continue
-        if m.get("role") == "tool":
-            looked_up.append(content[:VERIFIER_PIECE_CHARS])
-        elif m.get("role") == "user":
-            context.append(content[:VERIFIER_PIECE_CHARS])
-    return "\n---\n".join(dict.fromkeys(looked_up + context))[:VERIFIER_READ_CHARS]
+    Whole, never cut: the turn already fit the writer's context. On 30/10 a cut at 12 000
+    characters dropped the timetable page Orion had read, and « salle NAMEK » was rejected as
+    invented twice. The context a rewrite repeats goes in once."""
+    parts = [
+        content
+        for m in messages
+        if m.get("role") in ("user", "tool") and isinstance(content := m.get("content"), str)
+    ]
+    return "\n---\n".join(dict.fromkeys(p for p in parts if p))
 
 
 def _point(lines: str, extra: list[str]) -> str:
