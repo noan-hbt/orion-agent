@@ -6,8 +6,9 @@ was decided, what was left open. Claude Code compacts the same way: it summarize
 drops rather than forgetting it. Here the summary goes into the new user message, which is
 journaled verbatim, so the cache contract holds (nothing earlier is rewritten).
 
-Only trusted turns are summarized: a summary of a page or a mail would carry its instructions
-past the rebase, which is exactly what rebasing an untrusted window is meant to stop.
+Pages and mails are summarized too (D198): the summarizer keeps the thread of the conversation,
+not their instructions, and losing that thread every time Orion had read a page cost more than
+the risk it guarded against. Tool results only show their first lines anyway.
 """
 
 from __future__ import annotations

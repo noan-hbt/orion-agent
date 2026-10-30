@@ -191,7 +191,8 @@ def assert_prefix_stable_between_rebases(provider: ScriptedProvider) -> None:
     assert jumps < len(provider.requests) // 2
 
 
-async def test_untrusted_turns_are_not_summarized(journal: SqliteJournal) -> None:
+async def test_turns_with_a_page_are_summarized_too(journal: SqliteJournal) -> None:
+    """D198: a page in the dropped turns used to leave no summary at all."""
     from orion.core.events import Trust
 
     provider = _Summarizing(*[reply("r" * 900) for _ in range(9)])
@@ -202,7 +203,28 @@ async def test_untrusted_turns_are_not_summarized(journal: SqliteJournal) -> Non
     for i in range(1, 9):
         await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
     assert [e for e in await journal.read() if e.kind == "thread.rebased"]
-    assert not provider.summaries
+    assert provider.summaries
+
+
+async def test_a_rebase_keeps_the_last_exchange_however_long(journal: SqliteJournal) -> None:
+    """A long browsing turn alone outweighed the target: the rebase emptied the whole window
+    and Orion answered the follow-up with no idea what it had just done."""
+    page = "annonce " * 600
+    provider = ScriptedProvider(
+        reply("ok"),
+        *[call_tools(("echo", {"text": f"{i} {page}"})) for i in range(6)],
+        reply("le T2 rue Garibaldi"),
+        reply("oui"),
+    )
+    orion = make_orion(journal, provider, window=4_000)
+    await orion.start()
+    await orion.handle_owner_message("t1", "salut", "terminal", now=at(0))
+    await orion.handle_owner_message("t1", "cherche un T2 à Lyon", "terminal", now=at(1))
+    await orion.handle_owner_message("t1", "et il est dispo quand ?", "terminal", now=at(2))
+
+    shown = str(provider.requests[-1].messages)
+    assert "salut" not in shown  # the rebase did happen
+    assert "cherche un T2 à Lyon" in shown and "rue Garibaldi" in shown
 
 
 async def test_old_bulky_results_are_shortened_only_after_a_pause(journal: SqliteJournal) -> None:
