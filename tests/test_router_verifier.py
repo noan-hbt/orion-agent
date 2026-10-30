@@ -15,7 +15,13 @@ from orion.context.compiler import ContextCompiler
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import Guardian
-from orion.initiative.engine import DELIVERED, InitiativeEngine, InitiativeSettings, readable
+from orion.initiative.engine import (
+    DELIVERED,
+    InitiativeEngine,
+    InitiativeSettings,
+    _read_while_writing,  # pyright: ignore[reportPrivateUsage]
+    readable,
+)
 from orion.initiative.timers import TimerProjection, Timers
 from orion.providers.base import ModelRequest, ModelResponse, ProviderError, Usage
 from orion.providers.router import Router, parse_spec
@@ -224,6 +230,20 @@ async def test_the_verifier_sees_what_orion_looked_up_while_writing(
     await engine.tick()
     facts = checker.requests[0].messages[1]["content"].split("RECENT CONVERSATION:")[0]
     assert "What Orion read while writing" in facts and "averses, 13 °C" in facts
+
+
+def test_a_page_read_in_a_long_turn_still_reaches_the_verifier() -> None:
+    """30/10, 13:00: a long turn (memory, tax pages, then the timetable) was cut to its ends;
+    the rewrite repeated the context, and « salle NAMEK » was rejected twice as invented."""
+    context = "mémoire " * 2000
+    turn: list[Any] = [
+        {"role": "user", "content": context},
+        {"role": "tool", "content": "impots.gouv " * 3000},
+        {"role": "tool", "content": "Emploi du temps : anglais 13h30, salle NAMEK, 1er étage"},
+        {"role": "tool", "content": "page " * 3000},
+        {"role": "user", "content": context},
+    ]
+    assert "salle NAMEK" in _read_while_writing(turn)
 
 
 def test_a_point_reads_like_a_message() -> None:
