@@ -1,4 +1,4 @@
-"""The iMessage channel as a module: Orion's main way to reach the owner, through Inkbox.
+"""The iMessage channel as a module: an Inkbox line for the owner and their contacts.
 
 It owns the Inkbox client and the inbound side (polling or the webhook server). Modules built
 on the same Inkbox line (voice) subscribe to its events with `on_event`.
