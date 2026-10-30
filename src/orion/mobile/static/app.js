@@ -2768,7 +2768,7 @@ async function settingsFill(refresh) {
         { class: "list items" },
         row("toml", "orion.toml", plural(server.settings.length, "réglage", "réglages"), () => configPanel(server)),
         row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
-        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : `orion ${server.version}${server.release ? ` · ${server.release.commit}` : ""}`, () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
+        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : running(server), () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
         kept?.vault ? row("key", "Secrets", kept.asked.length ? plural(kept.asked.length, "demandé", "demandés") : plural(kept.secrets.length, "clé", "clés"), () => secretsPanel(refresh), kept.asked.length ? "wait" : "", "tes clés d'accès, jamais montrées") : null,
         row("spark", "ChatGPT", "", chatgptPanel, "", "ton forfait pour mes modèles"),
         row("where", "Raccourcis du téléphone", "", phoneTokenPanel, "", "lieux, sommeil, concentration"),
@@ -3268,13 +3268,20 @@ function machinesPanel() {
   });
 }
 
+// What runs: the last merged pull request when the commit says it, else the commit, else the package.
+function running(server) {
+  const r = server.release;
+  if (!r) return `orion ${server.version}`;
+  return r.pr ? `#${r.pr} · ${r.commit}` : r.commit;
+}
+
 function versionPanel(server) {
   const r = server.release;
   panel("Version", () => [
     h(
       "div",
       { class: "list items" },
-      row("server", "Orion", server.version, null),
+      row("server", "Orion", running(server), null),
       r ? row("check", "Ce qui tourne", r.commit, null) : null,
       r ? row("clock", "Depuis le", r.at ? SHORT.format(new Date(r.at)) : "—", null) : null,
       row("shield", "Gardien", server.split ? "à part, il protège tes clés" : "dans le même processus", null),

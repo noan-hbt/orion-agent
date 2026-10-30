@@ -342,6 +342,9 @@ def test_the_running_commit_and_a_set_aside_update_are_read(tmp_path: Path) -> N
     found = release(code)
     assert found is not None
     assert found["subject"] == "Les onglets" and found["set_aside"] is None and found["commit"]
+    assert found["pr"] is None
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "Les onglets (#114)"], check=True)
+    assert (release(code) or {})["pr"] == 114  # the version the app shows
     (tmp_path / "update.bad").write_text("0123456789abcdef\n", "utf-8")
     found = release(code)
     assert found is not None and found["set_aside"] == "0123456789ab"
