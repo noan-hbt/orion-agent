@@ -24,9 +24,11 @@ log = structlog.get_logger(__name__)
 SYSTEM_PROMPT = """You check a message before a personal assistant sends it to its owner.
 
 You get FACTS, sometimes the RECENT CONVERSATION between the owner ("Lui") and the assistant
-("Orion"), and a DRAFT. What the facts or the recent conversation say counts as known (e.g. an
-earlier failure mentioned there may be referred to). Find statements in the draft that
-contradict them or add specifics neither contains: dates, weekdays, times, amounts, names,
+("Orion"), and a DRAFT. The owner is one person: the facts may call him by his first name or
+"il", the draft speaks to him as "tu" (a reminder that "Noan" should call the garage, said to
+him as "appelle le garage", is right). What the facts or the recent conversation say counts
+as known (e.g. an earlier failure mentioned there may be referred to). Find statements in the draft
+that contradict them or add specifics neither contains: dates, weekdays, times, amounts, names,
 places, deadlines, claims that something was done. Tone, wording, jokes, greetings, opinions,
 questions and offers to help are fine. Paraphrase and reasonable reading of the facts are fine
 (something "not marked as done" may be called "still not done"; "demain" for tomorrow's date).

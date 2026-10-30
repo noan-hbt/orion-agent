@@ -90,7 +90,8 @@ _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
 VERIFIER_CONTEXT_MESSAGES = 8
-VERIFIER_READ_CHARS = 12_000
+VERIFIER_READ_CHARS = 200_000  # ~50k tokens: a long turn of pages, not a whole thread
+VERIFIER_PIECE_CHARS = 40_000
 
 
 class Notifier(Protocol):
@@ -406,18 +407,31 @@ def digest_lines(
 
 
 def _read_while_writing(messages: Sequence[Message]) -> str:
-    """The memory and tool results of the turn that wrote a draft: what it may rest on."""
-    parts = [
-        str(m.get("content") or "")
-        for m in messages
-        if m.get("role") in ("user", "tool") and isinstance(m.get("content"), str)
-    ]
-    read = "\n---\n".join(p for p in parts if p)
-    if len(read) <= VERIFIER_READ_CHARS:
-        return read
-    # The memory comes first in the turn, the searches after: keep both ends.
-    head = VERIFIER_READ_CHARS // 3
-    return read[:head] + "\n[…]\n" + read[-(VERIFIER_READ_CHARS - head) :]
+    """The memory and tool results of the turn that wrote a draft: what it may rest on.
+
+    What Orion looked up comes first, then the context, which a rewrite repeats but goes in
+    once. On 30/10 a cut at 12 000 characters dropped the timetable page Orion had read, and
+    « salle NAMEK » was rejected as invented twice."""
+    looked_up: list[str] = []
+    context: list[str] = []
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, str) or not content:
+            continue
+        if m.get("role") == "tool":
+            looked_up.append(content[:VERIFIER_PIECE_CHARS])
+        elif m.get("role") == "user":
+            context.append(content[:VERIFIER_PIECE_CHARS])
+    return "\n---\n".join(dict.fromkeys(looked_up + context))[:VERIFIER_READ_CHARS]
+
+
+def _after_review(fallback: str) -> str:
+    """What he asked for, once the review blocked Orion's wording: said as such. The raw text
+    alone read as Orion's own instruction (30/10, « Rappel (Ecole) : Te dire dans quelle
+    salle… » three times) and hid that the asked thing was not done."""
+    if not fallback:
+        return ""
+    return "Ma relecture a bloqué mon message, voici ce que tu m'avais demandé :\n" + fallback
 
 
 def _point(lines: str, extra: list[str]) -> str:
@@ -991,7 +1005,7 @@ class InitiativeEngine:
                 break
             if is_silence(again.text):
                 return (
-                    (candidate.fallback, "fallback: silence after a rejection")
+                    (_after_review(candidate.fallback), "fallback: silence after a rejection")
                     if (candidate.explicit)
                     else (None, "silence")
                 )
@@ -1001,7 +1015,7 @@ class InitiativeEngine:
             # Twice wrong on something he never asked for: Orion keeps quiet rather than send
             # the raw text (seen for real, « Pour la suite : … » after two rejected points).
             return None, "rejected: " + issues
-        return candidate.fallback, "fallback: " + issues
+        return _after_review(candidate.fallback), "fallback: " + issues
 
     async def _record(
         self,

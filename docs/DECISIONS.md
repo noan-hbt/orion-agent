@@ -4372,3 +4372,23 @@ disent la même chose » : des morceaux d'un même sujet, dits autrement, n'y en
 - **Mal classé se reclasse** : la catégorie est déjà posée à côté de chaque souvenir.
 - Ménage fait à la main le même jour (fusions par `supersedes`, au journal) : on verra aux
   prochaines nuits si les morceaux reviennent.
+
+## D197 — Le relecteur voit les pages qu'Orion a lues, même dans un long tour
+
+*30/10/2026 · acceptée · précise D103*
+
+Le 30 octobre, le rappel « à chaque arrivée à l'école, dis-moi ma salle » est parti trois fois
+sous sa forme brute (« Rappel (Ecole) : Te dire dans quelle salle… »). Orion avait lu son
+emploi du temps sur Hyperplanning, mais le relecteur rejetait « salle NAMEK » comme inventée :
+ce qu'Orion lit pendant le tour était coupé à 12 000 caractères (début et fin), et un tour de
+55 000 caractères (mémoire, pages des impôts, emploi du temps) perdait le milieu. À la
+réécriture, le contexte répété remplissait la fin à son tour.
+
+- **Ce qu'Orion a consulté passe d'abord**, puis le contexte du tour, une seule fois même si
+  une réécriture le répète. Limites relevées : 40 000 caractères par morceau, 200 000 en tout.
+- **Le propriétaire est une seule personne** : le relecteur lisait « Noan » dans les faits et
+  « Lui » dans la conversation comme deux personnes, et rejetait « appelle le garage » parce
+  que c'était « à Noan » d'appeler (trois refus du 25 au 26/10). Son prompt le dit désormais.
+- **Après deux refus, ce qu'il a demandé part comme tel** : « Ma relecture a bloqué mon
+  message, voici ce que tu m'avais demandé : » puis le texte brut. Seul, ce texte se lisait
+  comme une consigne d'Orion (« Te dire dans quelle salle… ») et cachait que rien n'était fait.
