@@ -222,3 +222,33 @@ async def test_one_mission_that_breaks_does_not_stop_the_others(journal: SqliteJ
     await world.use("mission_start", owner, goal="Un appart à Dreux", every_hours=24)
     await world.use("mission_start", owner, goal="Un vélo d'occasion", every_hours=24)
     assert len(await world.work.once()) == 1  # the first broke; the second still ran
+
+
+async def test_a_project_moves_forward_with_its_people_from_what_they_said(
+    journal: SqliteJournal,
+) -> None:
+    provider = ScriptedProvider()
+    world = World(journal, provider)
+    owner = ToolContext("owner", "c0")
+    refused = await world.use("mission_start", owner, goal="Sortir la maquette", people=["Léa"])
+    assert refused.is_error  # not one of his contacts: no project with her
+
+    world.missions.people = lambda: ["Léa"]
+
+    async def talks(names: list[str]) -> str:
+        return "18/10 14:00 Léa : j'ai fini les écrans, on part sur le bleu ?"
+
+    world.missions.talks = talks
+    await world.use(
+        "mission_start",
+        owner,
+        goal="Sortir la maquette",
+        people=["Léa"],
+        mandate="les choix de design ; pas le budget",
+    )
+    provider.extend(reply("Léa a fini les écrans ; je lui ai confirmé le bleu."))
+    await world.work.once()
+    brief = str(provider.requests[0].messages[-1]["content"])
+    assert "on part sur le bleu" in brief and "pas le budget" in brief
+    [alert] = await world.work.alerts(world.now)
+    assert alert.trust <= Trust.THIRD_PARTY  # what she wrote never passes for his words

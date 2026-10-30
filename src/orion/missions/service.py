@@ -12,13 +12,17 @@ What a mission saw is recorded item by item (`mission_seen` answers which are ne
 same listing is never reported twice; what the owner refused is kept with the reason, and the
 next runs read it.
 
+A mission may be a project the owner shares with some of their contacts (`people`, D199): then
+each pass moves it forward with them, and `mandate` says what Orion may settle for the owner
+(the rest is put to them).
+
     mission.started  mission.updated  mission.seen  mission.rejected  mission.ran
     mission.closed
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -72,6 +76,10 @@ class Mission:
     """When a pass was asked for right away (by the owner, or by a pass with more to see)."""
     rushes_seen: int = 0
     """How many of those the last pass started after: one asked later makes it due again."""
+    people: list[str] = field(default_factory=list[str])
+    """The contacts the owner shares it with (their names in the secretary): a project."""
+    mandate: str = ""
+    """What Orion may settle with them for the owner, in the owner's words."""
 
     def rushes_left(self, now: datetime) -> int:
         return max(0, RUSHES_PER_DAY - sum(1 for at in self.rushes if at.date() == now.date()))
@@ -87,13 +95,27 @@ class Mission:
             return True
         return self.last_run is None or now - self.last_run >= timedelta(hours=self.every_hours)
 
-    def brief(self) -> str:
-        """What a run starts from: the mission as it stands."""
+    def project(self) -> str:
+        """Who it is shared with and what Orion may settle, for a project; else empty."""
+        if not self.people:
+            return ""
+        return (
+            f"Projet mené avec {', '.join(self.people)}. Ce que tu peux décider avec eux pour "
+            f"le propriétaire : {self.mandate or '(rien : tu lui demandes tout)'}."
+        )
+
+    def brief(self, talks: str = "") -> str:
+        """What a run starts from: the mission as it stands; `talks`, the latest messages
+        with the people of a project."""
         lines = [
             f"Mission ({self.id}) : {self.goal}",
             f"Critères : {self.criteria or '(aucun précisé)'}",
             f"Passage n°{self.runs + 1}, toutes les {self.every_hours} h.",
         ]
+        if self.people:
+            lines.append(self.project())
+            if talks:
+                lines.append(f"Vos derniers échanges :\n{talks}")
         if self.rejected:
             lines.append(
                 "Refusé par le propriétaire (ne le repropose pas, et tiens compte du motif) :"
@@ -108,6 +130,18 @@ class Mission:
         if self.notes:
             lines.append("Tes notes des passages précédents :")
             lines += [f"- {note}" for note in self.notes[-NOTES_SHOWN:]]
+        if self.people:
+            lines.append(
+                "Travaille maintenant : fais avancer le projet sans que le propriétaire serve "
+                "d'intermédiaire. Écris-leur (`contact_message`) ce qui débloque : une question, "
+                "une décision prise dans ton mandat, un rappel de ce qu'ils doivent ; quand tu "
+                "attends leur réponse, `awaiting`. Ce qui sort du mandat, demande-le au "
+                "propriétaire dans ton message. Note chaque décision, qui doit quoi et pour "
+                "quand avec `mission` (note). Ne leur écris pas sans raison neuve, et rien de ce "
+                "qu'il ne leur dirait pas. Puis réponds : SILENCE s'il n'a rien à savoir, sinon "
+                "le message pour lui, court."
+            )
+            return "\n".join(lines)
         lines.append(
             "Travaille maintenant : cherche ce qui est neuf (recherche web, ton navigateur), "
             "enregistre chaque élément trouvé avec `mission` (seen), note ce que tu apprends "
@@ -149,6 +183,8 @@ class MissionState:
                 criteria=str(payload.get("criteria", "")),
                 every_hours=int(payload.get("every_hours", 24)),
                 started_at=datetime.fromisoformat(str(payload["at"])),
+                people=[str(p) for p in payload.get("people", [])],
+                mandate=str(payload.get("mandate", "")),
             )
             return
         mission = self.missions.get(str(payload.get("mission_id", "")))
@@ -163,6 +199,10 @@ class MissionState:
                 mission.every_hours = int(payload["every_hours"])
             if payload.get("note"):
                 mission.notes.append(str(payload["note"]))
+            if "people" in payload:
+                mission.people = [str(p) for p in payload["people"]]
+            if "mandate" in payload:
+                mission.mandate = str(payload["mandate"])
         elif event.kind == SEEN:
             for item in payload.get("items", []):
                 mission.seen.setdefault(str(item["key"]), str(item.get("label", "")))
@@ -192,6 +232,10 @@ class Missions:
         self._journal = journal
         self.state = MissionState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self.people: Callable[[], list[str]] | None = None
+        """The owner's contacts, when the secretary is on: who a project may be shared with."""
+        self.talks: Callable[[list[str]], Awaitable[str]] | None = None
+        """The latest messages with these contacts, for a project's pass."""
         self.waking: list[Callable[[], None]] = []
         """Told when a mission starts or is asked for now, so its pass comes at once, not at the
         next tick."""
@@ -207,6 +251,15 @@ class Missions:
         await self.sync()
         return [m for m in self.state.missions.values() if m.closed is None]
 
+    async def shared_with(self, name: str) -> list[str]:
+        """The projects running with this contact, as they are told when that person writes."""
+        return [
+            f"- ({m.id}) {m.goal}. {m.project()}"
+            + (f" Dernière note : {m.notes[-1]}" if m.notes else "")
+            for m in await self.active()
+            if name.lower() in (p.lower() for p in m.people)
+        ]
+
     async def start(
         self,
         goal: str,
@@ -215,6 +268,8 @@ class Missions:
         now: datetime,
         provenance: Provenance,
         correlation_id: str | None,
+        people: list[str] | None = None,
+        mandate: str = "",
     ) -> str:
         mission_id = f"m_{new_id()}"
         await self._record(
@@ -225,6 +280,8 @@ class Missions:
                 "criteria": criteria,
                 "every_hours": every_hours,
                 "at": now.isoformat(),
+                "people": people or [],
+                "mandate": mandate,
             },
             provenance,
             Trust.OWNER,
@@ -266,8 +323,14 @@ class Missions:
         criteria: str = "",
         every_hours: int = 0,
         note: str = "",
+        people: list[str] | None = None,
+        mandate: str | None = None,
     ) -> None:
         payload: dict[str, object] = {"mission_id": mission_id}
+        if people is not None:
+            payload["people"] = people
+        if mandate is not None:
+            payload["mandate"] = mandate
         if criteria:
             payload["criteria"] = criteria
         if every_hours:
