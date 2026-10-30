@@ -234,9 +234,10 @@ async def test_a_time_of_the_night_still_sees_everything_when_the_window_is_cut(
     scripted(orion).extend(*asleep(4), reply("SILENCE"))
     start = len(scripted(orion).requests)
     assert await thinking.tick() is not None
-    # The material (the day among it) is laid out again rather than left to a summary.
+    # The material (the day among it) stays in view: kept in the window, or laid out again
+    # rather than left to a summary when the window drops it.
     for request in scripted(orion).requests[start:]:
-        assert "J'hésite entre l'offre de Lyon" in str(request.messages[-1]["content"])
+        assert any("J'hésite entre l'offre de Lyon" in str(m["content"]) for m in request.messages)
 
 
 async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal) -> None:
