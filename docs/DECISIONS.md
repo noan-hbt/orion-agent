@@ -4355,3 +4355,20 @@ ont rendu un bilan vide.
   pas : ni message, ni accord, ni acte vers lui ou le monde depuis une tâche.
 - **Un expéditeur accentué** (« Enchères du Domaine ») faisait planter la recherche IMAP
   (`imaplib` n'envoie que de l'ASCII) : il part désormais en littéral UTF-8.
+
+## D196 — Un sujet, un souvenir
+
+*30/10/2026 · acceptée · complète D186*
+
+Relu la mémoire en vrai le 30 octobre : le manuel était propre (51 règles retirées en trois
+nuits), les souvenirs non. Sa voiture tenait en cinq souvenirs, son sommeil en trois, sa
+procrastination en trois ; « sa voiture pour tous ses déplacements » contredisait « les
+transports pour le travail » ; un goût d'Angèle et quatre traits de caractère étaient rangés
+dans ses goûts. La consigne demandait de relire « ligne à ligne » et de fondre « deux qui
+disent la même chose » : des morceaux d'un même sujet, dits autrement, n'y entraient pas.
+
+- **Sujet par sujet** : tout ce qu'Orion sait d'une même chose se fond en un souvenir qui garde
+  chaque précision ; deux qui se contredisent, le plus récent ou le plus précis reste.
+- **Mal classé se reclasse** : la catégorie est déjà posée à côté de chaque souvenir.
+- Ménage fait à la main le même jour (fusions par `supersedes`, au journal) : on verra aux
+  prochaines nuits si les morceaux reviennent.
