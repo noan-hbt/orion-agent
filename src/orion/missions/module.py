@@ -13,7 +13,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.loop import StopReason
-from orion.core.events import Provenance
+from orion.core.events import Provenance, Trust
 from orion.guardian.policy import TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.missions.service import Mission, Missions
@@ -78,8 +78,13 @@ class MissionWork:
             return current is None or current.closed is not None
 
         rushes_seen = len(mission.rushes)
+        talks = ""
+        if mission.people and self._missions.talks is not None:
+            talks = await self._missions.talks(mission.people)
+        # What they wrote is theirs: the pass is never more trusted than it.
+        trust = min(mission.trust, Trust.THIRD_PARTY) if talks else mission.trust
         turn = await self._orion.handle_initiative(
-            mission.thread, mission.brief(), "mission", mission.trust, now=now, halted=closed
+            mission.thread, mission.brief(talks), "mission", trust, now=now, halted=closed
         )
         if turn.reason is StopReason.HALTED:
             log.info("mission.called_off", mission=mission.id, steps=turn.steps)
@@ -122,6 +127,17 @@ class StartInput(BaseModel):
         description="Budget, place, dates, must-haves, deal-breakers",
     )
     every_hours: int = Field(default=24, ge=1, le=24 * 14, description="Pace")
+    people: list[str] = Field(
+        default_factory=list[str],
+        max_length=10,
+        description="A project he shares with some of his contacts: their names. Each pass "
+        "moves it forward with them",
+    )
+    mandate: str = Field(
+        default="",
+        max_length=1000,
+        description="With people: what you may settle with them for him, in his words",
+    )
 
 
 class UpdateInput(BaseModel):
@@ -130,6 +146,8 @@ class UpdateInput(BaseModel):
     mission: str = Field(description="m_…")
     criteria: str = Field(default="", max_length=1000, description="In full")
     every_hours: int = Field(default=0, ge=0, le=24 * 14)
+    people: list[str] | None = Field(default=None, max_length=10, description="In full")
+    mandate: str | None = Field(default=None, max_length=1000, description="In full")
 
 
 class NoteInput(BaseModel):
@@ -196,12 +214,43 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
         )
 
+    def unknown(people: list[str] | None) -> ToolResult | None:
+        if not people:
+            return None
+        known = missions.people() if missions.people is not None else []
+        missing = [p for p in people if p.lower() not in (k.lower() for k in known)]
+        if not missing:
+            return None
+        return ToolResult(
+            f"Not among his contacts: {', '.join(missing)} (contacts: "
+            f"{', '.join(known) or 'none, or the secretary is off'}). A project is shared only "
+            "with people allowed to write to you: offer to add them first.",
+            is_error=True,
+        )
+
     async def start(args: Any, ctx: ToolContext) -> ToolResult:
         if len(await missions.active()) >= max_active:
             return ToolResult(f"Already {max_active} missions: close one first.", is_error=True)
+        if (refused := unknown(args.people)) is not None:
+            return refused
         mission_id = await missions.start(
-            args.goal, args.criteria, args.every_hours, clock(), provenance(ctx), ctx.correlation_id
+            args.goal,
+            args.criteria,
+            args.every_hours,
+            clock(),
+            provenance(ctx),
+            ctx.correlation_id,
+            people=args.people,
+            mandate=args.mandate,
         )
+        if args.people:
+            return ToolResult(
+                f"Projet lancé ({mission_id}) avec {', '.join(args.people)} : j'y travaille "
+                f"maintenant, puis toutes les {args.every_hours} h, et quand ils m'écrivent. "
+                "Pour que tu leur écrives sans qu'il valide chaque message, il doit te le "
+                "laisser (`autonomy_grant`, `contact_message`, recipients = ces noms) : "
+                "propose-le-lui s'il ne l'a pas fait."
+            )
         return ToolResult(
             f"Mission lancée ({mission_id}) : j'y travaille maintenant, puis toutes les "
             f"{args.every_hours} h. Je ne t'écris que s'il y a du neuf."
@@ -210,6 +259,8 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
     async def update(args: Any, ctx: ToolContext) -> ToolResult:
         if await missions.get(args.mission) is None:
             return ToolResult(f"No mission {args.mission}.", is_error=True)
+        if (refused := unknown(args.people)) is not None:
+            return refused
         await missions.update(
             args.mission,
             provenance(ctx),
@@ -217,6 +268,8 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             ctx.correlation_id,
             criteria=args.criteria,
             every_hours=args.every_hours,
+            people=args.people,
+            mandate=args.mandate,
         )
         return ToolResult("Mission mise à jour.")
 
@@ -287,6 +340,7 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             "\n".join(
                 f"- ({m.id}) {m.goal} : {m.runs} passage(s), {len(m.seen)} vu(s), "
                 f"{len(m.rejected)} écarté(s), toutes les {m.every_hours} h"
+                + (f" ; {m.project()}" if m.people else "")
                 for m in active
             )
         )
@@ -311,7 +365,7 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
         ),
         tool(
             "mission_update",
-            "New criteria or pace, when he says so.",
+            "New criteria, pace, people or mandate, when he says so.",
             UpdateInput,
             update,
         ),
@@ -382,8 +436,10 @@ class MissionsModule(Module):
             grouped(
                 "mission",
                 "Missions: goals you keep working on alone over days (find a flat, watch a price, "
-                "look for a slot), when the owner wants you to keep looking. For a question to "
-                "answer now, search and answer instead (and offer a mission if it fits).",
+                "look for a slot), when the owner wants you to keep looking, or a project he "
+                "shares with some of his contacts, that you move forward with them (`people`, "
+                "`mandate`). For a question to answer now, search and answer instead (and offer "
+                "a mission if it fits).",
                 mission_tools(self.missions, self._clock, settings.max_active),
                 {
                     "mission_start": "start",

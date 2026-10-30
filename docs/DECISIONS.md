@@ -4412,3 +4412,24 @@ fait que si tous les messages jetés étaient de confiance, or une seule page lu
   (il n'en voit que les premières lignes). Le résumé compte comme de confiance : choix du
   propriétaire, qui ne veut plus qu'une session lue sur le web reste « à risque » après coup.
   La mémoire, elle, ne relit toujours que les échanges de confiance avant un rebase.
+
+## D199 — Un projet mené avec des proches
+
+*30/10/2026 · acceptée · étend D47, D93 et D114*
+
+Le propriétaire travaille sur un projet avec quelqu'un et ne veut plus faire l'intermédiaire.
+Le secrétaire répondait aux proches mais ne s'engageait jamais, et rien ne faisait avancer un
+travail commun. Désormais une mission peut être un **projet** :
+- `mission` (start) prend `people` (des proches du secrétaire, seulement eux) et `mandate`, ce
+  qu'Orion peut décider avec eux pour le propriétaire, dans ses mots (« les choix de design ;
+  pas le budget ») ;
+- **chaque passage** voit les derniers échanges avec ces personnes, le mandat et ses notes. Il
+  leur écrit ce qui débloque (`contact_message`), attend leur réponse (`awaiting`), note chaque
+  décision et qui doit quoi (`mission` note). Il ne dit au propriétaire que ce qu'il doit savoir,
+  et lui demande ce qui sort du mandat ;
+- **quand l'une d'elles écrit**, Orion voit les projets qu'ils partagent et leur mandat. Il peut
+  décider ce que le mandat couvre, et rien d'autre ; hors projet, il ne s'engage toujours à rien ;
+- ce qu'ils écrivent garde sa confiance : un passage qui a lu leurs messages est `THIRD_PARTY`.
+  Écrire sans validation demande toujours l'autonomie `contact_message` pour ces noms (D93),
+  que le gardien vérifie. Changer les personnes ou le mandat (`mission` update) depuis une
+  conversation qui contient leurs messages est demandé au propriétaire.

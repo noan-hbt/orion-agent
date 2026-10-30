@@ -399,3 +399,35 @@ async def test_a_message_that_breaks_does_not_stop_the_next_ones(journal: Sqlite
             await asyncio.sleep(0.01)
     worker.cancel()
     assert answered == ["bonjour"]
+
+
+async def test_a_collaborator_finds_the_project_and_what_orion_may_settle(
+    journal: SqliteJournal,
+) -> None:
+    from orion.core.events import Provenance
+    from orion.missions.service import Missions
+
+    missions = Missions(journal)
+    await missions.start(
+        "Sortir la maquette",
+        "",
+        24,
+        NOW,
+        Provenance(source="thread:owner", actor="orion:core"),
+        None,
+        people=["Julien"],
+        mandate="les choix de design ; pas le budget",
+    )
+    provider = answer("Va pour le bleu.")
+    provider.extend(reply("Coucou !"))
+    secretary, sent = secretary_with(journal, provider)
+    secretary.projects = missions.shared_with
+    await secretary.answer(
+        message("On part sur le bleu ?", sender="+33633333333", conversation="conv-julien")
+    )
+    seen = str(provider.requests[0].messages[-1]["content"])
+    assert "Sortir la maquette" in seen and "pas le budget" in seen
+    assert sent == [("conv-julien", "Va pour le bleu.")]
+    # His mother is not in it: she is told nothing of it.
+    await secretary.answer(message("Coucou", n=2))
+    assert "Sortir la maquette" not in str(provider.requests[-1].messages[-1]["content"])
