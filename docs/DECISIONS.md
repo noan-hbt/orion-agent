@@ -4340,3 +4340,18 @@ propose d'abord de raconter.
   ses mots.
 - Seul ce qui ne peut pas attendre sa réponse (un rendez-vous dans l'heure) se dit tout de
   suite, en une ligne.
+
+## D195 — Une tâche de fond lit tout ce qu'Orion lit
+
+*30/10/2026 · acceptée · révise D110 (en partie)*
+
+La nuit du 29 octobre, deux tâches de fond (retrouver une facture d'enchères, finir l'audit des
+newsletters) ont échoué au premier pas : le gardien ne leur laissait que le web, le navigateur
+et les fichiers téléchargés. `mail` et `conversations_search` leur étaient refusés, et elles
+ont rendu un bilan vide.
+
+- **Toute lecture est permise dans une tâche** : un appel sans effet (`Effect.NONE` : ses
+  mails, ses conversations passées, son agenda) passe, comme pour Orion. Le reste ne change
+  pas : ni message, ni accord, ni acte vers lui ou le monde depuis une tâche.
+- **Un expéditeur accentué** (« Enchères du Domaine ») faisait planter la recherche IMAP
+  (`imaplib` n'envoie que de l'ASCII) : il part désormais en littéral UTF-8.

@@ -151,6 +151,9 @@ async def test_a_task_only_looks_things_up(journal: SqliteJournal) -> None:
         return (await guardian.decide(proposal)).verdict
 
     assert await verdict("web_search", Effect.NONE) is Verdict.ALLOW
+    assert await verdict("mail", Effect.NONE) is Verdict.ALLOW  # every read, as Orion has
+    assert await verdict("conversations_search", Effect.NONE) is Verdict.ALLOW
+    assert await verdict("mail_send", Effect.EXTERNAL) is Verdict.DENY
     assert await verdict("file", Effect.INTERNAL, "download") is Verdict.ALLOW
     assert await verdict("file", Effect.INTERNAL, "send") is Verdict.DENY  # nothing to him
     assert await verdict("remind_me", Effect.INTERNAL) is Verdict.DENY
