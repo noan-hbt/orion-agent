@@ -57,6 +57,11 @@ class RemindMeInput(BaseModel):
     repeat: Repeat = Field(
         default="", description="Again at the same time each day, weekday, week, month or year"
     )
+    own: bool = Field(
+        default=False,
+        description="A note to yourself (check something, pick work up): it wakes you, and "
+        "you tell him only if it matters",
+    )
 
 
 class ReminderMoveInput(BaseModel):
@@ -136,8 +141,9 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             by_call=args.by_call,
             repeat=args.repeat,
             timezone=ctx.timezone,
+            own=args.own,
         )
-        how = " (par appel)" if args.by_call else ""
+        how = " (par appel)" if args.by_call else " (pour toi)" if args.own else ""
         pace = f", puis {REPEAT_FR[args.repeat]}" if args.repeat else ""
         return ToolResult(
             f"Rappel programmé ({timer_id}) pour {describe_moment(due, ctx.timezone)}{pace}{how}.",
