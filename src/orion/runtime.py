@@ -295,7 +295,7 @@ class Orion:
         sending), which callers must not deliver. `halted` stops work called off meanwhile.
         `model` and the limits replace the agent's for this turn (Orion's night, D117): a
         thread that always passes the same model keeps its prompt cache."""
-        body = f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
+        body = _initiative(notice, why)
         return await self._turn(
             thread_id,
             kind="initiative.triggered",
@@ -313,6 +313,12 @@ class Orion:
             max_steps=max_steps,
             max_tool_calls=max_tool_calls,
         )
+
+    def cuts(self, thread_id: str, notice: str, why: str, now: datetime) -> bool:
+        """Whether this initiative would push the thread past its window budget, so that its
+        start is dropped for a summary (Orion's night then lays its material out again, D193)."""
+        incoming = [render_user_message(_initiative(notice, why), now, "initiative")]
+        return self._compiler.rebase_point(self.threads.get(thread_id), incoming) is not None
 
     async def handle_contact(
         self,
@@ -990,6 +996,10 @@ SILENCE = "SILENCE"
 
 def is_silence(text: str) -> bool:
     return text.strip().strip(".").upper() == SILENCE
+
+
+def _initiative(notice: str, why: str) -> str:
+    return f'<initiative pourquoi="{_attr(why)}">\n{notice}\n</initiative>'
 
 
 def _attr(value: str) -> str:

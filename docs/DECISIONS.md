@@ -4297,3 +4297,46 @@ quatre minutes.
   minutes avant un point, l'attend ; prêt en même temps qu'autre chose, il part dans le même
   message. Il passe toujours, heures calmes ou pas. Les appels, ses notes à lui et le réveil
   après redémarrage restent à part.
+
+## D192 — Le sommeil se demande de quoi il a besoin
+
+*30/10/2026 · acceptée · complète D186*
+
+Le sommeil remettait d'aplomb ce qu'Orion savait, sans se demander si ce qu'il avait en place
+servait encore, ni ce qui manquait.
+
+- **Un temps « besoins »**, entre sa vie en cours et les rêves, les soirs où il a parlé : ce
+  qu'il demande souvent à la main devient une veille, un flux, un rappel qui revient ou une
+  règle du manuel ; un intérêt qui naît s'ajoute à la curiosité, ce qui ne sert plus (intérêt,
+  veille, flux, rappel) se retire ; ce qu'Orion ne sait pas faire, il cherche un skill et le
+  dit au réveil. Rien sans un signe concret dans ce qu'il a dit ou fait ; ce qui touche le
+  dehors se propose au réveil.
+
+## D193 — Le sommeil garde tout sous les yeux, répond à ses promesses, ne se rappelle rien
+
+*30/10/2026 · acceptée · complète D186*
+
+Relu la nuit du 29 octobre en vrai : un bon tri, mais trois défauts.
+
+- **La fenêtre coupait le matériel** : après trois temps, le fil `night` dépassait sa fenêtre et
+  le matériel posé au premier temps partait pour un résumé ; sa vie en cours et la suite
+  relistaient tout à la main. Quand un temps ferait couper la fenêtre, le matériel est reposé
+  avec lui, tel que les temps précédents l'ont laissé (`Orion.cuts`).
+- **Une question promise restait sans réponse** : la note ne parlait que des recherches
+  lancées. La note du matin donne, en plus de ses points, la réponse à chaque question promise.
+- **Un rappel pour lui-même lui était envoyé** : « Tâche interne : récupérer les résultats… »
+  est parti chez le propriétaire à 8 h 30. Un rappel part mot pour mot : la nuit n'en pose que
+  pour lui, et les tâches de fond lui écrivent d'elles-mêmes.
+
+## D194 — Le matin, Orion propose de raconter sa nuit
+
+*30/10/2026 · acceptée · révise la note du matin de D117*
+
+La note du matin arrivait d'un bloc, un pavé au réveil. Le propriétaire préfère qu'Orion lui
+propose d'abord de raconter.
+
+- **Une phrase courte** : Orion dit sur quoi sa nuit a porté et propose de la raconter. La
+  note entière est dans le fil (l'initiative la porte) : s'il dit oui, Orion la déroule avec
+  ses mots.
+- Seul ce qui ne peut pas attendre sa réponse (un rendez-vous dans l'heure) se dit tout de
+  suite, en une ligne.
