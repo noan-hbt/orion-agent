@@ -34,6 +34,7 @@ from orion.computer.module import ComputerModule
 from orion.computer.vault import LocalVault
 from orion.configure.module import ConfigureModule, SignedSettings
 from orion.contacts.module import ContactsModule
+from orion.core.web import Server
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
 from orion.initiative.engine import InitiativeSettings
@@ -289,7 +290,7 @@ class MobileModule(Module):
         self.app = channel
         daemon.add_service("mobile.changes", channel.changes)  # the open app follows (D140)
         for name, app, port in apps:
-            server = uvicorn.Server(
+            server = Server(
                 uvicorn.Config(
                     app,
                     host=settings.host,

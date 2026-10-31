@@ -16,6 +16,7 @@ from orion.channels.imessage import IMessageChannel, IMessageSettings
 from orion.channels.inbox import OwnerInbox
 from orion.channels.inkbox import InkboxClient, WebhookEvent
 from orion.channels.webhook import webhook_app
+from orion.core.web import Server
 from orion.modules.base import Daemon, Module, ModuleError, Plate
 
 if TYPE_CHECKING:
@@ -117,7 +118,7 @@ class IMessageModule(Module):
                 if self._guardian is not None
                 else cfg.signing_key.resolve().get_secret_value()
             )
-            server = uvicorn.Server(
+            server = Server(
                 uvicorn.Config(
                     webhook_app(cfg.webhook_path, signing_key, self.dispatch),
                     host=cfg.webhook_host,

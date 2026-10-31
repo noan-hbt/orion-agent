@@ -8,6 +8,7 @@ import uvicorn
 
 from orion.channels.inkbox import verify_signature
 from orion.channels.module import IMessageModule
+from orion.core.web import Server
 from orion.modules.base import Daemon, Module, ModuleError, Plate
 from orion.voice.channel import VoiceChannel, VoiceSettings
 from orion.voice.live import LiveVoice, Verify
@@ -100,7 +101,7 @@ class VoiceModule(Module):
         )
         self.live = live
         daemon.inbox.register(live)
-        server = uvicorn.Server(
+        server = Server(
             uvicorn.Config(
                 live.app(),
                 host=voice_cfg.live_host,

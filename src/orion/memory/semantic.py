@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
 RRF_K = 60
 MIN_SIMILARITY = 0.25
 BATCH = 64
+# Embedding models take 8192 tokens at most; a query can be a whole night transcript (400k
+# characters), which failed every search of the night. The head of a long text carries its
+# meaning well enough; the cache stays keyed by the full text.
+MAX_CHARS = 8000
 
 Vector = np.ndarray[tuple[int], np.dtype[np.float32]]
 
@@ -100,10 +104,8 @@ class SemanticIndex:
         missing = [t for t in dict.fromkeys(texts) if t not in found]
         for start in range(0, len(missing), BATCH):
             chunk = missing[start : start + BATCH]
-            fresh = {
-                t: _unit(v)
-                for t, v in zip(chunk, await self._embedder.embed(self._model, chunk), strict=True)
-            }
+            embedded = await self._embedder.embed(self._model, [t[:MAX_CHARS] for t in chunk])
+            fresh = {t: _unit(v) for t, v in zip(chunk, embedded, strict=True)}
             await self._cache.put(self._model, fresh)
             found.update(fresh)
         return found
