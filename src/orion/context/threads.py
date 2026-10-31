@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any, cast
 
 from orion.core.events import Event, Trust
 from orion.providers.base import Message
@@ -27,6 +28,10 @@ REBASED_KIND = "thread.rebased"
 PRUNED_KIND = "thread.pruned"
 PRUNED_KEEP = 600
 """Characters of a pruned tool result still shown."""
+NO_RESULT = (
+    "No result: the turn was interrupted before this call returned (Orion stopped or "
+    "restarted). It may or may not have run: check before doing it again."
+)
 
 
 def pruned(message: Message) -> Message:
@@ -36,6 +41,38 @@ def pruned(message: Message) -> Message:
         **message,
         "content": f"{content[:PRUNED_KEEP]}\n[ancien résultat allégé : {cut} caractères retirés]",
     }
+
+
+def paired(messages: list[Message]) -> list[Message]:
+    """`messages` with every tool call answered and every tool result answering a call.
+
+    A turn stopped while a tool ran (a restart, an update) journals the call and never its
+    result; a forgotten message can leave a result without its call. Providers refuse such a
+    conversation on every request after (« No tool output found for function call »), so the
+    thread was stuck. The missing result is shown as `NO_RESULT` right after the call's other
+    results, and a stray result is left out: the same messages always give the same window,
+    so the prompt cache still holds."""
+    out: list[Message] = []
+    waiting: list[str] = []  # the last assistant message's calls not answered yet
+
+    def close() -> None:
+        out.extend({"role": "tool", "tool_call_id": c, "content": NO_RESULT} for c in waiting)
+        waiting.clear()
+
+    for message in messages:
+        if message.get("role") == "tool":
+            call = message.get("tool_call_id")
+            if call in waiting:
+                waiting.remove(call)
+                out.append(message)
+            continue
+        close()
+        out.append(message)
+        if message.get("role") == "assistant":
+            calls = cast(list[dict[str, Any]], message.get("tool_calls") or [])
+            waiting.extend(str(c.get("id", "")) for c in calls)
+    close()
+    return out
 
 
 @dataclass
@@ -57,10 +94,12 @@ class Thread:
     """The turn its last message belongs to (what that turn sent is in it)."""
 
     def window(self) -> list[Message]:
-        return [
-            pruned(m) if i in self.pruned else m
-            for i, m in enumerate(self.messages[self.base :], start=self.base)
-        ]
+        return paired(
+            [
+                pruned(m) if i in self.pruned else m
+                for i, m in enumerate(self.messages[self.base :], start=self.base)
+            ]
+        )
 
     def prunable(self, keep_turns: int, min_chars: int) -> list[int]:
         """Bulky tool results in the window, older than the last `keep_turns` user messages."""
