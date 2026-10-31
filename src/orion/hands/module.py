@@ -9,6 +9,7 @@ import uvicorn
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Trust
+from orion.core.web import Server
 from orion.hands.desk import HandError, HandsDesk
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
@@ -159,7 +160,7 @@ class HandsModule(Module):
         if self.desk is None:  # pragma: no cover
             return
         settings: HandsSettings = self.settings
-        server = uvicorn.Server(
+        server = Server(
             uvicorn.Config(
                 self.desk.app(),
                 host=settings.host,

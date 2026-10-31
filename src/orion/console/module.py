@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.console.app import PREFIX, Console, console_app
 from orion.console.auth import Gate, session_key
+from orion.core.web import Server
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
 from orion.memory.provenance import Provenances
@@ -98,7 +99,7 @@ class ConsoleModule(Module):
         if self.console is None:  # pragma: no cover
             return
         settings: ConsoleSettings = self.settings
-        server = uvicorn.Server(
+        server = Server(
             uvicorn.Config(
                 console_app(self.console),
                 host=settings.host,

@@ -79,3 +79,13 @@ async def test_words_still_count_and_failures_fall_back(
     assert first.statement == "Le bureau de Noan est à Lyon."
     embedder.down = True
     assert [f.statement for f in await memory.search("Lyon")] == ["Le bureau de Noan est à Lyon."]
+
+
+async def test_a_whole_night_transcript_still_searches_by_meaning(
+    setup: tuple[MemoryService, Concepts],
+) -> None:
+    memory, embedder = setup
+    question = "qu'est-ce que Paul ne mange pas ? " + "et puis " * 50_000  # the night's day
+    [first, *_] = await memory.search(question, limit=2)
+    assert first.statement.startswith("Paul est allergique")
+    assert max(len(t) for call in embedder.calls for t in call) <= 8_000  # the models' limit

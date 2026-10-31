@@ -40,22 +40,25 @@ class Miss:
 
 
 def misses(events: Sequence[Event], zone: ZoneInfo) -> list[Miss]:
-    """Oldest first. `events`: the journal."""
-    found: list[Miss] = []
+    """Oldest first, each exchange once. `events`: the journal.
+
+    An evening pass cut short by the model is run again and rereads the same day: it may note
+    the same exchange a second time, worded otherwise. The exchange (when, what he said, what
+    Orion answered) is what counts, so the first note of it is kept."""
+    found: dict[tuple[datetime, str, str], Miss] = {}
     for e in events:
         if e.kind != MISSED or e.redacted:
             continue
         payload = e.payload
-        found.append(
-            Miss(
-                datetime.fromisoformat(str(payload["at"])).astimezone(zone),
-                str(payload.get("asked", "")),
-                str(payload.get("answered", "")),
-                str(payload.get("said", "")),
-                str(payload.get("why", "")),
-            )
+        miss = Miss(
+            datetime.fromisoformat(str(payload["at"])).astimezone(zone),
+            str(payload.get("asked", "")),
+            str(payload.get("answered", "")),
+            str(payload.get("said", "")),
+            str(payload.get("why", "")),
         )
-    return sorted(found, key=lambda m: m.at)
+        found.setdefault((miss.at, miss.said, miss.answered), miss)
+    return sorted(found.values(), key=lambda m: m.at)
 
 
 def dislikes(events: Sequence[Event], zone: ZoneInfo, now: datetime, after_seq: int) -> list[str]:

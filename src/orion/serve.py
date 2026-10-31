@@ -8,6 +8,8 @@ stops everything after trying to tell the owner, rather than running half-dead.
 from __future__ import annotations
 
 import asyncio
+import signal
+import sys
 from datetime import timedelta
 
 import structlog
@@ -131,4 +133,20 @@ async def serve(app: App) -> None:
 
     supervisor = Supervisor(escalate)
     await start(app, inbox, supervisor)
-    await supervisor.run()
+    running = asyncio.create_task(supervisor.run(), name="supervisor")
+    signalled: list[int] = []
+
+    def stop(sig: int) -> None:
+        signalled.append(sig)
+        running.cancel()
+
+    if sys.platform != "win32":  # no loop signal handlers there; Ctrl+C still stops it
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop, sig)
+    try:
+        await running
+    except asyncio.CancelledError:
+        if not signalled:
+            raise
+        log.info("orion.stopped", signal=signalled[0])  # a clean stop, not a failure

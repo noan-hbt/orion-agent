@@ -40,6 +40,7 @@ from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.core.web import Server
 from orion.initiative.engine import Alert, Report
 from orion.memory.store import name_key
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
@@ -600,7 +601,7 @@ class PlacesModule(Module):
         daemon.reports.append(self.places)
         daemon.alerts.append(self.places)
         daemon.orion.situation.append(self.places)
-        server = uvicorn.Server(
+        server = Server(
             uvicorn.Config(
                 self.places.app(),
                 host=settings.host,

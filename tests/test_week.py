@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from orion.adaptation.misses import MISSED
+from orion.adaptation.misses import MISSED, misses
 from orion.adaptation.week import report, week, weeks
 from orion.core.journal import SqliteJournal
 from orion.runtime import OWNER_THREAD
@@ -62,3 +62,16 @@ async def test_the_week_says_what_went_wrong_and_what_it_cost(journal: SqliteJou
 
     later = week(await journal.read(0, 100_000), PARIS, now + timedelta(days=8))
     assert later.turns == 0 and not later.misses  # a week later, all of it is the week before
+
+
+async def test_an_exchange_noted_by_two_nights_is_one_miss(journal: SqliteJournal) -> None:
+    when = datetime(2026, 10, 28, 21, 1, tzinfo=PARIS).isoformat()
+    exchange = {"at": when, "asked": "moins d'emojis", "answered": "ok 👌", "said": "j'avais dit"}
+    await journal.append(
+        [
+            make_event(MISSED, **exchange, why="J'ai encore mis un emoji."),
+            make_event(MISSED, **exchange, why="J'ai remis un emoji."),  # the pass, run again
+        ]
+    )
+    (miss,) = misses(await journal.read(0, 100), PARIS)
+    assert "encore" in miss.why
