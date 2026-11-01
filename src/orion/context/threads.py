@@ -37,9 +37,12 @@ NO_RESULT = (
 def pruned(message: Message) -> Message:
     content = str(message.get("content") or "")
     cut = len(content) - PRUNED_KEEP
+    call = message.get("tool_call_id")
+    again = f", relis tout avec reread({call})" if call else ""
     return {
         **message,
-        "content": f"{content[:PRUNED_KEEP]}\n[ancien résultat allégé : {cut} caractères retirés]",
+        "content": f"{content[:PRUNED_KEEP]}\n[ancien résultat allégé : {cut} caractères "
+        f"retirés{again}]",
     }
 
 

@@ -19,7 +19,7 @@ from orion.mail.card import BULK_CARD, HEADERS_CARD
 from orion.mail.imap import Batch, RawMail, parse_message
 from orion.mail.module import MailModule
 from orion.mail.service import CARD, MailAccount, Mailbox, MailSettings, MailState
-from orion.mail.tools import mail_tools
+from orion.mail.tools import mail_tools, text_part
 from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
@@ -518,3 +518,15 @@ JVBERi0xLjQK
     assert [a.name for a in mail.attachments] == ["contrat.pdf"]
     found = imap.attachment_of(raw, 1)
     assert found is not None and found.data.startswith(b"%PDF")
+
+
+def test_a_long_text_read_part_after_part_loses_nothing() -> None:
+    text = "".join(f"ligne {i}\n" for i in range(2000))
+    first = text_part(text, 0, "mail read=m_1")
+    assert first is not None and "part=1" in first and text not in first
+    parts: list[str] = []
+    part = 0
+    while (piece := text_part(text, part, "x")) is not None:
+        parts.append(piece.split("\n[suite")[0])
+        part += 1
+    assert "".join(parts) == text

@@ -136,6 +136,7 @@ LOOKS = (
     "web_read",
     "browser",
     "recall",
+    "reread",
     "attachment_look",
     "conversations_search",
     "library",

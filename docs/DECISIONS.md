@@ -4609,3 +4609,22 @@ n'en voyait que 8 lignes coupées à 300 caractères, sans résultats d'outils.
 - **Logs** : un rejet journalise aussi le brouillon et le début des faits (1 500 caractères
   chacun). Les raisons seules ne permettaient pas de dire si un refus était juste. Ces textes
   personnels vont donc dans journald, sur le serveur du propriétaire.
+
+## D204 — Un résultat allégé se relit
+
+*02/11/2026 · acceptée · complète D123, D128*
+
+Un vieux résultat d'outil allégé ne gardait que ses 600 premiers caractères : le reste n'existait
+plus pour Orion, alors que le journal garde tout. Il devait refaire l'appel, et une page ou une
+boîte mail a pu changer depuis.
+
+- **`reread`** : la note de l'allègement donne l'identifiant du résultat, l'outil le rend entier
+  depuis le journal. Même fil seulement, jamais un résultat oublié, avec la confiance d'origine.
+- **Cache** : la note change une fois au déploiement, donc les fils déjà allégés perdent leur cache
+  une fois. Ensuite elle est stable, le texte ne dépend que du message.
+- **`web_search`** : une page sans titre n'écrit plus son adresse deux fois.
+- **Plafonds** : un mail ou une pièce jointe se lit par parties de 4 000 caractères (`part`), une
+  pièce jointe n'est plus coupée à 20 000. Une page garde 6 000 caractères de texte, mais ses liens
+  et images sont limités à 1 500 et 800, le reste avec `links=true`. Sur les mails lus du 31/10 au
+  01/11, aucune réponse ne citait de détail situé après 4 000 caractères (approximation par les
+  chiffres et les noms). Les listes de mails ne changent pas : elles restent complètes.

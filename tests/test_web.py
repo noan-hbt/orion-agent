@@ -194,3 +194,25 @@ async def test_a_page_that_drips_forever_is_given_up(monkeypatch: pytest.MonkeyP
     async with httpx.AsyncClient(transport=httpx.MockTransport(dripping)) as client:
         with pytest.raises(FetchError, match="took more than"):
             await fetch(client, "https://slow.example/", allow_all)
+
+
+async def test_links_stay_small_next_to_the_text_and_all_come_on_request(
+    journal: SqliteJournal,
+) -> None:
+    anchors = "".join(f'<a href="https://a.fr/lien-{i}">lien {i}</a>' for i in range(300))
+    page_html = PAGE.replace("</body>", anchors + "</body>")
+    desk = WebDesk(
+        journal,
+        WebSearch(ScriptedProvider(), "m"),
+        site({"https://a.fr/1": html(page_html)}),
+        allow_all,
+    )
+    await desk.start()
+    read = {t.name: t for t in web_tools(desk)}["web_read"]
+    ctx = ToolContext(thread_id="owner", correlation_id="c1")
+    first = await read.handler(read.parse('{"url": "https://a.fr/1"}'), ctx)
+    assert "https://a.fr/lien-0" in first.content and "https://a.fr/lien-120" not in first.content
+    assert "links=true" in first.content
+    every = await read.handler(read.parse('{"url": "https://a.fr/1", "links": true}'), ctx)
+    assert "https://a.fr/lien-120" in every.content
+    await desk.aclose()
