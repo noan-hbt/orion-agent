@@ -28,6 +28,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -193,6 +194,17 @@ class OwnerInbox:
         self.eyes: Eyes | None = None
         self.last_channel: str | None = None
         """The outlet he last wrote from: where Orion answers him first."""
+        self._answering = False
+        orion.owner_waiting = self.owner_waiting
+
+    def owner_waiting(self) -> bool:
+        """Whether one of his messages waits for an answer. Nothing is taken off the queue: the
+        worker may be waiting on it."""
+        return (
+            self._answering
+            or any(not item.allow_silence for item in self._held)
+            or not self._queue.empty()
+        )
 
     def register(self, outlet: Outlet) -> None:
         """Outlets are tried in registration order, after the one he last wrote from."""
@@ -270,6 +282,7 @@ class OwnerInbox:
                     self._held.appendleft(item)  # a different kind of message: its own turn
                     break
                 batch.append(item)
+            self._answering = not batch[0].allow_silence
             try:
                 await self._handle(batch, waited=time.monotonic() - started)
             except Exception:
@@ -283,6 +296,8 @@ class OwnerInbox:
                     refs=[i for item in batch for i in item.message_ids],
                 )
                 await self._say_it_failed(batch[0])
+            finally:
+                self._answering = False
 
     async def _say_it_failed(self, first: Inbound) -> None:
         reply = self._outlets.get(first.reply_via or first.channel)
@@ -348,11 +363,14 @@ class OwnerInbox:
                 for item in self._arrived_meanwhile(first)
             ]
 
+        sent: list[str] = []
+
         async def progress(text: str, correlation_id: str) -> None:
             if reply is None or first.allow_silence or is_silence(text):
                 return
             # A message of its own, but only the last one of the turn rings (D169).
             await self._say(reply, text, correlation_id, None, quiet=True)
+            sent.append(text)
 
         async with showing:
             looked = await self._look(batch)
@@ -384,6 +402,9 @@ class OwnerInbox:
             # Allowed for transcripts; after a voice message or a file, it is all the answer
             # needed. The word itself is never his to read.
             log.info("inbox.silence", channel=first.channel, allowed=first.allow_silence)
+        elif text and repeats(text, sent):
+            # He already read it mid-turn: saying it again is the same message twice.
+            log.info("inbox.repeat_dropped", channel=first.channel)
         elif text and reply is not None:
             await self._say(reply, text, turn.correlation_id, batch[-1])
         elif text:
@@ -415,6 +436,19 @@ class OwnerInbox:
         task = asyncio.create_task(guarded())
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+
+REPEAT_RATIO = 0.8
+
+
+def repeats(text: str, sent: list[str]) -> bool:
+    """Whether `text` says again one of the messages already sent this turn."""
+    said = " ".join(text.lower().split())
+    for earlier in sent:
+        before = " ".join(earlier.lower().split())
+        if said in before or SequenceMatcher(None, said, before).ratio() >= REPEAT_RATIO:
+            return True
+    return False
 
 
 def _joins(item: Inbound, first: Inbound) -> bool:

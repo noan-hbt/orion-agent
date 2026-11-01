@@ -114,7 +114,10 @@ class AutonomyState:
 class GrantInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: str = Field(description="The tool Orion would use alone from now on")
+    action: str = Field(
+        pattern=r"^[a-z][a-z0-9_]*(:[a-z0-9_-]+)?$",
+        description="The tool's name alone (e.g. mail_tidy), Orion would use it alone from now on",
+    )
     approved_times: int = Field(default=0, ge=0, description="How many times the owner said yes")
     recipients: list[str] = Field(
         default_factory=list[str],

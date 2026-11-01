@@ -167,6 +167,8 @@ async def test_the_guardian_records_the_grant_and_enforces_it(tmp_path: Path) ->
             await g.client.calendar_add("perso", EVENT, None)
         with pytest.raises(GuardianUnavailableError, match="never be done without asking"):
             await g.client.post("/v1/autonomy/grant", {"action": "module_install"})
+        with pytest.raises(GuardianUnavailableError, match="not an action name"):
+            await g.client.post("/v1/autonomy/grant", {"action": "calendar_add (perso only)"})
         with pytest.raises(GuardianUnavailableError, match="needs the owner's approval"):
             await g.client.post("/v1/autonomy/grant", {"action": "calendar_add"})
         grant, message_id = await g.client.request_approval(
@@ -179,7 +181,8 @@ async def test_the_guardian_records_the_grant_and_enforces_it(tmp_path: Path) ->
         )
         await g.client.calendar_add("perso", EVENT, None)
         await g.client.calendar_add("perso", EVENT, None)
-        with pytest.raises(GuardianUnavailableError):  # today's allowance is spent
+        # Today's allowance is spent, and it says so: not the words for a missing grant.
+        with pytest.raises(GuardianUnavailableError, match="spent"):
             await g.client.calendar_add("perso", EVENT, None)
         assert len(written) == 2
         await g.client.post("/v1/autonomy/revoke", {"action": "calendar_add"})

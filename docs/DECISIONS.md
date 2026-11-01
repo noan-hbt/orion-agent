@@ -4544,3 +4544,48 @@ Conséquences :
 
 Éval `une_nuit_muette_prepare_ce_qui_vient` : sans un mot dans la journée, un voyage et un
 entretien trois jours après, la nuit les prépare.
+
+## D202 — Ce que `tell` a dit compte, son message passe d'abord, une mission se rouvre
+
+*01/11/2026 · acceptée · complète D162, D169, D173, D201*
+
+Diagnostic des journaux du 31/10 et de la nuit suivante :
+
+- **Trois fois la même chose** : sur WTI2, deux tours ont envoyé chacun deux `tell` puis une
+  réponse finale qui les redisait. Le message de fin de tour (`WRAP_UP`) demandait « ce que tu as
+  trouvé », c'est-à-dire ce que les `tell` venaient d'envoyer.
+- **Les `tell` étaient invisibles** : leur texte ne vit que dans l'appel d'outil. La mémoire, la
+  nuit, l'adaptation et les résumés lisaient le contenu seul. Orion a confirmé sur Cyclades par un
+  `tell` (« c'était bien moi ») ; l'extraction a ensuite noté qu'il l'avait nié, et la veille du
+  matin a reprogrammé la question.
+- **« Abandonne » a attendu 16 minutes** : le point de 19 h, un tour d'initiative dans sa
+  conversation, a continué à trier ses mails sans voir son message, bloqué derrière le verrou.
+- **Le point de 19 h perdu** : la réécriture après une relecture n'a parlé que des
+  désabonnements, et les sujets regroupés ont été marqués livrés.
+- **Son « oui » à `mail_tidy` n'a jamais servi** : l'autonomie a été enregistrée sous l'action
+  « mail_tidy (désabonnement uni… », qui ne correspond à rien. Le soir, les 10 actions seules du
+  jour étaient épuisées, et le refus disait seulement « needs the owner's approval » : douze
+  essais, puis il lui a dit que son autorisation ne marchait pas.
+- **La nuit a fermé deux missions « par erreur »** puis les a recréées huit fois. Chaque nouvelle
+  mission part aussitôt : l'une s'est connectée à Cyclades à 00:28, d'où l'alerte de sécurité.
+
+Décisions :
+
+- Ce que `tell` a envoyé fait partie de ce qu'Orion a dit (`providers.base.spoken`) pour tous
+  ceux qui lisent la conversation. Le message de fin de tour liste ce qui est déjà parti et dit
+  de ne pas le redire. Une réponse finale qui redit un `tell` du même tour n'est pas envoyée.
+- Un tour d'initiative dans sa conversation cède la place dès qu'un de ses messages attend
+  (`Orion.owner_waiting`) : arrêté après l'étape en cours, ni livré ni écarté, il revient à un
+  tick suivant. S'il attend déjà, l'initiative ne commence pas.
+- La réécriture après une relecture garde tout ce que le message devait dire.
+- Le gardien refuse une autonomie dont l'action n'est pas un nom d'outil, et dit quand c'est la
+  limite du jour qui manque, pas son accord.
+- Désabonnement : « acceptée par l'expéditeur », pas « fait ». Un `mailto` sans `smtp_host` le
+  dit clairement, et passe à la page quand il y en a une.
+- `mission` (reopen) rouvre une mission close par erreur, avec ce qu'elle a vu et noté, à son
+  rythme. Refermer une mission close est une erreur. La nuit ne lance pas de nouvelle mission.
+- `configure.watch` attend le redémarrage qu'il a lancé au lieu de rendre la main : le
+  superviseur le relançait en boucle.
+
+Déjà corrigé avant ce diagnostic, et vérifié dans les journaux depuis le dernier déploiement :
+la console qui faisait tomber le cœur à l'arrêt, les embeddings trop longs, `git log` illisible.

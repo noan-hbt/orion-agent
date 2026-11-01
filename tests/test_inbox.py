@@ -345,3 +345,82 @@ async def test_a_turn_that_breaks_does_not_stop_the_next_one(
     inbox.submit(Inbound("imessage", ("b",), "deux"))
     await until(lambda: len(imessage.sent) == 2)
     assert imessage.sent[-1] == "Me revoilà."
+
+
+async def test_his_message_comes_before_what_orion_was_doing_on_its_own(
+    journal: SqliteJournal, provider: ScriptedProvider
+) -> None:
+    # 2026-10-31: « abandonne » waited 16 minutes behind a digest that went on tidying his mail.
+    holder: list[OwnerInbox] = []
+
+    async def tidy(_args: object, _ctx: ToolContext) -> ToolResult:
+        if not holder[0].owner_waiting():
+            holder[0].submit(Inbound("imessage", ("a",), "abandonne"))
+            await until(holder[0].owner_waiting)
+        return ToolResult("trié")
+
+    tool = Tool(
+        name="tidy",
+        description="Tidy his mail.",
+        input_model=_Wait,
+        handler=tidy,
+        effect=Effect.NONE,
+        reversibility=Reversibility.REVERSIBLE,
+    )
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([tool]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    inbox = OwnerInbox(orion, coalesce_seconds=0.01)
+    holder.append(inbox)
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(call_tools(("tidy", {})), call_tools(("tidy", {})), reply("ok, j'arrête."))
+    worker = asyncio.create_task(inbox.run())
+    try:
+        turn = await orion.handle_initiative("owner", "ton point de 19:00", "le point")
+        await until(lambda: bool(imessage.sent))
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+
+    assert turn.reason.value == "halted"  # it gave way after the step under way
+    assert imessage.sent == ["ok, j'arrête."]
+
+
+async def test_an_answer_that_says_again_what_tell_sent_is_not_sent_twice(
+    journal: SqliteJournal, provider: ScriptedProvider
+) -> None:
+    from orion.tools.builtin import builtin_tools
+
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry(builtin_tools()),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    inbox = OwnerInbox(orion, coalesce_seconds=0.01)
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(
+        call_tools(
+            ("tell", {"text": "WTI2 est bien l'ETF IA WTAI."}),
+            ("plan", {"steps": [{"text": "vérifier", "status": "done"}]}),
+        ),
+        reply("WTI2 est bien l'ETF IA WTAI !"),
+    )
+    worker = asyncio.create_task(inbox.run())
+    inbox.submit(Inbound("imessage", ("a",), "c'est quoi WTI2 ?"))
+    await until(lambda: len(provider.requests) == 2)
+    await asyncio.sleep(0.05)
+    worker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await worker
+    assert imessage.sent == ["WTI2 est bien l'ETF IA WTAI."]

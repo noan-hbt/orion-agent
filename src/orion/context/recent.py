@@ -11,7 +11,7 @@ from datetime import datetime
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Trust
 from orion.core.journal import EventStore
-from orion.providers.base import Message
+from orion.providers.base import Message, spoken
 
 _BLOCK = re.compile(
     r"<(memoire|souvenirs|manuel|consignes|plus-tot-dans-la-conversation)>.*?</\1>\s*", re.DOTALL
@@ -21,18 +21,20 @@ _CONTEXT_LINE = re.compile(r"^\[[^\]]*\]\s*")
 
 
 def clean(message: Message) -> str | None:
+    role = message.get("role")
+    if role == "assistant":
+        # What `tell` sent is said too, though it lives in a tool call (2026-11-01).
+        said = spoken(message)
+        return f"Orion : {said}" if said else None
     content = message.get("content")
     if not isinstance(content, str) or not content.strip():
         return None
-    role = message.get("role")
     if role == "user":
         initiative = _INITIATIVE.search(content)
         if initiative:
             return f"(Orion a pris l'initiative : {initiative[1].strip()})"
         text = _CONTEXT_LINE.sub("", _BLOCK.sub("", content)).strip()
         return f"Lui : {text}" if text else None
-    if role == "assistant":
-        return f"Orion : {content.strip()}"
     return None
 
 

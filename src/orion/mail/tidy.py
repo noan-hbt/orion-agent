@@ -270,10 +270,17 @@ async def local_tidy(
                         _https(target.one_click), data={"List-Unsubscribe": "One-Click"}
                     )
                     response.raise_for_status()
-                elif target.mailto:
+                elif target.mailto and account.smtp_host is not None:
                     await smtp_send(account, _mailto(target.mailto))
+                elif target.page:
+                    outcome.pages.append(target.page)
+                    continue
                 else:
-                    outcome.pages.append(str(target.page))
+                    # A mailto with no way to send: said plainly, not as a send error.
+                    outcome.failed.append(
+                        f"{target.mailto} : désabonnement par mail, impossible sans envoi "
+                        f"configuré (`smtp_host` du compte {account.name})"
+                    )
                     continue
                 outcome.done += 1
             except (httpx.HTTPError, SendError, ValueError) as exc:

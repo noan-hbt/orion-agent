@@ -99,6 +99,8 @@ if TYPE_CHECKING:
     from orion.guardian.telegram import TelegramGate
 
 log = structlog.get_logger(__name__)
+ACTION_NAME = re.compile(r"[a-z][a-z0-9_]*(:[a-z0-9_-]+)?")
+"""A tool's name, as the guardian knows actions: nothing said around it."""
 
 APP_CONVERSATION = "app:owner"
 """Where the core asks for an approval in Orion's app (D125)."""
@@ -796,6 +798,10 @@ class GuardianService:
     async def _autonomy_grant(self, request: Request) -> Response:
         body = await _body(request)
         action = str(body.get("action", ""))
+        if not ACTION_NAME.fullmatch(action):
+            # « mail_tidy (désabonnement uniquement) » was granted, matched nothing, and he was
+            # told it was on (2026-10-31).
+            return refused(f"{action!r} is not an action name (e.g. mail_tidy)", 400)
         if not may_be_alone(action, self.config.guardian.autonomable):
             return await self.deny("autonomy", f"{action} can never be done without asking")
         try:
@@ -953,9 +959,23 @@ class GuardianService:
     ) -> str | None:
         """None when `grant` is the owner's yes to this very request; otherwise why not."""
         if not grant:
-            return f"{action} needs the owner's approval"
+            return await self.needs_asking(action)
         async with self._spending:
             return await self._use_grant(grant, action, matches, consume)
+
+    async def needs_asking(self, action: str) -> str:
+        """Why `action` needs his yes, said plainly: the same words for a spent allowance made
+        Orion retry twelve times, then tell him his yes was not working (2026-10-31)."""
+        await self.ledger.catch_up()
+        state = self.ledger.state
+        cap = self.config.guardian.max_autonomous_per_day
+        day = self.clock().date().isoformat()
+        if action in state.autonomous and state.autonomous_days.get(day, 0) >= cap:
+            return (
+                f"{action} needs the owner's approval: he lets you do it alone, but today's "
+                f"{cap} actions alone are spent (it starts again tomorrow)"
+            )
+        return f"{action} needs the owner's approval"
 
     async def _use_grant(
         self, grant: str, action: str, matches: Match, consume: bool
@@ -1193,7 +1213,7 @@ class GuardianService:
             # One yes covers the batch across the owner's accounts: never more mails in all than
             # the cards he approved, and it is spent once they are all done.
             if not grant:
-                return await self.deny(f"mail tidy {name}", "mail_tidy needs the owner's approval")
+                return await self.deny(f"mail tidy {name}", await self.needs_asking("mail_tidy"))
             async with self._spending:
                 done = self._tidied.get(grant, 0)
                 approved = 0

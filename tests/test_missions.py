@@ -252,3 +252,23 @@ async def test_a_project_moves_forward_with_its_people_from_what_they_said(
     assert "on part sur le bleu" in brief and "pas le budget" in brief
     [alert] = await world.work.alerts(world.now)
     assert alert.trust <= Trust.THIRD_PARTY  # what she wrote never passes for his words
+
+
+async def test_a_mission_closed_by_mistake_at_night_is_reopened_not_started_again(
+    journal: SqliteJournal,
+) -> None:
+    world = World(journal, ScriptedProvider())
+    owner = ToolContext("owner", "c0")
+    night = ToolContext("night", "c1")
+    await world.use("mission_start", owner, goal="Surveiller le dossier Cyclades", every_hours=24)
+    [mission] = await world.missions.active()
+    await world.missions.ran(mission, world.now, "", Trust.OWNER)
+    await world.use("mission_close", night, mission=mission.id, outcome="par erreur")
+
+    started = await world.use("mission_start", night, goal="Surveiller le dossier Cyclades")
+    assert started.is_error  # no new mission (and no login) while he sleeps
+    assert (await world.use("mission_reopen", night, mission=mission.id)).is_error is False
+
+    [back] = await world.missions.active()
+    assert back.id == mission.id and back.runs == 1
+    assert not back.due(world.now + timedelta(hours=1))  # at its pace, not at once

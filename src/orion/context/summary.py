@@ -22,7 +22,7 @@ from typing import Any
 
 import structlog
 
-from orion.providers.base import Message, ModelProvider, ModelRequest, ProviderError
+from orion.providers.base import Message, ModelProvider, ModelRequest, ProviderError, spoken
 
 log = structlog.get_logger(__name__)
 
@@ -63,8 +63,9 @@ def _transcript(messages: list[Message]) -> str:
         elif role == "assistant":
             asked: list[dict[str, Any]] = message.get("tool_calls") or []
             calls = [str(c["function"]["name"]) for c in asked]
-            if content:
-                lines.append(f"Orion : {content}")
+            said = spoken(message)
+            if said:
+                lines.append(f"Orion : {said}")
             if calls:
                 lines.append(f"[Orion appelle {', '.join(calls)}]")
         elif role == "user":

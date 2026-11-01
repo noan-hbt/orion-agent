@@ -357,6 +357,9 @@ class Configurator:
             if now != seen and self._restarting is None:
                 log.info("config.changed_on_disk")
                 self._restarting = asyncio.get_running_loop().create_task(self.restart())
+        # Wait for the restart under way: a watch that returns looks like a crash to the
+        # supervisor, which restarted it in a loop until the new process came (2026-10-31).
+        await self._restarting
 
 
 def _on_disk(source: Path) -> str:
@@ -525,4 +528,5 @@ class ConfigureModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.configurator is not None:
             self.configurator.restart = reexec
-            daemon.add_service("configure.watch", self.configurator.watch)
+            if self.configurator.source is not None:
+                daemon.add_service("configure.watch", self.configurator.watch)

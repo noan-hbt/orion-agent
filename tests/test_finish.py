@@ -6,6 +6,7 @@ import pytest
 
 from orion.cognition.finish import OFFER_NOTE, ends_on_offer, finish_check
 from orion.config import OrionConfig
+from orion.context.recent import recent_lines
 from orion.core.journal import SqliteJournal
 from orion.files.module import FilesModule
 from orion.runtime import OWNER_THREAD
@@ -142,3 +143,19 @@ def test_the_voice_has_a_tool_name_of_its_own() -> None:
         t.name for t in vocal_tools(FilesModule(OrionConfig()), Speaker(), VocalSettings(), "m")
     }
     assert not voice & {t.name for t in builtin_tools()}
+
+
+async def test_what_tell_sent_is_not_said_again_nor_forgotten(journal: SqliteJournal) -> None:
+    # 2026-10-31: three messages saying WTI2 was wrong, then the night read only the last one.
+    provider = ScriptedProvider(
+        call_tools(("tell", {"text": "WTI2 est bien l'ETF IA."}), ("echo", {"text": "a"})),
+        reply("Rien d'autre."),
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    await orion.handle_initiative(OWNER_THREAD, "vérifie WTI2", "test", now=at(1), max_tool_calls=1)
+
+    wrap_up = provider.requests[-1].messages[-1]["content"]
+    assert "WTI2 est bien l'ETF IA." in wrap_up  # the wrap-up knows it was sent
+    lines = recent_lines(orion.threads.get(OWNER_THREAD).messages, 10)
+    assert any("WTI2 est bien l'ETF IA." in line for line in lines)  # and readers see it said
