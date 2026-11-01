@@ -4589,3 +4589,23 @@ Décisions :
 
 Déjà corrigé avant ce diagnostic, et vérifié dans les journaux depuis le dernier déploiement :
 la console qui faisait tomber le cœur à l'arrêt, les embeddings trop longs, `git log` illisible.
+
+## D203 — Le vérificateur lit la journée, cite ce qu'il refuse, et s'éteint
+
+*01/11/2026 · acceptée · complète D103*
+
+Le propriétaire trouvait que le vérificateur bloquait trop. Les logs du 26/10 au 01/11 : 55 rejets,
+38 brouillons, 17 jamais partis. Beaucoup étaient justes (actions inventées, mauvais horaires), mais
+le point de 19 h du 01/11 est tombé avec ses 4 sujets : il rappelait l'après-midi, et le vérificateur
+n'en voyait que 8 lignes coupées à 300 caractères, sans résultats d'outils.
+
+- **Contexte** : il reçoit les dernières 24 h du journal, tous fils et résultats d'outils compris
+  (`day_since`), lues avant qu'Orion écrive pour que le brouillon ne compte pas comme connu.
+- **Prompt** : un refus cite les mots du brouillon. « Rien ne confirme » ne suffit pas ; seuls une
+  contradiction ou un détail précis absent de tout ce qu'il a reçu comptent. Les déductions simples
+  et les faits publics connus passent.
+- **Interrupteur** : `[initiative] verifier` donne le défaut, l'app le change (réglage journalisé,
+  lu à chaque passe). Éteint, le brouillon part tel quel, marqué `unverified`.
+- **Logs** : un rejet journalise aussi le brouillon et le début des faits (1 500 caractères
+  chacun). Les raisons seules ne permettaient pas de dire si un refus était juste. Ces textes
+  personnels vont donc dans journald, sur le serveur du propriétaire.

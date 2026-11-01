@@ -341,6 +341,11 @@ class InitiativeConfig(BaseModel):
         "the owner is passed on outside it)",
     )
     tick_seconds: float = Field(default=30.0, ge=1.0)
+    verifier: bool = Field(
+        default=True,
+        description="A second model checks what Orion says of its own accord before it goes "
+        "out; the owner can also switch it from the app",
+    )
 
 
 class AdaptationConfig(BaseModel):

@@ -190,7 +190,7 @@ class Rule:
 class SettingChange:
     id: str
     key: SettingKey
-    value: str | int | list[str]
+    value: bool | str | int | list[str]
     reason: str
     seq: int
     actor: str

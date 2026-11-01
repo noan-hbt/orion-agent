@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+import structlog
 from pydantic import BaseModel
 
 from orion.cognition.verifier import Verifier
@@ -233,6 +234,92 @@ async def test_the_verifier_sees_what_orion_looked_up_while_writing(
     assert "What Orion read while writing" in facts and "averses, 13 °C" in facts
 
 
+async def test_the_verifier_remembers_the_day_but_not_the_draft_or_older_days(
+    journal: SqliteJournal, setup: tuple[ScriptedProvider, Timers, Orion]
+) -> None:
+    """01/11, 19:00: the point recalled the afternoon (M. Hernandez, a Gmail draft Orion had tried
+    to read) and was rejected twice as invented: only eight clipped lines reached the verifier."""
+    provider, timers, _ = setup
+
+    class Empty(BaseModel):
+        pass
+
+    async def gmail(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("Gmail : brouillon pour M. Hernandez, connexion requise")
+
+    look = Tool(
+        name="gmail",
+        description="g",
+        input_model=Empty,
+        handler=gmail,
+        effect=Effect.NONE,
+        concurrency_safe=True,
+    )
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([look]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    provider.extend(
+        reply("Bien noté."),
+        call_tools(("gmail", {})),
+        reply("Il faut te reconnecter."),
+        *(reply(f"Message {i}") for i in range(12)),
+        reply("Hé, Paul. Toujours pas joint."),
+    )
+    now = datetime(2026, 10, 20, 9, 1, tzinfo=PARIS)
+    await orion.handle_owner_message(
+        "owner", "vieux sujet", "imessage", now=datetime(2026, 10, 18, 8, 0, tzinfo=PARIS)
+    )
+    await orion.handle_owner_message(
+        "owner", "lis le brouillon", "imessage", now=datetime(2026, 10, 19, 15, 0, tzinfo=PARIS)
+    )
+    for i in range(12):  # enough to push the afternoon out of a window of recent messages
+        await orion.handle_owner_message(
+            "owner", f"et {i}", "imessage", now=datetime(2026, 10, 20, 8, i, tzinfo=PARIS)
+        )
+    checker = ScriptedProvider(json_reply({"ok": True, "issues": []}))
+    engine = InitiativeEngine(
+        orion,
+        journal,
+        timers,
+        Inbox(),
+        InitiativeSettings(digests=()),
+        clock=lambda: now,
+        verifier=Verifier(checker, "verifier"),
+    )
+    await engine.tick()
+    background = checker.requests[0].messages[1]["content"].split("RECENT CONVERSATION:")[1]
+    background = background.split("DRAFT:")[0]
+    assert "brouillon pour M. Hernandez" in background
+    assert "vieux sujet" not in background
+    assert "Toujours pas joint" not in background
+
+
+async def test_with_the_verifier_off_a_draft_goes_as_written(
+    journal: SqliteJournal, setup: tuple[ScriptedProvider, Timers, Orion]
+) -> None:
+    provider, timers, orion = setup
+    provider.extend(reply("Hé, Paul. C'est l'heure."))
+    checker = ScriptedProvider(json_reply({"ok": False, "issues": ["non"]}))
+    engine = InitiativeEngine(
+        orion,
+        journal,
+        timers,
+        Inbox(),
+        InitiativeSettings(digests=(), verifier=False),
+        clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
+        verifier=Verifier(checker, "verifier"),
+    )
+    await engine.tick()
+    assert not checker.requests
+    [record] = [e for e in await journal.read() if e.kind == DELIVERED]
+    assert record.payload["how"] == "unverified"
+
+
 def test_a_page_read_in_a_long_turn_still_reaches_the_verifier() -> None:
     """30/10, 13:00: a long turn (memory, tax pages, then the timetable) was cut to its ends;
     the rewrite repeated the context, and « salle NAMEK » was rejected twice as invented."""
@@ -282,8 +369,11 @@ async def test_a_rejected_draft_is_rewritten_by_orion_not_replaced_by_a_canned_t
         clock=lambda: datetime(2026, 10, 20, 9, 1, tzinfo=PARIS),
         verifier=Verifier(checker, "verifier"),
     )
-    await engine.tick()
+    with structlog.testing.capture_logs() as logs:
+        await engine.tick()
     assert inbox.messages == ["Hé, c'est l'heure d'appeler Paul."]
+    [rejected] = [e for e in logs if e["event"] == "initiative.draft_rejected"]
+    assert "Mercredi" in rejected["draft"] and "Appeler Paul" in rejected["facts"]
     asked = str(provider.requests[1].messages[-1]["content"])
     assert "n'est pas parti" in asked and "says Wednesday" in asked
     [record] = [e for e in await journal.read() if e.kind == DELIVERED]

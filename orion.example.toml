@@ -115,6 +115,7 @@ quiet_start = "22:30:00"
 quiet_end = "08:00:00"
 daily_budget = 12                # what Orion says of its own accord, per day
 tick_seconds = 30
+verifier = true                  # a second model checks what Orion says of its own accord (also in the app)
 
 # How Orion learns to work with you: from what you tell it (immediately), from your reactions
 # and replies (a periodic reflection), and from what you ignore (digests nobody reads stop).

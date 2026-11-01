@@ -2753,6 +2753,13 @@ async function settingsFill(refresh) {
             h("button", { type: "button", "aria-label": "Plus", disabled: o.daily_budget >= 50, onclick: act("api/control/settings", { daily_budget: o.daily_budget + 1 }) }, "+"),
           ),
         ),
+        h(
+          "button",
+          { type: "button", class: "item", onclick: act("api/control/settings", { verifier: !o.verifier }) },
+          h("span", { class: `ico ${tint("shield")}` }, icon("shield", 17)),
+          h("span", {}, h("span", { class: "text" }, "Relecture"), h("small", {}, "un second modèle vérifie mes messages spontanés")),
+          h("span", { class: `switch ${o.verifier ? "on" : ""}`, "aria-hidden": "true" }),
+        ),
         row("moon", "Heures calmes", `${o.quiet_start} – ${o.quiet_end}`, () => quietHours(o, refresh), "", "je me tais, sauf urgence"),
         row("calendar", "Points du jour", o.digests?.length ? o.digests.join(" · ") : "aucun", () => digestsSheet(o, refresh), "", "ce qui compte, en un message"),
       ),

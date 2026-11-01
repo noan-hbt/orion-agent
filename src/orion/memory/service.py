@@ -253,7 +253,7 @@ class MemoryService:
         await self._write(RULE_RETIRED, RuleRetired(rule_id=rule_id, reason=reason), origin)
 
     async def change_setting(
-        self, key: SettingKey, value: str | int | list[str], reason: str, origin: Origin
+        self, key: SettingKey, value: bool | str | int | list[str], reason: str, origin: Origin
     ) -> str:
         change_id = f"s_{new_id()}"
         payload = SettingChanged(change_id=change_id, key=key, value=value, reason=reason)

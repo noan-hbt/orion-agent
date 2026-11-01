@@ -190,6 +190,7 @@ class MobileModule(Module):
                 quiet_start=config.initiative.quiet_start,
                 quiet_end=config.initiative.quiet_end,
                 daily_budget=config.initiative.daily_budget,
+                verifier=config.initiative.verifier,
             ),
             autonomy=plate.autonomy,
             spending=plate.provider if isinstance(plate.provider, Spending) else None,

@@ -38,7 +38,7 @@ import structlog
 
 from orion.cognition.loop import StopReason
 from orion.cognition.verifier import Verifier
-from orion.context.recent import recent_lines
+from orion.context.recent import day_since
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import Timestamp
@@ -91,7 +91,13 @@ GAVE_WAY = "gave way to him"
 _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
-VERIFIER_CONTEXT_MESSAGES = 8
+VERIFIER_LOOKBACK = timedelta(hours=24)
+"""What the verifier sees of what happened before the draft: the last day, every thread, tool
+results included. Eight clipped lines were not enough: on 01/11 the 19:00 point recalled the
+afternoon (M. Hernandez, a Gmail draft Orion tried to read) and was rejected twice as invented."""
+VERIFIER_JOURNAL_TAIL = 20_000
+VERIFIER_DAY_CHARS = 150_000
+VERIFIER_LOG_CHARS = 1500
 VERIFIER_READ_CHARS = 200_000  # ~50k tokens: a long turn of pages, not a whole thread
 VERIFIER_PIECE_CHARS = 40_000
 
@@ -187,6 +193,9 @@ class InitiativeSettings:
     paused_until: datetime | None = None
     """He paused Orion (from the app): nothing on its own until then, but the reminders he
     asked for."""
+    verifier: bool = True
+    """A second model checks what Orion says of its own accord before it goes out; off (from
+    the app or the config), drafts go as Orion wrote them."""
 
     def is_paused(self, now: datetime) -> bool:
         return self.paused_until is not None and now < self.paused_until
@@ -221,6 +230,8 @@ def effective_settings(
             updates["daily_budget"] = value
         elif key is SettingKey.PAUSED_UNTIL and isinstance(value, str):
             updates["paused_until"] = datetime.fromisoformat(value) if value else None
+        elif key is SettingKey.VERIFIER and isinstance(value, bool):
+            updates["verifier"] = value
         else:
             log.error("initiative.bad_setting", key=key, value=value)
     return replace(base, **updates)
@@ -948,6 +959,26 @@ class InitiativeEngine:
             return "daily attention budget spent"
         return None
 
+    async def _day_before(self, now: datetime) -> str:
+        """The last day as the verifier reads it: what he said, what Orion said and read, in
+        every thread, newest kept when it is too long."""
+        last = await self._journal.last_seq()
+        said, _ = await day_since(
+            self._journal,
+            self._settings.thread_id,
+            max(0, last - VERIFIER_JOURNAL_TAIL),
+            frozenset(),
+        )
+        since = now - VERIFIER_LOOKBACK
+        lines: list[str] = []
+        recent = False
+        for at, line in said:
+            if at is not None:
+                recent = at >= since
+            if recent:
+                lines.append(line)
+        return "\n".join(lines)[-VERIFIER_DAY_CHARS:]
+
     async def _compose(self, candidate: Candidate, now: datetime) -> tuple[str | None, str]:
         """Let Orion write the message in its own voice, then have a different model check it
         against the facts. A failure falls back to a plain, correct text, but a draft rejected
@@ -956,7 +987,10 @@ class InitiativeEngine:
         waiting = self._orion.owner_waiting
         if self._settings.thread_id == OWNER_THREAD and waiting is not None and waiting():
             return None, GAVE_WAY
-        earlier = list(self._orion.threads.get(self._settings.thread_id).messages)
+        earlier = len(self._orion.threads.get(self._settings.thread_id).messages)
+        verifying = self._verifier is not None and self._settings.verifier
+        # Read before Orion writes: the draft itself must not count as known.
+        conversation = await self._day_before(now) if verifying else ""
         try:
             turn = await self._orion.handle_initiative(
                 self._settings.thread_id, candidate.notice, candidate.why, candidate.trust, now
@@ -974,16 +1008,15 @@ class InitiativeEngine:
                 return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
-        if self._verifier is None:
+        if self._verifier is None or not verifying:
             return draft, "unverified"
         facts = (
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
             f"Why Orion writes: {candidate.why}\n{candidate.notice}"
         )
-        conversation = "\n".join(recent_lines(earlier, VERIFIER_CONTEXT_MESSAGES))
         for attempt in (1, 2):
             read = _read_while_writing(
-                self._orion.threads.get(self._settings.thread_id).messages[len(earlier) :]
+                self._orion.threads.get(self._settings.thread_id).messages[earlier:]
             )
             known = facts + (
                 f"\nWhat Orion read while writing (its memory, its searches):\n{read}"
@@ -993,7 +1026,15 @@ class InitiativeEngine:
             verification = await self._verifier.check(draft, known, conversation)
             if verification.ok:
                 return draft, "verified" if attempt == 1 else "verified on a second draft"
-            log.warning("initiative.draft_rejected", key=candidate.key, issues=verification.issues)
+            # The draft and its facts too: from the reasons alone, nobody could tell on 01/11
+            # whether a rejection was right.
+            log.warning(
+                "initiative.draft_rejected",
+                key=candidate.key,
+                issues=verification.issues,
+                draft=draft[:VERIFIER_LOG_CHARS],
+                facts=known[:VERIFIER_LOG_CHARS],
+            )
             if attempt == 2:
                 break
             # Orion rewrites it in its own words rather than a canned text going out (D103).

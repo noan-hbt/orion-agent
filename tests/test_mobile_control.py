@@ -134,6 +134,19 @@ async def test_he_sets_quiet_hours_and_the_budget(controlled: Controlled) -> Non
     ).status_code == 404
 
 
+async def test_he_switches_the_verifier_off_and_on(controlled: Controlled) -> None:
+    http = controlled.world.http
+    assert (await http.get("/app/api/control")).json()["verifier"] is True
+    off = await http.post("/app/api/control/settings", json={"verifier": False})
+    assert off.json()["verifier"] is False
+    assert (await http.get("/app/api/control")).json()["verifier"] is False
+    assert (
+        await http.post("/app/api/control/settings", json={"verifier": "non"})
+    ).status_code == 404
+    on = await http.post("/app/api/control/settings", json={"verifier": True})
+    assert on.json()["verifier"] is True
+
+
 async def test_he_reads_and_corrects_what_orion_knows(controlled: Controlled) -> None:
     http = controlled.world.http
     memory = controlled.memory
