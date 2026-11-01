@@ -144,6 +144,7 @@ class SettingKey(StrEnum):
     QUIET_END = "initiative.quiet_end"  # "HH:MM"
     DAILY_BUDGET = "initiative.daily_budget"  # int
     PAUSED_UNTIL = "initiative.paused_until"  # ISO datetime; "" when not paused
+    VERIFIER = "initiative.verifier"  # bool
 
 
 class SettingChanged(BaseModel):
@@ -153,7 +154,7 @@ class SettingChanged(BaseModel):
 
     change_id: str
     key: SettingKey
-    value: str | int | list[str]
+    value: bool | str | int | list[str]
     reason: str = Field(max_length=300)
 
 

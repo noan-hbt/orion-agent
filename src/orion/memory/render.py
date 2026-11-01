@@ -28,6 +28,7 @@ _SETTING_LABELS = {
     SettingKey.QUIET_START: "début des heures calmes",
     SettingKey.QUIET_END: "fin des heures calmes",
     SettingKey.DAILY_BUDGET: "messages non demandés par jour, au plus",
+    SettingKey.VERIFIER: "relecture de mes messages spontanés",
 }
 
 

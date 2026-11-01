@@ -90,6 +90,7 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
                 quiet_start=initiative.quiet_start,
                 quiet_end=initiative.quiet_end,
                 daily_budget=initiative.daily_budget,
+                verifier=initiative.verifier,
             ),
             memory=app.memory.store,
             verifier=Verifier(app.provider, app.config.agent.verifier_model),

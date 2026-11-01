@@ -160,6 +160,7 @@ class Control:
             "quiet_end": settings.quiet_end.strftime("%H:%M"),
             "quiet_now": settings.is_quiet(now.time()),
             "daily_budget": settings.daily_budget,
+            "verifier": settings.verifier,
             "digests": [d.strftime("%H:%M") for d in settings.digests],
             "counts": {"facts": len(facts), "commitments": len(commitments), "rules": len(rules)},
             "alone": [label(a) for a in sorted(self.autonomy.state.granted)]
@@ -215,6 +216,13 @@ class Control:
                 raise ControlError("daily_budget: between 0 and 50")
             await self.memory.change_setting(
                 SettingKey.DAILY_BUDGET, budget, "réglé depuis l'app", OWNER
+            )
+        if "verifier" in changes:
+            verifier = changes["verifier"]
+            if not isinstance(verifier, bool):
+                raise ControlError("verifier: true or false")
+            await self.memory.change_setting(
+                SettingKey.VERIFIER, verifier, "réglé depuis l'app", OWNER
             )
 
     # -- what it knows ------------------------------------------------------------------------
