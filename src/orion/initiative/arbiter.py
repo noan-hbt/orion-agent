@@ -9,6 +9,7 @@ with plain rules whose verdict is journaled with the message:
 - interruption costs more while the owner is busy (a calendar event under way) and as the
   day's budget runs out, and less right after an event ended: the natural break where a
   message lands best;
+- it costs more while the owner is in a conversation with Orion: what can wait lets it finish;
 - while the owner said they are focused (« je bosse jusqu'à 18 h »), only what cannot wait
   gets through, and waiting does not make the rest more urgent: it all waits for the end.
 
@@ -35,6 +36,8 @@ class Moment:
     """When the owner's last event ended, if they are free."""
     focus_until: datetime | None = None
     """The owner asked not to be disturbed until then (the focus module)."""
+    talking: bool = False
+    """The owner wrote to Orion a moment ago: a conversation is under way (D205)."""
 
 
 class PresenceSource(Protocol):
@@ -59,6 +62,9 @@ def merge(moments: list[Moment]) -> Moment:
     focus = [m.focus_until for m in moments if m.focus_until is not None]
     return Moment(busy, None if busy or not ends else max(ends), max(focus, default=None))
 
+
+TALKING_COST = 0.4
+"""An ordinary message waits for the end of a conversation; one that matters still goes."""
 
 FOCUS_COST = 0.95
 """While the owner is focused, only a message that cannot wait (urgency 0.95 and above) goes."""
@@ -87,6 +93,8 @@ def judge(
         cost += 0.5
     elif moment.free_since is not None and now - moment.free_since <= BREAK:
         cost -= 0.2
+    if moment.talking:
+        cost += TALKING_COST
     if budget:
         cost += 0.2 * min(spent / budget, 1.0)
     if focused:

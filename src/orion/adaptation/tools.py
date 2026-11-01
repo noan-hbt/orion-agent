@@ -144,7 +144,8 @@ def adaptation_tools(memory: MemoryService) -> list[Tool]:
             name="adapt",
             description="Record how the owner wants you to work with them, as soon as they say "
             "it or react to your manner ('trop long', 'arrête les blagues', 'toujours en "
-            "euros'). The rule applies from now on, everywhere.",
+            "euros'). The rule applies from now on, everywhere: state the manner in general, never "
+            "a scenario from an exercise, nor what only holds for this conversation.",
             input_model=AdaptInput,
             handler=adapt,
             **write,

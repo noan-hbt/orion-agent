@@ -37,6 +37,7 @@ def test_an_offer_at_the_end_is_seen(text: str) -> None:
     "text",
     [
         "Les horaires du dimanche : 9 h à 12 h. Bonne baignade !",
+        "situation : une alerte de connexion\nje réponds : « att je vérifie, t'étais où hier ? »",
         "Lyon ou Nantes, c'est toi qui vois : tu penches pour laquelle ?",
         "C'est réservé pour jeudi 14 h, je t'ai mis un rappel la veille.",
         "Tu veux du rouge ou du blanc pour samedi ?",
