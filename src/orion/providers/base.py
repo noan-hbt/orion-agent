@@ -7,12 +7,38 @@ byte: that is what keeps the prompt prefix stable and the provider cache warm.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 Message = dict[str, Any]
 """One chat message in OpenAI format: role, content, and optionally tool_calls / tool_call_id."""
+
+
+def told(message: Message) -> list[str]:
+    """The texts an assistant message sent him with `tell`: they live in its tool calls only."""
+    texts: list[str] = []
+    calls: list[dict[str, Any]] = message.get("tool_calls") or []
+    for call in calls:
+        function: dict[str, Any] = call.get("function") or {}
+        if function.get("name") != "tell":
+            continue
+        try:
+            text: Any = json.loads(str(function.get("arguments") or "{}")).get("text", "")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if isinstance(text, str) and text.strip():
+            texts.append(text.strip())
+    return texts
+
+
+def spoken(message: Message) -> str:
+    """All an assistant message said to him: its words, then what it sent with `tell`."""
+    content = message.get("content")
+    words = content.strip() if isinstance(content, str) else ""
+    return "\n".join([t for t in [words, *told(message)] if t])
+
 
 CACHE_MINUTES = (
     ("claude-code:", 5),

@@ -27,6 +27,7 @@ from orion.core.ids import new_id
 from orion.guardian.outbox import DELIVERED as OUTBOX_DELIVERED
 from orion.guardian.outbox import QUEUED as OUTBOX_QUEUED
 from orion.initiative.engine import DELIVERED as INITIATIVE_DELIVERED
+from orion.providers.base import spoken
 
 FEEDBACK_REACTION = "feedback.reaction"
 OWNER_MESSAGE = "message.received"
@@ -124,9 +125,9 @@ def collect(
         payload: dict[str, Any] = e.payload
         if e.kind == MESSAGE_KIND and e.correlation_id:
             message: dict[str, Any] = payload.get("message", {})
-            content = message.get("content")
-            if message.get("role") == "assistant" and isinstance(content, str) and content:
-                replies[e.correlation_id] = content
+            said = spoken(message) if message.get("role") == "assistant" else ""
+            if said:
+                replies[e.correlation_id] = said
         elif e.kind == OUTBOX_QUEUED:
             queued_text[str(payload["outbox_id"])] = str(payload["text"])
         elif e.kind == OUTBOX_DELIVERED and "remote_id" in payload:

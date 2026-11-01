@@ -17,7 +17,10 @@ each pass moves it forward with them, and `mandate` says what Orion may settle f
 (the rest is put to them).
 
     mission.started  mission.updated  mission.seen  mission.rejected  mission.ran
-    mission.closed
+    mission.closed  mission.reopened
+
+A mission closed by mistake is reopened, not started again: a new one would be a stranger to
+what the first saw, and would run at once.
 """
 
 from __future__ import annotations
@@ -42,6 +45,7 @@ SEEN = "mission.seen"
 REJECTED = "mission.rejected"
 RAN = "mission.ran"
 CLOSED = "mission.closed"
+REOPENED = "mission.reopened"
 RUSHED = "mission.rushed"
 RUSHES_PER_DAY = 8
 """Passes asked for right away (beyond its pace), per mission and per day."""
@@ -225,6 +229,8 @@ class MissionState:
             mission.rushes.append(datetime.fromisoformat(str(payload["at"])))
         elif event.kind == CLOSED:
             mission.closed = str(payload.get("outcome", "closed"))
+        elif event.kind == REOPENED:
+            mission.closed = None
 
 
 class Missions:
@@ -407,6 +413,18 @@ class Missions:
         await self._record(
             CLOSED,
             {"mission_id": mission_id, "outcome": outcome},
+            provenance,
+            Trust.OWNER,
+            correlation_id,
+        )
+
+    async def reopen(
+        self, mission_id: str, why: str, provenance: Provenance, correlation_id: str | None
+    ) -> None:
+        """Back to its pace, with everything it saw and noted; its next pass comes when due."""
+        await self._record(
+            REOPENED,
+            {"mission_id": mission_id, "why": why},
             provenance,
             Trust.OWNER,
             correlation_id,

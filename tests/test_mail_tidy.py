@@ -45,7 +45,13 @@ async def test_unsubscribing_posts_once_mails_or_returns_the_page(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     account = MailAccount.model_validate(
-        {"name": "perso", "host": "imap.x", "username": "n@x", "password": {"env": "X"}}
+        {
+            "name": "perso",
+            "host": "imap.x",
+            "username": "n@x",
+            "password": {"env": "X"},
+            "smtp_host": "smtp.x",
+        }
     )
     found = {
         1: Unsubscribe(one_click="https://a.example/u"),
@@ -145,7 +151,7 @@ async def test_tools_tidy_in_batches_draft_and_attach(journal: SqliteJournal) ->
 
     args = {"action": "unsubscribe", "cards": [news.id], "senders": ["Shop"]}
     done = await tools["mail_tidy"].handler(tools["mail_tidy"].parse(json.dumps(args)), CTX)
-    assert done.content.startswith("1 désabonnement") and asked == [("unsubscribe", [12], "g1")]
+    assert done.content.startswith("1 demande") and asked == [("unsubscribe", [12], "g1")]
     assert _mail_tidy(args) == "Je peux me désabonner de ces 1 mail(s) ? Expéditeurs : Shop"
 
     [paul] = [c for c in box.state.cards.values() if not c.bulk]
