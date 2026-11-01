@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.loop import StopReason
 from orion.core.events import Provenance, Trust
-from orion.guardian.policy import TRUSTED_FLOOR
+from orion.guardian.policy import NIGHT_THREAD, TRUSTED_FLOOR
 from orion.initiative.engine import Alert
 from orion.missions.service import Mission, Missions
 from orion.modules.base import Daemon, Module, ModuleSettings, Planned, Plate
@@ -188,6 +188,13 @@ class CloseInput(BaseModel):
     outcome: str = Field(max_length=300, description="And why")
 
 
+class ReopenInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mission: str
+    why: str = Field(default="", max_length=300)
+
+
 class NowInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -233,6 +240,14 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             return ToolResult(f"Already {max_active} missions: close one first.", is_error=True)
         if (refused := unknown(args.people)) is not None:
             return refused
+        if ctx.thread_id == NIGHT_THREAD:
+            # A pass starts at once, and works on the world: not while he sleeps (a login at
+            # night sends him a security alert).
+            return ToolResult(
+                "Pas de nouvelle mission la nuit : une mission close par erreur, `mission` "
+                "(reopen) ; une nouvelle, propose-la-lui demain.",
+                is_error=True,
+            )
         mission_id = await missions.start(
             args.goal,
             args.criteria,
@@ -310,10 +325,27 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
         return ToolResult("Écarté ; la mission en tiendra compte.")
 
     async def close(args: Any, ctx: ToolContext) -> ToolResult:
-        if await missions.get(args.mission) is None:
+        mission = await missions.get(args.mission)
+        if mission is None:
             return ToolResult(f"No mission {args.mission}.", is_error=True)
+        if mission.closed is not None:
+            return ToolResult(f"Mission {args.mission} is already closed.", is_error=True)
         await missions.close(args.mission, args.outcome, provenance(ctx), ctx.correlation_id)
-        return ToolResult("Mission close.")
+        return ToolResult("Mission close (fermée par erreur : `mission` reopen).")
+
+    async def reopen(args: Any, ctx: ToolContext) -> ToolResult:
+        mission = await missions.get(args.mission)
+        if mission is None:
+            return ToolResult(f"No mission {args.mission}.", is_error=True)
+        if mission.closed is None:
+            return ToolResult(f"Mission {args.mission} is still running.", is_error=True)
+        if len(await missions.active()) >= max_active:
+            return ToolResult(f"Already {max_active} missions: close one first.", is_error=True)
+        await missions.reopen(args.mission, args.why, provenance(ctx), ctx.correlation_id)
+        return ToolResult(
+            f"Mission rouverte, avec tout ce qu'elle avait vu et noté : prochain passage à son "
+            f"rythme (toutes les {mission.every_hours} h)."
+        )
 
     async def now(args: Any, ctx: ToolContext) -> ToolResult:
         mission_id = _which(args.mission, ctx)
@@ -398,6 +430,13 @@ def mission_tools(missions: Missions, clock: Callable[[], datetime], max_active:
             accepts_untrusted_context=True,
         ),
         tool(
+            "mission_reopen",
+            "A mission closed by mistake, or that he wants back: never start it again.",
+            ReopenInput,
+            reopen,
+            accepts_untrusted_context=True,
+        ),
+        tool(
             "mission_now",
             "Another pass right away: he wants it now, or this pass has more to see.",
             NowInput,
@@ -448,6 +487,7 @@ class MissionsModule(Module):
                     "mission_seen": "seen",
                     "mission_reject": "reject",
                     "mission_close": "close",
+                    "mission_reopen": "reopen",
                     "mission_now": "now",
                     "missions": "list",
                 },

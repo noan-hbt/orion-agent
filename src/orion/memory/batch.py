@@ -33,6 +33,7 @@ from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtr
 from orion.memory.model import FACT_ASSERTED
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Fact
+from orion.providers.base import spoken
 
 log = structlog.get_logger(__name__)
 
@@ -117,9 +118,9 @@ class Pending:
             exchange.facts.append(str(payload["fact_id"]))
         elif event.kind == MESSAGE:
             message: dict[str, Any] = payload.get("message") or {}
-            content = message.get("content")
-            if message.get("role") == "assistant" and isinstance(content, str) and content.strip():
-                exchange.replies.append(content.strip())
+            said = spoken(message) if message.get("role") == "assistant" else ""
+            if said:
+                exchange.replies.append(said)
 
 
 class MemoryBatcher:

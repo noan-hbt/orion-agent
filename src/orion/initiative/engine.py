@@ -51,7 +51,7 @@ from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
 from orion.memory.store import Commitment, MemoryStore, SettingChange
 from orion.providers.base import Message
-from orion.runtime import Orion, is_silence
+from orion.runtime import OWNER_THREAD, Orion, is_silence
 
 log = structlog.get_logger(__name__)
 
@@ -86,6 +86,8 @@ TAIL = 500
 
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
+GAVE_WAY = "gave way to him"
+"""He wrote while Orion was about to speak, or speaking, first: the initiative waits."""
 _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
@@ -874,6 +876,8 @@ class InitiativeEngine:
         if candidate.timer is not None and candidate.timer.by_call and await self._ring(candidate):
             return True
         text, how = await self._compose(candidate, now)
+        if how == GAVE_WAY:
+            return False  # neither said nor dropped: it comes back at a later tick
         if not text:  # silence, or a failure with nothing the owner could read as it is
             for item in (candidate, *together):
                 await self._record(
@@ -949,6 +953,9 @@ class InitiativeEngine:
         against the facts. A failure falls back to a plain, correct text, but a draft rejected
         twice is dropped unless he asked for it. Explicit reminders are always delivered, even
         if the model says SILENCE. Returns (text, how)."""
+        waiting = self._orion.owner_waiting
+        if self._settings.thread_id == OWNER_THREAD and waiting is not None and waiting():
+            return None, GAVE_WAY
         earlier = list(self._orion.threads.get(self._settings.thread_id).messages)
         try:
             turn = await self._orion.handle_initiative(
@@ -957,6 +964,8 @@ class InitiativeEngine:
         except Exception:
             log.exception("initiative.compose_failed", key=candidate.key)
             return candidate.fallback, "fallback: compose failed"
+        if turn.reason is StopReason.HALTED:
+            return None, GAVE_WAY
         if turn.reason is not StopReason.COMPLETED or not turn.text.strip():
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
             return candidate.fallback, f"fallback: {turn.reason.value}"
@@ -993,7 +1002,9 @@ class InitiativeEngine:
                     self._settings.thread_id,
                     "Ton message n'est pas parti : une relecture y a vu un problème ("
                     + "; ".join(verification.issues)[:500]
-                    + "). Réécris-le en t'en tenant à ce que tu sais, ou réponds SILENCE.",
+                    + "). Réécris-le en t'en tenant à ce que tu sais : corrige ce point et garde "
+                    "tout le reste de ce qu'il devait dire, sans passer à autre chose ; ou "
+                    "réponds SILENCE.",
                     candidate.why,
                     candidate.trust,
                     now,
@@ -1001,6 +1012,8 @@ class InitiativeEngine:
             except Exception:
                 log.exception("initiative.rewrite_failed", key=candidate.key)
                 break
+            if again.reason is StopReason.HALTED:
+                return None, GAVE_WAY
             if again.reason is not StopReason.COMPLETED or not again.text.strip():
                 break
             if is_silence(again.text):

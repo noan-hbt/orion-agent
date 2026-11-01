@@ -33,6 +33,7 @@ from orion.providers.base import (
     ProviderError,
     ToolCall,
     Usage,
+    told,
 )
 from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 
@@ -113,6 +114,18 @@ WRAP_UP = (
     "[Orion · limite du tour atteinte ({why}). N'appelle plus d'outil : réponds maintenant, "
     "brièvement, avec ce que tu as fait, ce que tu as trouvé et ce qui reste à faire.]"
 )
+WRAP_UP_TOLD = (
+    "\n[Déjà envoyé pendant ce tour, il l'a lu : ne le redis pas, réponds seulement ce qui "
+    "manque.]\n{told}"
+)
+"""A wrap-up asked for "what you found" repeated what `tell` had just sent (2026-10-31)."""
+
+
+def told_in(messages: Sequence[Message]) -> list[str]:
+    """The texts `tell` sent among these messages, in order."""
+    return [text for message in messages for text in told(message)]
+
+
 _WHY = {
     "max_steps": "trop d'étapes",
     "tool budget": "trop d'appels d'outils",
@@ -246,6 +259,7 @@ async def run_agent(
     open_steps: list[str] = []  # the plan's steps not done yet, from its last call
     held = 0  # replies held back for an unfinished plan
     worked = False  # tools ran since the last time
+    turn_start = len(messages)  # what this turn adds comes after
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
         return Finished(reason, text, usage, detail, steps, round(tool_seconds, 3))
@@ -256,7 +270,11 @@ async def run_agent(
             yield finished(reason, last_text, detail)
             return
         why = _WHY.get(detail or reason.value, detail or reason.value)
-        note: Message = {"role": "user", "content": WRAP_UP.format(why=why)}
+        sent = told_in(messages[turn_start:])
+        content = WRAP_UP.format(why=why) + (
+            WRAP_UP_TOLD.format(told="\n".join(f"- {t}" for t in sent)) if sent else ""
+        )
+        note: Message = {"role": "user", "content": content}
         messages.append(note)
         yield MessageEmitted(note, Trust.SYSTEM)
         request = ModelRequest(

@@ -212,6 +212,9 @@ class Orion:
         is up and talking (`initiative.engine`)."""
         self._projections = ProjectionRunner(journal, [self.threads, self.portrait])
         self._locks: dict[str, asyncio.Lock] = {}
+        self.owner_waiting: Callable[[], bool] | None = None
+        """Whether one of his messages waits for an answer (the inbox sets it): Orion's own
+        turn in his conversation then gives way to him."""
         self.situation: list[SituationSource] = []
         """What modules know of where his life stands (his agenda, the missions), D146."""
 
@@ -296,6 +299,20 @@ class Orion:
         `model` and the limits replace the agent's for this turn (Orion's night, D117): a
         thread that always passes the same model keeps its prompt cache."""
         body = _initiative(notice, why)
+        waiting = self.owner_waiting
+        if thread_id == OWNER_THREAD and waiting is not None:
+            # He wrote while Orion was busy on its own (a digest that went on tidying his mail
+            # for 20 minutes after « abandonne », 2026-10-31): he comes first, the initiative
+            # comes back later.
+            called_off = halted
+
+            async def gives_way() -> bool:
+                if waiting():
+                    log.info("initiative.gives_way", thread=thread_id)
+                    return True
+                return called_off is not None and await called_off()
+
+            halted = gives_way
         return await self._turn(
             thread_id,
             kind="initiative.triggered",

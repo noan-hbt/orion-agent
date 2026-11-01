@@ -322,7 +322,9 @@ def mail_tools(
             "archive": "archivé(s)",
             "trash": "mis à la corbeille",
             "move": f"déplacé(s) vers « {args.folder} »",
-            "unsubscribe": "désabonnement(s) fait(s)",
+            # Accepted by the sender is not done: it was told « 4 retirés » for one (2026-10-31).
+            "unsubscribe": "demande(s) de désabonnement acceptée(s) par l'expéditeur, sans "
+            "confirmation que ça prend effet (ça peut prendre quelques jours)",
         }[args.action]
         lines = [f"{total.done} {did}."]
         if total.pages:
