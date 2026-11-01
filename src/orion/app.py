@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from orion.adaptation.tools import adaptation_tools
 from orion.config import OrionConfig
 from orion.context.compiler import ContextCompiler
+from orion.context.reread import reread_tools
 from orion.core.hlc import HybridClock
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy, autonomy_tools
@@ -206,6 +207,7 @@ def core_tools(plate: Plate) -> list[Tool]:
             {"person": "show", "people": "list", "same_person": "same"},
         ),
         *provenance_tools(Provenances(plate.journal, plate.memory, plate.timers)),
+        *reread_tools(plate.journal),
         *(spending_tools(plate.provider) if isinstance(plate.provider, Spending) else []),
         *planned_tools(plate.modules, plate.timers, plate.config.agent.timezone),
         later_tool(),
