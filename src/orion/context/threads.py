@@ -26,7 +26,7 @@ from orion.providers.base import Message
 MESSAGE_KIND = "conversation.message"
 REBASED_KIND = "thread.rebased"
 PRUNED_KIND = "thread.pruned"
-PRUNED_KEEP = 600
+PRUNED_KEEP = 200
 """Characters of a pruned tool result still shown."""
 NO_RESULT = (
     "No result: the turn was interrupted before this call returned (Orion stopped or "
