@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,7 +55,7 @@ async def main(args: argparse.Namespace) -> int:
     print(f"\n{model}: {passed}/{len(outcomes)} passed, ${cost:.4f}")
     REPORTS.mkdir(exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    report = REPORTS / f"{stamp}-{model.replace('/', '_')}.json"
+    report = REPORTS / f"{stamp}-{re.sub(r'[^\w.-]', '_', model)}.json"
     report.write_text(
         json.dumps(
             {

@@ -4893,3 +4893,38 @@ ressemblance) ne voit pas une même chose dite avec d'autres mots.
   vide alors qu'aucun texte n'est parti pendant le tour renvoie le modèle une fois au travail
   (`SAY_SOMETHING`), quel que soit le fournisseur.
 
+
+## D217 — Sur le forfait Claude, des balises au lieu d'un schéma
+
+*02/11/2026 · acceptée · remplace en partie D100 · complète D213, D216*
+
+Sur 72 h du serveur, une réponse sur dix du forfait Claude coûtait au moins deux requêtes.
+Claude Code ne déclarait qu'un outil, `StructuredOutput` (`--json-schema`), et le modèle se
+croyait en mode outils : il appelait `playbook` ou `browser` directement (« No such tool
+available », jusqu'à quatre tours perdus), ou écrivait du texte et se faisait relancer
+(`structured-output-enforce`). L'historique, lui, montrait ses appels passés en balises texte :
+on lui demandait de répondre dans une autre forme que celle qu'il lisait.
+
+- **Les balises** : plus de schéma ni d'outil déclaré. Le modèle appelle un outil en écrivant
+  `<tool_call name="...">{json}</tool_call>`, la forme même de l'historique ; Orion lit les
+  balises. Sans outil déclaré, il ne peut plus en appeler un nativement ni être relancé : une
+  requête par réponse. Un JSON mal formé revient de l'outil en erreur, et le modèle le corrige.
+  Ce qu'il écrit après ses appels comme s'il était Orion (un `<tool_result>`, le message suivant
+  du propriétaire) est coupé et journalisé (`claude_code.overran`).
+- **`<fin/>`** : après D216, le modèle continuait de redire au tour suivant ce qu'il venait
+  d'écrire avec l'appel (« noté, un élément par message », puis « noté, un par message. on
+  reprend… »). Écrit avec ses appels, `<fin/>` dit que c'est son dernier mot : Orion exécute les
+  appels et le tour s'arrête là, sans redemander au modèle (`ModelResponse.ends_turn`). Pas quand
+  un appel échoue, que le plan a des étapes en attente, que le propriétaire a écrit entre-temps
+  ou que rien ne lui a été dit. Seul, `<fin/>` est la réponse vide de D216.
+- **La recherche web** : pour une requête `web_search`, Claude Code reçoit son propre outil
+  `WebSearch` (lecture seule, exécuté chez Anthropic), pour cet appel seulement ; les pages qu'il
+  liste reviennent en citations. Avant, elle repartait toujours vers ChatGPT.
+- **Les images et les PDF** de la conversation passent en blocs `image` et `document` à côté du
+  texte du message, au lieu d'être refusés. Fabriquer une image reste refusé.
+
+Le langage de balises peut porter d'autres signaux du modèle à Orion ; chacun s'ajoute ici,
+avec son effet.
+
+À surveiller : `turns` dans `claude_code.answered` doit rester à 1 (2 pour une recherche), et
+`loop.ended_with_calls` doit apparaître à chaque acquittement d'outil.

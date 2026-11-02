@@ -528,12 +528,35 @@ async def run_agent(
                 yield event
             return
 
+        # Its last word came with the calls (D217): asked again, the model only says it twice.
+        # Not when a call failed, the plan has steps left or nothing was said to the owner.
+        ended = (
+            response.ends_turn
+            and not open_steps
+            and not any(result.is_error for _, result, _ in executions)
+            and any(spoken(m) for m in messages[turn_start:] if m["role"] == "assistant")
+        )
         if steer is not None:
             interjection = await steer()
             if interjection is not None:
                 message, trust = interjection
                 messages.append(message)
                 context_trust = min(context_trust, trust)
+                ended = False  # the owner wrote meanwhile: he gets an answer
+        if ended:
+            note = (
+                settings.finish_check("\n".join(told_in(messages[turn_start:])), called)
+                if settings.finish_check is not None and not checked
+                else None
+            )
+            checked = True
+            if note is None:
+                log.info("loop.ended_with_calls", thread=settings.thread_id)
+                yield finished(StopReason.COMPLETED, "")
+                return
+            unchecked: Message = {"role": "user", "content": note}
+            messages.append(unchecked)
+            yield MessageEmitted(unchecked, Trust.SYSTEM)
 
 
 def _open_steps(call: ToolCall) -> list[str]:
