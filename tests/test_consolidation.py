@@ -115,6 +115,16 @@ async def test_what_was_not_lasting_becomes_a_situation_and_ends_on_its_own(
     )
     assert len(applied.applied) == 2 and trip.notes == ["Vol décalé à 9 h."]
 
+    long_note = MemoryExtractor(
+        ScriptedProvider(json_reply({"operations": [
+            {"op": "update_situation", "situation_id": trip.id, "note": "Retard encore. " * 60},
+        ]})),
+        memory,
+        "extractor",
+    )  # fmt: skip
+    kept = await long_note.consolidate("encore du retard", "Noté.", OWNER, night.date(), [])
+    assert len(kept.applied) == 1 and trip.notes[-1].startswith("Retard encore.")
+
     later = datetime(2026, 11, 5, 3, 45, tzinfo=paris)
     consolidator._clock = lambda: later  # pyright: ignore[reportPrivateUsage]
     await consolidator.tick()

@@ -88,6 +88,15 @@ La conversation t'arrive en blocs balisés (<message role=...>, <tool_call>,
 """
 
 
+_MODEL = re.compile(r"(claude-[a-z0-9-]+|[a-z]+)(\[[a-z0-9]+\])?")
+
+
+def is_model_name(model: str) -> bool:
+    """A name Claude Code takes: `opus`, `sonnet[1m]`, `claude-opus-5-5`. `opus-5.5` is not one:
+    it answers 404 to a short prompt and « Prompt is too long » to a long one, which hides why."""
+    return _MODEL.fullmatch(model) is not None
+
+
 def _text(content: object) -> str:
     if content is None:
         return ""
@@ -245,6 +254,12 @@ class ClaudeCodeProvider:
         return command
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
+        if not is_model_name(request.model):
+            raise ProviderError(
+                f"{request.model!r} is not a Claude Code model: use opus, sonnet, haiku "
+                "or a full name like claude-opus-5-5",
+                retryable=False,
+            )
         if request.image_output or request.web_search is not None:
             raise ProviderError("Claude Code cannot do that here", retryable=False)
         system, conversation = render(request.messages)

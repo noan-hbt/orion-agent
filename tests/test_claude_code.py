@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from orion.providers.base import ModelRequest, ProviderError, ToolSpec
-from orion.providers.claude_code import ClaudeCodeProvider, render
+from orion.providers.claude_code import ClaudeCodeProvider, is_model_name, render
 
 ECHO = ToolSpec(
     name="echo",
@@ -137,6 +137,13 @@ async def test_a_plan_used_up_is_an_error_the_router_falls_back_on(tmp_path: Pat
     with pytest.raises(ProviderError, match="usage limit") as caught:
         await provider.complete(request())
     assert caught.value.status == 429
+
+
+async def test_a_wrong_model_name_says_so_instead_of_prompt_too_long(tmp_path: Path) -> None:
+    provider = ClaudeCodeProvider(tmp_path / "work", fake_claude(tmp_path, {}))
+    with pytest.raises(ProviderError, match="not a Claude Code model"):
+        await provider.complete(request(model="opus-5.5"))
+    assert is_model_name("opus") and is_model_name("claude-opus-5-5")
 
 
 async def test_pictures_are_refused_for_another_provider(tmp_path: Path) -> None:

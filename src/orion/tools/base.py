@@ -225,8 +225,8 @@ class ToolRegistry:
         if not isinstance(asked, dict):
             return call
         name = str(cast(dict[str, Any], asked).get("tool") or "")
-        if name not in self._drawer:
-            return call
+        if name == DRAWER or name not in self._tools:
+            return call  # a tool on the menu asked through the drawer is still that tool
         args: object = cast(dict[str, Any], asked).get("args") or {}
         return self._routed(
             ToolCall(id=call.id, name=name, arguments=json.dumps(args, ensure_ascii=False))

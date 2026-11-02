@@ -15,7 +15,7 @@ from datetime import date
 from typing import Annotated, Literal, cast
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 from orion.core.events import Trust
 from orion.memory.model import Category, Closing, CommitmentStatus
@@ -116,6 +116,13 @@ class _OpenSituation(BaseModel):
     until: str | None = None
 
 
+def _shortened(value: object, limit: int) -> object:
+    """A model's text over the limit, cut at a word: too long is no reason to lose all of it."""
+    if isinstance(value, str) and len(value) > limit:
+        return value[: limit - 1].rsplit(" ", 1)[0] + "…"
+    return value
+
+
 class _UpdateSituation(BaseModel):
     model_config = ConfigDict(extra="ignore")
     op: Literal["update_situation"]
@@ -123,6 +130,16 @@ class _UpdateSituation(BaseModel):
     note: str = Field(min_length=3, max_length=400)
     summary: str | None = Field(default=None, max_length=600)
     until: str | None = None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _short_note(cls, value: object) -> object:
+        return _shortened(value, 400)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _short_summary(cls, value: object) -> object:
+        return _shortened(value, 600)
 
 
 class _CloseSituation(BaseModel):
