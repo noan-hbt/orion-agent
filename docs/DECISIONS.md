@@ -4753,3 +4753,28 @@ vide, et l'erreur faisait chercher du côté de la fenêtre.
 - **Une note trop longue est coupée** : l'extracteur perdait toute une mise à jour de situation
   pour quelques caractères de trop.
 
+## D210 — Le contexte, première passe : compter juste et moins répéter
+
+*02/11/2026 · acceptée · complète D44, D123, D128, D184, D200, D204*
+
+Branché sur Opus, un premier message a pris 18 % de la fenêtre de 5 h du forfait, puis 0,7 % par
+appel au modèle. Le fil d'Orion pesait 342k tokens, là où une session Claude Code tourne autour de
+91k. Mesuré sur le vrai fil (625k caractères, plus 85k de message système) : résultats d'outils
+198k, consignes 146k, enveloppes d'appels 69k.
+
+- **Compter juste** : Anthropic compte environ 2 caractères par token sur ce fil (mesuré), pas 3.
+  Un plafond « de 250k » laissait passer 342k. L'estimation dépend maintenant du modèle.
+- **Le cache du forfait dure une heure** (`ephemeral_1h_input_tokens`), pas 5 minutes : alléger
+  après 10 minutes de pause cassait un cache encore bon. Et l'écriture y coûte environ 28 fois la
+  relecture (mesuré) : sur le forfait, on n'allège plus qu'après une pause, jamais d'un coup en
+  pleine conversation.
+- **Les consignes reviennent moins** : 9 000 caractères, 16 fois dans la même fenêtre, parce qu'une
+  ou deux pages suffisaient à dépasser 6 000 tokens. Le seuil passe à 30 000. Le rappel après 6
+  messages (D184) reste, mais ne compte plus que les messages de Noan.
+- **Allégés plus tôt, plus court** : au-delà de 800 caractères au lieu de 2 000, on garde 200
+  caractères au lieu de 600. `reread` rend le résultat entier (D204). Sur le fil mesuré, les
+  résultats passent de 198k à 118k. Ce changement réécrit une fois le préfixe des fils déjà allégés.
+
+À surveiller : si Orion oublie à nouveau son style en longue conversation (D184), c'est le seuil de
+30 000 qu'il faut revoir.
+

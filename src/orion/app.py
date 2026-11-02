@@ -34,7 +34,7 @@ from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.registry import discover, load
-from orion.providers.base import Embedder, ModelProvider
+from orion.providers.base import Embedder, ModelProvider, chars_per_token
 from orion.providers.spending import Spending, spending_tools, with_spending
 from orion.resources import read_resource
 from orion.runtime import Orion
@@ -289,6 +289,7 @@ async def build_app(
             compiler=ContextCompiler(
                 constitution(enabled, offers(config), config.memory.owner_names),
                 config.agent.max_window_tokens,
+                chars_per_token=chars_per_token(config.agent.model),
             ),
             agent=config.agent,
             memory=memory,

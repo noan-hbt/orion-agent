@@ -41,12 +41,13 @@ def spoken(message: Message) -> str:
 
 
 CACHE_MINUTES = (
-    ("claude-code:", 5),
+    ("claude-code:", 60),
     ("anthropic/", 5),
     ("deepseek/", 240),
 )
 """How long a model's prompt cache outlives the last request, by spec prefix (after an
-`openrouter:` provider). Anthropic keeps it 5 minutes; DeepSeek keeps it on disk for hours."""
+`openrouter:` provider). Anthropic keeps it 5 minutes, an hour through Claude Code on a plan
+(`ephemeral_1h_input_tokens`); DeepSeek keeps it on disk for hours."""
 CACHE_MINUTES_ELSE = 60
 """Others (OpenAI and the ChatGPT plan keep theirs up to an hour): the longest they may."""
 
@@ -55,6 +56,13 @@ def cache_minutes(spec: str) -> int:
     """Until when changing the start of a conversation would cost its cache."""
     model = spec.removeprefix("openrouter:")
     return next((m for prefix, m in CACHE_MINUTES if model.startswith(prefix)), CACHE_MINUTES_ELSE)
+
+
+def chars_per_token(spec: str) -> int:
+    """How many characters make a token, roughly. Anthropic counts about 2 on Orion's real
+    conversations (measured: 12 693 characters, 6 456 tokens), the others about 3."""
+    model = spec.removeprefix("openrouter:")
+    return 2 if model.startswith(("claude-code:", "anthropic/")) else 3
 
 
 class ToolSpec(BaseModel):

@@ -23,9 +23,10 @@ from orion.providers.base import Message
 _WEEKDAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-def estimate_tokens(messages: list[Message]) -> int:
-    """Cheap, deliberately pessimistic estimate (≈3 characters per token)."""
-    return sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) // 3 + 4 * len(messages)
+def estimate_tokens(messages: list[Message], chars_per_token: int = 3) -> int:
+    """Cheap estimate; `chars_per_token` depends on the model (`providers.base.chars_per_token`)."""
+    chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
+    return chars // chars_per_token + 4 * len(messages)
 
 
 def render_user_message(
@@ -56,6 +57,7 @@ class ContextCompiler:
     constitution: str
     max_window_tokens: int = 200_000
     rebase_target_ratio: float = 0.75
+    chars_per_token: int = 3
 
     def system_message(self) -> Message:
         return {"role": "system", "content": self.constitution}
@@ -70,18 +72,17 @@ class ContextCompiler:
         so tool calls and their results are never split apart.
         """
         window = thread.window()
-        if estimate_tokens([*window, *incoming]) <= self.max_window_tokens:
+        if estimate_tokens([*window, *incoming], self.chars_per_token) <= self.max_window_tokens:
             return None
-        return _moved(
-            thread, _cut(thread, incoming, int(self.max_window_tokens * self.rebase_target_ratio))
-        )
+        target = int(self.max_window_tokens * self.rebase_target_ratio)
+        return _moved(thread, _cut(thread, incoming, target, self.chars_per_token))
 
     def fresh_point(self, thread: Thread, incoming: list[Message], budget: int) -> int | None:
         """After a pause, the provider's cache is gone and the whole window would be paid in
         full: keep only the latest exchanges that fit `budget`, cut at a user message."""
-        if estimate_tokens([*thread.window(), *incoming]) <= budget:
+        if estimate_tokens([*thread.window(), *incoming], self.chars_per_token) <= budget:
             return None
-        return _moved(thread, _cut(thread, incoming, budget))
+        return _moved(thread, _cut(thread, incoming, budget, self.chars_per_token))
 
 
 def _moved(thread: Thread, point: int) -> int | None:
@@ -89,18 +90,18 @@ def _moved(thread: Thread, point: int) -> int | None:
     return point if point > thread.base else None
 
 
-def _cut(thread: Thread, incoming: list[Message], target: int) -> int:
+def _cut(thread: Thread, incoming: list[Message], target: int, chars_per_token: int) -> int:
     """The earliest user message after which the window and `incoming` fit `target`.
 
     The last exchange always stays: dropping it too left Orion answering a follow-up with no
     idea what it had just done (a long browsing turn alone outweighed the target)."""
     window = thread.window()
-    incoming_tokens = estimate_tokens(incoming)
+    incoming_tokens = estimate_tokens(incoming, chars_per_token)
     last = None
     for offset, message in enumerate(window):
         if message.get("role") != "user":
             continue
-        if estimate_tokens(window[offset:]) + incoming_tokens <= target:
+        if estimate_tokens(window[offset:], chars_per_token) + incoming_tokens <= target:
             return thread.base + offset
         last = offset
     return thread.base + (last if last is not None else len(window))

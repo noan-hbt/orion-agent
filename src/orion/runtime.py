@@ -65,7 +65,7 @@ from orion.tools.builtin import TellInput
 
 log = structlog.get_logger(__name__)
 
-PRUNE_OVER = 2000
+PRUNE_OVER = 800
 """Tool results longer than this are shortened after a pause."""
 PRUNE_AT_ONCE = 40_000
 """Characters of old bulky results worth shortening without waiting for a pause: the prefix
@@ -164,10 +164,25 @@ class SituationSource(Protocol):
         ...
 
 
-REMIND_AFTER_TOKENS = 6000
+REMIND_AFTER_TOKENS = 30_000
 REMIND_AFTER_MESSAGES = 6
 """His standing instructions come back once this much conversation, or this many of his
-messages, separate them from now: short replies drift long before the tokens add up (D184)."""
+messages, separate them from now: short replies drift long before the tokens add up (D184).
+A page or two is not a drift: at 6 000 tokens, 9 000 characters of them came back 16 times in
+one window, a quarter of it (D210)."""
+
+
+def _from_him(message: Message) -> bool:
+    """A message the owner wrote, not an initiative or a note Orion gave itself."""
+    line = str(message.get("content") or "").split("\n", 1)[0]
+    return (
+        message.get("role") == "user"
+        and line.startswith("[")
+        and not line.startswith("[Orion")
+        and "· initiative" not in line
+    )
+
+
 SITUATION_DAYS = 3
 """Commitments due within this many days are shown as he writes."""
 SITUATION_LINES = 20
@@ -872,6 +887,8 @@ class Orion:
         found = thread.prunable(keep_turns=2, min_chars=PRUNE_OVER)
         if self._idle(thread, when, max(idle, cache_minutes(self._agent.model))):
             return found
+        if self._agent.model.startswith("claude-code:"):
+            return []  # on a plan, writing the cache again costs far more than reading it (D210)
         bulk = sum(len(str(thread.messages[i].get("content") or "")) for i in found)
         return found if bulk >= PRUNE_AT_ONCE else []
 
@@ -957,7 +974,7 @@ class Orion:
                 0,
             )
             since = window[held + 1 :]
-            asked = sum(1 for m in since if m.get("role") == "user")
+            asked = sum(1 for m in since if _from_him(m))
             if asked >= REMIND_AFTER_MESSAGES or estimate_tokens(since) > REMIND_AFTER_TOKENS:
                 reminder = reminder_block(rules, await store.facts())
                 if reminder:

@@ -422,13 +422,44 @@ async def test_old_bulky_results_that_add_up_are_shortened_without_a_pause(
     assert provider.requests[-1].messages[: len(before)] == before  # shortened once only
 
 
+async def test_on_the_claude_plan_old_results_wait_for_a_pause(journal: SqliteJournal) -> None:
+    """Writing the plan's cache again costs far more than reading it: 18 % of five hours for one
+    change of prefix on a big thread (D210)."""
+    pages = [f"page {n} " + "annonce " * 1600 for n in range(4)]
+    provider = ScriptedProvider(
+        call_tools(*[("echo", dict[str, object](text=p)) for p in pages]),
+        reply("quatre pages lues"),
+        *[reply("ok") for _ in range(4)],
+    )
+    orion = make_orion(journal, provider, agent=AgentConfig(model="claude-code:opus"))
+    await orion.start()
+    for minute in range(4):
+        await orion.handle_owner_message("t1", f"m{minute}", "terminal", now=at(minute))
+    assert_prefix_stable(provider)
+
+
 def test_each_model_has_its_cache_lifetime() -> None:
     from orion.providers.base import cache_minutes
 
     assert cache_minutes("anthropic/claude-haiku-5.5") == 5
     assert cache_minutes("openrouter:deepseek/deepseek-v4.1-flash") == 240
-    assert cache_minutes("claude-code:opus") == 5
+    assert cache_minutes("claude-code:opus") == 60
     assert cache_minutes("chatgpt:gpt-5.5") == 60
+
+
+def test_claude_counts_a_window_as_bigger_and_rebases_it_sooner() -> None:
+    """Counted at 3 characters a token, a window « of 250k » was 342k for Claude (D210)."""
+    from orion.context.compiler import ContextCompiler
+    from orion.context.threads import Thread
+    from orion.core.events import Trust
+    from orion.providers.base import Message, chars_per_token
+
+    assert chars_per_token("claude-code:opus") == 2
+    assert chars_per_token("chatgpt:gpt-6-luna") == 3
+    messages: list[Message] = [{"role": "user", "content": "x" * 3_000}] * 4
+    thread = Thread("t", messages=messages, seqs=[1, 2, 3, 4], trusts=[Trust.OWNER] * 4)
+    assert ContextCompiler("C", 5_000, chars_per_token=3).rebase_point(thread, []) is None
+    assert ContextCompiler("C", 5_000, chars_per_token=2).rebase_point(thread, []) is not None
 
 
 async def test_where_his_life_stands_comes_with_his_message_when_it_changed(
