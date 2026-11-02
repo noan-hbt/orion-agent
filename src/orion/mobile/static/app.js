@@ -2905,7 +2905,7 @@ function changeSheet(setting) {
     h("h2", {}, setting.path),
     h("p", { class: "quote" }, `Aujourd'hui : ${shown(setting.value)}`),
     h("label", { class: "field-edit" }, input),
-    h("p", { class: "hint" }, setting.tier === "owner" ? "Ce réglage te protège : tu signes ce changement exact avec Face ID, et mon gardien l'écrit après avoir vérifié le fichier entier." : "Tu signes avec Face ID, je vérifie le fichier entier, puis je redémarre pour l'appliquer."),
+    h("p", { class: "hint" }, setting.live ? "Celui-ci change aussi par message ou depuis l'app : je l'applique tout de suite, sans redémarrer." : setting.tier === "owner" ? "Ce réglage te protège : tu signes ce changement exact avec Face ID, et mon gardien l'écrit après avoir vérifié le fichier entier." : "Tu signes avec Face ID, je vérifie le fichier entier, puis je redémarre pour l'appliquer."),
     status,
     h(
       "button",
@@ -2923,7 +2923,13 @@ function changeSheet(setting) {
           if (JSON.stringify(value) === JSON.stringify(setting.value)) return close();
           event.currentTarget.disabled = true;
           try {
-            await writeSettings([{ path: setting.path, value }]);
+            if (setting.live) {
+              // Kept beside the file, where it wins: written there it would change nothing.
+              await api("api/control/settings", { [setting.path.split(".").pop()]: value });
+              toast("C'est réglé.");
+            } else {
+              await writeSettings([{ path: setting.path, value }]);
+            }
             setting.value = value;
             close();
           } catch (error) {
@@ -2932,8 +2938,7 @@ function changeSheet(setting) {
           }
         },
       },
-      icon("face", 20),
-      "Changer avec Face ID",
+      ...(setting.live ? ["Changer"] : [icon("face", 20), "Changer avec Face ID"]),
     ),
   );
 }

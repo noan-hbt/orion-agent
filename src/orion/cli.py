@@ -874,6 +874,14 @@ async def _doctor(config: OrionConfig) -> int:
         for spec in config.agent.models():
             if spec.startswith(prefix) and not is_model_name(spec.removeprefix(prefix)):
                 print(f"claude:     {spec} is not a model name (opus, sonnet, claude-opus-5-5)")
+    from orion.providers.base import on_plan
+
+    agent = config.agent
+    if on_plan(agent.model) and agent.max_window_tokens > agent.plan_window_tokens:
+        print(
+            f"window:    {agent.plan_window_tokens} tokens on the Claude plan, not "
+            f"max_window_tokens = {agent.max_window_tokens} (raise agent.plan_window_tokens)"
+        )
     if config.guardian.enabled:
         print(f"guardian:  {await _guardian_status(config)}")
     from orion.modules.base import ModuleError

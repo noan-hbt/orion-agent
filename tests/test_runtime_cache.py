@@ -201,6 +201,31 @@ def assert_prefix_stable_between_rebases(provider: ScriptedProvider) -> None:
     assert jumps < len(provider.requests) // 2
 
 
+class _LongSummary(_Summarizing):
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.model == "summary-model":
+            self.summaries.append(request)
+            return reply("## En cours\n" + "- une chose en cours\n" * 250)(request)
+        return await ScriptedProvider.complete(self, request)
+
+
+async def test_a_long_summary_does_not_get_the_window_cut_again_and_again(
+    journal: SqliteJournal,
+) -> None:
+    """2026-11-02: the summary and core memory a cut adds were not counted, so the window was
+    over its budget again within a turn or two and every other message paid a cold cache."""
+    turns = 24
+    provider = _LongSummary(*[reply("r" * 900) for _ in range(turns)])
+    orion = make_orion(journal, provider, window=6_000)
+    orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
+    await orion.start()
+    for i in range(turns):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 900, "terminal", now=at(i))
+
+    rebases = [e for e in await journal.read() if e.kind == "thread.rebased"]
+    assert 2 <= len(rebases) <= turns // 4
+
+
 async def test_turns_with_a_page_are_summarized_too(journal: SqliteJournal) -> None:
     """D198: a page in the dropped turns used to leave no summary at all."""
     from orion.core.events import Trust

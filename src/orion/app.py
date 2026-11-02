@@ -303,7 +303,11 @@ async def build_app(
             ),
             compiler=ContextCompiler(
                 constitution(enabled, offers(config), config.memory.owner_names),
-                window_tokens(config.agent.model, config.agent.max_window_tokens),
+                window_tokens(
+                    config.agent.model,
+                    config.agent.max_window_tokens,
+                    config.agent.plan_window_tokens,
+                ),
                 chars_per_token=chars_per_token(config.agent.model),
             ),
             agent=config.agent,

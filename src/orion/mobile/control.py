@@ -84,6 +84,20 @@ class ControlError(ValueError):
     """A change that cannot be made (unknown id, a value out of range)."""
 
 
+LIVE_SETTINGS = frozenset(
+    {
+        SettingKey.DIGESTS,
+        SettingKey.QUIET_START,
+        SettingKey.QUIET_END,
+        SettingKey.DAILY_BUDGET,
+        SettingKey.VERIFIER,
+    }
+)
+"""orion.toml settings that are changed without touching the file: by him in the app
+(`Control.change`) or learned by Orion (adaptation). Kept in memory, they override the file
+at once, with no restart."""
+
+
 @dataclass
 class Control:
     journal: EventStore
@@ -582,6 +596,15 @@ class Control:
         if self.config is None:
             raise ControlError("the server part is not available here")
         shown = server_view(self.config)
+        changed = await self.memory.store.settings()
+        for setting in shown["settings"]:
+            if setting["path"] in LIVE_SETTINGS:
+                # What applies, not what the file still says: changed since, it was shown
+                # stale, and changing it in the file did nothing.
+                setting["live"] = True
+                change = changed.get(SettingKey(setting["path"]))
+                if change is not None:
+                    setting["value"] = change.value
         shown["release"] = await asyncio.to_thread(release, self.code) if self.code else None
         return shown
 

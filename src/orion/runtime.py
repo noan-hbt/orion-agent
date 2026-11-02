@@ -39,7 +39,7 @@ from orion.cognition.loop import (
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
-from orion.context.summary import previous, sides, summarize, summary_block
+from orion.context.summary import SUMMARY_CHARS, previous, sides, summarize, summary_block
 from orion.context.threads import (
     MESSAGE_KIND,
     PRUNED_KIND,
@@ -539,10 +539,12 @@ class Orion:
             new_base: int | None = len(thread.messages)
         elif fresh:
             new_base = self._compiler.fresh_point(thread, incoming, self._agent.fresh_window_tokens)
-        elif self._cold(thread, when):
-            new_base = self._compiler.rebase_point(thread, incoming, self._agent.cold_window_tokens)
         else:
-            new_base = self._compiler.rebase_point(thread, incoming)
+            budget = self._agent.cold_window_tokens if self._cold(thread, when) else None
+            new_base = self._compiler.rebase_point(thread, incoming, budget)
+            if new_base is not None:
+                reserve = await self._cut_reserve(thread)
+                new_base = self._compiler.rebase_point(thread, incoming, budget, reserve)
         window = thread.messages[new_base if new_base is not None else thread.base :]
         blocks = await self._memory_blocks(memory_query, window, cut=new_base is not None)
         if thread_id == OWNER_THREAD and kind == "message.received":
@@ -951,6 +953,31 @@ class Orion:
         last = next((s for s in reversed(shown) if "<maintenant>" in s), "")
         return None if block in last else block
 
+    async def _snapshot(self) -> str | None:
+        """Core memory, shown again at the start of each window."""
+        if self._memory is None:
+            return None
+        store = self._memory.store
+        rules = await store.rules(include_retired=True)
+        return snapshot_block(
+            await store.facts(),
+            await store.commitments(),
+            self._snapshot_chars,
+            rules=[r for r in rules if r.active],
+            settings=list((await store.settings()).values()),
+            portrait=portrait_block(self.portrait),
+        )
+
+    async def _cut_reserve(self, thread: Thread) -> int:
+        """Characters a cut adds to the message that opens the new window: core memory, shown
+        again, and the summary of what leaves, about as long as the one it merges (at most
+        `SUMMARY_CHARS`). Left out, they put the window back over its budget a turn or two
+        later, and every other message was cut again (2026-11-02)."""
+        summary = 0
+        if self._summary_model is not None:
+            summary = min(len(previous(thread.window()) or ""), SUMMARY_CHARS)
+        return summary + len(await self._snapshot() or "")
+
     async def _memory_blocks(self, text: str, window: list[Message], cut: bool) -> list[str]:
         """Memory to attach to this message: core memory and the playbook when a window starts
         or was just cut (the opening that held them is gone), his standing instructions again
@@ -964,14 +991,7 @@ class Orion:
         settings = list((await store.settings()).values())
         blocks: list[str] = []
         if not window or cut:
-            snapshot = snapshot_block(
-                await store.facts(),
-                await store.commitments(),
-                self._snapshot_chars,
-                rules=[r for r in rules if r.active],
-                settings=settings,
-                portrait=portrait_block(self.portrait),
-            )
+            snapshot = await self._snapshot()
             if snapshot:
                 blocks.append(snapshot)
         else:

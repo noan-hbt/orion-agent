@@ -271,11 +271,8 @@ async def test_the_server_part_shows_settings_with_whose_yes_and_the_modules(
     controlled.control.config = load_config(source)
     shown = (await http.get("/app/api/server")).json()
     by_path = {s["path"]: s for s in shown["settings"]}
-    assert by_path["initiative.quiet_start"] == {
-        "path": "initiative.quiet_start",
-        "value": "22:30:00",
-        "tier": "orion",
-    }
+    assert by_path["initiative.quiet_start"]["value"] == "22:30:00"
+    assert by_path["initiative.quiet_start"]["tier"] == "orion"
     assert by_path["modules.web.enabled"]["tier"] == "orion"
     assert all(s["tier"] == "owner" for s in shown["settings"] if s["path"].startswith("budget."))
     assert not any(s["path"].endswith(("api_key", "base_url", "_dir")) for s in shown["settings"])
@@ -283,6 +280,21 @@ async def test_the_server_part_shows_settings_with_whose_yes_and_the_modules(
     assert web == {"name": "web", "on": False, "added": False}
     assert shown["version"] and shown["split"] is False
     assert all("description" in entry for entry in shown["catalog"])
+
+
+async def test_the_server_part_shows_a_setting_as_changed_outside_the_file(
+    controlled: Controlled, tmp_path: Path
+) -> None:
+    """Quiet hours changed in the app (or summaries Orion stopped sending) win over the file:
+    the orion.toml page showed the file's value, stale."""
+    source = tmp_path / "orion.toml"
+    source.write_text('[initiative]\nquiet_start = "22:30:00"\n', "utf-8")
+    controlled.control.config = load_config(source)
+    await controlled.control.change({"quiet_start": "02:30"})
+
+    shown = (await controlled.world.http.get("/app/api/server")).json()
+    quiet = next(s for s in shown["settings"] if s["path"] == "initiative.quiet_start")
+    assert quiet["value"] == "02:30" and quiet["live"] is True
 
 
 async def test_he_follows_and_steers_his_missions(controlled: Controlled) -> None:

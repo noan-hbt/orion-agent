@@ -4928,3 +4928,30 @@ avec son effet.
 
 À surveiller : `turns` dans `claude_code.answered` doit rester à 1 (2 pour une recherche), et
 `loop.ended_with_calls` doit apparaître à chaque acquittement d'outil.
+
+
+## D218 — Une coupe compte ce qu'elle ajoute ; les réglages vivants se montrent tels qu'ils sont
+
+*02/11/2026 · acceptée · complète D200, D210, D211*
+
+Sur le serveur, le soir du 02/11, la fenêtre du propriétaire se coupait un message sur deux
+(`thread.rebase reason=window budget` à 21:44, 21:47, 21:50) : chaque coupe réécrivait ~75k
+tokens dans le cache et la réponse prenait 80 à 90 s au lieu de 10. Le message qui ouvre la
+fenêtre coupée pesait 44 000 caractères : le résumé (`<plus-tot-dans-la-conversation>`,
+33 000) et la mémoire de fond (10 000). La coupe visait les trois quarts du budget sans les
+compter : la fenêtre repartait au bord de la limite.
+
+- **La coupe compte ce qu'elle ajoute** : la mémoire de fond, et un résumé aussi long que celui
+  qu'il fusionne, sont réservés sur la cible (`rebase_point(reserve_chars=…)`).
+- **Le résumé est plafonné** à 12 000 caractères : le prompt le dit, et ce qui dépasse est
+  coupé à une ligne (`thread.summary_trimmed`). Cumulatif (D200), il ne faisait que grossir.
+- **Le plafond du forfait Claude se règle** : `agent.plan_window_tokens` (80 000 par défaut)
+  remplace la constante de D210. `orion doctor` dit quand il l'emporte sur
+  `max_window_tokens`, qui sinon semblait ignoré.
+- **La page orion.toml de l'app** montre les réglages d'initiative (heures calmes, points du
+  jour, budget, vérificateur) tels qu'ils s'appliquent : changés depuis l'app ou appris par
+  Orion, ils vivent en mémoire et l'emportent sur le fichier, que la page montrait périmé. Les
+  changer depuis cette page passe par le même chemin, sans redémarrage : écrits dans le
+  fichier, ils n'auraient rien changé.
+
+À surveiller : l'écart entre deux `thread.rebase reason=window budget` d'un même fil.

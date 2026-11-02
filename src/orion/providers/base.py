@@ -58,16 +58,15 @@ def cache_minutes(spec: str) -> int:
     return next((m for prefix, m in CACHE_MINUTES if model.startswith(prefix)), CACHE_MINUTES_ELSE)
 
 
-PLAN_WINDOW_TOKENS = 80_000
-"""A conversation's window on the Claude plan, whatever the config says: every call there counts
-against the plan's five-hour limit in proportion to what it carries (D210, D211)."""
+def on_plan(spec: str) -> bool:
+    """Whether this model runs on the Claude plan, where the window is capped (D210)."""
+    return spec.removeprefix("openrouter:").startswith("claude-code:")
 
 
-def window_tokens(spec: str, configured: int) -> int:
-    """How big a conversation's window may grow on this model."""
-    if spec.removeprefix("openrouter:").startswith("claude-code:"):
-        return min(configured, PLAN_WINDOW_TOKENS)
-    return configured
+def window_tokens(spec: str, configured: int, plan: int) -> int:
+    """How big a conversation's window may grow on this model: on the Claude plan, never past
+    `plan` (`agent.plan_window_tokens`)."""
+    return min(configured, plan) if on_plan(spec) else configured
 
 
 def chars_per_token(spec: str) -> int:
