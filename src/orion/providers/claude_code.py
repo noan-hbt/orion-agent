@@ -6,8 +6,11 @@ for one answer at a time: no tools of its own (`--tools ""`), no settings, MCP s
 session kept, Orion's system message in place of Claude Code's. Orion's tools travel as text
 in that system message, sorted and the same every time, and the answer comes back as a JSON
 object checked against a schema (`--json-schema`): the text, and the tool calls with their
-arguments. The conversation goes in on stdin, rendered the same way every time, so the prefix
-Anthropic caches stays the same from one call to the next.
+arguments. The conversation goes in on stdin as one user message (`stream-json`) with one text
+block per message, rendered the same way every time: Anthropic finds a cached prefix only where
+a block ends, so the previous call's last block must still end at the same place (one block for
+the whole conversation was a new block on every call, written to the cache and never read).
+Text that looks like Orion's own tags is escaped, so a mail or a page cannot pass for the owner.
 
 What it cannot do is refused here, so the router falls back: pictures in or out, web search.
 Calls cost nothing per token (`cost_usd` 0): the plan's own limits are the limit, and a plan
@@ -23,6 +26,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -76,7 +80,7 @@ des outils, jamais quand tu n'en appelles plus. Une fois les résultats lus, ta 
 outil est le message qu'il recevra. Ne dis jamais qu'un outil ne répond pas tant que tu n'as
 pas vu son <tool_result>.
 
-La conversation t'arrive en un seul bloc balisé (<message role=...>, <tool_call>,
+La conversation t'arrive en blocs balisés (<message role=...>, <tool_call>,
 <tool_result>) : réponds au dernier message, comme l'assistant.
 
 # Outils d'Orion (à mettre dans tool_calls)
@@ -100,30 +104,56 @@ def _text(content: object) -> str:
     return "\n".join(parts)
 
 
-def render(messages: list[Message]) -> tuple[str, str]:
-    """(system, conversation): the same messages give the same bytes, every time."""
+_TAG = re.compile(r"<(/?)(message|tool_call|tool_result)\b", re.IGNORECASE)
+
+
+def _escape(text: str) -> str:
+    """Orion's tags inside content are shown, not obeyed: a tool result cannot close itself and
+    open a message from the owner."""
+    return _TAG.sub(r"&lt;\1\2", text)
+
+
+def _attr(value: object) -> str:
+    return _escape(str(value)).replace('"', "&quot;")
+
+
+def render(messages: list[Message]) -> tuple[str, list[str]]:
+    """(system, one block per message): the same messages give the same bytes, every time."""
     system: list[str] = []
-    lines: list[str] = []
+    blocks: list[str] = []
     for message in messages:
         role = message["role"]
         if role == "system":
             system.append(_text(message.get("content")))
             continue
         if role == "tool":
-            lines.append(
-                f'<tool_result id="{message.get("tool_call_id", "")}">\n'
-                f"{_text(message.get('content'))}\n</tool_result>"
+            blocks.append(
+                f'<tool_result id="{_attr(message.get("tool_call_id", ""))}">\n'
+                f"{_escape(_text(message.get('content')))}\n</tool_result>"
             )
             continue
-        body = _text(message.get("content"))
+        body = _escape(_text(message.get("content")))
         for call in cast(list[dict[str, Any]], message.get("tool_calls") or []):
             function = cast(dict[str, Any], call.get("function") or {})
             body += (
-                f'\n<tool_call id="{call.get("id", "")}" name="{function.get("name", "")}">'
-                f"{function.get('arguments') or '{}'}</tool_call>"
+                f'\n<tool_call id="{_attr(call.get("id", ""))}" '
+                f'name="{_attr(function.get("name", ""))}">'
+                f"{_escape(function.get('arguments') or '{}')}</tool_call>"
             )
-        lines.append(f'<message role="{role}">\n{body.strip()}\n</message>')
-    return "\n\n".join(system), "\n\n".join(lines)
+        blocks.append(f'<message role="{_attr(role)}">\n{body.strip()}\n</message>')
+    return "\n\n".join(system), blocks
+
+
+def stdin_message(blocks: list[str]) -> bytes:
+    """The conversation as one user message of Claude Code's `stream-json` input."""
+    content = [{"type": "text", "text": block} for block in blocks or ["(vide)"]]
+    line = {
+        "type": "user",
+        "session_id": "",
+        "message": {"role": "user", "content": content},
+        "parent_tool_use_id": None,
+    }
+    return (json.dumps(line, ensure_ascii=False) + "\n").encode()
 
 
 def tools_text(tools: list[ToolSpec]) -> str:
@@ -153,14 +183,32 @@ def answer_schema(tools: list[ToolSpec], allowed: bool) -> dict[str, Any]:
     }
 
 
+_EFFORT = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+
 class ClaudeCodeProvider:
     name = "claude-code"
 
-    def __init__(self, workdir: Path, binary: str = "claude", timeout: float = 300.0) -> None:
+    def __init__(
+        self,
+        workdir: Path,
+        binary: str = "claude",
+        timeout: float = 300.0,
+        default_effort: str | None = "low",
+    ) -> None:
         self._binary = binary
         self._workdir = workdir
         """An empty directory: no project, no CLAUDE.md for Claude Code to pick up."""
         self._timeout = timeout
+        self._default_effort = default_effort
+        """With no effort asked, Claude Code thinks at its own length: a text reply should not."""
 
     @staticmethod
     def available(binary: str = "claude") -> bool:
@@ -180,10 +228,17 @@ class ClaudeCodeProvider:
             "--no-session-persistence",
             "--system-prompt-file",
             str(system_file),
+            "--input-format",
+            "stream-json",
             "--output-format",
             "stream-json",
             "--verbose",
         ]
+        effort = (
+            _EFFORT[request.reasoning_effort] if request.reasoning_effort else self._default_effort
+        )
+        if effort is not None:
+            command += ["--effort", effort]
         if request.tools:
             schema = answer_schema(request.tools, allowed=not request.no_tools)
             command += ["--json-schema", json.dumps(schema, sort_keys=True)]
@@ -211,7 +266,7 @@ class ClaudeCodeProvider:
             raise ProviderError(f"cannot start Claude Code: {exc}", retryable=False) from exc
         try:
             out, err = await asyncio.wait_for(
-                process.communicate(conversation.encode()), self._timeout
+                process.communicate(stdin_message(conversation)), self._timeout
             )
         except TimeoutError as exc:
             raise ProviderError("Claude Code did not answer in time", retryable=True) from exc
@@ -257,6 +312,7 @@ class ClaudeCodeProvider:
                 retryable=retryable,
                 status=status if isinstance(status, int) else None,
             )
+        usage = cast(dict[str, Any], result.get("usage") or {})
         log.info(
             "claude_code.answered",
             turns=result.get("num_turns"),
@@ -264,7 +320,9 @@ class ClaudeCodeProvider:
                 d.get("tool_name")
                 for d in cast(list[dict[str, Any]], result.get("permission_denials") or [])
             ],
-            answer=str(result.get("structured_output") or result.get("result"))[:500],
+            answer_chars=len(str(result.get("structured_output") or result.get("result") or "")),
+            cached=usage.get("cache_read_input_tokens"),
+            written=usage.get("cache_creation_input_tokens"),
         )
         tool_calls: list[ToolCall] = []
         if request.tools:
@@ -293,7 +351,6 @@ class ClaudeCodeProvider:
                 }
                 for c in tool_calls
             ]
-        usage = cast(dict[str, Any], result.get("usage") or {})
         cached = int(usage.get("cache_read_input_tokens") or 0)
         written = int(usage.get("cache_creation_input_tokens") or 0)
         models = cast(dict[str, Any], result.get("modelUsage") or {})
