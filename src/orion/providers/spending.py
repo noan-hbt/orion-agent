@@ -144,6 +144,7 @@ class Spending:
                     "session": request.session_id or "",
                     "foreground": owner_waiting,
                     "cost_usd": round(usage.cost_usd, 6),
+                    "equivalent_usd": round(usage.equivalent_usd, 6),
                     "prompt_tokens": usage.prompt_tokens,
                     "completion_tokens": usage.completion_tokens,
                     "cached_tokens": usage.cached_tokens,

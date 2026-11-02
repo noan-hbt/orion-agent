@@ -166,6 +166,7 @@ class ChatGPTProvider:
         self._max_attempts = max_attempts
         self._max_backoff = max_backoff
         self._turn_state: dict[str, str] = {}
+        self._quota_missing_said = False
         """Each conversation's routing token for the turn under way (`TURN_STATE`)."""
 
     async def aclose(self) -> None:
@@ -271,11 +272,33 @@ class ChatGPTProvider:
                 if session and (state := response.headers.get(TURN_STATE)):
                     self._turn_state[session] = state
                 quota = plan_windows(response.headers)
+                if not quota and not self._quota_missing_said:
+                    # The plan's windows never reached the journal: say once what came instead.
+                    self._quota_missing_said = True
+                    log.warning(
+                        "chatgpt.no_quota_headers",
+                        names=sorted(
+                            n for n in response.headers if "codex" in n or "ratelimit" in n
+                        ),
+                    )
+                if not quota and not self._quota_missing_said:
+                    # The plan's windows never reached the journal: say once what came instead.
+                    self._quota_missing_said = True
+                    log.warning(
+                        "chatgpt.no_quota_headers",
+                        names=sorted(
+                            n for n in response.headers if "codex" in n or "ratelimit" in n
+                        ),
+                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
                     event = cast(dict[str, Any], json.loads(line[5:]))
                     kind = event.get("type")
+                    if "rate_limit" in str(kind):
+                        log.info("chatgpt.rate_limit_event", kind=kind)
+                    if "rate_limit" in str(kind):
+                        log.info("chatgpt.rate_limit_event", kind=kind)
                     if kind == "response.output_item.done":
                         items.append(cast(dict[str, Any], event["item"]))
                     elif kind in ("response.completed", "response.incomplete"):

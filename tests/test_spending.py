@@ -8,8 +8,10 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from orion.config import BudgetConfig
+from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.core.projections import ProjectionRunner
+from orion.delegation.jobs import JOB_FINISHED
 from orion.mobile.usage import UsageStats
 from orion.providers.base import (
     Embedder,
@@ -136,3 +138,103 @@ async def test_a_plans_calls_and_windows_reach_the_usage_screen(journal: SqliteJ
     assert len([e for e in await journal.read() if e.kind == QUOTA]) == 2  # 17 % twice: once
     [quota] = seen["quotas"]
     assert quota["provider"] == "claude-code" and quota["windows"][0]["used"] == 0.25
+
+
+async def test_a_plan_at_no_cost_stands_beside_paid_models_and_compares_with_before(
+    journal: SqliteJournal,
+) -> None:
+    today = datetime.now(ZoneInfo("Europe/Paris")).replace(hour=12)
+    source = Provenance(source="test", actor="test")
+
+    def spent(model: str, provider: str, tokens: int, cost: float, ago: int = 0) -> NewEvent:
+        return NewEvent(
+            kind=SPENT,
+            payload={
+                "at": (today - timedelta(days=ago)).isoformat(),
+                "model": model,
+                "provider": provider,
+                "foreground": True,
+                "cost_usd": cost,
+                "equivalent_usd": 0.0 if cost else 0.5,
+                "prompt_tokens": tokens,
+                "completion_tokens": 10,
+                "cached_tokens": tokens // 2,
+            },
+            provenance=source,
+            trust=Trust.SYSTEM,
+        )
+
+    await journal.append(
+        [
+            *(spent(f"paid/model-{i}", "openrouter", 100, 1.0) for i in range(9)),
+            spent("paid/model-0", "together", 100, 1.0),
+            spent("claude-opus-5-5", "claude-code", 1000, 0),
+            spent("claude-opus-5-5", "claude-code", 1000, 0, ago=10),
+            NewEvent(
+                kind=JOB_FINISHED, payload={"cost_usd": 2.0}, provenance=source, trust=Trust.SYSTEM
+            ),
+        ]
+    )
+    stats = UsageStats()
+    await ProjectionRunner(journal, [stats]).catch_up()
+    seen = stats.report(today.date(), 7)
+    plan = next(m for m in seen["models"] if m["model"] == "claude-opus-5-5")
+    assert plan["calls"] == 1 and plan["tokens"] == 510 and plan["equivalent"] == 0.5
+    assert sum(d["calls"] for d in plan["series"]) == 1
+    assert {p["provider"] for p in seen["providers"]} == {
+        "claude-code",
+        "openrouter",
+        "together",
+        "delegated",
+    }
+    assert {m["provider"] for m in seen["models"] if m["model"] == "paid/model-0"} == {
+        "openrouter",
+        "together",
+    }
+    assert seen["previous"]["tokens"] == 510
+    assert seen["span"]["cost"] == 10.0  # neither a plan's equivalent nor a job is money spent
+    assert stats.report(today.date(), 0)["span"]["days"] == 11
+
+
+async def test_a_plans_points_go_to_the_models_that_worked_and_survive_a_reset(
+    journal: SqliteJournal,
+) -> None:
+    now = datetime.now(ZoneInfo("Europe/Paris")).replace(hour=12)
+    source = Provenance(source="test", actor="test")
+
+    def spent(model: str, tokens: int) -> NewEvent:
+        payload = {
+            "at": now.isoformat(),
+            "model": model,
+            "provider": "claude-code",
+            "cost_usd": 0.0,
+            "prompt_tokens": tokens,
+        }
+        return NewEvent(kind=SPENT, payload=payload, provenance=source, trust=Trust.SYSTEM)
+
+    def read(used: float, resets: str) -> NewEvent:
+        window = {"name": "seven_day", "used": used, "resets_at": resets}
+        payload = {"at": now.isoformat(), "provider": "claude-code", "windows": [window]}
+        return NewEvent(kind=QUOTA, payload=payload, provenance=source, trust=Trust.SYSTEM)
+
+    await journal.append(
+        [
+            read(0.10, "2026-11-09T00:00:00+00:00"),
+            spent("opus", 3000),
+            spent("haiku", 1000),
+            read(0.14, "2026-11-09T00:00:00+00:00"),
+            read(
+                0.13, "2026-11-09T00:00:00+00:00"
+            ),  # the provider's rounding: nothing was given back
+            spent("opus", 1000),
+            read(0.02, "2026-11-16T00:00:00+00:00"),  # a new window: its two points count
+            read(0.40, "2026-11-10T00:00:00+00:00"),  # resets sooner: another account, not usage
+        ]
+    )
+    stats = UsageStats()
+    await ProjectionRunner(journal, [stats]).catch_up()
+    seen = stats.report(now.date(), 7)
+    [plan] = seen["plans"]
+    assert plan["used"] == 0.4 and plan["points"] == 6.0 and len(plan["readings"]) == 5
+    points = {m["model"]: m["quota"]["seven_day"] for m in seen["models"]}
+    assert points == {"opus": 5.0, "haiku": 1.0}

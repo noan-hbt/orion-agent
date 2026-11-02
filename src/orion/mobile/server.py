@@ -758,8 +758,11 @@ def core_routes(
     async def server(_request: Request, c: Control) -> object:
         return await c.server()
 
-    async def usage(_request: Request, c: Control) -> object:
-        return await c.usage()
+    async def usage(request: Request, c: Control) -> object:
+        days = request.query_params.get("days", "30")
+        if not days.isdecimal():
+            raise ControlError("unknown period")
+        return await c.usage(int(days))
 
     async def missions(_request: Request, c: Control) -> object:
         return {"missions": await c.mission_list()}
