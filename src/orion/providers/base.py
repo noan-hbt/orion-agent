@@ -108,6 +108,8 @@ class Usage(BaseModel):
     cached_tokens: int = 0
     cache_write_tokens: int = 0
     cost_usd: float = 0.0
+    equivalent_usd: float = 0.0
+    """What a plan's call would have cost at API prices: not spent, never counted as spending."""
 
     def __add__(self, other: Usage) -> Usage:
         return Usage(
@@ -116,6 +118,7 @@ class Usage(BaseModel):
             cached_tokens=self.cached_tokens + other.cached_tokens,
             cache_write_tokens=self.cache_write_tokens + other.cache_write_tokens,
             cost_usd=self.cost_usd + other.cost_usd,
+            equivalent_usd=self.equivalent_usd + other.equivalent_usd,
         )
 
     @property

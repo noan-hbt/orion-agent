@@ -537,6 +537,7 @@ class ClaudeCodeProvider:
                 completion_tokens=int(usage.get("output_tokens") or 0),
                 cached_tokens=cached,
                 cache_write_tokens=written,
+                equivalent_usd=float(result.get("total_cost_usd") or 0),
             ),
             model=next(iter(models), request.model),
             provider=self.name,

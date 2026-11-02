@@ -49,7 +49,7 @@ from orion.memory.portrait import Portrait
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import Fact, name_key
 from orion.missions.service import Mission, Missions
-from orion.mobile.usage import UsageStats
+from orion.mobile.usage import USAGE_PERIODS, UsageStats
 from orion.modules.base import Planned
 from orion.providers.router import Router
 from orion.providers.spending import Spending
@@ -564,15 +564,18 @@ class Control:
 
     # -- usage: tokens, messages, cost, the plans' windows -----------------------------------
 
-    async def usage(self) -> dict[str, Any]:
-        """The usage screen: counted from the journal, plus what is left on prepaid accounts
-        (asked of the provider now; one that cannot say is left out)."""
+    async def usage(self, days: int = 30) -> dict[str, Any]:
+        """The usage screen over the last `days` (0: since the beginning): counted from the
+        journal, plus what is left on prepaid accounts (asked of the provider now; one that
+        cannot say is left out)."""
+        if days not in USAGE_PERIODS:
+            raise ControlError("unknown period")
         if self._usage_runner is None:
             self._usage = UsageStats(zone=self.initiative.timezone)
             self._usage_runner = ProjectionRunner(self.journal, [self._usage])
         await self._usage_runner.catch_up()
         assert self._usage is not None
-        found = self._usage.report(self.now().date())
+        found = self._usage.report(self.now().date(), days)
         credits: list[dict[str, Any]] = []
         caps: dict[str, Any] | None = None
         if self.spending is not None:

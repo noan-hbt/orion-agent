@@ -3321,25 +3321,215 @@ function resets(at) {
   return hours < 20 ? `repart à ${when.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}` : `repart ${UNTIL.format(when)}`;
 }
 
-function usageBars(series, key) {
-  const top = Math.max(...series.map((d) => d[key]), 0);
-  const show = (v) => (key === "cost" ? money(v) : COMPACT.format(v));
+const USAGE_TINTS = { "claude-code": "#C2571A", chatgpt: "#0F8F7A", openrouter: "#2563EB" };
+const USAGE_OTHER = "#8E8E93";
+const USAGE_METRICS = { tokens: "tokens", calls: "appels", cost: "", messages: "messages", points: "points" };
+
+function providerName(provider) {
+  return provider === "delegated" ? "Tâches déléguées" : PROVIDERS[provider] || provider || "Autre";
+}
+
+function usageShow(value, key) {
+  if (key === "cost") return money(value);
+  const unit = USAGE_METRICS[key];
+  return `${COMPACT.format(value)}${unit ? ` ${unit}` : ""}`;
+}
+
+// Past two months a bar a day is too thin to touch: a bar a week, the last one ending today.
+function usageBuckets(series) {
+  if (series.length <= 60) return series;
+  const weeks = [];
+  for (let end = series.length; end > 0; end -= 7) {
+    const days = series.slice(Math.max(0, end - 7), end);
+    const week = { day: days[0].day, until: days[days.length - 1].day, providers: {} };
+    for (const key of Object.keys(USAGE_METRICS)) week[key] = days.reduce((sum, d) => sum + (d[key] || 0), 0);
+    for (const d of days) {
+      for (const [provider, share] of Object.entries(d.providers || {})) {
+        const kept = (week.providers[provider] ??= { tokens: 0, calls: 0, cost: 0 });
+        for (const key of Object.keys(kept)) kept[key] += share[key];
+      }
+    }
+    weeks.unshift(week);
+  }
+  return weeks;
+}
+
+function usageBars(series, key, tint = "var(--blue)") {
+  const buckets = usageBuckets(series);
+  const unit = buckets.length < series.length ? "semaine" : "jour";
+  const top = Math.max(...buckets.map((d) => d[key]), 0);
+  const peak = top > 0 ? `au plus ${usageShow(top, key)} par ${unit}` : "rien encore";
+  const told = h("small", { "aria-live": "polite" }, peak);
+  const when = (d) => (d.until ? `${DAY_MONTH.format(new Date(d.day))} – ${DAY_MONTH.format(new Date(d.until))}` : DAY_MONTH.format(new Date(d.day)));
+  const rank = (provider) => Object.keys(USAGE_TINTS).indexOf(provider) + 1 || 9;
+  const shares = (d) =>
+    key === "messages"
+      ? []
+      : Object.entries(d.providers || {})
+          .map(([provider, share]) => ({ provider, value: share[key] }))
+          .filter((s) => s.value > 0)
+          .sort((a, b) => rank(a.provider) - rank(b.provider));
+  let picked = null;
   const bars = h(
     "div",
-    { class: "bars", role: "img", "aria-label": `Sur ${series.length} jours, au plus ${show(top)} par jour` },
-    series.map((d) => {
-      const bar = h("span", { title: `${DAY_MONTH.format(new Date(d.day))} : ${show(d[key])}` });
-      bar.style.height = top > 0 && d[key] > 0 ? `${Math.max(3, Math.round((100 * d[key]) / top))}%` : "0";
-      return bar;
+    { class: "bars" },
+    buckets.map((d) => {
+      const parts = shares(d);
+      const detail = parts.length > 1 ? ` · ${parts.map((s) => `${providerName(s.provider)} ${key === "cost" ? money(s.value) : COMPACT.format(s.value)}`).join(" · ")}` : parts.length === 1 ? ` · ${providerName(parts[0].provider)}` : "";
+      const text = `${when(d)} : ${usageShow(d[key], key)}${detail}`;
+      const column = h("button", {
+        type: "button",
+        "aria-label": text,
+        title: text,
+        onclick: () => {
+          if (picked) picked.removeAttribute("data-picked");
+          const again = picked === column;
+          picked = again ? null : column;
+          if (!again) column.setAttribute("data-picked", "");
+          told.textContent = again ? peak : text;
+        },
+      });
+      const height = top > 0 && d[key] > 0 ? Math.max(3, (100 * d[key]) / top) : 0;
+      const fill = h(
+        "span",
+        { class: "stack" },
+        (parts.length ? parts : [{ value: d[key] }]).map((s) => {
+          const piece = h("i");
+          piece.style.flexGrow = String(s.value || 0);
+          piece.style.background = s.provider === undefined ? tint : USAGE_TINTS[s.provider] || USAGE_OTHER;
+          return piece;
+        }),
+      );
+      fill.style.height = `${height}%`;
+      column.append(fill);
+      return column;
     }),
   );
+  const seen = [...new Set(buckets.flatMap((d) => shares(d).map((s) => s.provider)))].sort((a, b) => rank(a) - rank(b));
   return h(
     "div",
     { class: "card chart" },
-    h("small", {}, top > 0 ? `au plus ${show(top)} par jour` : "rien encore"),
+    told,
     bars,
     h("div", { class: "chart-axis" }, h("small", {}, DAY_MONTH.format(new Date(series[0].day))), h("small", {}, "aujourd'hui")),
+    seen.length > 1
+      ? h(
+          "div",
+          { class: "legend" },
+          // Past the three named providers, one gray "Autres": a bar's detail still names them.
+          [...new Set(seen.map((provider) => (USAGE_TINTS[provider] ? provider : "")))].map((provider) => {
+            const dot = h("i");
+            dot.style.background = USAGE_TINTS[provider] || USAGE_OTHER;
+            return h("small", {}, dot, provider ? providerName(provider) : "Autres");
+          }),
+        )
+      : null,
   );
+}
+
+function usageChange(now, before) {
+  if (!before) return "";
+  const change = Math.round((100 * (now - before)) / before);
+  return `${change > 0 ? "+" : ""}${change} % vs avant`;
+}
+
+function usageBill(p) {
+  if (p.cost) return money(p.cost);
+  if (p.quota_window) return `≈ ${COMPACT.format(p.quota[p.quota_window])} pts`;
+  return p.equivalent ? `≈ ${money(p.equivalent)}` : "forfait";
+}
+
+// Calls journaled before D190 carry no tokens: better say nothing than "0 tokens".
+function usageTokens(p) {
+  return p.tokens ? `${COMPACT.format(p.tokens)} tokens` : "";
+}
+
+function usagePeriod(s) {
+  return s.everything ? "depuis le début" : `sur ${s.days} jours`;
+}
+
+function usageModelName(m) {
+  return m.provider === "delegated" ? providerName(m.provider) : m.model.split("/").pop();
+}
+
+// One plan window through time: what it had used at each reading, so its resets show.
+function usagePlanChart(plan, since) {
+  const NS = "http://www.w3.org/2000/svg";
+  const name = `${providerName(plan.provider)} · ${WINDOWS[plan.window] || plan.window.replaceAll("_", " ")}`;
+  const moved = `+${COMPACT.format(plan.points)} points ${since}${plan.today ? ` · +${COMPACT.format(plan.today)} aujourd'hui` : ""}`;
+  const told = h("small", { "aria-live": "polite" }, moved);
+  const times = plan.readings.map((r) => new Date(r.at).getTime());
+  const start = Math.min(...times);
+  const end = Math.max(Date.now(), ...times);
+  const x = (time) => (end > start ? (100 * (time - start)) / (end - start) : 100);
+  let path = "";
+  plan.readings.forEach((r, i) => {
+    path += `${i ? ` H${x(times[i]).toFixed(2)} ` : "M"}${i ? "" : `${x(times[i]).toFixed(2)} `}${i ? "V" : ""}${(100 - r.used * 100).toFixed(1)}`;
+  });
+  path += ` H${x(end).toFixed(2)}`;
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "quota-line");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${name} : ${Math.round(plan.used * 100)} % utilisé, ${moved}`);
+  const line = document.createElementNS(NS, "path");
+  line.setAttribute("d", path);
+  line.setAttribute("stroke", USAGE_TINTS[plan.provider] || USAGE_OTHER);
+  svg.append(line);
+  const read = (event) => {
+    const box = svg.getBoundingClientRect();
+    const at = start + ((event.clientX - box.left) / box.width) * (end - start);
+    let nearest = 0;
+    times.forEach((time, i) => {
+      if (time <= at) nearest = i;
+    });
+    told.textContent = `${SHORT.format(new Date(times[nearest]))} : ${Math.round(plan.readings[nearest].used * 100)} %`;
+  };
+  svg.addEventListener("pointerdown", read);
+  svg.addEventListener("pointermove", read);
+  svg.addEventListener("pointerleave", () => (told.textContent = moved));
+  return h(
+    "div",
+    { class: "card chart" },
+    h("b", { class: "chart-title" }, name),
+    told,
+    svg,
+    h("div", { class: "chart-axis" }, h("small", {}, DAY_MONTH.format(new Date(start))), h("small", {}, "maintenant")),
+  );
+}
+
+function usageModelPanel(m, span) {
+  let shown = "tokens";
+  panel(usageModelName(m), (refresh) => {
+    const pick = (key, text) => h("button", { type: "button", class: "chip", "aria-pressed": String(shown === key), onclick: () => ((shown = key), refresh()) }, text);
+    const share = m.prompt_tokens ? `${Math.round((100 * m.cached_tokens) / m.prompt_tokens)} %` : "—";
+    const spent = m.cost || m.equivalent;
+    return [
+      h("p", { class: "hint" }, `${providerName(m.provider)} · ${usagePeriod(span)}`),
+      h(
+        "div",
+        { class: "grid usage-tiles" },
+        usageTile("Tokens", COMPACT.format(m.tokens), "hors relus du cache"),
+        usageTile("Appels", COMPACT.format(m.calls), `${m.calls - m.alone} pour toi · ${m.alone} seul`),
+        usageTile("Relus du cache", share, `${COMPACT.format(m.cached_tokens)} tokens`),
+        usageTile(m.cost || !spent ? "Coût" : "Équivalent API", spent ? money(spent) : "Forfait", spent && m.calls ? `${(spent / m.calls).toFixed(3).replace(".", ",")} $ par appel` : "rien de facturé"),
+      ),
+      h("div", { class: "chips usage-chips" }, pick("tokens", "Tokens"), pick("calls", "Appels"), m.cost ? pick("cost", "Coût") : null, m.quota_window ? pick("points", "Quota") : null),
+      usageBars(m.series, shown, USAGE_TINTS[m.provider] || USAGE_OTHER),
+      h("p", { class: "label" }, "Tokens"),
+      h(
+        "div",
+        { class: "list items" },
+        row("book", "Lus", COMPACT.format(m.prompt_tokens), null),
+        row("wrong", "Écrits", COMPACT.format(m.completion_tokens), null),
+        m.cache_write_tokens ? row("pin", "Mis en cache", COMPACT.format(m.cache_write_tokens), null) : null,
+      ),
+      m.quota_window ? h("p", { class: "label" }, "Quota du forfait") : null,
+      m.quota_window ? h("div", { class: "list items" }, Object.entries(m.quota).map(([window, points]) => row("spark", WINDOWS[window] || window.replaceAll("_", " "), `≈ ${COMPACT.format(points)} points`, null))) : null,
+      m.quota_window ? h("p", { class: "hint" }, "Une estimation : le forfait ne dit pas ce que coûte un appel, je répartis ce qui a bougé entre deux relevés selon les tokens. Si tu l'utilises ailleurs en même temps, ça compte ici aussi.") : null,
+    ];
+  });
 }
 
 function usageTile(title, big, caption) {
@@ -3348,20 +3538,24 @@ function usageTile(title, big, caption) {
 
 function usagePanel() {
   let shown = "tokens";
+  let days = 30;
   panel(
     "Utilisation",
     async (refresh) => {
-      const u = await api("api/usage");
-      const tokens = (p) => COMPACT.format(p.prompt_tokens + p.completion_tokens);
+      const u = await api(`api/usage?days=${days}`);
       const t = u.today;
+      const s = u.span;
+      const period = s.everything ? "Depuis le début" : `${s.days} jours`;
+      const span = (key, text) => h("button", { type: "button", class: "chip", "aria-pressed": String(days === key), onclick: () => ((days = key), refresh()) }, text);
       const parts = [
+        h("div", { class: "chips" }, span(7, "7 j"), span(30, "30 j"), span(90, "90 j"), span(0, "Tout")),
         h(
           "div",
-          { class: "grid" },
-          usageTile("Aujourd'hui", tokens(t), `tokens · ${plural(t.calls, "appel", "appels")} · ${money(t.cost)}`),
+          { class: "grid usage-tiles" },
+          usageTile("Aujourd'hui", COMPACT.format(t.tokens), `tokens · ${plural(t.calls, "appel", "appels")} · ${money(t.cost)}`),
           usageTile("Messages aujourd'hui", String(t.received), `de toi · ${t.answers} de moi · ${plural(t.tools, "outil", "outils")}`),
-          usageTile("7 jours", money(u.week.cost), `${tokens(u.week)} tokens · ${plural(u.week.received, "message", "messages")}`),
-          usageTile(`${u.span.days} jours`, money(u.span.cost), `${tokens(u.span)} tokens · ${plural(u.span.received, "message", "messages")}`),
+          usageTile(period, COMPACT.format(s.tokens), ["tokens", usageChange(s.tokens, u.previous?.tokens)].filter(Boolean).join(" · ")),
+          usageTile(`Coût · ${period.toLowerCase()}`, money(s.cost), s.equivalent ? `≈ ${money(s.equivalent)} au tarif API` : usageChange(s.cost, u.previous?.cost) || plural(s.calls, "appel", "appels")),
         ),
       ];
       if (u.quotas.length || u.credits.length) {
@@ -3390,12 +3584,55 @@ function usagePanel() {
           u.quotas.length ? h("p", { class: "hint" }, `Ce que le forfait m'a dit à mon dernier appel (${u.quotas.map((q) => SHORT.format(new Date(q.at))).join(", ")}).`) : null,
         );
       }
+      const plans = u.plans.filter((plan) => plan.readings.length);
+      if (plans.length) {
+        parts.push(
+          h("p", { class: "label" }, "Le quota au fil du temps"),
+          plans.map((plan) => usagePlanChart(plan, usagePeriod(s))),
+          h("p", { class: "hint" }, "Ce qui a bougé, pour tout ce qui utilise le forfait, moi et le reste."),
+        );
+      }
       const pick = (key, text) => h("button", { type: "button", class: "chip", "aria-pressed": String(shown === key), onclick: () => ((shown = key), refresh()) }, text);
-      const s = u.span;
+      const worked = u.providers.reduce((sum, p) => sum + p.tokens, 0);
       parts.push(
-        h("p", { class: "label" }, `Les ${s.days} derniers jours`),
-        h("div", { class: "chips" }, pick("tokens", "Tokens"), pick("cost", "Coût"), pick("messages", "Messages")),
+        h("p", { class: "label" }, `L'évolution, ${usagePeriod(s)}`),
+        h("div", { class: "chips" }, pick("tokens", "Tokens"), pick("calls", "Appels"), pick("cost", "Coût"), pick("messages", "Messages")),
         usageBars(u.series, shown),
+        h("p", { class: "hint" }, "Touche une barre pour le détail. Les tokens comptés ici laissent de côté ce qui est relu du cache."),
+      );
+      if (u.providers.length) {
+        parts.push(
+          h("p", { class: "label" }, "Par forfait ou compte"),
+          h(
+            "div",
+            { class: "list items" },
+            u.providers.map((p) =>
+              h(
+                "div",
+                { class: "item quota" },
+                h("span", { class: `ico ${tint("spark")}` }, icon("spark", 17)),
+                h(
+                  "span",
+                  {},
+                  h("span", { class: "text" }, `${providerName(p.provider)} · ${usageBill(p)}`),
+                  meter(worked ? p.tokens / worked : 0, [usageTokens(p), plural(p.calls, "appel", "appels"), `${p.alone} seul`].filter(Boolean).join(" · ")),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      if (u.models.length) {
+        parts.push(
+          h("p", { class: "label" }, "Modèles"),
+          h(
+            "div",
+            { class: "list items" },
+            u.models.map((m) => row("blocks", usageModelName(m), usageBill(m), () => usageModelPanel(m, s), "", [providerName(m.provider), plural(m.calls, "appel", "appels"), usageTokens(m)].filter(Boolean).join(" · "))),
+          ),
+        );
+      }
+      parts.push(
         h("p", { class: "label" }, "Tokens"),
         h(
           "div",
@@ -3406,12 +3643,6 @@ function usagePanel() {
           s.cache_write_tokens ? row("pin", "Mis en cache", COMPACT.format(s.cache_write_tokens), null) : null,
         ),
       );
-      if (u.models.length) {
-        parts.push(
-          h("p", { class: "label" }, "Modèles"),
-          h("div", { class: "list items" }, u.models.map((m) => row("blocks", m.model.split("/").pop(), m.cost ? money(m.cost) : "forfait", null, "", `${plural(m.calls, "appel", "appels")} · ${COMPACT.format(m.tokens)} tokens`))),
-        );
-      }
       if (u.channels.length) {
         parts.push(
           h("p", { class: "label" }, "Tu m'écris par"),

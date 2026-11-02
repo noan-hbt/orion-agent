@@ -4996,3 +4996,31 @@ plus comme en attente : pendant cette demi-seconde, une initiative en cours ne l
 la place et lançait son étape suivante. La CI l'attrapait au hasard, selon le minutage. `_answering`
 se lève maintenant dès que le message sort de la file, et le test garde une fenêtre assez longue
 pour échouer à coup sûr sans ce correctif.
+
+## D221 — Utilisation : des stats, pas seulement des données
+
+L'écran montrait quatre totaux et une barre par jour. Le forfait Claude, enregistré, y restait
+invisible : les modèles étaient classés par coût et coupés à huit, donc un forfait à 0 $ passait
+derrière tout le reste, et rien ne regroupait par fournisseur.
+
+- **Une période** (7, 30, 90 jours, tout : `GET /app/api/usage?days=`), comparée à la même durée
+  juste avant.
+- **L'évolution** empilée par fournisseur, en tokens, appels, coût ou messages. Toucher une barre
+  donne son détail. Au-delà de soixante jours, une barre par semaine.
+- **Par forfait ou compte**, et **tous les modèles** avec leur page : évolution, appels pour lui ou
+  seul, cache, coût par appel. Classés par tokens, plus par coût.
+- **Les tokens affichés sont ceux réellement travaillés** : ce qui est relu du cache en est retiré
+  (et reste détaillé à part), sinon le contexte relu à chaque appel écrase tout le reste.
+- **Équivalent API** : `equivalent_usd` dans `spend.recorded`, lu du `total_cost_usd` de Claude
+  Code. Ce n'est pas une dépense : ni le coût affiché, ni les plafonds ne le comptent. Connu pour
+  Claude seulement, et à partir de cette décision.
+- **Tâches déléguées** : un `job.finished` compte comme un appel à part, son coût en équivalent
+  (sur un forfait, rien n'est facturé).
+- **Le quota comme un coût** : chaque fenêtre de forfait a sa courbe (`plan.quota`, avec ses remises
+  à zéro) et les points qu'elle a pris sur la période. Par modèle, les points bougés entre deux
+  relevés sont répartis selon les tokens de ce qui a travaillé entre-temps. C'est une estimation,
+  haute : le forfait ne donne qu'un pourcentage global, et tout ce qui l'utilise par ailleurs (ses
+  sessions Claude Code) le fait bouger aussi.
+- **ChatGPT sans relevé** : aucun `plan.quota` en production malgré D190 et des milliers d'appels ;
+  le code lit bien les en-têtes `x-codex-*`, qui semblent absents. Le fournisseur journalise une
+  fois les noms d'en-têtes reçus (`chatgpt.no_quota_headers`), pour trancher sur pièce.
