@@ -465,7 +465,13 @@ class Session:
     async def _keep(self, context: BrowserContext) -> None:
         if self.profile is None:
             return
-        cookies = await context.cookies()
+        try:
+            cookies = await context.cookies()
+        except Error as exc:
+            # The browser died under us (crashed, killed): its cookies went with it and what
+            # was kept last stands. Closing a tab or stopping Orion must not fail for that.
+            log.warning("browser.cookies_not_kept", error=exc.message.splitlines()[0])
+            return
         write_private(self.profile / KEPT_COOKIES, json.dumps(cookies))
 
     async def new_page(self) -> Page:
