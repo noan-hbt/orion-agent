@@ -1016,4 +1016,16 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(uses("playbook", "adapt"), says_nothing_twice()),
     ),
+    Case(
+        name="un_message_vague_reste_dans_le_fil",
+        origin="02/11 22:52 : « T'as pas des réveils automatiques ? » « oui, 8h30 et 19h » puis "
+        "« Tu veux en ajouter ? » ; un souvenir sur Angèle dans le message, et Orion répond "
+        "« qu'est-ce que tu veux ajouter sur elle » (D219).",
+        at=paris(2026, 11, 2, 22, 52),
+        steps=(
+            Say("T'as pas des réveils automatiques le matin et le soir ?"),
+            Say("Tu veux en ajouter ?"),
+        ),
+        checks=(avoids("shell", "browser", "file"),),
+    ),
 )

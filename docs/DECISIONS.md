@@ -4955,3 +4955,34 @@ compter : la fenêtre repartait au bord de la limite.
   fichier, ils n'auraient rien changé.
 
 À surveiller : l'écart entre deux `thread.rebase reason=window budget` d'un même fil.
+
+## D219 — Il répond à ce que tu viens de dire, pas à ce qu'on a glissé à côté
+
+*02/11/2026 · acceptée · complète D165, D200, D217*
+
+Le 02/11 au soir, le propriétaire trouvait qu'Orion perdait le fil : « Tu veux en ajouter ? » →
+« qu'est-ce que tu veux ajouter sur elle » ; « Ah voilà bah c de ça que je parlais » → rien, et un
+contrat ouvert sans raison ; « pas vu de mail du garage » sorti de nulle part. Le journal montre
+que le modèle (Haiku sur le forfait) lisait comme le sujet ce qu'Orion ajoutait autour du message.
+
+- **Souvenirs.** Mesuré sur 80 vrais messages avec le cache d'embeddings : ce qui a un vrai
+  rapport score de 0,44 à 0,54, un message vague atteint quand même 0,25 à 0,35 avec n'importe
+  quel fait. `MIN_SIMILARITY` passe de 0,25 à 0,40, et la recherche par mots ignore les mots
+  vides (« C qui elle ? » ne cherche plus rien). Un message sans sujet ne reçoit plus de
+  souvenir : ce qui se disait avant est déjà dans la fenêtre. Quelques vrais rapports faibles
+  se perdent ; la mémoire de base et la recherche à la demande restent. La constitution dit qu'un
+  souvenir sans rapport s'ignore.
+- **Après une coupe.** Le résumé et la mémoire de base partent dans leur propre message, juste
+  avant le sien, avec une ligne qui dit qu'il n'a rien écrit de tout ça. Dans son message, jusqu'à
+  50 000 caractères se lisaient comme ce qu'il venait de dire.
+- **La relance sur une proposition.** Elle commence par : si ça ne répond pas à ce qu'il vient
+  d'écrire, retire-la. Avant, « je le dézippe ? » devenait un travail que personne n'avait demandé.
+- **Un tour muet.** Une réponse retenue par une relance comptait comme déjà dite : des appels
+  d'outils sans mots finissaient alors le tour sans rien envoyer (D217). Seuls les mots écrits
+  avec un appel comptent : ce sont les seuls qui sont partis.
+- **Le redémarrage.** « Tu étais en train de travailler » devenait « je reprends ta demande ».
+  Ne se reprend que ce qu'il avait écrit vouloir faire après ; un travail en plan n'est pas une
+  demande.
+
+À surveiller : la part de messages avec `<souvenirs>` (31 sur 79 avant) et les réponses hors
+sujet juste après une coupe.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 from pydantic import BaseModel
@@ -634,6 +635,24 @@ async def test_a_model_that_insists_without_working_is_let_go() -> None:
     )
     end = finished((await collect(provider))[0])
     assert end.text == "Impossible de comparer : rien à comparer."
+
+
+async def test_a_reply_held_back_by_a_nudge_does_not_count_as_said() -> None:
+    """02/11 : « je le dézippe ? » held back, then calls with no words: he got silence."""
+    provider = ScriptedProvider(
+        reply("je regarde ?"),
+        lambda request: call_tools(("echo", {"text": "42"}))(request).model_copy(
+            update={"ends_turn": True}
+        ),
+        reply("c'est 42"),
+    )
+
+    def asks_back(text: str, _: object) -> str | None:
+        return "[note]" if "?" in text else None
+
+    settings = replace(SETTINGS, finish_check=asks_back)
+    events, _ = await collect(provider, settings=settings)
+    assert finished(events).text == "c'est 42"
 
 
 async def test_last_words_with_the_calls_end_the_turn_unless_a_call_fails() -> None:

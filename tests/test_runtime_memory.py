@@ -98,7 +98,8 @@ async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     await orion.handle_owner_message("t1", "salut", "terminal", now=at(10) + timedelta(hours=9))
     sent = provider.requests[-1].messages
     assert "message 0" not in str(sent)  # the window was cut
-    assert "<memoire>" in str(sent[-1]["content"]) and "très courtes" in str(sent[-1]["content"])
+    assert "<memoire>" in str(sent) and "très courtes" in str(sent)
+    assert "<memoire>" not in str(sent[-1]["content"])  # beside his message, not in it
 
 
 async def test_a_big_window_shrinks_once_the_cache_is_cold_and_not_before(

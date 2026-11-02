@@ -89,7 +89,8 @@ SHORT_REPLY = 1500
 """Below this, a reply is a message, not a document: no titles."""
 
 OFFER_NOTE = (
-    "Elle finit en lui proposant de faire quelque chose. Si tu peux le faire maintenant, sans "
+    "Elle finit en lui proposant de faire quelque chose. Si ça ne répond pas à ce qu'il vient "
+    "d'écrire, retire la proposition et réponds-lui. Sinon, si tu peux le faire maintenant, sans "
     "risque, fais-le d'abord, puis réponds avec ce que tu as fait. Si c'est un choix qui "
     "n'appartient qu'à lui, garde-le."
 )

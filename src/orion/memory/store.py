@@ -125,6 +125,13 @@ SCHEMA_VERSION = 2
 _TABLES = ("facts", "facts_fts", "commitments", "rules", "aliases", "setting_changes", "meta")
 
 _WORD = re.compile(r"\w{3,}", re.UNICODE)
+_COMMON_WORDS = (
+    "les des une que qui quoi pas est son ses mes tes nos vos pour dans avec sur par mais "
+    "donc elle lui eux ils elles nous vous toi moi ton mon ces cet cette tout tous fait "
+    "faire suis été être avoir the and"
+)
+_COMMON = frozenset(_COMMON_WORDS.split())
+"""Words that say nothing of the subject: « C qui elle ? » matched every fact with a « elle »."""
 
 
 def name_key(name: str) -> str:
@@ -260,7 +267,7 @@ def fts_query(text: str, max_terms: int = 24) -> str | None:
     """Turn free text into a safe FTS5 OR-query of quoted words (no operators leak through)."""
     words: list[str] = []
     for word in _WORD.findall(text.lower()):
-        if word not in words:
+        if word not in words and word not in _COMMON:
             words.append(word)
     if not words:
         return None
