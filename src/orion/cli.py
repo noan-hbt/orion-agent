@@ -867,6 +867,13 @@ async def _doctor(config: OrionConfig) -> int:
         else:
             plan = "plan use granted" if known.can_use_plan else "plan use NOT granted"
             print(f"chatgpt:    {known.email or known.subject}, {plan}")
+    if config.providers.claude_code.enabled:
+        from orion.providers.claude_code import is_model_name
+
+        prefix = "claude-code:"
+        for spec in config.agent.models():
+            if spec.startswith(prefix) and not is_model_name(spec.removeprefix(prefix)):
+                print(f"claude:     {spec} is not a model name (opus, sonnet, claude-opus-5-5)")
     if config.guardian.enabled:
         print(f"guardian:  {await _guardian_status(config)}")
     from orion.modules.base import ModuleError

@@ -594,6 +594,18 @@ async def test_a_tool_in_the_drawer_is_called_under_its_own_name() -> None:
     assert unknown.result.is_error and "it holds: echo" in unknown.result.content
 
 
+async def test_a_menu_tool_asked_through_the_drawer_still_runs() -> None:
+    """A model called `shell` through `orion`, read « no such tool » and told the owner it had
+    no shell."""
+    registry = ToolRegistry([*builtin_tools(), echo_tool()], drawer=[])
+    provider = ScriptedProvider(
+        call_tools(("orion", {"tool": "echo", "args": {"text": "42"}})), reply("42.")
+    )
+    events, _ = await collect(provider, registry)
+    (done,) = [e for e in events if isinstance(e, ToolExecuted)]
+    assert (done.call.name, done.result.content) == ("echo", "42")
+
+
 async def test_a_reply_with_plan_steps_left_is_sent_back_to_work() -> None:
     steps = [{"text": "chercher", "status": "done"}, {"text": "comparer", "status": "todo"}]
     provider = ScriptedProvider(

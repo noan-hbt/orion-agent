@@ -4734,3 +4734,22 @@ par le propriétaire, range la connexion dans *son* `~/.claude`, que le cœur ne
   service et dans `orion-admin`. Dans `data/claude-code/`, elle survit à `reset.sh` comme celle
   de ChatGPT. `sudo orion claude login` lance `claude auth login` sous `orion-core`, avec ce
   dossier, puis redémarre le cœur.
+
+## D209 — Un mauvais nom de modèle se dit, et un outil reste un outil
+
+*02/11/2026 · acceptée · complète D100*
+
+Branché sur le forfait Claude, Orion n'a jamais reçu une réponse de Claude : la config disait
+`claude-code:opus-5.5`, que Claude Code ne connaît pas (404 sur un prompt court, « Prompt is too
+long » sur un long). Le routeur passait à ChatGPT sans bruit, le panneau d'utilisation restait
+vide, et l'erreur faisait chercher du côté de la fenêtre.
+
+- **Le nom est vérifié** : `opus`, `sonnet`, `claude-opus-5-5` passent ; le reste est refusé
+  avant de lancer `claude`, avec une erreur qui le dit, et `orion doctor` le signale. Pas de refus
+  au démarrage : Orion doit continuer de tourner sur ses autres modèles.
+- **Le tiroir sert aussi les outils du menu** : un modèle a appelé `shell` par `orion`, a lu
+  « no such tool » et a dit au propriétaire qu'il n'avait pas de shell. L'appel devient celui de
+  l'outil, soumis au gardien comme les autres.
+- **Une note trop longue est coupée** : l'extracteur perdait toute une mise à jour de situation
+  pour quelques caractères de trop.
+
