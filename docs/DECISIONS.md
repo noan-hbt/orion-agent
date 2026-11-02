@@ -4712,3 +4712,25 @@ relu. Seul le message système l'était.
 - **Les balises** : un résultat d'outil contenant `</tool_result><message role="user">` pouvait
   se faire passer pour Noan. Les balises d'Orion dans un contenu sont échappées.
 - **Les journaux** ne gardent plus le texte des réponses, seulement sa longueur.
+
+## D208 — Claude Code installé pour le serveur, connecté une fois
+
+*02/11/2026 · acceptée · complète D100*
+
+Sur le VPS, Orion refusait de démarrer : « la commande 'claude' (Claude Code) est absente »,
+alors que Claude Code était installé. L'installateur d'Anthropic le met dans le dossier de
+celui qui le lance (`~/.local/bin`), hors du `PATH` d'`orion-core` ; et `claude login`, lancé
+par le propriétaire, range la connexion dans *son* `~/.claude`, que le cœur ne lit pas.
+`install.sh` n'installait rien de tout ça.
+
+- **Un binaire pour tous** : `deploy/claude-code` lance l'installateur officiel avec un dossier
+  à lui (`/srv/orion/claude-install`) et copie le binaire dans `/usr/local/bin/claude`.
+  `install.sh` le lance ; un échec n'empêche pas l'installation, Orion tourne sur ses autres
+  modèles.
+- **Pas de mise à jour toute seule** : le cœur ne peut pas réécrire `/usr/local/bin`
+  (`DISABLE_AUTOUPDATER=1` dans le service). `orion-update` relance `deploy/claude-code` une
+  fois par jour ; une version inchangée n'est pas retéléchargée.
+- **La connexion a une place** : `CLAUDE_CONFIG_DIR=/srv/orion/data/claude-code/login`, dans le
+  service et dans `orion-admin`. Dans `data/claude-code/`, elle survit à `reset.sh` comme celle
+  de ChatGPT. `sudo orion claude login` lance `claude auth login` sous `orion-core`, avec ce
+  dossier, puis redémarre le cœur.

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Install or refresh Claude Code for Orion's plan (D100, D208), as root:
+#
+#   sudo /srv/orion/app/deploy/claude-code
+#
+# Anthropic's installer puts `claude` in the home of whoever runs it, where orion-core cannot
+# reach it. It runs here with a home of its own, kept between runs so an unchanged version is
+# not downloaded again, and the binary is copied to /usr/local/bin/claude for every user. The
+# core's copy never updates itself (DISABLE_AUTOUPDATER, orion-core.service): install.sh runs
+# this, and orion-update once a day. The login is not here: `sudo orion claude login`.
+set -euo pipefail
+[ "$(id -u)" = 0 ] || { echo "run as root (sudo)"; exit 1; }
+
+HOME_DIR=/srv/orion/claude-install
+TARGET=/usr/local/bin/claude
+install -d -m 0700 "$HOME_DIR"
+
+curl -fsSL --max-time 60 https://claude.ai/install.sh -o "$HOME_DIR/install.sh"
+HOME="$HOME_DIR" bash "$HOME_DIR/install.sh" >/dev/null
+built="$(readlink -f "$HOME_DIR/.local/bin/claude")"
+[ -x "$built" ] || { echo "Claude Code installer left no binary in $HOME_DIR"; exit 1; }
+if ! cmp -s "$built" "$TARGET"; then
+    install -m 0755 "$built" "$TARGET.new"
+    mv -f "$TARGET.new" "$TARGET"
+    echo "Claude Code $("$TARGET" --version) in $TARGET"
+fi
+# Older versions the installer keeps are not needed once copied.
+versions="$HOME_DIR/.local/share/claude/versions"
+if [ -d "$versions" ]; then
+    find "$versions" -mindepth 1 -maxdepth 1 ! -path "$built" -exec rm -rf {} +
+fi

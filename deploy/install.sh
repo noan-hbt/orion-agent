@@ -56,9 +56,13 @@ uv sync --frozen --no-dev -q
 # Orion's own browser ([modules.computer]): Chromium and the libraries it needs.
 PLAYWRIGHT_BROWSERS_PATH="$ROOT/browsers" .venv/bin/playwright install --with-deps chromium >/dev/null
 chmod -R a+rX "$ROOT/app" "$ROOT/python" "$ROOT/browsers"
+# Claude Code, for the owner's Claude plan (D100) and delegated tasks: in /usr/local/bin, where
+# orion-core finds it (D208). Not fatal: Orion runs without it, on its other models.
+"$HERE/claude-code" || echo "Claude Code could not be installed: run sudo $HERE/claude-code"
 
 echo "==> folders"
 install -d -o orion-core -g orion -m 0750 "$ROOT/data" "$ROOT/backups/core"
+install -d -o orion-core -g orion -m 0700 "$ROOT/data/claude-code" "$ROOT/data/claude-code/login"
 install -d -o orion-guardian -g orion -m 0700 "$ROOT/guardian" "$ROOT/backups/guardian"
 install -d -o orion-guardian -g orion -m 0750 "$ROOT/run"
 install -d -m 0755 /etc/orion
@@ -125,6 +129,9 @@ MSG
 else
     systemctl restart orion-guardian orion-core
     echo "==> Orion restarted on https://$DOMAIN"
+    if [ ! -s "$ROOT/data/claude-code/login/.credentials.json" ]; then
+        echo "    your Claude plan (optional): sudo orion claude login"
+    fi
     # The first phone's code, shown here: after it, everything is done from the app (D154).
     for _ in $(seq 1 30); do
         if devices=$("$HERE/orion-admin" app devices 2>/dev/null); then

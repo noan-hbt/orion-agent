@@ -3,13 +3,27 @@
 #   sudo /srv/orion/app/deploy/orion-admin inkbox setup --webhook-url https://…/inkbox/webhook
 #   sudo /srv/orion/app/deploy/orion-admin federation invite Paul
 # `--core` runs it as the core's user instead; `memory`, `doctor` and `chat` go there by default.
+# `claude login` signs the core's Claude Code in to the owner's plan (D208), then restarts it.
 # Installed as /usr/local/bin/orion: on the server, `orion memory` just works.
 set -euo pipefail
+# What orion-core.service gives Claude Code: where its login is, no self-update.
+export CLAUDE_CONFIG_DIR=/srv/orion/data/claude-code/login DISABLE_AUTOUPDATER=1
 case "${1:-}" in
     --core) who=core; shift ;;
     --guardian) who=guardian; shift ;;
     memory|doctor|chat) who=core ;;
+    claude)
+        [ "${2:-}" = login ] || { echo "usage: sudo orion claude login"; exit 2; }
+        [ -x /usr/local/bin/claude ] || /srv/orion/app/deploy/claude-code
+        install -d -o orion-core -g orion -m 0700 "$CLAUDE_CONFIG_DIR"
+        cd /srv/orion
+        sudo -u orion-core env HOME=/srv/orion CLAUDE_CONFIG_DIR="$CLAUDE_CONFIG_DIR" \
+            DISABLE_AUTOUPDATER=1 /usr/local/bin/claude auth login
+        systemctl restart orion-core
+        echo "Claude Code connected; Orion restarted."
+        exit 0
+        ;;
     *) who=guardian ;;
 esac
 cd /srv/orion
-exec sudo -u "orion-$who" sh -c 'set -a; . "/etc/orion/$0.env"; set +a; exec /srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml "$@"' "$who" "$@"
+exec sudo -u "orion-$who" --preserve-env=CLAUDE_CONFIG_DIR,DISABLE_AUTOUPDATER sh -c 'set -a; . "/etc/orion/$0.env"; set +a; exec /srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml "$@"' "$who" "$@"
