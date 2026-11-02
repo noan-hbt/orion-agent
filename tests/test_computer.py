@@ -119,6 +119,17 @@ async def test_a_browser_that_cannot_start_leaves_nothing_running(tmp_path: Path
     assert session._pw is None  # pyright: ignore[reportPrivateUsage]  # the driver was stopped
 
 
+async def test_a_browser_that_died_does_not_stop_orion_from_stopping(tmp_path: Path) -> None:
+    # 02/11 on the server: Chromium gone, keeping its cookies on shutdown crashed the core.
+    browser = Session()
+    browser.profile = tmp_path / "profile"
+    async with browser:
+        context = browser._context  # pyright: ignore[reportPrivateUsage]
+        assert context is not None
+        await context.close()  # killed from outside
+        await browser.keep_cookies()
+
+
 async def test_a_wall_put_up_by_an_anti_bot_is_named_and_a_way_round_given() -> None:
     """D145: Orion is told who turned the browser away and what can be done about it."""
     walls = {
