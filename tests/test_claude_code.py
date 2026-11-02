@@ -142,7 +142,7 @@ async def test_a_plan_used_up_is_an_error_the_router_falls_back_on(tmp_path: Pat
 async def test_a_wrong_model_name_says_so_instead_of_prompt_too_long(tmp_path: Path) -> None:
     provider = ClaudeCodeProvider(tmp_path / "work", fake_claude(tmp_path, {}))
     with pytest.raises(ProviderError, match="not a Claude Code model"):
-        await provider.complete(request(model="opus-5.5"))
+        await provider.complete(ModelRequest(model="opus-5.5", messages=[]))
     assert is_model_name("opus") and is_model_name("claude-opus-5-5")
 
 
