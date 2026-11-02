@@ -48,6 +48,10 @@ deploy() {
         rm -f /etc/sudoers.d/orion-core
     fi
     systemctl daemon-reload
+    # An install from before D208 has no shared `claude`: a core on the Claude plan needs it.
+    if [ -x "$APP/deploy/claude-code" ] && [ ! -x /usr/local/bin/claude ]; then
+        "$APP/deploy/claude-code" || echo "Claude Code could not be installed"
+    fi
 }
 
 healthy() {
