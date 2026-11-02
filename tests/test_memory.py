@@ -292,3 +292,8 @@ async def test_an_older_store_is_rebuilt_from_the_journal(
     await ProjectionRunner(journal, [reopened]).catch_up()
     assert [f.statement for f in await reopened.facts()] == ["Il aime le thé."]
     await reopened.close()
+
+
+def test_a_message_without_a_subject_searches_nothing() -> None:
+    assert fts_query("C qui elle ?") is None
+    assert fts_query("Gegele elle aime quoi") is not None

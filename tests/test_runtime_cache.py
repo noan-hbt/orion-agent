@@ -190,6 +190,9 @@ async def test_a_rebase_carries_a_summary_of_what_it_drops(journal: SqliteJourna
         if "<plus-tot-dans-la-conversation>" in str(m["content"])
     ]
     assert carried and "T2 à Lyon" in carried[0]
+    # Beside his message, never in it: what he just wrote stays alone at the end (D219).
+    for request in provider.requests:
+        assert "<plus-tot-dans-la-conversation>" not in str(request.messages[-1]["content"])
     assert_prefix_stable_between_rebases(provider)
 
 

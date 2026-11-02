@@ -172,6 +172,13 @@ A page or two is not a drift: at 6 000 tokens, 9 000 characters of them came bac
 one window, a quarter of it (D210)."""
 
 
+RECAP_LINE = (
+    "[Orion · Pour mémoire, ce qui précède. Il n'a rien écrit de tout ça : n'y réponds pas.]"
+)
+"""Heads the summary and core memory after a cut. Inside his message, 50 000 characters read as
+what he had just said (D219)."""
+
+
 def _from_him(message: Message) -> bool:
     """A message the owner wrote, not an initiative or a note Orion gave itself."""
     line = str(message.get("content") or "").split("\n", 1)[0]
@@ -560,10 +567,13 @@ class Orion:
             if elsewhere:
                 blocks.insert(0, elsewhere)
         leaving: tuple[str, str] | None = None
+        recap: list[str] = []
         if new_base is not None:
             summary = await self._summarize_dropped(thread, new_base)
             if summary:
-                blocks.insert(0, summary_block(summary))
+                recap.append(summary_block(summary))
+            recap += [b for b in blocks if b.startswith("<memoire>")]
+            blocks = [b for b in blocks if not b.startswith("<memoire>")]
         if new_base is not None and not (stale or anew):
             dropped = self._trusted_dropped(thread, new_base)
             if dropped:
@@ -593,6 +603,18 @@ class Orion:
                     Trust.SYSTEM,
                     correlation_id,
                     received.id,
+                )
+            )
+        if recap:
+            events.append(
+                self._message_event(
+                    thread_id,
+                    {"role": "user", "content": "\n".join([RECAP_LINE, *recap])},
+                    trust,
+                    correlation_id,
+                    received.id,
+                    provenance=provenance,
+                    at=when,
                 )
             )
         events.append(

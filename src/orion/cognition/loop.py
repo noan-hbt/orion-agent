@@ -415,7 +415,7 @@ async def run_agent(
                 and reason is StopReason.COMPLETED
                 and room
                 and usage.cost_usd < max_cost
-                and not any(spoken(m) for m in messages[turn_start:] if m["role"] == "assistant")
+                and not _reached_him(messages[turn_start:])
             ):
                 log.info("loop.empty_reply", thread=settings.thread_id)
                 pressed = True
@@ -534,7 +534,7 @@ async def run_agent(
             response.ends_turn
             and not open_steps
             and not any(result.is_error for _, result, _ in executions)
-            and any(spoken(m) for m in messages[turn_start:] if m["role"] == "assistant")
+            and _reached_him(messages[turn_start:])
         )
         if steer is not None:
             interjection = await steer()
@@ -557,6 +557,12 @@ async def run_agent(
             unchecked: Message = {"role": "user", "content": note}
             messages.append(unchecked)
             yield MessageEmitted(unchecked, Trust.SYSTEM)
+
+
+def _reached_him(messages: list[Message]) -> bool:
+    """Something left during the turn: the words beside a call do. A final reply sent back by a
+    nudge never did, and counting it ended a turn in silence (02/11, « Ah voilà », D219)."""
+    return any(spoken(m) for m in messages if m["role"] == "assistant" and m.get("tool_calls"))
 
 
 def _open_steps(call: ToolCall) -> list[str]:

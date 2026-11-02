@@ -34,7 +34,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
 );
 """
 RRF_K = 60
-MIN_SIMILARITY = 0.25
+MIN_SIMILARITY = 0.40
+"""Measured on 80 real messages (D219): what truly relates scores 0.44 to 0.54; « Tu veux en
+ajouter ? » or « Demain ? » still reach 0.25 to 0.35 with any fact, and the model took those for
+the subject."""
 BATCH = 64
 # Embedding models take 8192 tokens at most; a query can be a whole night transcript (400k
 # characters), which failed every search of the night. The head of a long text carries its

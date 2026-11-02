@@ -646,10 +646,10 @@ class InitiativeEngine:
             return None
         return Candidate(
             key=f"{RESTART_KEY}{last}",
-            notice="Tu viens de redémarrer. Juste avant, tu étais en train de travailler. Si "
-            "tu avais prévu quelque chose pour après ce redémarrage (vérifier qu'un réglage a "
-            "pris, reprendre une tâche, dire à ton propriétaire où tu en es), fais-le "
-            "maintenant. Sinon, réponds SILENCE.",
+            notice="Tu viens de redémarrer. Si tu avais écrit que tu ferais quelque chose après "
+            "ce redémarrage (vérifier qu'un réglage a pris, reprendre une tâche qu'il t'a "
+            "demandée, lui dire où tu en es), fais-le maintenant. Un travail laissé en plan "
+            "n'est pas une demande de sa part : ne lui prête rien. Sinon, réponds SILENCE.",
             why="je viens de redémarrer, et je travaillais juste avant",
             fallback="",
             explicit=True,
