@@ -504,6 +504,7 @@ class PapersModule(Module):
     name = "papers"
     requires = ("files", "photos")
     instructions = "papers.md"
+    read_when = "il t'envoie un papier (identité, fiche de paie, RIB…) ou en cherche un"
     settings_model = PaperSettings
 
     def __init__(self, config: OrionConfig, render: Render | None = None) -> None:

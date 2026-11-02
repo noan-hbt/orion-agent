@@ -93,6 +93,9 @@ class Module:
     instructions: ClassVar[str | None] = None
     """A built-in module's constitution section (a packaged resource of `orion.resources`).
     Third-party modules override `instructions_text` instead."""
+    read_when: ClassVar[str | None] = None
+    """When its section matters, for a section rarely useful: the system message then says only
+    this, and `consigne` gives the section (D212)."""
     settings_model: ClassVar[type[ModuleSettings]] = ModuleSettings
     offer: ClassVar[str | None] = None
     """What the module would let Orion do, and how the owner turns it on, in one French line:

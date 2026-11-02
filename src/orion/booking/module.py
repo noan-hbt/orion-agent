@@ -485,6 +485,7 @@ class BookingModule(Module):
     name = "booking"
     requires = ("computer",)
     instructions = "booking.md"
+    read_when = "il veut un rendez-vous, une table ou un billet"
     settings_model = BookingSettings
     offer = (
         "Prendre ses rendez-vous (médecin sur Doctolib, resto, train) de la recherche du "
