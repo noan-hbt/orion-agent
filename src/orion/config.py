@@ -160,6 +160,13 @@ class AgentConfig(BaseModel):
         "(the default, D200: a pause no longer costs the thread of the conversation)",
     )
     fresh_window_tokens: int = Field(default=16_000, ge=2_000)
+    cold_window_tokens: int = Field(
+        default=40_000,
+        ge=0,
+        description="Once the model's cache has expired, a window above this size is cut back "
+        "to three quarters of it, with a summary of the rest: it would be paid in full "
+        "anyway, so this costs no cache (D211); 0 never does",
+    )
     approvals: Literal["prudent", "equilibre"] = Field(
         default="equilibre",
         description="When outside content (a web page, a mail) is in the conversation: "

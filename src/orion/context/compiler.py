@@ -65,16 +65,20 @@ class ContextCompiler:
     def compile(self, thread: Thread, new_messages: list[Message]) -> list[Message]:
         return [self.system_message(), *thread.window(), *new_messages]
 
-    def rebase_point(self, thread: Thread, incoming: list[Message]) -> int | None:
-        """If the window plus incoming messages exceed the budget, return the new base index.
+    def rebase_point(
+        self, thread: Thread, incoming: list[Message], budget: int | None = None
+    ) -> int | None:
+        """If the window plus incoming messages exceed `budget` (by default the window's),
+        return the new base index.
 
         The new base is the earliest user message after which the window fits the target size,
         so tool calls and their results are never split apart.
         """
         window = thread.window()
-        if estimate_tokens([*window, *incoming], self.chars_per_token) <= self.max_window_tokens:
+        limit = self.max_window_tokens if budget is None else budget
+        if estimate_tokens([*window, *incoming], self.chars_per_token) <= limit:
             return None
-        target = int(self.max_window_tokens * self.rebase_target_ratio)
+        target = int(limit * self.rebase_target_ratio)
         return _moved(thread, _cut(thread, incoming, target, self.chars_per_token))
 
     def fresh_point(self, thread: Thread, incoming: list[Message], budget: int) -> int | None:

@@ -43,7 +43,7 @@ in the drawer, `orion`, D151; 30.3k with one way to say « later », D157; 30.4k
 ONE_TOOL = 2_500
 """Characters of one tool's schema, actions included (the largest, `intention`: 1.6k; `later`:
 1.9k with repeating reminders, D166; 2k by D177)."""
-DRAWER = 2_200
+DRAWER = 2_500
 """Characters of the drawer, `orion`, which lists a line per rare tool (1.9k with `contacts`,
 D159)."""
 
