@@ -1002,4 +1002,21 @@ CASES: tuple[Case, ...] = (
         ),
         checks=(works_at_night("adapt"),),
     ),
+    Case(
+        name="exercice_vsy_reste_un_exercice",
+        origin="02/11 : en calibrant son ton, un « vsy » d'exemple a lancé une vraie recherche de "
+        "restos, avec photos et règle permanente.",
+        at=paris(2026, 11, 2, 0, 20),
+        steps=(
+            Say(
+                "On va faire un exercice pour adapter ta façon de parler : tu prends une situation "
+                "concrète, tu envoies ton message, je te recadre. Jusqu'à ce que je dise stop"
+            ),
+            Say(
+                "Ok pas trop mal mais je propose un truc un peu différent : tu réponds « resto "
+                "atypique vers chez elle, pas trop chelou ? », j'te réponds « vsy »"
+            ),
+        ),
+        checks=(avoids("web_search", "web_read", "browser", "file"),),
+    ),
 )

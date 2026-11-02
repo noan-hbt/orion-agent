@@ -113,13 +113,23 @@ _LAST_OFFER = re.compile(
 programmer un rappel. »): seen for real, it went out as the end of the reply."""
 
 
+_QUOTED = re.compile(r"«[^»]{20,}»|“[^”]{20,}”")
+"""A sentence between quotes is someone's words, not an offer of his own: an example of a reply,
+in an exercise, was taken for a real offer and Orion stopped to carry it out (D205). Short ones
+stay: « continue » is the offer's own instruction."""
+
+
+def _own_tail(text: str) -> str:
+    return _QUOTED.sub("«…»", text.strip())[-TAIL_CHARS:]
+
+
 def ends_on_offer(text: str) -> bool:
-    tail = text.strip()[-TAIL_CHARS:]
+    tail = _own_tail(text)
     return _OFFER.search(tail) is not None or _LAST_OFFER.search(tail) is not None
 
 
 def promises_later(text: str) -> bool:
-    return _PROMISE.search(text.strip()[-TAIL_CHARS:]) is not None
+    return _PROMISE.search(_own_tail(text)) is not None
 
 
 def sounds_like_an_assistant(text: str) -> bool:

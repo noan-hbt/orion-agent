@@ -76,6 +76,9 @@ JOIN_BEFORE = timedelta(minutes=10)
 AWAKE = timedelta(minutes=20)
 """The owner wrote less than this ago: he is up, quiet hours do not hold Orion back."""
 
+TALKING = timedelta(minutes=10)
+"""The owner wrote less than this ago: a conversation is under way (D205)."""
+
 RESTART_KEY = "restart:"
 WOKEN_WITHIN = timedelta(minutes=15)
 """Orion spoke in the owner's thread less than this before a restart: he was busy, often with a
@@ -817,7 +820,10 @@ class InitiativeEngine:
         return None
 
     async def _moment(self, now: datetime) -> Moment:
-        return merge([await source.presence(now) for source in self._presence])
+        moment = merge([await source.presence(now) for source in self._presence])
+        wrote = getattr(self._orion, "owner_wrote_at", None)
+        talking = isinstance(wrote, datetime) and timedelta(0) <= now - wrote < TALKING
+        return replace(moment, talking=talking)
 
     async def _admit(self, candidate: Candidate, now: datetime) -> str | None:
         """The gate, then the arbiter: why it should go now, or None (dropped or waiting)."""

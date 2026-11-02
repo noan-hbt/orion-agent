@@ -4628,3 +4628,28 @@ boîte mail a pu changer depuis.
   et images sont limités à 1 500 et 800, le reste avec `links=true`. Sur les mails lus du 31/10 au
   01/11, aucune réponse ne citait de détail situé après 4 000 caractères (approximation par les
   chiffres et les noms). Les listes de mails ne changent pas : elles restent complètes.
+
+## D205 — Orion se situe, et un exercice reste un exercice
+
+*02/11/2026 · acceptée · complète D118, D144, D194*
+
+Le 02/11, Noan calibrait le ton d'Orion : une situation, un message, il recadre. Sa correction
+« tu réponds "resto atypique…", j'te réponds "vsy" » a déclenché une vraie recherche de restos,
+avec des photos envoyées et une règle permanente « si Noan répond vsy, chercher ». Le journal
+montre cinq causes.
+
+- **Répétition** : la constitution poussait à agir et ne disait rien des exercices. Elle dit
+  maintenant que rien n'y est réel et qu'une demande faite pour la conversation tient jusqu'à ce
+  qu'il la lève.
+- **Situation** : le problème dépasse l'exercice. Orion traitait chaque message comme une question
+  isolée, alors qu'il tourne en continu. Une section « Où tu en es » ouvre la constitution : quand,
+  où, où en est la conversation, ce que ce qu'il sait a de daté, et que lui-même change. Le passage
+  sur l'heure y a déménagé. Une note de la nuit se revérifie : « sipp mis à jour » a été redit,
+  puis démenti, sans contrôle.
+- **Manuel** : une règle garde la manière, en général. Ni un scénario, ni ce qui ne vaut que pour la
+  conversation : sinon l'exercice s'installe dans `<consignes>` pour toujours.
+- **Fin de réponse** : `finish` a lu « att je vérifie, t'étais au Paraguay ? », un exemple entre
+  guillemets, comme une offre d'Orion, et l'a poussé à agir. Une citation de 20 caractères ou plus
+  n'est plus lue ; une courte reste lue, « continue » fait partie de l'offre.
+- **Interruption** : « ta nuit » est arrivée trois minutes après son dernier message. Dix minutes
+  après qu'il a écrit, le dérangement monte de 0,4 : ce qui peut attendre attend, ce qui compte part.

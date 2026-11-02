@@ -422,6 +422,16 @@ def test_quiet_hours_do_not_hold_orion_back_while_the_owner_is_up() -> None:
     assert not engine._owner_is_up(night)  # pyright: ignore[reportPrivateUsage]
 
 
+def test_an_ordinary_message_waits_for_the_end_of_a_conversation() -> None:
+    from orion.initiative.arbiter import Moment, judge
+
+    now = datetime(2026, 11, 2, 0, 27)
+    talking = Moment(talking=True)
+    assert not judge(0.55, now, talking, 0, 5).now
+    assert judge(0.55, now, Moment(), 0, 5).now
+    assert judge(0.9, now, talking, 0, 5).now
+
+
 def test_what_he_reads_at_night_counts_for_the_evening_not_the_next_day() -> None:
     """Contacts relayed at 1 a.m. spent the next day's budget: no digest at 8:30 (D98)."""
     from zoneinfo import ZoneInfo
