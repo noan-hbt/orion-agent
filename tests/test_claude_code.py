@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from orion.providers.base import ModelRequest, ProviderError, ToolSpec
-from orion.providers.claude_code import ClaudeCodeProvider, is_model_name, render
+from orion.providers.claude_code import ClaudeCodeProvider, _trail, is_model_name, render
 
 ECHO = ToolSpec(
     name="echo",
@@ -207,3 +207,15 @@ def test_the_plans_windows_come_with_the_answer(tmp_path: Path) -> None:
     response = ClaudeCodeProvider(tmp_path).parse(ModelRequest(model="m", messages=[]), out, b"", 0)
     assert response.text == "ok"
     assert [(w.name, w.used) for w in response.quota] == [("five_hour", 0.17), ("seven_day", 0.68)]
+
+
+def test_the_steps_of_a_paid_second_request_can_be_read_in_the_log() -> None:
+    """`turns: 3` costs a second request: the log must say what the model did first (D211)."""
+    said = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Bonjour"}]}}
+    answered = {
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "content": "Structured output provided"}]},
+    }
+    assert "Bonjour" in _trail(said)
+    assert "Structured output" in _trail(answered)
+    assert "nudge" in _trail({"type": "user", "message": {"content": "nudge"}})

@@ -202,6 +202,24 @@ _EFFORT = {
 }
 
 
+def _step(block: object) -> str:
+    if not isinstance(block, dict):
+        return f"text: {block}"[:100]
+    part = cast(dict[str, Any], block)
+    if part.get("type") == "text":
+        return f"text: {part.get('text')}"[:100]
+    return str(part.get("name") or f"{part.get('type')}: {part.get('content')}")[:100]
+
+
+def _trail(event: dict[str, Any]) -> str:
+    """One step inside Claude Code, short. A plain answer takes 2 turns for 1 request (the answer
+    tool and its result); with 3, a second request was paid, and this says why (D211)."""
+    message = cast(dict[str, Any], event.get("message") or {})
+    content: object = message.get("content")
+    blocks = cast(list[object], content) if isinstance(content, list) else [content]
+    return f"{event.get('type')}: {', '.join(_step(b) for b in blocks)}"
+
+
 class ClaudeCodeProvider:
     name = "claude-code"
 
@@ -303,6 +321,7 @@ class ClaudeCodeProvider:
     def parse(self, request: ModelRequest, out: bytes, err: bytes, code: int) -> ModelResponse:
         result: dict[str, Any] | None = None
         quota: list[QuotaWindow] = []
+        trail: list[str] = []
         for line in out.splitlines():
             try:
                 event = json.loads(line)
@@ -311,6 +330,8 @@ class ClaudeCodeProvider:
             if not isinstance(event, dict):
                 continue
             event = cast(dict[str, Any], event)
+            if event.get("type") in ("assistant", "user"):
+                trail.append(_trail(event))
             if event.get("type") == "result":
                 result = event
             elif event.get("type") == "rate_limit_event":
@@ -331,6 +352,7 @@ class ClaudeCodeProvider:
         log.info(
             "claude_code.answered",
             turns=result.get("num_turns"),
+            trail=trail if int(result.get("num_turns") or 0) > 2 else None,
             denied=[
                 d.get("tool_name")
                 for d in cast(list[dict[str, Any]], result.get("permission_denials") or [])

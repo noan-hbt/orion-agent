@@ -10,11 +10,12 @@ from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
-from orion.guardian.policy import Guardian
-from orion.memory.model import Category
+from orion.guardian.policy import WATCH_THREAD, Guardian
+from orion.memory.model import Category, RuleScope
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
+from orion.providers.base import PLAN_WINDOW_TOKENS, window_tokens
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
@@ -100,14 +101,81 @@ async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     assert "<memoire>" in str(sent[-1]["content"]) and "très courtes" in str(sent[-1]["content"])
 
 
+async def test_a_big_window_shrinks_once_the_cache_is_cold_and_not_before(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """Back after the cache expired, a big window is paid in full anyway: it is the moment to
+    cut it, with a summary of the rest. A short pause keeps the cache, and the window (D211)."""
+    from datetime import timedelta
+
+    provider = ScriptedProvider(*[reply("r" * 3000) for _ in range(12)])
+    agent = AgentConfig(model="claude-code:claude-opus-5-5", cold_window_tokens=8_000)
+    orion = make_orion(journal, memory, provider, agent)
+    await orion.start()
+    for i in range(10):
+        await orion.handle_owner_message("t1", f"message {i} " + "x" * 3000, "terminal", now=at(i))
+
+    await orion.handle_owner_message("t1", "encore", "terminal", now=at(40))
+    assert "message 0" in str(provider.requests[-1].messages)  # 30 min: the cache still holds
+    assert_prefix_stable(provider)
+
+    await orion.handle_owner_message("t1", "salut", "terminal", now=at(40) + timedelta(hours=2))
+    sent = provider.requests[-1].messages
+    assert "message 0" not in str(sent)
+    assert "message 9" in str(sent)
+
+
+async def test_each_watch_pass_starts_short_with_a_summary_of_the_last(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """Passes hours apart find the cache gone: carrying the last browsing session again would be
+    paid in full for nothing (D211)."""
+    provider = ScriptedProvider(reply("rien"), reply("deux prix relevés"), reply("rien"))
+    orion = make_orion(journal, memory, provider)
+    orion._summary_model = "summary-model"  # pyright: ignore[reportPrivateUsage]
+    await orion.start()
+
+    for slot in ("matin", "midi"):
+        await orion.handle_initiative(WATCH_THREAD, f"brief {slot}", slot, Trust.SYSTEM, at(1))
+
+    sent = str(provider.requests[-1].messages)
+    assert "brief midi" in sent and "brief matin" not in sent
+    assert "deux prix relevés" in sent
+
+
+def test_the_claude_plan_keeps_a_smaller_window_than_the_others() -> None:
+    assert window_tokens("claude-code:opus", 200_000) == PLAN_WINDOW_TOKENS
+    assert window_tokens("chatgpt:gpt-5.5", 250_000) == 250_000
+
+
+async def test_only_how_he_wants_to_be_spoken_to_comes_back(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """The reminder comes many times in a window: it must stay small (D211)."""
+    await memory.remember("Noan aime le rap.", OWNER, category=Category.PREFERENCE)
+    await memory.learn_rule("Réponses de 1 à 5 mots.", OWNER, scope=RuleScope.STYLE)
+    await memory.learn_rule("Vérifier ses sources.", OWNER, scope=RuleScope.WORK)
+    provider = ScriptedProvider(*[reply("ok") for _ in range(8)])
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+    for i in range(8):
+        await orion.handle_owner_message("t1", f"message {i}", "terminal", now=at(i))
+
+    reminders = [
+        str(r.messages[-1]["content"]).split("<consignes>")[-1]
+        for r in provider.requests
+        if "<consignes>" in str(r.messages[-1]["content"])
+    ]
+    assert reminders and "1 à 5 mots" in reminders[0]
+    assert "Vérifier" not in reminders[0] and "rap" not in reminders[0]
+
+
 async def test_his_instructions_come_back_as_a_long_conversation_drifts(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:
     """Told once to answer in a few words, Orion slid back to long replies as the instruction
     fell far behind in the window: it must be shown again, without breaking the cache."""
-    await memory.remember(
-        "Noan veut des réponses de 1 à 5 mots.", OWNER, category=Category.PREFERENCE
-    )
+    await memory.learn_rule("Noan veut des réponses de 1 à 5 mots.", OWNER, scope=RuleScope.STYLE)
     provider = ScriptedProvider(*[reply("r" * 2000) for _ in range(12)])
     orion = make_orion(journal, memory, provider)
     await orion.start()
@@ -126,9 +194,7 @@ async def test_his_instructions_come_back_in_a_short_conversation_too(
 ) -> None:
     """With short replies, 6k tokens took dozens of exchanges: the drift started long before
     the reminder came (D184)."""
-    await memory.remember(
-        "Noan veut des réponses de 1 à 5 mots.", OWNER, category=Category.PREFERENCE
-    )
+    await memory.learn_rule("Noan veut des réponses de 1 à 5 mots.", OWNER, scope=RuleScope.STYLE)
     provider = ScriptedProvider(*[reply("ok") for _ in range(8)])
     orion = make_orion(journal, memory, provider)
     await orion.start()

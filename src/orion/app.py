@@ -34,7 +34,7 @@ from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.registry import discover, load
-from orion.providers.base import Embedder, ModelProvider, chars_per_token
+from orion.providers.base import Embedder, ModelProvider, chars_per_token, window_tokens
 from orion.providers.spending import Spending, spending_tools, with_spending
 from orion.resources import read_resource
 from orion.runtime import Orion
@@ -126,27 +126,37 @@ DRAWER_TOOLS = frozenset(
         "autonomy",
         "autonomy_grant",
         "autonomy_revoke",
+        "booking",
         "chronicle",
         "configure_change",
         "configure_show",
-        "contacts",
         "console_link",
+        "consult_expert",
+        "contacts",
         "contain_source",
+        "departure",
         "doubt",
+        "drive_change",
+        "drive_upload",
         "feeds",
+        "focus",
         "hand_find_files",
         "hand_notify",
         "hand_open",
         "hand_read_file",
         "hands",
         "initiative_settings",
+        "mail_draft",
         "mistake",
         "module_install",
         "module_remove",
         "modules",
         "onboarding_stop",
         "owner_style",
+        "papers",
         "provenance",
+        "say",
+        "secret_ask",
         "spending",
     }
 )
@@ -288,7 +298,7 @@ async def build_app(
             ),
             compiler=ContextCompiler(
                 constitution(enabled, offers(config), config.memory.owner_names),
-                config.agent.max_window_tokens,
+                window_tokens(config.agent.model, config.agent.max_window_tokens),
                 chars_per_token=chars_per_token(config.agent.model),
             ),
             agent=config.agent,

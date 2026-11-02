@@ -4778,3 +4778,33 @@ appel au modèle. Le fil d'Orion pesait 342k tokens, là où une session Claude 
 À surveiller : si Orion oublie à nouveau son style en longue conversation (D184), c'est le seuil de
 30 000 qu'il faut revoir.
 
+
+## D211 — Le contexte, deuxième passe : ce qui reste cher
+
+*02/11/2026 · acceptée · complète D200, D210, révise D184*
+
+Mesuré après D210 sur le serveur : message système de 85k caractères (38k de consignes, 46k de
+schémas d'outils), rappel de 9 450 caractères, veille qui repart de tout son fil à chaque passage.
+
+- **Cache froid, fenêtre plus petite** : une fois le cache du modèle expiré, tout est refacturé de
+  toute façon. Une fenêtre au-delà de `cold_window_tokens` (40k) revient alors aux trois quarts,
+  avec le résumé cumulatif. Ce n'est pas le reset de D200, qui gardait 16k et dix lignes : une
+  courte pause garde tout, et la fenêtre reste large.
+- **La veille repart courte** : chaque passage part de son brief et du résumé des précédents. Ils
+  sont espacés de plusieurs heures, leur cache est toujours perdu, et ce qu'il a dit au propriétaire
+  lui arrive déjà par le brief.
+- **Fenêtre du forfait Claude : 80k au plus**, quel que soit le réglage ; les autres gardent le leur.
+- **Le rappel ne porte que sur le style** : les règles de portée `style` (7 sur 25, environ 1 700
+  caractères). Le reste ouvre toujours la fenêtre avec `<memoire>`.
+- **Dix outils rares passent au tiroir** (moins de dix appels sur 5 235, ou tout neufs) : `booking`,
+  `consult_expert`, `departure`, `drive_change`, `drive_upload`, `focus`, `mail_draft`, `papers`,
+  `say`, `secret_ask`. Environ 8k caractères de moins à chaque appel. `later` reste au menu malgré
+  ses 7 appels : sans lui, Orion promet de revenir sans rien programmer.
+- **Double requête : le log parle maintenant.** `turns: 2` est une seule requête (l'outil de réponse
+  et son résultat, mesuré : le cache n'est lu qu'une fois). `turns: 3` en est deux (22 % des réponses
+  sur 55, cache lu deux fois). Six essais n'ont pas reproduit le cas : `claude_code.answered` donne
+  désormais le détail des étapes dès 3 tours, pour trouver la cause sur de vrais échanges.
+
+À surveiller : si Orion perd le fil au retour d'une longue pause (D200), remonter
+`cold_window_tokens` ; si des règles de travail s'oublient en longue conversation, les remettre dans
+le rappel. Reste à faire : charger à la demande les sections rares du message système.

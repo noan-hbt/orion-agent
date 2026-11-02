@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from orion.memory.model import Category, RuleBasis, SettingKey
+from orion.memory.model import Category, RuleBasis, RuleScope, SettingKey
 from orion.memory.store import Commitment, Fact, Rule, SettingChange
 
 _OWNER = {"owner": "toi", "orion": "Orion"}
@@ -83,11 +83,11 @@ def recall_block(facts: list[Fact]) -> str | None:
     return "<souvenirs>\n" + "\n".join(format_fact(f) for f in facts) + "\n</souvenirs>"
 
 
-def reminder_block(rules: Sequence[Rule], facts: list[Fact]) -> str | None:
-    """His standing instructions shown again once the window has drifted far from where they
-    were last shown: a long conversation otherwise slides back to the model's own habits."""
-    lines = [format_rule(r) for r in rules if r.active]
-    lines += [format_fact(f) for f in facts if f.category == Category.PREFERENCE and f.current]
+def reminder_block(rules: Sequence[Rule]) -> str | None:
+    """How he wants to be spoken to, shown again once the window has drifted far from where it
+    was last shown: a long conversation otherwise slides back to the model's own habits. Only
+    that: the rest of his instructions and tastes open the window with `<memoire>` (D211)."""
+    lines = [format_rule(r) for r in rules if r.active and r.scope is RuleScope.STYLE]
     if not lines:
         return None
     return (

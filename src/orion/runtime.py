@@ -51,7 +51,7 @@ from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.guardian.policy import TRUSTED_FLOOR, Guardian
+from orion.guardian.policy import TRUSTED_FLOOR, WATCH_THREAD, Guardian
 from orion.memory.extractor import EXTRACTOR_TRUST, ExtractionReport, MemoryExtractor
 from orion.memory.model import FACT_ASSERTED
 from orion.memory.portrait import Portrait, portrait_block
@@ -513,7 +513,10 @@ class Orion:
 
         events: list[NewEvent] = [received]
         stale = self._untrusted_and_idle(thread, when)
-        prune = [] if stale else self._prunable(thread, when)
+        # Each pass of the watch starts from its brief and a summary of the passes before: hours
+        # apart, its cache is gone, and they had carried a whole browsing session each (D211).
+        anew = thread_id == WATCH_THREAD and bool(thread.window())
+        prune = [] if stale or anew else self._prunable(thread, when)
         if prune:
             log.info("thread.prune", thread=thread_id, results=len(prune))
             events.append(
@@ -531,11 +534,13 @@ class Orion:
             )
             thread = replace(thread, pruned=thread.pruned | set(prune))  # as it will be shown
         incoming = [render_user_message(body, when, channel)]
-        fresh = not stale and self._idle(thread, when, self._agent.fresh_idle_minutes)
-        if stale:
+        fresh = not (stale or anew) and self._idle(thread, when, self._agent.fresh_idle_minutes)
+        if stale or anew:
             new_base: int | None = len(thread.messages)
         elif fresh:
             new_base = self._compiler.fresh_point(thread, incoming, self._agent.fresh_window_tokens)
+        elif self._cold(thread, when):
+            new_base = self._compiler.rebase_point(thread, incoming, self._agent.cold_window_tokens)
         else:
             new_base = self._compiler.rebase_point(thread, incoming)
         window = thread.messages[new_base if new_base is not None else thread.base :]
@@ -557,7 +562,7 @@ class Orion:
             summary = await self._summarize_dropped(thread, new_base)
             if summary:
                 blocks.insert(0, summary_block(summary))
-        if new_base is not None and not stale:
+        if new_base is not None and not (stale or anew):
             dropped = self._trusted_dropped(thread, new_base)
             if dropped:
                 leaving = sides(dropped)
@@ -569,6 +574,8 @@ class Orion:
                 base=new_base,
                 reason="untrusted content, conversation idle"
                 if stale
+                else "new watch pass"
+                if anew
                 else "conversation idle"
                 if fresh
                 else "window budget",
@@ -901,6 +908,13 @@ class Orion:
             and when - thread.last_at >= timedelta(minutes=minutes)
         )
 
+    def _cold(self, thread: Thread, when: datetime) -> bool:
+        """Whether the model's cache has expired: the whole window is about to be paid in full
+        anyway, so a smaller one costs no cache (D211)."""
+        return bool(self._agent.cold_window_tokens) and self._idle(
+            thread, when, cache_minutes(self._agent.model)
+        )
+
     def _untrusted_and_idle(self, thread: Thread, when: datetime) -> bool:
         """Untrusted content stays in the window, and everything written after it is tainted
         too, until the window starts afresh. Do it after a pause in the conversation: the
@@ -976,7 +990,7 @@ class Orion:
             since = window[held + 1 :]
             asked = sum(1 for m in since if _from_him(m))
             if asked >= REMIND_AFTER_MESSAGES or estimate_tokens(since) > REMIND_AFTER_TOKENS:
-                reminder = reminder_block(rules, await store.facts())
+                reminder = reminder_block(rules)
                 if reminder:
                     blocks.append(reminder)
         shown = "\n".join(str(m.get("content") or "") for m in window) + "\n".join(blocks)
