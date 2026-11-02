@@ -234,6 +234,7 @@ def expert_tools(expert: Expert) -> list[Tool]:
 class ExpertModule(Module):
     name = "expert"
     instructions = "expert.md"
+    read_when = "une question vraiment difficile, qui mérite un modèle plus fort"
     settings_model = ExpertSettings
 
     async def assemble(self, plate: Plate) -> list[Tool]:

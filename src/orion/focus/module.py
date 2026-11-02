@@ -247,6 +247,7 @@ def focus_tools(keeper: FocusKeeper) -> list[Tool]:
 class FocusModule(Module):
     name = "focus"
     instructions = "focus.md"
+    read_when = "il dit qu'il bosse, qu'il révise ou qu'il ne veut pas être dérangé"
     settings_model = FocusSettings
 
     def __init__(self, config: OrionConfig) -> None:

@@ -33,6 +33,7 @@ from orion.memory.service import MemoryService
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
+from orion.modules.guide import guide_section, guide_tool, on_demand
 from orion.modules.registry import discover, load
 from orion.providers.base import Embedder, ModelProvider, chars_per_token, window_tokens
 from orion.providers.spending import Spending, spending_tools, with_spending
@@ -106,8 +107,10 @@ def constitution(
                 f"module {module.name!r}: its instructions are {len(text)} characters, more "
                 f"than {MAX_SECTION_CHARS}; move what its tools do into their descriptions"
             )
-        if text:
+        if text and not module.read_when:
             parts.append(text)
+    if on_demand(modules):
+        parts.append(guide_section(modules))
     if offers:
         listed = "\n".join(f"- {offer}" for offer in offers)
         parts.append(f"{read_resource('offers.md').strip()}\n\n{listed}")
@@ -281,6 +284,8 @@ async def build_app(
         for module in enabled:
             stack.push_async_callback(module.close)
             tools += await module.assemble(plate)
+        if on_demand(enabled):
+            tools.append(guide_tool(enabled))
 
         orion = Orion(
             journal=journal,

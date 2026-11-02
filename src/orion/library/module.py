@@ -360,6 +360,7 @@ def library_tools(
 class LibraryModule(Module):
     name = "library"
     instructions = "library.md"
+    read_when = "il te confie un texte à garder, ou cherche une note ou un document"
     settings_model = LibrarySettings
 
     def __init__(self, config: OrionConfig) -> None:

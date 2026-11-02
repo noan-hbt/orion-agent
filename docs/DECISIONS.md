@@ -4808,3 +4808,16 @@ schémas d'outils), rappel de 9 450 caractères, veille qui repart de tout son f
 À surveiller : si Orion perd le fil au retour d'une longue pause (D200), remonter
 `cold_window_tokens` ; si des règles de travail s'oublient en longue conversation, les remettre dans
 le rappel. Reste à faire : charger à la demande les sections rares du message système.
+
+## D212 — Des consignes rares lues quand elles servent
+
+*02/11/2026 · acceptée · complète D84, D211*
+
+Le message système se paie à chaque appel. Cinq sections qui servent peu en sortent : rendez-vous,
+papiers, concentration, modèle plus fort, bibliothèque (5 300 caractères). Il n'en reste qu'une
+ligne qui dit quand les lire, et l'outil `consigne` les donne en entier.
+
+Seules des sections déclenchées par une demande claire sortent : celles qui règlent le comportement
+de tous les jours ou l'initiative d'Orion restent, car il ne saurait pas qu'il doit les lire.
+
+À surveiller : si Orion agit dans un de ces cas sans lire la consigne, remettre la section.
