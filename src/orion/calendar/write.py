@@ -448,14 +448,15 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 LOOPBACK = "http://127.0.0.1:8765/"
 
 
-def google_consent_url(client_id: str, state: str) -> str:
-    """Where the owner agrees to let Orion add events (a 'Desktop app' OAuth client)."""
+def google_consent_url(client_id: str, state: str, scopes: tuple[str, ...] = ()) -> str:
+    """Where the owner agrees to let Orion add events (a 'Desktop app' OAuth client), and
+    whatever else `scopes` asks (his Drive, D206): one refresh token for all of it."""
     query = httpx.QueryParams(
         {
             "client_id": client_id,
             "redirect_uri": LOOPBACK,
             "response_type": "code",
-            "scope": GOOGLE_SCOPE,
+            "scope": " ".join((GOOGLE_SCOPE, *scopes)),
             "access_type": "offline",
             "prompt": "consent",
             "state": state,

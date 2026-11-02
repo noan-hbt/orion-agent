@@ -4653,3 +4653,40 @@ montre cinq causes.
   n'est plus lue ; une courte reste lue, « continue » fait partie de l'offre.
 - **Interruption** : « ta nuit » est arrivée trois minutes après son dernier message. Dix minutes
   après qu'il a écrit, le dérangement monte de 0,4 : ce qui peut attendre attend, ce qui compte part.
+
+## D206 — Son Google Drive
+
+*02/11/2026 · acceptée · complète D28, D63, D74, D95*
+
+Noan veut qu'Orion ait accès à son Google Drive. Un module natif `drive`, plutôt qu'un serveur
+MCP : Google demande un jeton OAuth renouvelé toutes les heures, que le relais MCP du gardien
+(un jeton fixe) ne sait pas tenir, et la lecture des PDF et fichiers Office existe déjà
+(`text_of`, D63).
+
+- **Lire** : `drive` (search, read, fetch). La recherche passe par le texte intégral de Drive ;
+  `read` rend le texte d'un Google Doc, d'une feuille (CSV, première feuille), d'une
+  présentation, d'un PDF ou d'un fichier Office, ou la liste d'un dossier ; `fetch` en garde une
+  copie dans les fichiers (formats Google en PDF ou Excel), pour `file` (send) ou `mail_send`.
+  Ce qui en revient est `THIRD_PARTY` : un document partagé peut contenir n'importe quoi.
+- **Écrire** : `drive_upload` range un fichier gardé dans le dossier d'Orion (« Orion », et un
+  sous-dossier s'il le veut), avec son oui, ou seul s'il le permet. Journalisé
+  (`drive.uploaded`) : nom, identifiants, taille, jamais le contenu.
+- **Deux niveaux** (`access`). `own`, par défaut : Orion ne touche pas à ses fichiers, et les
+  portées OAuth le garantissent côté Google (`drive.readonly` + `drive.file` : Orion n'écrit que
+  ce qu'il a créé). `full` (portée `drive`), demandé par Noan, dont le Drive est rangé en
+  dossiers : `drive_change` déplace, renomme, met à la corbeille, remplace le contenu d'un
+  fichier (Drive garde l'ancienne version) et crée des dossiers. Chaque changement passe par
+  son oui, que le gardien vérifie lui-même : ce fichier, cette destination, ce nom, cette
+  action. Sinon, c'est qu'il a laissé Orion le faire seul. Un fichier Google (Doc, Sheets) ne
+  se remplace pas : on ne réécrit pas un document vivant d'un bloc.
+- **Jamais, quel que soit le niveau** : partager (un partage demandé est refusé et noté) ni
+  supprimer pour de bon (la corbeille garde 30 jours). Le gardien ne relaie que ce que liste
+  `orion.drive.api.allowed`. Déplacer dans un dossier partagé rend le fichier visible des
+  autres : c'est pourquoi chaque déplacement passe par son oui. Les dossiers d'Orion se
+  retrouvent par une marque privée (`appProperties`), pas par leur nom.
+- **Le jeton** : le même client OAuth que l'agenda ; `orion google auth <client id> --drive`
+  (ou `--drive full`) demande les deux accès d'un coup, et le gardien garde le jeton (D28).
+
+Les papiers (D74) restent tels quels : ils ajoutent au fichier ce que Drive ne fait pas (les
+dates de validité, l'alerte avant expiration, le dossier de location). Les ranger aussi dans
+Drive est une étape suivante, à décider.

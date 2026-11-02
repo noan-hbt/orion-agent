@@ -31,6 +31,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.curiosity.module import CuriosityModule
     from orion.delegation.module import DelegationModule
     from orion.departure.module import DepartureModule
+    from orion.drive.module import DriveModule
     from orion.expert.module import ExpertModule
     from orion.federation.module import FederationModule
     from orion.feeds.module import FeedsModule
@@ -88,6 +89,7 @@ def builtin_modules() -> list[type[Module]]:
         LibraryModule,
         PhotosModule,
         PapersModule,
+        DriveModule,
         ThinkingModule,
         WatchModule,
         AwaitingModule,
