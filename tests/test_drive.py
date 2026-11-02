@@ -18,6 +18,7 @@ from orion.drive.service import Drive
 from orion.files.module import FileStore
 from orion.tools.base import ToolContext
 from tests.fake_guardian import guardian_config, running_guardian
+from tests.fake_inkbox import CONVERSATION
 
 DOC = "application/vnd.google-apps.document"
 FOLDER = "application/vnd.google-apps.folder"
@@ -46,6 +47,12 @@ class FakeDrive:
                 and ("name = '" not in q or f"name = '{f['name']}'" in q)
             ]
             return httpx.Response(200, json={"files": found})
+        if request.method == "PATCH":
+            file = self.files[path.rsplit("/", 1)[-1]]
+            if "addParents" in request.url.params:
+                file["parents"] = [request.url.params["addParents"]]
+            file |= json.loads(request.content or b"{}")
+            return httpx.Response(200, json=file)
         if request.method == "GET" and path.endswith("/export"):
             return httpx.Response(200, text=self.files[path.split("/")[-2]]["text"])
         if request.method == "GET":
@@ -67,6 +74,12 @@ async def call(tool: Any, ctx: ToolContext, **args: Any) -> Any:
     return await tool.handler(tool.parse(json.dumps(args)), ctx)
 
 
+def google_behind(google: FakeDrive, settings: DriveSettings) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        base_url=GOOGLE_API, auth=GoogleAuth(settings), transport=httpx.MockTransport(google.handle)
+    )
+
+
 async def test_his_drive_is_searched_read_and_orion_files_go_in_its_folder(
     journal: SqliteJournal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -74,11 +87,7 @@ async def test_his_drive_is_searched_read_and_orion_files_go_in_its_folder(
     monkeypatch.setenv("GOOGLE_REFRESH_TOKEN", "r")
     google = FakeDrive()
     settings = DriveSettings(enabled=True, client_id="c")
-    to_google = httpx.AsyncClient(
-        base_url=GOOGLE_API,
-        auth=GoogleAuth(settings),
-        transport=httpx.MockTransport(google.handle),
-    )
+    to_google = google_behind(google, settings)
     config = guardian_config(tmp_path, modules={"drive": settings.model_dump()})
     async with running_guardian(config, drive=to_google) as running:
         store = FileStore(journal, tmp_path / "files")
@@ -107,4 +116,32 @@ async def test_his_drive_is_searched_read_and_orion_files_go_in_its_folder(
         assert shared.status_code == 403
         assert not any("permissions" in s for s in google.seen)
         await relay.aclose()
+        await drive.aclose()
+
+
+async def test_with_full_access_a_file_moves_only_where_he_said_yes(
+    journal: SqliteJournal, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "s")
+    monkeypatch.setenv("GOOGLE_REFRESH_TOKEN", "r")
+    google = FakeDrive()
+    google.files["d1"]["parents"] = ["inbox"]
+    settings = DriveSettings(enabled=True, client_id="c", access="full")
+    config = guardian_config(tmp_path, modules={"drive": settings.model_dump()})
+    async with running_guardian(config, drive=google_behind(google, settings)) as running:
+        running.fake.inbound("salut")
+        drive = Drive(running.client.relay(), "/v1/drive/", full=True)
+        _, _, change = drive_tools(drive, FileStore(journal, tmp_path / "files"), journal)
+        move = {"action": "move", "file": "d1", "to": "travaux", "what": "Devis → Travaux"}
+        grant, asked = await running.client.request_approval("drive_change", move, "", CONVERSATION)
+
+        moved = await call(change, ToolContext("owner", "c1", grant=grant), **move)
+        assert moved.is_error and google.files["d1"]["parents"] == ["inbox"]  # no yes yet
+        running.fake.react(asked, "like")
+        elsewhere = await call(
+            change, ToolContext("owner", "c1", grant=grant), **move | {"to": "x"}
+        )
+        assert elsewhere.is_error and google.files["d1"]["parents"] == ["inbox"]
+        moved = await call(change, ToolContext("owner", "c1", grant=grant), **move)
+        assert not moved.is_error and google.files["d1"]["parents"] == ["travaux"]
         await drive.aclose()

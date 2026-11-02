@@ -4671,13 +4671,21 @@ MCP : Google demande un jeton OAuth renouvelé toutes les heures, que le relais 
 - **Écrire** : `drive_upload` range un fichier gardé dans le dossier d'Orion (« Orion », et un
   sous-dossier s'il le veut), avec son oui, ou seul s'il le permet. Journalisé
   (`drive.uploaded`) : nom, identifiants, taille, jamais le contenu.
-- **Ce qu'Orion ne peut pas** : modifier, supprimer ou partager un fichier à lui. Les portées
-  OAuth le garantissent côté Google (`drive.readonly` + `drive.file` : Orion n'écrit que ce
-  qu'il a créé), et le gardien ne relaie que la lecture et la création (`/v1/drive/…`,
-  `orion.drive.api.allowed`) ; un partage demandé est refusé et noté. Les dossiers d'Orion se
+- **Deux niveaux** (`access`). `own`, par défaut : Orion ne touche pas à ses fichiers, et les
+  portées OAuth le garantissent côté Google (`drive.readonly` + `drive.file` : Orion n'écrit que
+  ce qu'il a créé). `full` (portée `drive`), demandé par Noan, dont le Drive est rangé en
+  dossiers : `drive_change` déplace, renomme, met à la corbeille, remplace le contenu d'un
+  fichier (Drive garde l'ancienne version) et crée des dossiers. Chaque changement passe par
+  son oui, que le gardien vérifie lui-même : ce fichier, cette destination, ce nom, cette
+  action. Sinon, c'est qu'il a laissé Orion le faire seul. Un fichier Google (Doc, Sheets) ne
+  se remplace pas : on ne réécrit pas un document vivant d'un bloc.
+- **Jamais, quel que soit le niveau** : partager (un partage demandé est refusé et noté) ni
+  supprimer pour de bon (la corbeille garde 30 jours). Le gardien ne relaie que ce que liste
+  `orion.drive.api.allowed`. Déplacer dans un dossier partagé rend le fichier visible des
+  autres : c'est pourquoi chaque déplacement passe par son oui. Les dossiers d'Orion se
   retrouvent par une marque privée (`appProperties`), pas par leur nom.
 - **Le jeton** : le même client OAuth que l'agenda ; `orion google auth <client id> --drive`
-  demande les deux accès d'un coup, et le gardien garde le jeton (D28).
+  (ou `--drive full`) demande les deux accès d'un coup, et le gardien garde le jeton (D28).
 
 Les papiers (D74) restent tels quels : ils ajoutent au fichier ce que Drive ne fait pas (les
 dates de validité, l'alerte avant expiration, le dossier de location). Les ranger aussi dans

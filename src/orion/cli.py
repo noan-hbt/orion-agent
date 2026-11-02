@@ -710,14 +710,14 @@ async def _library_add(config: OrionConfig, notes: list[tuple[str, Path, str]]) 
     return added
 
 
-async def _google_auth(client_id: str, secret_env: str, drive: bool) -> int:
+async def _google_auth(client_id: str, secret_env: str, drive: str | None) -> int:
     import os
     import secrets
 
     import httpx
 
     from orion.calendar.write import CalendarWriteError, google_consent_url, google_refresh_token
-    from orion.drive.api import DRIVE_SCOPES
+    from orion.drive.api import SCOPES
 
     secret = os.environ.get(secret_env)
     if not secret:
@@ -725,7 +725,7 @@ async def _google_auth(client_id: str, secret_env: str, drive: bool) -> int:
         return 2
     state = secrets.token_urlsafe(16)
     print("1. Ouvre cette adresse dans ton navigateur et accepte :\n")
-    print(google_consent_url(client_id, state, DRIVE_SCOPES if drive else ()))
+    print(google_consent_url(client_id, state, SCOPES[drive] if drive else ()))
     print("\n2. Google te renvoie vers une page 127.0.0.1 qui ne s'affiche pas : c'est normal.")
     redirected = await asyncio.to_thread(input, "   Colle ici l'adresse complète de cette page : ")
     async with httpx.AsyncClient(timeout=20.0) as http:
@@ -1067,7 +1067,12 @@ def main(argv: list[str] | None = None) -> int:
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
     )
     google_auth.add_argument(
-        "--drive", action="store_true", help="Also read your Drive and put Orion's files there"
+        "--drive",
+        nargs="?",
+        const="own",
+        choices=("own", "full"),
+        help="Also your Drive: own (read all, write its own files) or full (also move, "
+        "rename, trash; each change approved)",
     )
     chatgpt = sub.add_parser("chatgpt", help="Use your ChatGPT plan for Orion's models (D62)")
     chatgpt_sub = chatgpt.add_subparsers(dest="chatgpt_command", required=True)

@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from orion.channels.inkbox import GRANT_HEADER
 from orion.core.ids import new_id
 from orion.drive.api import DriveError
 
@@ -42,7 +43,7 @@ KINDS = {
     _APPS + "presentation": "Google Slides",
     "application/pdf": "PDF",
 }
-FIELDS = "id,name,mimeType,modifiedTime,size,webViewLink,owners(displayName,me)"
+FIELDS = "id,name,mimeType,modifiedTime,size,webViewLink,owners(displayName,me),parents"
 MAX_READ = 20 * 1024 * 1024
 
 
@@ -56,6 +57,7 @@ class DriveFile:
     link: str
     owner: str
     """Who owns it, when it is not the owner: a file shared with him."""
+    parents: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, data: dict[str, Any]) -> DriveFile:
@@ -70,6 +72,7 @@ class DriveFile:
             size=int(data["size"]) if data.get("size") else None,
             link=str(data.get("webViewLink", "")),
             owner=str(theirs.get("displayName", "")) if theirs else "",
+            parents=tuple(str(p) for p in data.get("parents") or ()),
         )
 
     @property
@@ -83,6 +86,8 @@ class DriveFile:
             parts.append(f"modifié le {self.modified:%d/%m/%Y}")
         if self.owner:
             parts.append(f"partagé par {self.owner}")
+        if self.parents:
+            parts.append(f"dans {', '.join(self.parents)}")
         return ", ".join(parts)
 
 
@@ -99,10 +104,14 @@ def _refusal(response: httpx.Response) -> str:
 
 
 class Drive:
-    def __init__(self, http: httpx.AsyncClient, base: str, folder: str = "Orion") -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, base: str, folder: str = "Orion", full: bool = False
+    ) -> None:
         self._http = http
         self._base = base
         self.folder_name = folder
+        self.full = full
+        """He let Orion change his own files too (`access = "full"`)."""
         self._folders: dict[str, str] = {}
 
     async def aclose(self) -> None:
@@ -115,14 +124,18 @@ class Drive:
         params: dict[str, str] | None = None,
         content: bytes | None = None,
         content_type: str | None = None,
+        grant: str | None = None,
     ) -> httpx.Response:
+        headers = {"content-type": content_type} if content_type else {}
+        if grant and self._base:  # his yes, for the guardian to check; never sent to Google
+            headers[GRANT_HEADER] = grant
         try:
             response = await self._http.request(
                 method,
                 self._base + path,
                 params=params,
                 content=content,
-                headers={"content-type": content_type} if content_type else None,
+                headers=headers,
             )
         except httpx.HTTPError as exc:
             raise DriveError(f"Drive unreachable: {exc!r}") from exc
@@ -169,12 +182,16 @@ class Drive:
         return got.content, file.mime or "application/octet-stream", file.name
 
     async def upload(
-        self, name: str, data: bytes, content_type: str, subfolder: str = ""
+        self, name: str, data: bytes, content_type: str, subfolder: str = "", into: str = ""
     ) -> DriveFile:
-        """Into Orion's folder (or one of its subfolders), created the first time."""
-        parent = await self._folder(self.folder_name, None)
-        if subfolder:
-            parent = await self._folder(subfolder, parent)
+        """Into Orion's folder (or one of its subfolders), created the first time; with full
+        access, into any of his folders (`into`, its id)."""
+        if into:
+            parent = into
+        else:
+            parent = await self._folder(self.folder_name, None)
+            if subfolder:
+                parent = await self._folder(subfolder, parent)
         metadata = json.dumps({"name": name, "parents": [parent]}).encode()
         boundary = f"orion{new_id()}"
         body = b"".join(
@@ -192,6 +209,62 @@ class Drive:
             {"uploadType": "multipart", "fields": FIELDS},
             body,
             f"multipart/related; boundary={boundary}",
+        )
+        return DriveFile.of(made.json())
+
+    # -- his own files (full access) -------------------------------------------------------
+
+    async def change(
+        self,
+        file: DriveFile,
+        grant: str | None,
+        name: str = "",
+        to: str = "",
+        trash: bool = False,
+    ) -> DriveFile:
+        """Renamed, moved (out of every folder it was in, into `to`) or put in the trash."""
+        params = {"fields": FIELDS}
+        if to:
+            params["addParents"] = to
+            if file.parents:
+                params["removeParents"] = ",".join(file.parents)
+        body: dict[str, Any] = {}
+        if name:
+            body["name"] = name
+        if trash:
+            body["trashed"] = True
+        made = await self._call(
+            "PATCH",
+            f"drive/v3/files/{file.id}",
+            params,
+            json.dumps(body).encode(),
+            "application/json",
+            grant,
+        )
+        return DriveFile.of(made.json())
+
+    async def replace(
+        self, file: DriveFile, data: bytes, content_type: str, grant: str | None
+    ) -> DriveFile:
+        """A new version of its content; Drive keeps the previous ones."""
+        made = await self._call(
+            "PATCH",
+            f"upload/drive/v3/files/{file.id}",
+            {"uploadType": "media", "fields": FIELDS},
+            data,
+            content_type,
+            grant,
+        )
+        return DriveFile.of(made.json())
+
+    async def make_folder(self, name: str, parent: str) -> DriveFile:
+        metadata = {"name": name, "mimeType": FOLDER, "parents": [parent or "root"]}
+        made = await self._call(
+            "POST",
+            "drive/v3/files",
+            {"fields": FIELDS},
+            json.dumps(metadata).encode(),
+            "application/json",
         )
         return DriveFile.of(made.json())
 

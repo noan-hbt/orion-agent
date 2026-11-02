@@ -197,6 +197,40 @@ def _drive_upload(params: dict[str, Any]) -> str:
     return f"Avant que je range « {what} » dans ton Google Drive{where}."
 
 
+DRIVE_VERBS = {
+    "move": "je déplace",
+    "rename": "je renomme",
+    "trash": "je mette à la corbeille (30 jours pour la récupérer)",
+    "replace": "je remplace le contenu (l'ancienne version reste dans l'historique)",
+    "folder": "je crée le dossier",
+}
+
+
+def _drive_change(params: dict[str, Any]) -> str:
+    verb = DRIVE_VERBS.get(str(params.get("action")), str(params.get("action")))
+    return f"Dans ton Google Drive, avant que {verb} : {params.get('what')}"
+
+
+def _same_drive_change(
+    p: dict[str, Any], file_id: str, upload: bool, query: dict[str, str], body: dict[str, Any]
+) -> bool:
+    """The very change the owner read: that file, that destination, that name, that action."""
+    action = p.get("action")
+    if p.get("file") != file_id or set(body) - {"name", "trashed"}:
+        return False
+    if set(query) - {"fields", "addParents", "removeParents", "uploadType"}:
+        return False
+    if upload:
+        return action == "replace" and not body
+    if "addParents" in query and (action != "move" or query["addParents"] != p.get("to")):
+        return False
+    if "name" in body and (action != "rename" or body["name"] != p.get("name")):
+        return False
+    if body.get("trashed") and action != "trash":
+        return False
+    return bool(body) or "addParents" in query
+
+
 def _calendar_change(params: dict[str, Any]) -> str:
     event = f"« {params.get('title')} » du {_when(params.get('start'))}"
     if params.get("series"):
@@ -387,6 +421,7 @@ class GuardianService:
             "calendar_add": _calendar_add,
             "calendar_change": _calendar_change,
             "drive_upload": _drive_upload,
+            "drive_change": _drive_change,
             "mail_send": _mail_send,
             "mail_tidy": _mail_tidy,
             "autonomy_grant": _autonomy_grant,
@@ -455,7 +490,7 @@ class GuardianService:
                 Route("/v1/contacts/send", self._contact_send, methods=["POST"]),
                 Route("/v1/config", self._configure, methods=["POST"]),
                 Route("/v1/mcp/{name}", self._mcp, methods=["POST"]),
-                Route("/v1/drive/{path:path}", self._drive_relay, methods=["GET", "POST"]),
+                Route("/v1/drive/{path:path}", self._drive_relay, methods=["GET", "POST", "PATCH"]),
                 *self.routes,
             ]
         )
@@ -874,17 +909,41 @@ class GuardianService:
     # -- Google Drive (D206) -------------------------------------------------------------------
 
     async def _drive_relay(self, request: Request) -> Response:
-        """Relay to Google Drive with the refresh token the guardian holds: reading, and
-        creating files and folders, nothing else (`orion.drive.api.allowed`). Never sharing,
-        changing or deleting one of the owner's files. Which uploads he approves is the core's
-        policy, as for MCP; the scope `drive.file` keeps them to Orion's own files."""
-        from orion.drive.api import DriveError, DriveSettings, allowed, direct_client
+        """Relay to Google Drive with the refresh token the guardian holds: reading, creating
+        files and folders, and with full access changing one of his files, nothing else
+        (`orion.drive.api.allowed`). Never sharing, never deleting for good. A change needs his
+        yes to that very change (`drive_change`), checked here, unless he let Orion act alone;
+        which uploads he approves is the core's policy, as for MCP."""
+        from orion.drive.api import DriveError, DriveSettings, allowed, changed, direct_client
 
         path = str(request.path_params["path"])
-        if not allowed(request.method, path):
+        settings = DriveSettings.model_validate(self.config.modules.get("drive", {}))
+        if not allowed(request.method, path, settings.access == "full"):
             return await self.deny("drive", f"{request.method} {path} is not allowed")
+        content = await request.body() if request.method != "GET" else None
+        file_id = changed(path)
+        if request.method == "PATCH" and file_id is not None:
+            upload = path.lstrip("/").startswith("upload/")
+            query = dict(request.query_params)
+            try:
+                body: Any = {} if upload else json.loads(content or b"{}")
+            except json.JSONDecodeError:
+                return refused("malformed Drive change", 400)
+            if not isinstance(body, dict):
+                return refused("malformed Drive change", 400)
+            fields = cast(dict[str, Any], body)
+            await self.ledger.catch_up()
+            grant = request.headers.get(GRANT_HEADER)
+            if grant or not await self.autonomous("drive_change"):
+                reason = await self.use_grant(
+                    grant,
+                    "drive_change",
+                    lambda p: _same_drive_change(p, file_id, upload, query, fields),
+                    consume=True,
+                )
+                if reason is not None:
+                    return await self.deny("drive", reason)
         if self._drive is None:
-            settings = DriveSettings.model_validate(self.config.modules.get("drive", {}))
             if not settings.enabled:
                 return refused("Google Drive is off", 404)
             try:
@@ -897,7 +956,7 @@ class GuardianService:
                 request.method,
                 path,
                 params=httpx.QueryParams(str(request.query_params)),
-                content=await request.body() if request.method == "POST" else None,
+                content=content,
                 headers=headers,
             )
         except (httpx.HTTPError, DriveError, LookupError) as exc:
