@@ -96,6 +96,10 @@ class ClaudeCodeConfig(BaseModel):
     enabled: bool = False
     binary: str = Field(default="claude", description="The Claude Code command")
     timeout_seconds: float = Field(default=300.0, gt=0)
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
+        default="low",
+        description="How long the models think when a call asks nothing; none: Claude Code's own",
+    )
 
 
 class ProvidersConfig(BaseModel):

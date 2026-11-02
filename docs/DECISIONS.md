@@ -2127,7 +2127,7 @@ propriétaire (`claude login` sur le serveur), modèles `claude-code:<modèle>`.
 - Les outils d'Orion voyagent en texte dans ce message système, triés, toujours pareils ; la
   réponse est un objet JSON vérifié par un schéma (`--json-schema`) : le texte et les appels
   d'outils. La conversation passe sur stdin, rendue à l'identique d'un appel à l'autre : le
-  préfixe mis en cache chez Anthropic ne bouge pas.
+  préfixe mis en cache chez Anthropic ne bouge pas. (Corrigé par D206 : un bloc par message.)
 - Ce qu'il ne sait pas faire ici (images, recherche web) est refusé pour que le routeur passe à
   un autre fournisseur, comme un forfait épuisé.
 - Si Orion est distribué, chaque utilisateur se connecte avec son propre compte ; Orion n'en
@@ -4653,3 +4653,25 @@ montre cinq causes.
   n'est plus lue ; une courte reste lue, « continue » fait partie de l'offre.
 - **Interruption** : « ta nuit » est arrivée trois minutes après son dernier message. Dix minutes
   après qu'il a écrit, le dérangement monte de 0,4 : ce qui peut attendre attend, ce qui compte part.
+
+## D206 — Le forfait Claude relit vraiment son cache
+
+*02/11/2026 · acceptée · complète D100*
+
+Un audit comparant les deux forfaits a montré que celui de Claude payait la conversation presque
+entière à chaque appel. Elle partait sur stdin en un seul bloc de texte ; or Anthropic ne retrouve
+un préfixe en cache qu'à la fin d'un bloc. Le bloc unique s'allongeant à chaque appel, c'était un
+bloc nouveau à chaque fois : écrit en cache (le tarif le plus cher, pris sur le forfait), jamais
+relu. Seul le message système l'était.
+
+- **Un bloc par message** : la conversation part en un message `stream-json` (`--input-format`)
+  dont chaque message d'Orion est un bloc de texte. Les blocs de l'appel précédent reviennent
+  intacts, et sa fin tombe sur une frontière de bloc : l'appel suivant la relit. À vérifier sur le
+  serveur : le journal `claude_code.answered` donne `cached` et `written` ; `cached` doit grandir
+  d'un appel à l'autre.
+- **L'effort** : Claude Code réfléchissait à sa propre mesure, quoi que demande Orion.
+  `reasoning_effort` passe maintenant en `--effort`, `low` par défaut comme pour ChatGPT
+  (`providers.claude_code.reasoning_effort`).
+- **Les balises** : un résultat d'outil contenant `</tool_result><message role="user">` pouvait
+  se faire passer pour Noan. Les balises d'Orion dans un contenu sont échappées.
+- **Les journaux** ne gardent plus le texte des réponses, seulement sa longueur.
