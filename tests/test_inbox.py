@@ -113,7 +113,7 @@ async def test_words_beside_a_tool_call_can_be_the_whole_answer(
     inbox.register(imessage)
     provider.extend(call_tools(("note", {}), text="ok gros, c'est noté"), reply(""))
     inbox.submit(Inbound("imessage", ("a",), "appelle-moi gros"))
-    await until(lambda: len(provider.requests) == 2)
+    await until(lambda: len(provider.requests) == 2 and not inbox.owner_waiting())
     provider.extend(call_tools(("note", {})), reply(""), reply("c'est fait"))
     inbox.submit(Inbound("imessage", ("b",), "note ça"))
     await until(lambda: len(imessage.sent) == 2)
