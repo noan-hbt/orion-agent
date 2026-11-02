@@ -4986,3 +4986,13 @@ que le modèle (Haiku sur le forfait) lisait comme le sujet ce qu'Orion ajoutait
 
 À surveiller : la part de messages avec `<souvenirs>` (31 sur 79 avant) et les réponses hors
 sujet juste après une coupe.
+
+## D220 — Il passe avant le travail de fond dès qu'il a écrit
+
+*02/11/2026 · acceptée · complète D202*
+
+Un message sorti de la file, le temps de regrouper une rafale (`coalesce_seconds`), ne comptait
+plus comme en attente : pendant cette demi-seconde, une initiative en cours ne lui cédait pas
+la place et lançait son étape suivante. La CI l'attrapait au hasard, selon le minutage. `_answering`
+se lève maintenant dès que le message sort de la file, et le test garde une fenêtre assez longue
+pour échouer à coup sûr sans ce correctif.
