@@ -713,13 +713,14 @@ async def _library_add(config: OrionConfig, notes: list[tuple[str, Path, str]]) 
     return added
 
 
-async def _google_auth(client_id: str, secret_env: str) -> int:
+async def _google_auth(client_id: str, secret_env: str, drive: str | None) -> int:
     import os
     import secrets
 
     import httpx
 
     from orion.calendar.write import CalendarWriteError, google_consent_url, google_refresh_token
+    from orion.drive.api import SCOPES
 
     secret = os.environ.get(secret_env)
     if not secret:
@@ -727,7 +728,7 @@ async def _google_auth(client_id: str, secret_env: str) -> int:
         return 2
     state = secrets.token_urlsafe(16)
     print("1. Ouvre cette adresse dans ton navigateur et accepte :\n")
-    print(google_consent_url(client_id, state))
+    print(google_consent_url(client_id, state, SCOPES[drive] if drive else ()))
     print("\n2. Google te renvoie vers une page 127.0.0.1 qui ne s'affiche pas : c'est normal.")
     redirected = await asyncio.to_thread(input, "   Colle ici l'adresse complète de cette page : ")
     async with httpx.AsyncClient(timeout=20.0) as http:
@@ -1061,12 +1062,20 @@ def main(argv: list[str] | None = None) -> int:
     reminders_cancel = reminders_sub.add_parser("cancel", help="Cancel a reminder by its id")
     reminders_cancel.add_argument("reminder_id", help="The id, e.g. r_…")
     reminders_cancel.add_argument("--reason", default="owner request")
-    google = sub.add_parser("google", help="Let Orion add events to a Google Calendar")
+    google = sub.add_parser("google", help="Let Orion use your Google Calendar and Drive")
     google_sub = google.add_subparsers(dest="google_command", required=True)
     google_auth = google_sub.add_parser("auth", help="Get the refresh token (once)")
     google_auth.add_argument("client_id", help="OAuth client id (type: Desktop app)")
     google_auth.add_argument(
         "--secret-env", default="GOOGLE_CLIENT_SECRET", help="Variable holding the client secret"
+    )
+    google_auth.add_argument(
+        "--drive",
+        nargs="?",
+        const="own",
+        choices=("own", "full"),
+        help="Also your Drive: own (read all, write its own files) or full (also move, "
+        "rename, trash; each change approved)",
     )
     chatgpt = sub.add_parser("chatgpt", help="Use your ChatGPT plan for Orion's models (D62)")
     chatgpt_sub = chatgpt.add_subparsers(dest="chatgpt_command", required=True)
@@ -1212,7 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "library":
         return _library_import(config, args.folder)
     if args.command == "google":
-        return asyncio.run(_google_auth(args.client_id, args.secret_env))
+        return asyncio.run(_google_auth(args.client_id, args.secret_env, args.drive))
     if args.command == "chatgpt":
         return asyncio.run(_chatgpt(config, args))
     if args.command == "backup":

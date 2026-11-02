@@ -34,6 +34,11 @@ def guarded(config: OrionConfig) -> list[SecretRef]:
 
         servers = McpSettings.model_validate(config.modules["mcp"]).servers
         refs += [s.token for s in servers if s.token is not None]
+    if "drive" in config.modules:
+        from orion.drive.api import DriveSettings
+
+        drive = DriveSettings.model_validate(config.modules["drive"])
+        refs += [drive.client_secret, drive.refresh_token]
     if "mail" in config.modules:
         refs += [a.password for a in MailSettings.model_validate(config.modules["mail"]).accounts]
     return refs
