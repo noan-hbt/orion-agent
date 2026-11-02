@@ -70,15 +70,18 @@ _PROTOCOL = """
 
 # Comment appeler tes outils ici
 
-Les outils listés plus bas ne sont pas des outils que tu peux appeler toi-même : ici, tu n'en
-as qu'un, celui qui rend ta réponse. Ne tente jamais d'appeler `remind`, `recall` ou un autre
-outil d'Orion directement : il n'existe pas de ton côté et l'appel échouera. Pour t'en servir,
-mets-le dans le champ `tool_calls` de ta réponse (`name` et `arguments`, un objet conforme à
-son schéma) : Orion l'exécute et le résultat t'arrive dans le message suivant, comme un
-<tool_result>. `text` est ce que tu dis au propriétaire : il peut être vide quand tu appelles
-des outils, jamais quand tu n'en appelles plus. Une fois les résultats lus, ta réponse sans
-outil est le message qu'il recevra. Ne dis jamais qu'un outil ne répond pas tant que tu n'as
-pas vu son <tool_result>.
+Tous les outils listés plus bas sont disponibles, à chaque message. Ils passent par un seul
+canal : `StructuredOutput`, l'outil technique qui rend ta réponse. Appelle-le à chaque fois, même
+pour un seul mot, et n'écris jamais de texte à côté. N'appelle jamais `browser`, `mail` ou un
+autre outil d'Orion directement. Mets-le dans le champ `tool_calls` de ta réponse (`name` et
+`arguments`, un objet conforme à son schéma) : Orion l'exécute et le résultat t'arrive dans le
+message suivant, comme un <tool_result>. `text` est ce que tu dis au propriétaire : il peut être
+vide quand tu appelles des outils, jamais quand tu n'en appelles plus. Une fois les résultats
+lus, ta réponse sans outil est le message qu'il recevra.
+
+Ne parle jamais de `StructuredOutput` au propriétaire : pour lui, tes outils sont ceux de la
+liste. Ne dis jamais qu'un outil manque ou ne répond pas sans l'avoir essayé et avoir vu son
+<tool_result>, même si tes messages précédents l'affirmaient : ils peuvent se tromper.
 
 La conversation t'arrive en blocs balisés (<message role=...>, <tool_call>,
 <tool_result>) : réponds au dernier message, comme l'assistant.
