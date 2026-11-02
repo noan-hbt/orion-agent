@@ -15,7 +15,7 @@ from orion.memory.model import Category, RuleScope
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from orion.memory.tools import memory_tools
-from orion.providers.base import PLAN_WINDOW_TOKENS, window_tokens
+from orion.providers.base import window_tokens
 from orion.runtime import Orion
 from orion.tools.base import ToolRegistry
 from orion.tools.builtin import builtin_tools
@@ -144,8 +144,8 @@ async def test_each_watch_pass_starts_short_with_a_summary_of_the_last(
 
 
 def test_the_claude_plan_keeps_a_smaller_window_than_the_others() -> None:
-    assert window_tokens("claude-code:opus", 200_000) == PLAN_WINDOW_TOKENS
-    assert window_tokens("chatgpt:gpt-5.5", 250_000) == 250_000
+    assert window_tokens("claude-code:opus", 200_000, 80_000) == 80_000
+    assert window_tokens("chatgpt:gpt-5.5", 250_000, 80_000) == 250_000
 
 
 async def test_only_how_he_wants_to_be_spoken_to_comes_back(

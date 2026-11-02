@@ -130,6 +130,13 @@ class AgentConfig(BaseModel):
     model: str = "deepseek/deepseek-v4.1-flash"
     timezone: str = "Europe/Paris"
     max_window_tokens: int = Field(default=200_000, ge=4_000)
+    plan_window_tokens: int = Field(
+        default=80_000,
+        ge=4_000,
+        description="On the Claude plan (claude-code:…), the window never grows past this, "
+        "whatever max_window_tokens says: every call there counts against the plan's "
+        "five-hour limit in proportion to what it carries (D210)",
+    )
     max_steps: int = Field(
         default=40, ge=1, description="Model calls per turn; browsing a site takes one per page"
     )

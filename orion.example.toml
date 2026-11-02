@@ -12,6 +12,7 @@ json_output = true
 model = "deepseek/deepseek-v4.1-flash"
 timezone = "Europe/Paris"
 max_window_tokens = 200000   # visible conversation window before a one-step rebase (D200)
+plan_window_tokens = 80000   # on the Claude plan (claude-code:…), the window never grows past this (D210)
 max_steps = 40               # model calls per turn (cost and repeats stop it first)
 max_tool_calls = 80
 max_cost_usd_per_turn = 0.5
