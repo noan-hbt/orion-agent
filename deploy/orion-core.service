@@ -9,6 +9,10 @@ Group=orion
 WorkingDirectory=/srv/orion
 EnvironmentFile=/etc/orion/core.env
 Environment=PLAYWRIGHT_BROWSERS_PATH=/srv/orion/browsers
+# The Claude plan (D208): the login `sudo orion claude login` made, in data/ (kept by reset.sh);
+# /usr/local/bin/claude is refreshed by deploy/claude-code, never by itself.
+Environment=CLAUDE_CONFIG_DIR=/srv/orion/data/claude-code/login
+Environment=DISABLE_AUTOUPDATER=1
 ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml serve
 Restart=always
 RestartSec=5

@@ -174,6 +174,19 @@ def test_orion_is_root_through_sudo_and_its_unit_lets_it() -> None:
         assert "visudo -cqf" in text and "/etc/sudoers.d/orion-core" in text
 
 
+def test_the_core_finds_claude_code_and_its_login() -> None:
+    """D208: `claude` in the owner's home and his login in his ~/.claude were out of the core's
+    reach; it now runs a shared binary, signed in to a folder kept by reset.sh."""
+    unit = (DEPLOY / "orion-core.service").read_text()
+    login = "/srv/orion/data/claude-code/login"
+    assert f"CLAUDE_CONFIG_DIR={login}" in unit and "DISABLE_AUTOUPDATER=1" in unit
+    assert login in (DEPLOY / "orion-admin").read_text()
+    assert "claude-code" in (DEPLOY / "reset.sh").read_text()
+    for script in ("install.sh", "orion-update"):
+        assert "deploy/claude-code" in (DEPLOY / script).read_text().replace("$HERE/", "deploy/")
+    assert "/usr/local/bin/claude" in (DEPLOY / "claude-code").read_text()
+
+
 def test_a_purge_keeps_nothing(tmp_path: Path) -> None:
     root, _ = installed(tmp_path)
     assert run(tmp_path, "uninstall.sh", "--purge", "--yes").startswith("0\n")

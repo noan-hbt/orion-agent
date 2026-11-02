@@ -104,6 +104,18 @@ Réglages, et ce qui compte se signe avec Face ID :
 - **mes ratés** : ce qu'Orion a relevé le soir de ce qu'il a raté (tes 👎, tes corrections) ;
 - la version et les mises à jour, qui se font seules.
 
+**Le forfait Claude** est l'exception (D100, D208) : Anthropic veut que tu te connectes
+toi-même à Claude Code, sur le serveur. `install.sh` installe Claude Code dans
+`/usr/local/bin/claude` ; une fois, lance
+
+```bash
+sudo orion claude login
+```
+
+ouvre le lien, connecte-toi à ton compte Claude, colle le code : Orion redémarre avec ton
+forfait. La connexion vit dans `/srv/orion/data/claude-code/login` (gardée par `reset.sh`), et
+Claude Code se met à jour une fois par jour avec `orion-update`.
+
 Une passkey est liée au nom du serveur (`public_url`) : avec `sslip.io`, si l'IP du VPS change
 ou si tu passes à un vrai domaine, il faut réappairer (relance `install.sh`, qui affiche un
 code). Les commandes `orion-admin …` restent là pour dépanner.

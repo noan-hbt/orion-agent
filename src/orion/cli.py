@@ -55,7 +55,10 @@ def _provider(config: OrionConfig) -> Router | None:
 
         cc = config.providers.claude_code
         if not ClaudeCodeProvider.available(cc.binary):
-            print(f"Impossible de démarrer : la commande {cc.binary!r} (Claude Code) est absente.")
+            print(
+                f"Impossible de démarrer : la commande {cc.binary!r} (Claude Code) est absente. "
+                "Sur le serveur : sudo /srv/orion/app/deploy/claude-code"
+            )
             return None
         providers["claude-code"] = ClaudeCodeProvider(
             config.data_dir / "claude-code",

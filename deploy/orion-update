@@ -18,6 +18,13 @@ install -d -m 0755 "$ROOT/python"  # stays empty when the system Python is recen
 ADMIN="$APP/deploy/orion-admin"
 
 cd "$APP"
+# Claude Code does not update itself on the server (D208): once a day, from here. A failure is
+# logged and retried the next day; it never holds back Orion's own update.
+STAMP="$ROOT/claude-install/.checked"
+if [ -x "$APP/deploy/claude-code" ] && [ -z "$(find "$STAMP" -mmin -1440 2>/dev/null)" ]; then
+    "$APP/deploy/claude-code" || echo "Claude Code refresh failed"
+    touch "$STAMP"
+fi
 branch="$(git rev-parse --abbrev-ref HEAD)"
 git fetch -q origin "$branch"
 old="$(git rev-parse HEAD)"
