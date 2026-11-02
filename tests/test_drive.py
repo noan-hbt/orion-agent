@@ -156,6 +156,6 @@ def test_google_auth_turns_drive_on_in_the_config_keeping_its_comments(tmp_path:
     enable_in_config(path, "123.apps.googleusercontent.com", "full")
     text = path.read_text()
     assert "# mon Orion" in text and "[modules.calendar]" in text
-    settings = DriveSettings.model_validate(__import__("tomllib").loads(text)["modules"]["drive"])
+    settings = DriveSettings.model_validate(tomllib.loads(text)["modules"]["drive"])
     assert settings.enabled and settings.access == "full"
     assert settings.client_id == "123.apps.googleusercontent.com"
