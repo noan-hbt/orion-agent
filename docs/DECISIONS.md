@@ -4821,3 +4821,20 @@ Seules des sections déclenchées par une demande claire sortent : celles qui r�
 de tous les jours ou l'initiative d'Orion restent, car il ne saurait pas qu'il doit les lire.
 
 À surveiller : si Orion agit dans un de ces cas sans lire la consigne, remettre la section.
+
+## D213 — Sur le forfait Claude, Orion sait qu'il a ses outils
+
+*02/11/2026 · acceptée · complète D207, D211*
+
+Le 02/11 à 18:36, Orion a appelé `browser`, qui a répondu, puis a dit au propriétaire que son
+navigateur n'était « pas disponible dans cette session » et qu'il n'avait « que l'outil de réponse »,
+sans plus rien essayer. Le protocole lui disait « tu n'en as qu'un, celui qui rend ta réponse », et
+Claude Code le relance (`structured-output-enforce`) quand il écrit du texte au lieu de cet outil.
+Le lien entre les deux est probable, pas prouvé.
+
+Le protocole dit maintenant que tous ses outils sont disponibles, qu'il répond toujours par
+`StructuredOutput`, et qu'il n'affirme jamais qu'un outil manque sans l'avoir essayé, même si ses
+messages précédents le disaient. Cette relance étant aussi une cause de double requête (D211), elle
+devrait se faire plus rare.
+
+À surveiller : la part de `turns: 3` dans `claude_code.answered`.
