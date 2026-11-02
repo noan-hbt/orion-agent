@@ -251,7 +251,10 @@ def says_nothing_twice() -> Check:
     """His messages read one after the other: each one says something new (D173)."""
 
     async def check(o: Observation, judge: Judge) -> str | None:
-        thread = "\n---\n".join([*o.spoken, o.last])
+        said = [m for m in [*o.spoken, o.last] if m.strip()]
+        if len(said) < 2:
+            return None  # one message cannot repeat another (a judge says it does, sometimes)
+        thread = "\n---\n".join(said)
         question = (
             "Ces messages se lisent à la suite. Chacun apporte-t-il du neuf, sans redire ce "
             "qu'un message précédent disait déjà ?"
@@ -445,6 +448,7 @@ async def run_case(
                     if step.at is not None:
                         clock.move_to(step.at)
                     observation.times.append(datetime.now(PARIS))
+                    heard = len(observation.spoken)
                     if isinstance(step, Say):
                         sent = datetime.now(PARIS) - step.waited if step.waited else None
 
@@ -482,7 +486,12 @@ async def run_case(
                         turn = await app.orion.handle_initiative(
                             OWNER_THREAD, step.text, step.why, step.trust
                         )
-                    observation.replies.append(turn.text.strip())
+                    text = turn.text.strip()
+                    if not text and len(observation.spoken) > heard:
+                        # An empty final reply (D216, D217): what he read last went beside a
+                        # tool call, and that is his reply.
+                        text = observation.spoken.pop()
+                    observation.replies.append(text)
                     observation.cost += turn.usage.cost_usd
                 observation.seconds = time.monotonic() - started
                 observation.asked = refuse.asked

@@ -634,3 +634,19 @@ async def test_a_model_that_insists_without_working_is_let_go() -> None:
     )
     end = finished((await collect(provider))[0])
     assert end.text == "Impossible de comparer : rien à comparer."
+
+
+async def test_last_words_with_the_calls_end_the_turn_unless_a_call_fails() -> None:
+    """« ok, noté » written with the call that notes: asked again, it says it twice (D217)."""
+
+    def ending(script: Script) -> Script:
+        return lambda request: script(request).model_copy(update={"ends_turn": True})
+
+    provider = ScriptedProvider(ending(call_tools(("echo", {"text": "42"}), text="ok, noté")))
+    events, _ = await collect(provider)
+    assert finished(events).reason is StopReason.COMPLETED
+    assert len(provider.requests) == 1
+
+    provider = ScriptedProvider(ending(call_tools(("nope", {}), text="ok, noté")), reply("raté"))
+    events, _ = await collect(provider)
+    assert finished(events).text == "raté"  # the failure came back to the model

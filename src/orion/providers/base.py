@@ -198,6 +198,11 @@ class ModelResponse(BaseModel):
     provider: str | None = None
     attempts: int = 1
     citations: list[Citation] = Field(default_factory=list[Citation])
+    ends_turn: bool = Field(
+        default=False,
+        description="The model's last word comes with its tool calls: once they ran without "
+        "error, the turn ends there, with no request to say it again (D217)",
+    )
     images: list[str] = Field(
         default_factory=list[str], description="Pictures an image model made, as data: URLs"
     )

@@ -983,7 +983,7 @@ CASES: tuple[Case, ...] = (
             Say("salut"),
             Night(at=paris(2026, 10, 28, 23, 40)),
         ),
-        checks=(works_at_night("adapt"),),
+        checks=(works_at_night("adapt", "playbook:learn"),),
     ),
     Case(
         name="exercice_vsy_reste_un_exercice",
@@ -1001,5 +1001,19 @@ CASES: tuple[Case, ...] = (
             ),
         ),
         checks=(avoids("web_search", "web_read", "browser", "file"),),
+    ),
+    Case(
+        name="note_et_ne_redit_pas",
+        origin="02/11 21:09 : « il aurait fallu que ce soit en plusieurs messages » ; Orion écrit "
+        "« noté, un élément par message » avec la règle, puis « noté, un par message. on "
+        "reprend… » : la même chose deux fois (D216, D217).",
+        at=paris(2026, 11, 2, 22, 9),
+        steps=(
+            Say(
+                "Quand tu me réponds et que c'est pas une réponse directe, dis-moi au fur et à "
+                "mesure, en plusieurs messages, au lieu de tout dire à la fin"
+            ),
+        ),
+        checks=(uses("playbook", "adapt"), says_nothing_twice()),
     ),
 )

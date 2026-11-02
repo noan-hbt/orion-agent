@@ -4,18 +4,22 @@ Orion never holds a Claude credential. It runs the `claude` command as Anthropic
 signed in by the owner himself (`claude login` on the server, Anthropic's own flow), and asks it
 for one answer at a time: no tools of its own (`--tools ""`), no settings, MCP servers or
 session kept, Orion's system message in place of Claude Code's. Orion's tools travel as text
-in that system message, sorted and the same every time, and the answer comes back as a JSON
-object checked against a schema (`--json-schema`): the text, and the tool calls with their
-arguments. The conversation goes in on stdin as one user message (`stream-json`) with one text
-block per message, rendered the same way every time: Anthropic finds a cached prefix only where
-a block ends, so the previous call's last block must still end at the same place (one block for
-the whole conversation was a new block on every call, written to the cache and never read).
-Text that looks like Orion's own tags is escaped, so a mail or a page cannot pass for the owner.
+in that system message, sorted and the same every time, and the model calls them in its answer
+with the very tags the conversation shows it (`<tool_call name="...">{json}</tool_call>`, D217):
+with no tool declared, it can neither call one natively nor be nudged into a second request.
 
-What it cannot do is refused here, so the router falls back: pictures in or out, web search.
-Calls cost nothing per token (`cost_usd` 0): the plan's own limits are the limit, and a plan
-used up is an error the router falls back on. The answer comes as a stream of JSON lines
-(`stream-json`) for the one that says how much of the plan's windows is used
+The conversation goes in on stdin as one user message (`stream-json`) with one text block per
+message, its pictures after it, rendered the same way every time: Anthropic finds a cached
+prefix only where a block ends, so the previous call's last block must still end at the same
+place (one block for the whole conversation was a new block on every call, written to the cache
+and never read). Text that looks like Orion's own tags is escaped, so a mail or a page cannot
+pass for the owner.
+
+A web search lends Claude Code its own `WebSearch` tool for that call only (read-only, run by
+Anthropic); the pages it found come back as citations. Pictures out are refused here, so the
+router falls back. Calls cost nothing per token (`cost_usd` 0): the plan's own limits are the
+limit, and a plan used up is an error the router falls back on. The answer comes as a stream of
+JSON lines (`stream-json`) for the one that says how much of the plan's windows is used
 (`rate_limit_event`), which the usage screen shows.
 """
 
@@ -37,6 +41,7 @@ import structlog
 
 from orion.core.ids import new_id
 from orion.providers.base import (
+    Citation,
     Message,
     ModelRequest,
     ModelResponse,
@@ -51,7 +56,12 @@ log = structlog.get_logger(__name__)
 
 _SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PID")
 """Set when Orion itself runs under Claude Code: the child must not pass for that session."""
-_ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR")
+_ENV_KEEP = (
+    *("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "TMPDIR"),
+    # Windows (evals from a laptop): `claude` cannot reach the network without SYSTEMROOT, nor
+    # find its login without the profile folders.
+    *("SYSTEMROOT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"),
+)
 _ENV_PREFIXES = ("CLAUDE", "ANTHROPIC")
 
 
@@ -70,25 +80,36 @@ _PROTOCOL = """
 
 # Comment appeler tes outils ici
 
-Tous les outils listés plus bas sont disponibles, à chaque message. Ils passent par un seul
-canal : `StructuredOutput`, l'outil technique qui rend ta réponse. Appelle-le à chaque fois, même
-pour un seul mot, et n'écris jamais de texte à côté. N'appelle jamais `browser`, `mail` ou un
-autre outil d'Orion directement. Mets-le dans le champ `tool_calls` de ta réponse (`name` et
-`arguments`, un objet conforme à son schéma) : Orion l'exécute et le résultat t'arrive dans le
-message suivant, comme un <tool_result>. `text` est ce que tu dis au propriétaire. Écrit avec
-des appels d'outils, il part chez lui tout de suite, comme un message : il l'a déjà lu. Ta
-réponse sans outil finit le tour et ne redit rien de ce que tes `text` précédents lui ont déjà
-dit : seulement ce qui est neuf, en peu de mots. S'ils ont déjà tout dit (« ok, noté » écrit
-avec l'outil qui note), laisse `text` vide : rien ne part. Sinon, elle n'est jamais vide.
+Tous les outils listés plus bas sont disponibles, à chaque message. Pour en appeler un, écris
+dans ta réponse une balise, comme celles de la conversation :
 
-Ne parle jamais de `StructuredOutput` au propriétaire : pour lui, tes outils sont ceux de la
-liste. Ne dis jamais qu'un outil manque ou ne répond pas sans l'avoir essayé et avoir vu son
-<tool_result>, même si tes messages précédents l'affirmaient : ils peuvent se tromper.
+<tool_call name="nom_de_l_outil">{"argument": "valeur"}</tool_call>
+
+Son contenu est un objet JSON conforme au schéma de l'outil ; plusieurs balises à la suite pour
+plusieurs appels. Orion les exécute et leurs résultats t'arrivent au message suivant, en
+<tool_result>. Ta réponse s'arrête après tes appels : n'écris jamais toi-même de <tool_result>
+ni de <message>.
+
+Le texte hors des balises est ce que tu dis au propriétaire. Écrit avec des appels d'outils, il
+part chez lui tout de suite, comme un message : il l'a déjà lu.
+
+Quand ce texte et tes appels disent tout (« ok, noté » avec l'outil qui note), termine par
+<fin/> après tes balises : Orion fait les appels et le tour s'arrête là, tu n'as rien à redire.
+Un appel en erreur te revient quand même. Pas de <fin/> quand il te faut le résultat d'un appel
+pour répondre.
+
+Ta réponse sans appel finit le tour et ne redit rien de ce que tes textes précédents lui ont
+déjà dit : seulement ce qui est neuf, en peu de mots. S'ils ont déjà tout dit, réponds
+seulement <fin/> : rien ne part.
+
+Ne parle jamais de ces balises au propriétaire. Ne dis jamais qu'un outil manque ou ne répond
+pas sans l'avoir appelé et avoir vu son <tool_result>, même si tes messages précédents
+l'affirmaient : ils peuvent se tromper.
 
 La conversation t'arrive en blocs balisés (<message role=...>, <tool_call>,
 <tool_result>) : réponds au dernier message, comme l'assistant.
 
-# Outils d'Orion (à mettre dans tool_calls)
+# Outils d'Orion
 
 """
 
@@ -102,23 +123,63 @@ def is_model_name(model: str) -> bool:
     return _MODEL.fullmatch(model) is not None
 
 
-def _text(content: object) -> str:
+_DATA_URL = re.compile(r"data:([\w.+-]+/[\w.+-]+);base64,(.*)", re.DOTALL)
+_PICTURES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
+
+
+def _media(url: str, kind: str) -> dict[str, Any]:
+    """A picture or a PDF as Anthropic takes it, from the data URL Orion carries."""
+    found = _DATA_URL.fullmatch(url)
+    if found is None:
+        if kind == "image" and url.startswith(("https://", "http://")):
+            return {"type": "image", "source": {"type": "url", "url": url}}
+        raise ProviderError(f"Claude Code cannot read this {kind} here", retryable=False)
+    media_type, data = found.groups()
+    if media_type in _PICTURES:
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+    if media_type == "application/pdf":
+        return {
+            "type": "document",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+    raise ProviderError(f"Claude Code cannot read {media_type} here", retryable=False)
+
+
+def _content(content: object) -> tuple[str, list[dict[str, Any]]]:
+    """The text of a message, and the pictures and PDFs it carries."""
     if content is None:
-        return ""
+        return "", []
     if isinstance(content, str):
-        return content
+        return content, []
     parts: list[str] = []
+    media: list[dict[str, Any]] = []
     for part in cast(list[dict[str, Any]], content):
-        if part.get("type") == "text":
+        kind = part.get("type")
+        if kind == "text":
             parts.append(str(part.get("text", "")))
+        elif kind == "image_url":
+            image = cast(dict[str, Any], part.get("image_url") or {})
+            media.append(_media(str(image.get("url", "")), "image"))
+        elif kind == "file":
+            file = cast(dict[str, Any], part.get("file") or {})
+            media.append(_media(str(file.get("file_data", "")), "file"))
         else:
-            raise ProviderError(
-                f"Claude Code takes text only here, not {part.get('type')!r}", retryable=False
-            )
-    return "\n".join(parts)
+            raise ProviderError(f"Claude Code cannot take {kind!r} here", retryable=False)
+    return "\n".join(parts), media
+
+
+def _text(content: object) -> str:
+    text, media = _content(content)
+    if media:
+        raise ProviderError("Claude Code takes text only here", retryable=False)
+    return text
 
 
 _TAG = re.compile(r"<(/?)(message|tool_call|tool_result)\b", re.IGNORECASE)
+_ESCAPED = re.compile(r"&lt;(/?)(message|tool_call|tool_result)\b", re.IGNORECASE)
 
 
 def _escape(text: str) -> str:
@@ -131,22 +192,29 @@ def _attr(value: object) -> str:
     return _escape(str(value)).replace('"', "&quot;")
 
 
-def render(messages: list[Message]) -> tuple[str, list[str]]:
-    """(system, one block per message): the same messages give the same bytes, every time."""
+def render(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
+    """(system, the content blocks of the conversation): one text block per message, its
+    pictures after it. The same messages give the same bytes, every time."""
     system: list[str] = []
-    blocks: list[str] = []
+    blocks: list[dict[str, Any]] = []
     for message in messages:
         role = message["role"]
         if role == "system":
             system.append(_text(message.get("content")))
             continue
         if role == "tool":
+            text, media = _content(message.get("content"))
             blocks.append(
-                f'<tool_result id="{_attr(message.get("tool_call_id", ""))}">\n'
-                f"{_escape(_text(message.get('content')))}\n</tool_result>"
+                {
+                    "type": "text",
+                    "text": f'<tool_result id="{_attr(message.get("tool_call_id", ""))}">\n'
+                    f"{_escape(text)}\n</tool_result>",
+                }
             )
+            blocks.extend(media)
             continue
-        body = _escape(_text(message.get("content")))
+        text, media = _content(message.get("content"))
+        body = _escape(text)
         for call in cast(list[dict[str, Any]], message.get("tool_calls") or []):
             function = cast(dict[str, Any], call.get("function") or {})
             body += (
@@ -154,13 +222,16 @@ def render(messages: list[Message]) -> tuple[str, list[str]]:
                 f'name="{_attr(function.get("name", ""))}">'
                 f"{_escape(function.get('arguments') or '{}')}</tool_call>"
             )
-        blocks.append(f'<message role="{_attr(role)}">\n{body.strip()}\n</message>')
+        blocks.append(
+            {"type": "text", "text": f'<message role="{_attr(role)}">\n{body.strip()}\n</message>'}
+        )
+        blocks.extend(media)
     return "\n\n".join(system), blocks
 
 
-def stdin_message(blocks: list[str]) -> bytes:
+def stdin_message(blocks: list[dict[str, Any]]) -> bytes:
     """The conversation as one user message of Claude Code's `stream-json` input."""
-    content = [{"type": "text", "text": block} for block in blocks or ["(vide)"]]
+    content = blocks or [{"type": "text", "text": "(vide)"}]
     line = {
         "type": "user",
         "session_id": "",
@@ -171,7 +242,7 @@ def stdin_message(blocks: list[str]) -> bytes:
 
 
 UNOFFERED = frozenset({"tell"})
-"""Orion's tools Claude does not get: its `text` beside a tool call already goes to the owner
+"""Orion's tools Claude does not get: its text beside a tool call already goes to the owner
 mid-turn, so `tell` would only say it twice (D215)."""
 
 
@@ -187,23 +258,73 @@ def tools_text(tools: list[ToolSpec]) -> str:
     )
 
 
-def answer_schema(tools: list[ToolSpec], allowed: bool) -> dict[str, Any]:
-    call: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "name": {"type": "string", "enum": sorted(t.name for t in tools)},
-            "arguments": {"type": "object"},
-        },
-        "required": ["name", "arguments"],
-    }
-    calls: dict[str, Any] = {"type": "array", "items": call}
-    if not allowed:
-        calls["maxItems"] = 0
-    return {
-        "type": "object",
-        "properties": {"text": {"type": "string"}, "tool_calls": calls},
-        "required": ["text", "tool_calls"],
-    }
+_CALL = re.compile(r"<tool_call\b([^>]*)>(.*?)</tool_call\s*>", re.DOTALL | re.IGNORECASE)
+_ATTRS = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
+_DONE = re.compile(r"<fin\s*/>", re.IGNORECASE)
+_OPENING = re.compile(r'^\s*<message\s+role="assistant"\s*>', re.IGNORECASE)
+_OVERRUN = re.compile(r"</message\s*>|<message\b|<tool_result\b", re.IGNORECASE)
+
+
+def _unescape(text: str) -> str:
+    return _ESCAPED.sub(r"<\1\2", text)
+
+
+def read_answer(answer: str, allowed: bool) -> tuple[str, list[ToolCall], bool]:
+    """(what is said to the owner, the tool calls, whether its last word came with them) from
+    an answer written with Orion's tags.
+
+    What the model writes after its calls as if it were Orion (a <tool_result>, the owner's
+    next <message>) is its own invention, never a result: it is cut off and the cut logged."""
+    answer = _OPENING.sub("", answer, count=1)
+    overrun = _OVERRUN.search(answer)
+    if overrun is not None:
+        log.warning("claude_code.overran", dropped_chars=len(answer) - overrun.start())
+        answer = answer[: overrun.start()]
+    calls: list[ToolCall] = []
+    for found in _CALL.finditer(answer):
+        attrs = {k.lower(): v for k, v in _ATTRS.findall(found.group(1))}
+        name = attrs.get("name", "").replace("&quot;", '"')
+        raw = _unescape(found.group(2).strip()) or "{}"
+        try:
+            arguments = json.dumps(json.loads(raw), ensure_ascii=False)
+        except json.JSONDecodeError:
+            arguments = raw  # the tool says the arguments are not JSON, and the model fixes them
+        calls.append(ToolCall(id=f"cc_{new_id()}", name=name, arguments=arguments))
+    ends = _DONE.search(answer) is not None
+    text = _DONE.sub("", _CALL.sub("", answer))
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if calls and not allowed:
+        log.warning("claude_code.calls_dropped", tools=[c.name for c in calls])
+        calls = []
+    return text, calls, ends and bool(calls)
+
+
+_LINKS = "Links: "
+
+
+def found_pages(result: object) -> list[Citation]:
+    """The pages a `WebSearch` result lists (`Links: [{"title", "url"}...]`)."""
+    if isinstance(result, list):
+        result = "\n".join(
+            str(cast(dict[str, Any], b).get("text", ""))
+            for b in cast(list[object], result)
+            if isinstance(b, dict)
+        )
+    text = str(result or "")
+    pages: list[Citation] = []
+    start = text.find(_LINKS)
+    while start != -1:
+        try:
+            links, end = json.JSONDecoder().raw_decode(text, start + len(_LINKS))
+        except json.JSONDecodeError:
+            log.warning("claude_code.links_unreadable", at=start)
+            break
+        for link in cast(list[object], links) if isinstance(links, list) else []:
+            if isinstance(link, dict) and cast(dict[str, Any], link).get("url"):
+                link = cast(dict[str, Any], link)
+                pages.append(Citation(url=str(link["url"]), title=str(link.get("title") or "")))
+        start = text.find(_LINKS, end)
+    return pages
 
 
 _EFFORT = {
@@ -226,8 +347,8 @@ def _step(block: object) -> str:
 
 
 def _trail(event: dict[str, Any]) -> str:
-    """One step inside Claude Code, short. A plain answer takes 2 turns for 1 request (the answer
-    tool and its result); with 3, a second request was paid, and this says why (D211)."""
+    """One step inside Claude Code, short. An answer takes 1 turn for 1 request; with more, a
+    second request was paid, and this says why (D211)."""
     message = cast(dict[str, Any], event.get("message") or {})
     content: object = message.get("content")
     blocks = cast(list[object], content) if isinstance(content, list) else [content]
@@ -256,13 +377,18 @@ class ClaudeCodeProvider:
         return shutil.which(binary) is not None
 
     def command(self, request: ModelRequest, system_file: Path) -> list[str]:
+        searching = request.web_search is not None
         command = [
             self._binary,
             "--print",
             "--model",
             request.model,
             "--tools",
-            "",
+            "WebSearch" if searching else "",
+        ]
+        if searching:  # its own search, read-only, for this call only
+            command += ["--allowedTools", "WebSearch"]
+        command += [
             "--strict-mcp-config",
             "--setting-sources",
             "",
@@ -280,9 +406,6 @@ class ClaudeCodeProvider:
         )
         if effort is not None:
             command += ["--effort", effort]
-        if request.tools:
-            schema = answer_schema(offered(request.tools), allowed=not request.no_tools)
-            command += ["--json-schema", json.dumps(schema, sort_keys=True)]
         return command
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -292,8 +415,8 @@ class ClaudeCodeProvider:
                 "or a full name like claude-opus-5-5",
                 retryable=False,
             )
-        if request.image_output or request.web_search is not None:
-            raise ProviderError("Claude Code cannot do that here", retryable=False)
+        if request.image_output:
+            raise ProviderError("Claude Code cannot make pictures", retryable=False)
         system, conversation = render(request.messages)
         if request.tools:
             system += _PROTOCOL + tools_text(offered(request.tools))
@@ -328,7 +451,7 @@ class ClaudeCodeProvider:
         path = self._workdir / f"system-{digest}.md"
         if not path.exists():
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(system)
+            tmp.write_text(system, encoding="utf-8")
             tmp.replace(path)
         return path
 
@@ -336,6 +459,7 @@ class ClaudeCodeProvider:
         result: dict[str, Any] | None = None
         quota: list[QuotaWindow] = []
         trail: list[str] = []
+        citations: list[Citation] = []
         for line in out.splitlines():
             try:
                 event = json.loads(line)
@@ -346,6 +470,13 @@ class ClaudeCodeProvider:
             event = cast(dict[str, Any], event)
             if event.get("type") in ("assistant", "user"):
                 trail.append(_trail(event))
+            if event.get("type") == "user" and request.web_search is not None:
+                content: object = cast(dict[str, Any], event.get("message") or {}).get("content")
+                for block in cast(list[object], content) if isinstance(content, list) else []:
+                    if isinstance(block, dict):
+                        block = cast(dict[str, Any], block)
+                        if block.get("type") == "tool_result":
+                            citations += found_pages(block.get("content"))
             if event.get("type") == "result":
                 result = event
             elif event.get("type") == "rate_limit_event":
@@ -363,35 +494,26 @@ class ClaudeCodeProvider:
                 status=status if isinstance(status, int) else None,
             )
         usage = cast(dict[str, Any], result.get("usage") or {})
+        answer = str(result.get("result") or "")
+        expected = 1 if request.web_search is None else 2  # the search and its answer
         log.info(
             "claude_code.answered",
             turns=result.get("num_turns"),
-            trail=trail if int(result.get("num_turns") or 0) > 2 else None,
+            trail=trail if int(result.get("num_turns") or 0) > expected else None,
             denied=[
                 d.get("tool_name")
                 for d in cast(list[dict[str, Any]], result.get("permission_denials") or [])
             ],
-            answer_chars=len(str(result.get("structured_output") or result.get("result") or "")),
+            answer_chars=len(answer),
             cached=usage.get("cache_read_input_tokens"),
             written=usage.get("cache_creation_input_tokens"),
         )
         tool_calls: list[ToolCall] = []
+        ends = False
         if request.tools:
-            answer = result.get("structured_output")
-            if not isinstance(answer, dict):
-                raise ProviderError("Claude Code gave no structured answer", retryable=True)
-            answer = cast(dict[str, Any], answer)
-            text = str(answer.get("text") or "")
-            for call in cast(list[dict[str, Any]], answer.get("tool_calls") or []):
-                tool_calls.append(
-                    ToolCall(
-                        id=f"cc_{new_id()}",
-                        name=str(call.get("name", "")),
-                        arguments=json.dumps(call.get("arguments") or {}, ensure_ascii=False),
-                    )
-                )
+            text, tool_calls, ends = read_answer(answer, allowed=not request.no_tools)
         else:
-            text = str(result.get("result") or "")
+            text = answer
         message: Message = {"role": "assistant", "content": text}
         if tool_calls:
             message["tool_calls"] = [
@@ -419,6 +541,8 @@ class ClaudeCodeProvider:
             model=next(iter(models), request.model),
             provider=self.name,
             quota=quota,
+            citations=list({c.url: c for c in citations}.values()),
+            ends_turn=ends,
         )
 
 
