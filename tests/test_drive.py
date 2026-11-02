@@ -4,6 +4,7 @@ folder; never a sharing (D206)."""
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -145,3 +146,16 @@ async def test_with_full_access_a_file_moves_only_where_he_said_yes(
         moved = await call(change, ToolContext("owner", "c1", grant=grant), **move)
         assert not moved.is_error and google.files["d1"]["parents"] == ["travaux"]
         await drive.aclose()
+
+
+def test_google_auth_turns_drive_on_in_the_config_keeping_its_comments(tmp_path: Path) -> None:
+    from orion.drive.api import enable_in_config
+
+    path = tmp_path / "orion.toml"
+    path.write_text('# mon Orion\ninstance = "main"\n\n[modules.calendar]\nenabled = false\n')
+    enable_in_config(path, "123.apps.googleusercontent.com", "full")
+    text = path.read_text()
+    assert "# mon Orion" in text and "[modules.calendar]" in text
+    settings = DriveSettings.model_validate(__import__("tomllib").loads(text)["modules"]["drive"])
+    assert settings.enabled and settings.access == "full"
+    assert settings.client_id == "123.apps.googleusercontent.com"

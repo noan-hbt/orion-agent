@@ -710,7 +710,9 @@ async def _library_add(config: OrionConfig, notes: list[tuple[str, Path, str]]) 
     return added
 
 
-async def _google_auth(client_id: str, secret_env: str, drive: str | None) -> int:
+async def _google_auth(
+    client_id: str, secret_env: str, drive: str | None, config: OrionConfig
+) -> int:
     import os
     import secrets
 
@@ -736,6 +738,15 @@ async def _google_auth(client_id: str, secret_env: str, drive: str | None) -> in
             return 1
     print("\nMets ceci dans les secrets du gardien (jamais dans orion.toml) :")
     print(f"GOOGLE_REFRESH_TOKEN={token}")
+    if drive:
+        from orion.drive.api import enable_in_config
+
+        if config.source is None:
+            print("Pas de orion.toml : ajoute [modules.drive] toi-même (voir orion.example.toml).")
+            return 0
+        enable_in_config(config.source, client_id, drive)
+        print(f"\n[modules.drive] est écrit dans {config.source} (accès : {drive}).")
+        print("Redémarre le gardien et le cœur pour qu'ils le prennent en compte.")
     return 0
 
 
@@ -1218,7 +1229,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "library":
         return _library_import(config, args.folder)
     if args.command == "google":
-        return asyncio.run(_google_auth(args.client_id, args.secret_env, args.drive))
+        return asyncio.run(_google_auth(args.client_id, args.secret_env, args.drive, config))
     if args.command == "chatgpt":
         return asyncio.run(_chatgpt(config, args))
     if args.command == "backup":

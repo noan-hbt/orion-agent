@@ -17,12 +17,16 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Literal
 
 import httpx
+import tomlkit
 from pydantic import Field
+from tomlkit.items import Table
 
 from orion.config import SecretRef
+from orion.core.private import write_private
 from orion.modules.base import ModuleSettings
 
 GOOGLE_API = "https://www.googleapis.com/"
@@ -115,6 +119,26 @@ class GoogleAuth(httpx.Auth):
             self._expires = time.monotonic() + float(body.get("expires_in", 3600)) - 60
         request.headers["authorization"] = f"Bearer {self._token}"
         yield request
+
+
+def enable_in_config(path: Path, client_id: str, access: str) -> None:
+    """Turn `[modules.drive]` on in orion.toml, with its secrets' names (never their values),
+    keeping the file's comments and layout. Creates the section if it is not there."""
+    doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    modules = doc.setdefault("modules", tomlkit.table(is_super_table=True))
+    section = modules.get("drive")
+    if not isinstance(section, Table):
+        section = tomlkit.table()
+        modules["drive"] = section
+    section["enabled"] = True
+    section["client_id"] = client_id
+    section["client_secret"] = tomlkit.inline_table()
+    section["client_secret"]["env"] = "GOOGLE_CLIENT_SECRET"  # type: ignore[index]
+    section["refresh_token"] = tomlkit.inline_table()
+    section["refresh_token"]["env"] = "GOOGLE_REFRESH_TOKEN"  # type: ignore[index]
+    section.setdefault("folder", "Orion")
+    section["access"] = access
+    write_private(path, tomlkit.dumps(doc))
 
 
 def direct_client(settings: DriveSettings, timeout: float = 60.0) -> httpx.AsyncClient:
