@@ -108,6 +108,16 @@ async def test_tool_calls_come_back_and_nothing_of_claude_code_is_used(
     assert argv[argv.index("--effort") + 1] == "low"  # a reply does not think at length
 
 
+def test_on_the_claude_plan_tell_is_not_offered(tmp_path: Path) -> None:
+    """Claude's text beside a tool call already reaches him mid-turn: `tell` would only say it
+    twice (D215)."""
+    tell = ToolSpec(name="tell", description="Send him a message now", parameters={})
+    provider = ClaudeCodeProvider(tmp_path, "claude")
+    argv = provider.command(request(tools=[ECHO, tell]), tmp_path / "system.md")
+    schema = json.loads(argv[argv.index("--json-schema") + 1])
+    assert schema["properties"]["tool_calls"]["items"]["properties"]["name"]["enum"] == ["echo"]
+
+
 def test_each_call_extends_the_previous_one_block_for_block() -> None:
     """Anthropic finds a cached prefix only where a block ends: the previous call's blocks must
     come back unchanged, each one whole, so the next call reads them from the cache."""

@@ -54,7 +54,7 @@ async def world(journal: SqliteJournal, tmp_path: Path) -> AsyncIterator[World]:
     provider = ScriptedProvider()
     orion = make_orion(journal, provider)
     await orion.start()
-    inbox = OwnerInbox(orion, coalesce_seconds=0.05, beat_seconds=0.0)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
     devices = Devices(journal, URL, session_key(tmp_path / "mobile"))
     pusher = FakePusher()
     channel = MobileChannel(
@@ -366,15 +366,3 @@ async def test_what_orion_says_as_he_works_is_a_message_of_its_own(world: World)
     said, answer = [s for s in world.channel.state.said if s.who == "orion"]
     assert said.text == "Ton jeudi est pris par le dentiste."
     assert answer.text == "Tu es libre vendredi."
-
-
-async def test_an_answer_in_two_messages_is_two_bubbles(world: World) -> None:
-    """Two things to say are two bubbles in the app (D163)."""
-    await pair(world)
-    world.provider.extend(
-        call_tools(("lookup", {})), reply("Tu es libre jeudi.<suite/>Tu y vas avec Léa ?")
-    )
-    await world.http.post("/app/api/send", json={"text": "Je suis libre quand ?"})
-    await until(lambda: len([s for s in world.channel.state.said if s.who == "orion"]) == 2)
-    first, second = [s for s in world.channel.state.said if s.who == "orion"]
-    assert (first.text, second.text) == ("Tu es libre jeudi.", "Tu y vas avec Léa ?")

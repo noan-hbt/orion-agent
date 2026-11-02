@@ -75,9 +75,11 @@ canal : `StructuredOutput`, l'outil technique qui rend ta réponse. Appelle-le �
 pour un seul mot, et n'écris jamais de texte à côté. N'appelle jamais `browser`, `mail` ou un
 autre outil d'Orion directement. Mets-le dans le champ `tool_calls` de ta réponse (`name` et
 `arguments`, un objet conforme à son schéma) : Orion l'exécute et le résultat t'arrive dans le
-message suivant, comme un <tool_result>. `text` est ce que tu dis au propriétaire : il peut être
-vide quand tu appelles des outils, jamais quand tu n'en appelles plus. Une fois les résultats
-lus, ta réponse sans outil est le message qu'il recevra.
+message suivant, comme un <tool_result>. `text` est ce que tu dis au propriétaire. Écrit avec
+des appels d'outils, il part chez lui tout de suite, comme un message : il l'a déjà lu. Il peut
+être vide, jamais quand tu n'appelles plus d'outil. Ta réponse sans outil finit le tour et ne
+redit rien de ce que tes `text` précédents lui ont déjà dit : seulement ce qui est neuf, en peu
+de mots.
 
 Ne parle jamais de `StructuredOutput` au propriétaire : pour lui, tes outils sont ceux de la
 liste. Ne dis jamais qu'un outil manque ou ne répond pas sans l'avoir essayé et avoir vu son
@@ -166,6 +168,15 @@ def stdin_message(blocks: list[str]) -> bytes:
         "parent_tool_use_id": None,
     }
     return (json.dumps(line, ensure_ascii=False) + "\n").encode()
+
+
+UNOFFERED = frozenset({"tell"})
+"""Orion's tools Claude does not get: its `text` beside a tool call already goes to the owner
+mid-turn, so `tell` would only say it twice (D215)."""
+
+
+def offered(tools: list[ToolSpec]) -> list[ToolSpec]:
+    return [t for t in tools if t.name not in UNOFFERED]
 
 
 def tools_text(tools: list[ToolSpec]) -> str:
@@ -270,7 +281,7 @@ class ClaudeCodeProvider:
         if effort is not None:
             command += ["--effort", effort]
         if request.tools:
-            schema = answer_schema(request.tools, allowed=not request.no_tools)
+            schema = answer_schema(offered(request.tools), allowed=not request.no_tools)
             command += ["--json-schema", json.dumps(schema, sort_keys=True)]
         return command
 
@@ -285,7 +296,7 @@ class ClaudeCodeProvider:
             raise ProviderError("Claude Code cannot do that here", retryable=False)
         system, conversation = render(request.messages)
         if request.tools:
-            system += _PROTOCOL + tools_text(request.tools)
+            system += _PROTOCOL + tools_text(offered(request.tools))
         if request.json_output:
             system += "\n\nRéponds par un seul objet JSON, sans rien autour."
         system_file = self._system_file(system)
