@@ -377,7 +377,7 @@ async def test_his_message_comes_before_what_orion_was_doing_on_its_own(
         compiler=ContextCompiler("C"),
         agent=AgentConfig(),
     )
-    inbox = OwnerInbox(orion, coalesce_seconds=0.01)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.3)
     holder.append(inbox)
     imessage = Outlet("imessage")
     inbox.register(imessage)

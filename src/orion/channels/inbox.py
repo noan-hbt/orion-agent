@@ -246,6 +246,9 @@ class OwnerInbox:
         while True:
             batch = [await self._next()]
             started = time.monotonic()
+            # Off the queue, gathering a burst: still waiting for an answer, or what Orion does on
+            # its own would not give way to him (D220).
+            self._answering = not batch[0].allow_silence
             while True:
                 if self._held:
                     item = self._held.popleft()
@@ -258,7 +261,6 @@ class OwnerInbox:
                     self._held.appendleft(item)  # a different kind of message: its own turn
                     break
                 batch.append(item)
-            self._answering = not batch[0].allow_silence
             try:
                 await self._handle(batch, waited=time.monotonic() - started)
             except Exception:

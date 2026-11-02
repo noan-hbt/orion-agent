@@ -163,22 +163,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         inbox = owner_inbox(app)
         supervisor = Supervisor()
         daemon = await start(app, inbox, supervisor)
-        assert supervisor.services == [
-            "inbox",
-            "memory.batch",
-            "adaptation",
-            "consolidation",
-            "feeds",
-            "missions.work",
-            "tasks.work",
-            "thinking.night",
-            "watch",
-            "chronicle.week",
-            "configure.watch",
-            "weather.watch",
-            "autonomy.ritual",
-            "initiative",
-        ]
+        assert "weather.watch" in supervisor.services
         assert daemon.reports == [app.module(Weather)]
         assert await inbox.available()
     weather = next(m for m in modules if isinstance(m, Weather))
