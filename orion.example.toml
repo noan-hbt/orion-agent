@@ -219,6 +219,18 @@ url = { env = "CALENDAR_PERSO_ICS" }
 # name = "boulot"
 # url = { env = "CALENDAR_BOULOT_ICS" }
 
+# Your Google Drive (D206): Orion searches and reads all of it, keeps a copy of a file to send
+# it, and puts its own files in one folder (each upload approved). It never changes, deletes or
+# shares your files: Google enforces it (scopes drive.readonly + drive.file). Same OAuth client
+# as the calendar (enable the Drive API too), then `orion google auth <client id> --drive`: its
+# token serves the calendar as well, so it replaces GOOGLE_REFRESH_TOKEN.
+[modules.drive]
+enabled = false
+client_id = "1234-abc.apps.googleusercontent.com"
+client_secret = { env = "GOOGLE_CLIENT_SECRET" }
+refresh_token = { env = "GOOGLE_REFRESH_TOKEN" }
+folder = "Orion"
+
 # Your mailboxes (M6), read over IMAP, strictly read-only (nothing is marked as read). Each
 # mail is read in quarantine by a separate model and reduced to a card; Orion never sees the
 # mail itself. Use an app password, never your account password:
