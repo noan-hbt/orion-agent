@@ -65,7 +65,7 @@ async def inbox(journal: SqliteJournal, provider: ScriptedProvider) -> AsyncIter
         compiler=ContextCompiler("C"),
         agent=AgentConfig(),
     )
-    inbox = OwnerInbox(orion, coalesce_seconds=0.05, beat_seconds=0.0)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
     worker = asyncio.create_task(inbox.run())
     yield inbox
     worker.cancel()
@@ -90,32 +90,17 @@ async def test_bursts_coalesce_per_channel_and_answer_where_they_came_from(
     assert imessage.shown == ["deux"]
 
 
-async def test_two_things_to_say_go_as_two_messages_typed_one_after_the_other(
+async def test_an_answer_is_one_message_even_with_an_old_split_marker(
     inbox: OwnerInbox, provider: ScriptedProvider
 ) -> None:
-    """`<suite/>` is where he meant another message (D163): the second is typed again first;
-    never more than three, and nothing of the marker is ever shown."""
+    """`<suite/>` no longer splits a message (D214): imitated from past answers, it is a
+    paragraph break, never a second message nor shown as text."""
     imessage = Outlet("imessage")
     inbox.register(imessage)
-    provider.extend(
-        reply("Jeudi 18 h, c'est bon.<suite/>Tu y vas avec Léa ?"),
-        reply("a<suite/>b<suite/>c<suite/>d"),
-    )
+    provider.extend(reply("Jeudi 18 h, c'est bon.<suite/>Tu y vas avec Léa ?"))
     inbox.submit(Inbound("imessage", ("a",), "c'est quand ?"))
-    await until(lambda: len(imessage.sent) == 2)
-    assert imessage.sent == ["Jeudi 18 h, c'est bon.", "Tu y vas avec Léa ?"]
-    assert imessage.shown == ["c'est quand ?", "c'est quand ?"]
-    inbox.submit(Inbound("imessage", ("b",), "et ?"))
-    await until(lambda: len(imessage.sent) == 5)
-    assert imessage.sent[2:] == ["a", "b", "c\n\nd"]
-
-
-async def test_what_orion_writes_first_is_split_the_same_way(inbox: OwnerInbox) -> None:
-    imessage = Outlet("imessage")
-    inbox.register(imessage)
-    await inbox.notify("Ton colis arrive demain.<suite/>Tu seras là ?", "c1")
-    assert imessage.sent == ["Ton colis arrive demain.", "Tu seras là ?"]
-    assert imessage.shown == []  # nothing of his to answer: no typing to show
+    await until(lambda: len(imessage.sent) == 1)
+    assert imessage.sent == ["Jeudi 18 h, c'est bon.\n\nTu y vas avec Léa ?"]
 
 
 async def test_call_transcripts_may_need_no_answer(

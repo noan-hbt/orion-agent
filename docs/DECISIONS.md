@@ -3696,7 +3696,7 @@ reprendre si les messages en chemin tiennent leurs promesses.
 
 ## D163 — Il parle en plusieurs messages quand il a plusieurs choses à dire
 
-*27/10/2026 · acceptée · complète D162*
+*27/10/2026 · remplacée par D214 · complète D162*
 
 Un ami qui répond par texto n'envoie pas un pavé : la réponse, puis, à part, la question ou la
 remarque qui vient après. Couper une réponse en paragraphes ne ferait que l'imiter ; c'est
@@ -4838,3 +4838,41 @@ messages précédents le disaient. Cette relance étant aussi une cause de doubl
 devrait se faire plus rare.
 
 À surveiller : la part de `turns: 3` dans `claude_code.answered`.
+
+## D214 — Une réponse, un message : plus de `<suite/>`
+
+*02/11/2026 · acceptée · remplace D163*
+
+Le 02/11 au soir, le propriétaire voyait beaucoup de doublons. Dans le journal, une partie venait
+de `<suite/>` : à 21:12, « t'as l'appli Drive sur ton PC ? si oui… » puis, en second message,
+« t'as déjà l'appli Drive installée ? ». Le modèle (Haiku sur le forfait Claude) s'en servait pour
+reposer ce qu'il venait de dire, malgré « jamais pour couper ». Le gain (une question à part,
+comme un texto) ne valait pas ce bruit.
+
+- La ligne sur `<suite/>` quitte la constitution ; `messages_of`, `beat` et `beat_seconds`
+  disparaissent : une réponse part en un seul message.
+- Une balise imitée des anciennes réponses du journal (rejouées telles quelles, D163) devient
+  un saut de ligne (`shown`), jamais un second message ni du texte.
+- L'évaluation `deux_messages_seulement_pour_deux_choses` part avec la règle.
+
+L'autre source de doublons, le mot écrit avec un appel d'outil puis redit par la réponse finale
+(D169, D173), reste à traiter.
+
+
+## D215 — Sur le forfait Claude, pas de `tell`
+
+*02/11/2026 · acceptée · complète D173, D214*
+
+Claude écrit du texte à côté de ses appels d'outils (le champ `text` de sa réponse), et ce texte
+part déjà tout de suite comme un message (D169). `tell` faisait doublon : deux façons de parler en
+cours de tour, et des messages redits.
+
+- Le fournisseur Claude Code ne propose plus `tell` (`UNOFFERED`) : absent de la liste d'outils
+  et du schéma de réponse, Claude ne peut pas l'appeler. Le registre d'Orion ne change pas ; les
+  autres fournisseurs le gardent.
+- La constitution ne parle plus de `tell` : le texte écrit avec un appel d'outil suffit à dire.
+- Ce texte était bien rejoué au modèle, mais rien ne lui disait qu'il était déjà parti : le
+  protocole disait « ta réponse sans outil est le message qu'il recevra », et Haiku refaisait une
+  réponse complète (21:09 : « ok je redescends d'un cran… » puis « ok noté, ponctuation au
+  minimum… »). Le protocole dit maintenant que `text` écrit avec des outils part tout de suite,
+  qu'il l'a déjà lu, et que la réponse finale ne dit que ce qui est neuf.
