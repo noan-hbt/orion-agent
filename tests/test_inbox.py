@@ -103,6 +103,23 @@ async def test_an_answer_is_one_message_even_with_an_old_split_marker(
     assert imessage.sent == ["Jeudi 18 h, c'est bon.\n\nTu y vas avec Léa ?"]
 
 
+async def test_words_beside_a_tool_call_can_be_the_whole_answer(
+    inbox: OwnerInbox, provider: ScriptedProvider
+) -> None:
+    """« ok, noté » written with the call that notes it, then an empty reply: one message
+    (D216). An empty reply with nothing said yet is sent back once instead of leaving him
+    without an answer."""
+    imessage = Outlet("imessage")
+    inbox.register(imessage)
+    provider.extend(call_tools(("note", {}), text="ok gros, c'est noté"), reply(""))
+    inbox.submit(Inbound("imessage", ("a",), "appelle-moi gros"))
+    await until(lambda: len(provider.requests) == 2)
+    provider.extend(call_tools(("note", {})), reply(""), reply("c'est fait"))
+    inbox.submit(Inbound("imessage", ("b",), "note ça"))
+    await until(lambda: len(imessage.sent) == 2)
+    assert imessage.sent == ["ok gros, c'est noté", "c'est fait"]
+
+
 async def test_call_transcripts_may_need_no_answer(
     inbox: OwnerInbox, provider: ScriptedProvider
 ) -> None:

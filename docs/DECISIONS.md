@@ -4876,3 +4876,20 @@ cours de tour, et des messages redits.
   réponse complète (21:09 : « ok je redescends d'un cran… » puis « ok noté, ponctuation au
   minimum… »). Le protocole dit maintenant que `text` écrit avec des outils part tout de suite,
   qu'il l'a déjà lu, et que la réponse finale ne dit que ce qui est neuf.
+
+## D216 — Une réponse finale vide quand tout est déjà dit
+
+*02/11/2026 · acceptée · complète D100, D215*
+
+Après D215, les doublons continuaient sur le forfait Claude. À 21:38, « ok gros, c'est noté »
+écrit avec l'appel `playbook`, puis « c'est bon gros, réglé » ; « ok, mec en dernier recours
+alors », puis « c bon, réglé ». Le protocole de Claude Code voulait une réponse finale jamais
+vide (D100) : n'ayant rien de neuf, Claude remplissait. Le filet de `repeats` (80 % de
+ressemblance) ne voit pas une même chose dite avec d'autres mots.
+
+- Le protocole dit maintenant : si tes `text` écrits avec les outils ont déjà tout dit, laisse
+  la réponse finale vide ; rien ne part (l'inbox n'envoie pas un texte vide).
+- Ce que D100 évitait, un tour qui finit sans que rien ne parte, reste impossible : une réponse
+  vide alors qu'aucun texte n'est parti pendant le tour renvoie le modèle une fois au travail
+  (`SAY_SOMETHING`), quel que soit le fournisseur.
+

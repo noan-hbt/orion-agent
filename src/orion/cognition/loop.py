@@ -33,6 +33,7 @@ from orion.providers.base import (
     ProviderError,
     ToolCall,
     Usage,
+    spoken,
     told,
 )
 from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
@@ -195,6 +196,11 @@ UNSENT = (
     "[Orion · ta réponse ci-dessus n'est pas partie : un message est arrivé entre-temps. "
     "Réponds en tenant compte de tout.]"
 )
+SAY_SOMETHING = (
+    "[Orion · ta réponse est vide et rien ne lui est parti pendant ce tour : réponds-lui.]"
+)
+"""An empty final reply is right when the words beside the tool calls said it all (D216); with
+nothing said at all, the owner would get nothing."""
 GOING_ON = "C'est plus long que prévu, je continue."
 UNFINISHED = (
     "[Orion · Ta réponse n'est pas encore partie : ton plan a encore {n} étape(s) à faire "
@@ -251,6 +257,7 @@ async def run_agent(
     model = settings.model
     max_cost = budget.max_cost_usd
     checked = False
+    pressed = False  # sent back once for an empty reply with nothing said (`SAY_SOMETHING`)
     failures: Counter[tuple[str, str]] = Counter()
     parts: list[str] = []  # a reply cut by the length limit, so far: continued, then joined
     segment = 0  # model calls since the turn started or last went on (`Budget.continuations`)
@@ -401,6 +408,20 @@ async def run_agent(
                 }
                 messages.append(more)
                 yield MessageEmitted(more, Trust.SYSTEM)
+                continue
+            if (
+                not text.strip()
+                and not pressed
+                and reason is StopReason.COMPLETED
+                and room
+                and usage.cost_usd < max_cost
+                and not any(spoken(m) for m in messages[turn_start:] if m["role"] == "assistant")
+            ):
+                log.info("loop.empty_reply", thread=settings.thread_id)
+                pressed = True
+                press: Message = {"role": "user", "content": SAY_SOMETHING}
+                messages.append(press)
+                yield MessageEmitted(press, Trust.SYSTEM)
                 continue
             note = (
                 settings.finish_check(text, called)
