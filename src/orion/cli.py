@@ -47,8 +47,12 @@ def _provider(config: OrionConfig) -> Router | None:
         auth = ChatGPTAuth(config.chatgpt_path)
         if auth.load() is None:  # he signs in from the app, Orion running (D154)
             print("Pas encore connecté à ChatGPT : connecte-toi dans l'app (Réglages > ChatGPT).")
+        plan = config.providers.chatgpt
         providers["chatgpt"] = ChatGPTProvider(
-            auth, default_effort=config.providers.chatgpt.reasoning_effort
+            auth,
+            default_effort=plan.reasoning_effort,
+            stall_seconds=plan.stall_seconds,
+            silence_seconds=plan.silence_seconds,
         )
     if config.providers.claude_code.enabled:
         from orion.providers.claude_code import ClaudeCodeProvider
@@ -65,6 +69,7 @@ def _provider(config: OrionConfig) -> Router | None:
             cc.binary,
             cc.timeout_seconds,
             default_effort=cc.reasoning_effort,
+            stall=cc.stall_seconds,
         )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}

@@ -263,7 +263,12 @@ def tools_text(tools: list[ToolSpec]) -> str:
     )
 
 
-_CALL = re.compile(r"<tool_call\b([^>]*)>(.*?)</tool_call\s*>", re.DOTALL | re.IGNORECASE)
+_CALL = re.compile(
+    r"<(?:[\w-]+:)?(?:tool_call|invoke)\b([^>]*)>(.*?)</(?:[\w-]+:)?(?:tool_call|invoke)\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+"""Orion's `<tool_call>`, and the forms Claude slips into from its own tool use: on 03/11 at
+00:43, `<invoke:tool_call name="web_read">{…}</invoke>` went to the owner as his answer."""
 _ATTRS = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 _DONE = re.compile(r"<fin\s*/>", re.IGNORECASE)
 _OPENING = re.compile(r'^\s*<message\s+role="assistant"\s*>', re.IGNORECASE)
@@ -303,6 +308,15 @@ def read_answer(answer: str, allowed: bool) -> tuple[str, list[ToolCall], bool]:
         calls = []
     return text, calls, ends and bool(calls)
 
+
+_LINE_LIMIT = 64 * 1024 * 1024
+"""One stdout line holds a whole answer and its usage: far over asyncio's 64 KiB default."""
+_FRAGMENT = b'{"type":"stream_event"'
+"""A piece of the answer as it is written (`--include-partial-messages`): only a sign of life."""
+_RETRY = b'{"type":"system","subtype":"api_retry"'
+_WAITING = b'{"type":"system","subtype":"status"'
+"""Claude Code waiting on the API, or retrying it on its own (an overload, no response): no
+answer under way. Those kept it « alive » for 300 s on 03/11."""
 
 _LINKS = "Links: "
 
@@ -369,11 +383,16 @@ class ClaudeCodeProvider:
         binary: str = "claude",
         timeout: float = 300.0,
         default_effort: str | None = "low",
+        stall: float = 45.0,
     ) -> None:
         self._binary = binary
         self._workdir = workdir
         """An empty directory: no project, no CLAUDE.md for Claude Code to pick up."""
         self._timeout = timeout
+        self._stall = stall
+        """Seconds without a word from Claude Code before the call is given up: it streams as it
+        writes, so a slow answer goes on and a stuck one falls back fast (03/11, a Sonnet call
+        that never answered held the owner 300 s)."""
         self._default_effort = default_effort
         """With no effort asked, Claude Code thinks at its own length: a text reply should not."""
 
@@ -404,6 +423,7 @@ class ClaudeCodeProvider:
             "stream-json",
             "--output-format",
             "stream-json",
+            "--include-partial-messages",  # a word as it is written: it is still alive
             "--verbose",
         ]
         effort = (
@@ -436,18 +456,62 @@ class ClaudeCodeProvider:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._workdir,
                 env=child_env(),
+                limit=_LINE_LIMIT,
             )
         except OSError as exc:  # no binary, no permission: another provider may answer
             raise ProviderError(f"cannot start Claude Code: {exc}", retryable=False) from exc
         try:
-            out, err = await asyncio.wait_for(
-                process.communicate(stdin_message(conversation)), self._timeout
-            )
-        except TimeoutError as exc:
-            raise ProviderError("Claude Code did not answer in time", retryable=True) from exc
+            out, err = await self._read(process, stdin_message(conversation))
         finally:
             await stop(process)  # timed out, or the turn was cancelled: never left running
         return self.parse(request, out, err, process.returncode or 0)
+
+    async def _read(self, process: asyncio.subprocess.Process, stdin: bytes) -> tuple[bytes, bytes]:
+        """(stdout without the streamed fragments, stderr), line by line: a call that says
+        nothing for `stall` seconds is given up, whatever its length so far."""
+        assert process.stdin is not None and process.stdout is not None
+        assert process.stderr is not None
+        errors = asyncio.ensure_future(process.stderr.read())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._timeout
+        kept: list[bytes] = []
+        try:
+            process.stdin.write(stdin)
+            await process.stdin.drain()
+            process.stdin.close()
+            alive = loop.time()  # the last sign of an answer under way
+            while True:
+                now = loop.time()
+                left, quiet = deadline - now, alive + self._stall - now
+                try:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(), max(0.0, min(quiet, left))
+                    )
+                except TimeoutError as exc:
+                    if left <= quiet:
+                        raise ProviderError(
+                            "Claude Code did not answer in time", retryable=True
+                        ) from exc
+                    log.warning("claude_code.stalled", seconds=self._stall)
+                    raise ProviderError(
+                        f"Claude Code answered nothing for {self._stall:.0f} s", retryable=True
+                    ) from exc
+                if not line:
+                    break
+                if line.startswith(_RETRY):
+                    log.warning("claude_code.api_retry", detail=line[:300].decode(errors="replace"))
+                elif not line.startswith(_WAITING):
+                    alive = loop.time()
+                if not line.startswith(_FRAGMENT):  # the result says it all again
+                    kept.append(line)
+            await process.wait()
+            return b"".join(kept), await errors
+        except (BrokenPipeError, ConnectionResetError) as exc:  # it died reading its input
+            detail = (await errors).decode(errors="replace").strip()[-300:]
+            raise ProviderError(f"Claude Code failed: {detail or exc}", retryable=False) from exc
+        finally:
+            if not errors.done():
+                errors.cancel()
 
     def _system_file(self, system: str) -> Path:
         """Named after its content: the same system message is written once."""

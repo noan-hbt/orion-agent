@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -316,3 +317,42 @@ async def test_router_reaches_the_plan_by_prefix_and_embeds_fail_softly(tmp_path
     with pytest.raises(ProviderError):
         await router.embed("openrouter:openai/text-embedding-3-small", ["hello"])
     await router.aclose()
+
+
+async def test_a_used_up_plan_answering_429_is_not_retried(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        error = {"code": "subscription_sharing_usage_limit_exceeded", "message": "weekly cap"}
+        return httpx.Response(429, json={"error": error})
+
+    provider = _provider(tmp_path, handler)
+    request = ModelRequest(model="gpt-6-luna", messages=[{"role": "user", "content": "hi"}])
+    with pytest.raises(ProviderError) as caught:
+        await provider.complete(request)
+    await provider.aclose()
+    assert calls == 1 and caught.value.used_up == ["chatgpt"]
+
+
+async def test_a_call_that_says_nothing_is_given_up_at_once(tmp_path: Path) -> None:
+    """03/11: Claude went quiet for five minutes (D227); ChatGPT could wait four times 180 s."""
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(5)
+        return _sse({"type": "response.completed", "response": {}})
+
+    provider = ChatGPTProvider(
+        _signed_in(tmp_path), transport=httpx.MockTransport(handler), stall_seconds=0.05
+    )
+    request = ModelRequest(model="gpt-6-luna", messages=[{"role": "user", "content": "hi"}])
+    started = time.monotonic()
+    with pytest.raises(ProviderError, match="said nothing") as caught:
+        await provider.complete(request)
+    assert not caught.value.retryable and calls == 1
+    assert time.monotonic() - started < 2
+    await provider.aclose()

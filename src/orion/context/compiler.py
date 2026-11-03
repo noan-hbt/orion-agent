@@ -23,10 +23,10 @@ from orion.providers.base import Message
 _WEEKDAYS_FR = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 
 
-def estimate_tokens(messages: list[Message], chars_per_token: int = 3) -> int:
+def estimate_tokens(messages: list[Message], chars_per_token: float = 3) -> int:
     """Cheap estimate; `chars_per_token` depends on the model (`providers.base.chars_per_token`)."""
     chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
-    return chars // chars_per_token + 4 * len(messages)
+    return int(chars / chars_per_token) + 4 * len(messages)
 
 
 def render_user_message(
@@ -57,7 +57,7 @@ class ContextCompiler:
     constitution: str
     max_window_tokens: int = 200_000
     rebase_target_ratio: float = 0.75
-    chars_per_token: int = 3
+    chars_per_token: float = 3
 
     def system_message(self) -> Message:
         return {"role": "system", "content": self.constitution}
@@ -84,7 +84,7 @@ class ContextCompiler:
         limit = self.max_window_tokens if budget is None else budget
         if estimate_tokens([*window, *incoming], self.chars_per_token) <= limit:
             return None
-        target = int(limit * self.rebase_target_ratio) - reserve_chars // self.chars_per_token
+        target = int(limit * self.rebase_target_ratio) - int(reserve_chars / self.chars_per_token)
         return _moved(thread, _cut(thread, incoming, target, self.chars_per_token))
 
     def fresh_point(self, thread: Thread, incoming: list[Message], budget: int) -> int | None:
@@ -100,7 +100,7 @@ def _moved(thread: Thread, point: int) -> int | None:
     return point if point > thread.base else None
 
 
-def _cut(thread: Thread, incoming: list[Message], target: int, chars_per_token: int) -> int:
+def _cut(thread: Thread, incoming: list[Message], target: int, chars_per_token: float) -> int:
     """The earliest user message after which the window and `incoming` fit `target`.
 
     The last exchange always stays: dropping it too left Orion answering a follow-up with no

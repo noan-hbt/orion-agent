@@ -22,7 +22,15 @@ from orion.providers.base import (
     Speaker,
 )
 from orion.providers.foreground import foreground
-from orion.providers.spending import QUOTA, SPENT, Spending, spending_tools, with_spending
+from orion.providers.router import Router
+from orion.providers.spending import (
+    EXHAUSTED,
+    QUOTA,
+    SPENT,
+    Spending,
+    spending_tools,
+    with_spending,
+)
 from orion.tools.base import ToolContext
 from tests.fakes import Script, ScriptedProvider, reply
 
@@ -138,6 +146,37 @@ async def test_a_plans_calls_and_windows_reach_the_usage_screen(journal: SqliteJ
     assert len([e for e in await journal.read() if e.kind == QUOTA]) == 2  # 17 % twice: once
     [quota] = seen["quotas"]
     assert quota["provider"] == "claude-code" and quota["windows"][0]["used"] == 0.25
+
+
+async def test_a_plan_that_never_tells_its_quota_still_shows_when_it_ran_out(
+    journal: SqliteJournal,
+) -> None:
+    def plan(request: ModelRequest) -> ModelResponse:
+        return reply("ok", cost=0)(request).model_copy(update={"provider": "chatgpt"})
+
+    def used_up(_request: ModelRequest) -> ModelResponse:
+        raise ProviderError("ChatGPT plan allowance used up", retryable=False, used_up="chatgpt")
+
+    chatgpt = ScriptedProvider(plan, used_up, used_up, plan)
+    router = Router(
+        {"chatgpt": chatgpt, "openrouter": ScriptedProvider(reply("a"), reply("b"))},
+        "openrouter",
+        {"chatgpt:gpt": ["openrouter:m"]},
+    )
+    now = [NOON]
+    spending = with_spending(router, journal, BudgetConfig(), "Europe/Paris", clock=lambda: now[0])
+    asked = REQUEST.model_copy(update={"model": "chatgpt:gpt"})
+    for hour in range(4):
+        now[0] = NOON + timedelta(hours=hour)
+        assert (await spending.complete(asked)).text in ("ok", "a", "b")  # the fallback answers
+    assert len([e for e in await journal.read() if e.kind == EXHAUSTED]) == 1  # said once
+
+    stats = UsageStats()
+    await ProjectionRunner(journal, [stats]).catch_up()
+    [unread] = stats.report(NOON.date())["unread"]
+    assert unread["provider"] == "chatgpt"
+    [spell] = unread["exhausted"]
+    assert spell["at"] < spell["back"] == (NOON + timedelta(hours=3)).isoformat()
 
 
 async def test_a_plan_at_no_cost_stands_beside_paid_models_and_compares_with_before(

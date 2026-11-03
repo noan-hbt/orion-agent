@@ -35,7 +35,13 @@ from orion.memory.tools import memory_tools
 from orion.modules.base import LateApprover, M, Module, ModuleError, Plate
 from orion.modules.guide import guide_section, guide_tool, on_demand
 from orion.modules.registry import discover, load
-from orion.providers.base import Embedder, ModelProvider, chars_per_token, window_tokens
+from orion.providers.base import (
+    Embedder,
+    ModelProvider,
+    chars_per_token,
+    on_chatgpt,
+    window_tokens,
+)
 from orion.providers.spending import Spending, spending_tools, with_spending
 from orion.resources import read_resource
 from orion.runtime import Orion
@@ -89,13 +95,30 @@ MAX_SECTION_CHARS = 2_500
 section drowns the others. What a tool does belongs in its description, read when it matters."""
 
 
+SAID_WITH_A_CALL = "Ce texte écrit avec un appel d'outil part"
+SAID_WITH_TELL = (
+    "Ce texte écrit avec un appel d'outil, ou passé à `tell` en même temps qu'un autre outil, part"
+)
+"""On the ChatGPT plan, `tell` is offered and the constitution says what it is for; Claude does
+not get it (D215), and the others are not told (D229)."""
+
+
 def constitution(
-    modules: list[Module], offers: Sequence[str] = (), owner_names: Sequence[str] = ()
+    modules: list[Module],
+    offers: Sequence[str] = (),
+    owner_names: Sequence[str] = (),
+    model: str = "",
 ) -> str:
     """The core constitution, his name, each enabled module's section in loading order, what
     Orion could do with more setup (D64), then the reread before each reply. All fixed while
-    Orion runs: the system message is cached."""
-    parts = [read_resource("constitution.md").strip()]
+    Orion runs: the system message is cached. `model` is `agent.model`: on the ChatGPT plan,
+    the constitution speaks of `tell`."""
+    core = read_resource("constitution.md").strip()
+    if on_chatgpt(model):
+        if SAID_WITH_A_CALL not in core:
+            raise ValueError("constitution.md no longer says what text beside a call does")
+        core = core.replace(SAID_WITH_A_CALL, SAID_WITH_TELL, 1)
+    parts = [core]
     if owner_names:
         # From `[memory] owner_names`: known from the first message, not asked (20/10).
         also = f" (il répond aussi à : {', '.join(owner_names[1:])})" if owner_names[1:] else ""
@@ -304,7 +327,9 @@ async def build_app(
                 config.agent.untrusted_idle_minutes,
             ),
             compiler=ContextCompiler(
-                constitution(enabled, offers(config), config.memory.owner_names),
+                constitution(
+                    enabled, offers(config), config.memory.owner_names, config.agent.model
+                ),
                 window_tokens(
                     config.agent.model,
                     config.agent.max_window_tokens,

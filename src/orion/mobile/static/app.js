@@ -3328,6 +3328,28 @@ const USAGE_TINTS = { "claude-code": "#C2571A", chatgpt: "#0F8F7A", openrouter: 
 const USAGE_OTHER = "#8E8E93";
 const USAGE_METRICS = { tokens: "tokens", calls: "appels", cost: "", messages: "messages", points: "points" };
 
+const USAGE_PAGES = { chatgpt: "https://chatgpt.com/settings/usage" };
+
+function usageUnread(q, figures) {
+  const last = q.exhausted.at(-1);
+  const when = (at) => SHORT.format(new Date(at));
+  const said = last && !last.back
+    ? `Épuisé depuis ${when(last.at)} : je passe par le modèle de secours`
+    : last
+      ? `Épuisé ${q.exhausted.length} fois sur la période, la dernière ${when(last.at)} → ${when(last.back)}`
+      : "Pas épuisé sur la période";
+  const used = figures ? [usageTokens(figures), plural(figures.calls, "appel", "appels")].filter(Boolean).join(" · ") : "";
+  const page = USAGE_PAGES[q.provider];
+  return h(
+    page ? "a" : "div",
+    page ? { class: "item", href: page, target: "_blank", rel: "noopener noreferrer" } : { class: "item" },
+    h("span", { class: `ico ${last && !last.back ? "c-red" : tint("spark")}` }, icon("spark", 17)),
+    h("span", {}, h("span", { class: "text" }, `${providerName(q.provider)} · quota non communiqué`), h("small", {}, [said, used].filter(Boolean).join(" · "))),
+    page ? h("small", { class: "value" }, "Voir") : null,
+    page ? h("span", { class: "chev" }, icon("chevron", 14)) : null,
+  );
+}
+
 function providerName(provider) {
   return provider === "delegated" ? "Tâches déléguées" : PROVIDERS[provider] || provider || "Autre";
 }
@@ -3561,7 +3583,8 @@ function usagePanel() {
           usageTile(`Coût · ${period.toLowerCase()}`, money(s.cost), s.equivalent ? `≈ ${money(s.equivalent)} au tarif API` : usageChange(s.cost, u.previous?.cost) || plural(s.calls, "appel", "appels")),
         ),
       ];
-      if (u.quotas.length || u.credits.length) {
+      const unread = u.unread || [];
+      if (u.quotas.length || u.credits.length || unread.length) {
         parts.push(
           h("p", { class: "label" }, "Forfaits"),
           h(
@@ -3582,9 +3605,11 @@ function usagePanel() {
                 ),
               ),
             ),
+            unread.map((q) => usageUnread(q, u.providers.find((p) => p.provider === q.provider))),
             u.credits.map((c) => row("key", PROVIDERS[c.provider] || c.provider, c.remaining !== null ? `${money(c.remaining)} restants` : `${money(c.used)} dépensés`, null, "", c.total ? `sur ${money(c.total)} de crédit` : "")),
           ),
           u.quotas.length ? h("p", { class: "hint" }, `Ce que le forfait m'a dit à mon dernier appel (${u.quotas.map((q) => SHORT.format(new Date(q.at))).join(", ")}).`) : null,
+          unread.length ? h("p", { class: "hint" }, `${unread.map((q) => providerName(q.provider)).join(", ")} ne me dit pas ce qu'il reste du forfait, seulement quand il est épuisé. Ce que j'en utilise est dans « L'évolution », en tokens ; le pourcentage est sur sa page d'utilisation.`) : null,
         );
       }
       const plans = u.plans.filter((plan) => plan.readings.length);

@@ -301,6 +301,17 @@ def uses(*tools: str) -> Check:
     return check
 
 
+def digs(at_least: int, *tools: str) -> Check:
+    """At least `at_least` calls among `tools`: he goes on looking when the first page is not
+    the answer (03/11, two searches then « à confirmer sur impots.gouv »)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        count = sum(1 for name, _ in o.tools if name in tools)
+        return None if count >= at_least else f"{count} calls to {'/'.join(tools)} (min {at_least})"
+
+    return check
+
+
 def called_with(tool: str, *fragments: str) -> Check:
     """`tool` was called with arguments holding every fragment (JSON as the model wrote it,
     spaces removed)."""
@@ -362,9 +373,12 @@ def avoids(*tools: str) -> Check:
     return check
 
 
-def judged(question: str) -> Check:
+def judged(question: str, whole: bool = False) -> Check:
+    """`whole`: the judge reads all he sent during the turn, the words beside his calls too,
+    not just the last reply (his estimate can leave beside the search that checks it)."""
+
     async def check(o: Observation, judge: Judge) -> str | None:
-        verdict = await judge(question, o.last)
+        verdict = await judge(question, "\n\n".join([*o.spoken, *o.replies]) if whole else o.last)
         if verdict is None:  # the judge's failure, not Orion's: said apart
             return f"judge gave no verdict: {question}"
         return None if verdict else f"judge says no: {question}"

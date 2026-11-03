@@ -15,6 +15,7 @@ from evals.harness import (
     avoids,
     before,
     called_with,
+    digs,
     either,
     judged,
     never_says,
@@ -1077,5 +1078,56 @@ CASES: tuple[Case, ...] = (
             Say("Tu veux en ajouter ?"),
         ),
         checks=(avoids("shell", "browser", "file"),),
+    ),
+    Case(
+        name="creuse_la_date_de_la_tva",
+        origin="03/11 13:20 : « Vsy vérifie » quand l'option TVA prend effet pour une "
+        "micro-entreprise. Deux PDF illisibles, une recherche, une page d'un blog, puis « je n'ai "
+        "pas trouvé la date exacte pour la micro, donc à confirmer sur impots.gouv ».",
+        at=paris(2026, 11, 3, 14, 20),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Je suis micro-entrepreneur en franchise de TVA. Si j'opte pour payer la TVA, "
+                "ça prend effet à partir de quand ? Vérifie pour moi stp, sur du officiel"
+            ),
+        ),
+        checks=(
+            digs(3, "web_search", "web_read", "browser"),
+            judged(
+                "La règle officielle (art. 293 F du CGI, BOFiP) : l'option pour le paiement de "
+                "la TVA prend effet le 1er jour du mois au cours duquel elle est déclarée. La "
+                "réponse donne-t-elle cette règle (ou une règle équivalente précise) au lieu de "
+                "renvoyer le propriétaire vérifier lui-même sur impots.gouv ?"
+            ),
+        ),
+        live_web=True,
+        modules=("web",),
+    ),
+    Case(
+        name="creuse_les_minutes_d_appel",
+        origin="03/11 13:53 : combien de minutes d'appel par mois pour un cabinet ou un "
+        "garage. Deux recherches, deux pages, puis « pas de chiffre fiable », sans chercher la "
+        "durée d'un appel ni faire l'estimation.",
+        at=paris(2026, 11, 3, 13, 53),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Je veux vendre des réceptionnistes IA au téléphone. Une entreprise type "
+                "cabinet médical, garage, etc, ça fait combien de minutes d'appel par mois en "
+                "moyenne ?"
+            ),
+        ),
+        checks=(
+            digs(3, "web_search", "web_read", "browser"),
+            judged(
+                "La réponse donne-t-elle une estimation chiffrée de minutes par mois pour ce "
+                "type d'entreprise (même une fourchette, avec ses hypothèses : appels par jour, "
+                "durée d'un appel), au lieu de dire seulement qu'il n'y a pas de chiffre fiable ?",
+                whole=True,
+            ),
+        ),
+        live_web=True,
+        modules=("web",),
     ),
 )

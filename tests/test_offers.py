@@ -54,3 +54,10 @@ def test_orion_knows_his_name_from_the_start() -> None:
     """20/10: « tu sais déjà comment je m'appelle » — it did not; it is in the config."""
     assert "Ton propriétaire s'appelle Noan." in constitution([], [], ["Noan"])
     assert "s'appelle" not in constitution([], [])
+
+
+def test_only_the_chatgpt_plan_is_told_about_tell() -> None:
+    """Claude does not get `tell` (D215); on ChatGPT it is offered and said (D229)."""
+    assert "`tell`" in constitution([], model="chatgpt:gpt-6-luna")
+    assert "`tell`" not in constitution([], model="claude-code:sonnet")
+    assert "`tell`" not in constitution([])

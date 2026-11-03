@@ -21,7 +21,7 @@ from orion.console.dashboard import moment
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event
 from orion.delegation.jobs import JOB_FINISHED
-from orion.providers.spending import QUOTA, SPENT
+from orion.providers.spending import EXHAUSTED, QUOTA, SPENT
 
 OWNER_THREAD = "owner"
 TOKENS = ("prompt_tokens", "completion_tokens", "cached_tokens", "cache_write_tokens")
@@ -110,6 +110,11 @@ def _figures(found: ModelDay) -> dict[str, Any]:
     }
 
 
+def _unread(provider: str, found: ModelDay) -> bool:
+    """A plan (no cost per call) that never said what its windows have used: ChatGPT's."""
+    return provider not in ("", DELEGATED) and found.calls > 0 and found.cost == 0
+
+
 def _main_window(found: ModelDay) -> str | None:
     """The window a model's points are told in: the week when known, the longest-lived there is."""
     return "seven_day" if "seven_day" in found.points else min(found.points, default=None)
@@ -128,6 +133,10 @@ class UsageStats:
     """(provider, window) → when, how much used (0 to 1), when it resets"""
     working: dict[str, dict[str, int]] = field(default_factory=dict[str, dict[str, int]])
     """provider → model → the tokens worked since that plan's last reading"""
+    exhausted: dict[str, list[list[datetime | None]]] = field(
+        default_factory=dict[str, list[list[datetime | None]]]
+    )
+    """provider → [when its allowance was found used up, when it answered again]"""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -138,6 +147,7 @@ class UsageStats:
         self.quotas.clear()
         self.readings.clear()
         self.working.clear()
+        self.exhausted.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -148,6 +158,7 @@ class UsageStats:
         kind = event.kind
         if kind not in (
             QUOTA,
+            EXHAUSTED,
             SPENT,
             JOB_FINISHED,
             "message.received",
@@ -156,13 +167,16 @@ class UsageStats:
         ):
             return
         zone = ZoneInfo(self.zone)
-        if kind in (SPENT, QUOTA) and payload.get("at"):
+        if kind in (SPENT, QUOTA, EXHAUSTED) and payload.get("at"):
             at = datetime.fromisoformat(str(payload["at"])).astimezone(zone)
         else:
             at = moment(event, zone)
         day = self.days.setdefault(at.date(), Day())
         if kind == QUOTA:
             self._read_quota(payload, day, at)
+            return
+        if kind == EXHAUSTED:
+            self.exhausted.setdefault(str(payload.get("provider") or ""), []).append([at, None])
             return
         if kind == SPENT:
             cost = float(payload.get("cost_usd") or 0)
@@ -172,6 +186,8 @@ class UsageStats:
                 day.tokens[key] += int(payload.get(key) or 0)
             name = str(payload.get("model") or "?")
             provider = provider_of(payload, name)
+            if (spells := self.exhausted.get(provider)) and spells[-1][1] is None:
+                spells[-1][1] = at  # it answers again
             model = day.models.setdefault((provider, name), ModelDay(provider))
             model.calls += 1
             model.alone += 0 if payload.get("foreground") else 1
@@ -311,6 +327,14 @@ class UsageStats:
                 )
             return kept
 
+        def spelled(provider: str) -> list[dict[str, str | None]]:
+            """The times a plan was used up during the period, or still is."""
+            return [
+                {"at": at.isoformat(), "back": back.isoformat() if back else None}
+                for at, back in self.exhausted.get(provider, [])
+                if at and (back is None or back.date() >= order[0])
+            ]
+
         def biggest(item: tuple[Any, ModelDay]) -> tuple[int, int, float]:
             return (-item[1].fresh, -item[1].calls, -item[1].cost)
 
@@ -360,5 +384,13 @@ class UsageStats:
             "quotas": [
                 {"provider": provider, "at": q.get("at"), "windows": q.get("windows") or []}
                 for provider, q in sorted(self.quotas.items())
+            ],
+            "unread": [
+                {"provider": name, "exhausted": spelled(name)}
+                for name in sorted(
+                    {n for n, found in providers.items() if _unread(n, found)}
+                    | {n for n in self.exhausted if spelled(n)}
+                )
+                if not any(p == name for p, _ in self.readings)
             ],
         }

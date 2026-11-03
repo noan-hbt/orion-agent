@@ -69,11 +69,22 @@ def window_tokens(spec: str, configured: int, plan: int) -> int:
     return min(configured, plan) if on_plan(spec) else configured
 
 
-def chars_per_token(spec: str) -> int:
+def on_chatgpt(spec: str) -> bool:
+    """Whether this model runs on the ChatGPT plan, the one provider that still offers `tell`
+    and whose constitution says so (D229)."""
+    return spec.startswith("chatgpt:")
+
+
+def chars_per_token(spec: str) -> float:
     """How many characters make a token, roughly. Anthropic counts about 2 on Orion's real
-    conversations (measured: 12 693 characters, 6 456 tokens), the others about 3."""
+    conversations (measured: 12 693 characters, 6 456 tokens). OpenAI's `o200k_base` counts
+    3.6 to 3.7 on Orion's system message, tool schemas and French messages (measured, D229):
+    3.5, since tool results (JSON, links) count worse and a low guess cuts sooner, not later.
+    The others about 3."""
     model = spec.removeprefix("openrouter:")
-    return 2 if model.startswith(("claude-code:", "anthropic/")) else 3
+    if model.startswith(("claude-code:", "anthropic/")):
+        return 2
+    return 3.5 if model.startswith(("chatgpt:", "openai/")) else 3
 
 
 class ToolSpec(BaseModel):
@@ -212,13 +223,27 @@ class ModelResponse(BaseModel):
         default_factory=list[QuotaWindow],
         description="What the plan's windows have used, when the provider says (a plan only)",
     )
+    used_up: list[str] = Field(
+        default_factory=list[str],
+        description="The plans found used up before a fallback answered (`ProviderError.used_up`)",
+    )
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status: int | None = None,
+        used_up: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
+        self.used_up: list[str] = [used_up] if used_up else []
+        """The plans whose allowance was found used up on the way (the router adds those it
+        fell back from): a plan that tells nothing of its windows says this much."""
 
 
 class ModelProvider(Protocol):

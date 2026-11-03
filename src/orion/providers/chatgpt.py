@@ -9,7 +9,8 @@ What the plan does not offer is dropped or refused here rather than half-done: `
 and `max_output_tokens` are rejected by the server (dropped: a cap is a cost guard, and the
 plan has no per-call cost), pictures cannot be generated (refused, so the router falls back),
 and there are no embeddings. Calls cost nothing per token: `cost_usd` stays 0, and the plan's
-own weekly allowance is the limit.
+own weekly allowance is the limit. The plan never says how much of it is left (no window
+headers on this path, no endpoint): all Orion learns is when it is used up (`used_up`).
 """
 
 from __future__ import annotations
@@ -118,6 +119,22 @@ def to_input(messages: list[Message]) -> list[dict[str, Any]]:
     return items
 
 
+def _error_code(body: str) -> str:
+    """The `error.code` of an error body, or "" when it is not one."""
+    try:
+        found = json.loads(body)
+    except json.JSONDecodeError:
+        return ""
+    error = cast(dict[str, Any], found).get("error") if isinstance(found, dict) else None
+    return str(cast(dict[str, Any], error).get("code") or "") if isinstance(error, dict) else ""
+
+
+def _used_up(code: str) -> ProviderError:
+    return ProviderError(
+        f"ChatGPT plan allowance used up ({code})", retryable=False, status=429, used_up="chatgpt"
+    )
+
+
 def _json_object(text: str) -> str:
     """The JSON object in a reply asked for JSON without JSON mode (fences, a sentence around)."""
     start, end = text.find("{"), text.rfind("}")
@@ -153,7 +170,8 @@ class ChatGPTProvider:
         auth: ChatGPTAuth,
         *,
         base_url: str = API_URL,
-        timeout: float = 180.0,
+        stall_seconds: float = 45.0,
+        silence_seconds: float = 180.0,
         max_attempts: int = 4,
         max_backoff: float = 20.0,
         default_effort: str | None = "low",
@@ -162,11 +180,19 @@ class ChatGPTProvider:
         self._auth = auth
         self._default_effort = default_effort
         """With no effort asked, reasoning models think at length: a text reply should not."""
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._stall = stall_seconds
+        """How long a call may say nothing at all before it is given up (D229): the server
+        starts its stream at once, so silence there means it will not answer soon."""
+        self._silence = silence_seconds
+        """How long a started call may then go quiet: thinking at length sends nothing."""
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(silence_seconds, connect=stall_seconds),
+            transport=transport,
+        )
         self._max_attempts = max_attempts
         self._max_backoff = max_backoff
         self._turn_state: dict[str, str] = {}
-        self._quota_missing_said = False
         """Each conversation's routing token for the turn under way (`TURN_STATE`)."""
 
     async def aclose(self) -> None:
@@ -255,14 +281,20 @@ class ChatGPTProvider:
             elif state := self._turn_state.get(session):
                 headers[TURN_STATE] = state
         items: list[dict[str, Any]] = []
+        started = False
+        clock = asyncio.get_running_loop()
         try:
-            async with self._client.stream(
-                "POST", "/responses", json=body, headers=headers
-            ) as response:
+            async with (
+                asyncio.timeout(self._stall) as watch,
+                self._client.stream("POST", "/responses", json=body, headers=headers) as response,
+            ):
                 if response.status_code >= 400:
                     text = (await response.aread()).decode("utf-8", "replace")
                     if response.status_code == 401:
                         self._auth.expire()
+                    if (code := _error_code(text)) in _PLAN_EXHAUSTED:
+                        # A 429 like any other, but waiting a few seconds will not bring it back.
+                        raise _used_up(code)
                     raise ProviderError(
                         f"HTTP {response.status_code}: {text[:500]}",
                         retryable=response.status_code in _RETRYABLE_STATUS
@@ -271,34 +303,16 @@ class ChatGPTProvider:
                     )
                 if session and (state := response.headers.get(TURN_STATE)):
                     self._turn_state[session] = state
+                # Sign in with ChatGPT sends none of these today (openai/codex#54219): read
+                # them anyway, the day OpenAI does.
                 quota = plan_windows(response.headers)
-                if not quota and not self._quota_missing_said:
-                    # The plan's windows never reached the journal: say once what came instead.
-                    self._quota_missing_said = True
-                    log.warning(
-                        "chatgpt.no_quota_headers",
-                        names=sorted(
-                            n for n in response.headers if "codex" in n or "ratelimit" in n
-                        ),
-                    )
-                if not quota and not self._quota_missing_said:
-                    # The plan's windows never reached the journal: say once what came instead.
-                    self._quota_missing_said = True
-                    log.warning(
-                        "chatgpt.no_quota_headers",
-                        names=sorted(
-                            n for n in response.headers if "codex" in n or "ratelimit" in n
-                        ),
-                    )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
+                    started = True
+                    watch.reschedule(clock.time() + self._silence)
                     event = cast(dict[str, Any], json.loads(line[5:]))
                     kind = event.get("type")
-                    if "rate_limit" in str(kind):
-                        log.info("chatgpt.rate_limit_event", kind=kind)
-                    if "rate_limit" in str(kind):
-                        log.info("chatgpt.rate_limit_event", kind=kind)
                     if kind == "response.output_item.done":
                         items.append(cast(dict[str, Any], event["item"]))
                     elif kind in ("response.completed", "response.incomplete"):
@@ -308,7 +322,16 @@ class ChatGPTProvider:
                         return parsed.model_copy(update={"quota": quota})
                     elif kind in ("response.failed", "error"):
                         raise self._failure(event)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            # Asking again would wait as long once more: the fallback model answers (D229).
+            waited = self._silence if started else self._stall
+            log.warning("chatgpt.stalled", started=started, seconds=waited, attempt=attempt)
+            raise ProviderError(
+                f"ChatGPT said nothing for {waited:.0f} s"
+                + (" after it started" if started else ""),
+                retryable=False,
+            ) from exc
+        except httpx.TransportError as exc:
             raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid event from provider", retryable=True) from exc
@@ -320,7 +343,7 @@ class ChatGPTProvider:
         error = cast(dict[str, Any], response.get("error") or event.get("error") or event)
         code = str(error.get("code") or "")
         if code in _PLAN_EXHAUSTED:
-            return ProviderError(f"ChatGPT plan allowance used up ({code})", retryable=False)
+            return _used_up(code)
         return ProviderError(
             f"provider error: {error.get('message') or code or 'failed'}",
             retryable=code in ("server_error", "rate_limit_exceeded"),

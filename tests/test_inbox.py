@@ -107,13 +107,13 @@ async def test_words_beside_a_tool_call_can_be_the_whole_answer(
     inbox: OwnerInbox, provider: ScriptedProvider
 ) -> None:
     """« ok, noté » written with the call that notes it, then an empty reply: one message
-    (D216). An empty reply with nothing said yet is sent back once instead of leaving him
-    without an answer."""
+    (D216); a call whose result it read is asked once about it first (D226). An empty reply
+    with nothing said yet is sent back once instead of leaving him without an answer."""
     imessage = Outlet("imessage")
     inbox.register(imessage)
-    provider.extend(call_tools(("note", {}), text="ok gros, c'est noté"), reply(""))
+    provider.extend(call_tools(("note", {}), text="ok gros, c'est noté"), reply(""), reply(""))
     inbox.submit(Inbound("imessage", ("a",), "appelle-moi gros"))
-    await until(lambda: len(provider.requests) == 2 and not inbox.owner_waiting())
+    await until(lambda: len(provider.requests) == 3 and not inbox.owner_waiting())
     provider.extend(call_tools(("note", {})), reply(""), reply("c'est fait"))
     inbox.submit(Inbound("imessage", ("b",), "note ça"))
     await until(lambda: len(imessage.sent) == 2)

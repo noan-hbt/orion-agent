@@ -5176,3 +5176,97 @@ et `notifications`, dans le tiroir, et une consigne lue quand elle sert (D212). 
 `hook.ran`, `hook.capped`, `notification.set` ; les hooks et les choix sont des projections.
 Les adresses passent par Caddy (`/hooks/in/*`, port 8797) : relancer `deploy/install.sh` le
 met à jour sur un serveur déjà installé.
+
+## D226 — « Je vérifie » n'est pas ce qu'il a trouvé
+
+*03/11/2026 · acceptée · complète D216, D217*
+
+Le 03/11, deux réponses que le propriétaire n'a jamais eues :
+
+- **13:09** : « Je vérifie la date d'effet avant de te dire quand ça peut prendre effet », écrit
+  avec un `web_search`, puis une réponse finale vide. Comme ces mots étaient partis, la boucle
+  tenait le tour pour fini (D216) : le résultat de la recherche n'est jamais arrivé, il a dû
+  écrire « Vsy vérifie » onze minutes plus tard. Les mots écrits avec un appel qui lit partent
+  avant son résultat : ils ne peuvent pas l'avoir dit. Une réponse vide après un tel appel est
+  renvoyée une fois au modèle (`UNREPORTED`), avec ce qui est déjà parti : il dit ce qu'il a
+  trouvé, ou reste vide si ça ne change rien. Les appels qui notent seulement finissent toujours
+  le tour (D223), et une initiative peut toujours se taire.
+- **00:43** : à « le dernier match de l'équipe de France, avec le lien », Haiku a écrit
+  `<invoke:tool_call name="web_read">{…}</invoke>`, la forme de ses propres outils, au lieu de
+  `<tool_call>`. Rien ne l'a lu comme un appel : la balise est partie telle quelle comme réponse.
+  `read_answer` lit aussi `<invoke>` et un préfixe `x:` devant le nom de la balise.
+
+## D227 — Un appel à Claude qui se tait est lâché vite
+
+*03/11/2026 · acceptée · complète D100, D208*
+
+Le 03/11 vers 15:00, juste après le passage à Sonnet, l'app affiche « écrit… » pendant cinq
+minutes : un appel à `claude-code:sonnet` ne répond pas, et Orion attend les 300 s de
+`timeout_seconds` avant de passer à son modèle de secours. Une étape prend d'habitude 5 à 20 s.
+Au même moment, une évaluation lancée depuis une autre machine bute pareil : un ralentissement
+de Sonnet, pas du serveur.
+
+- **Claude Code écrit sa réponse au fur et à mesure** (`--include-partial-messages`) et Orion
+  lit sa sortie ligne par ligne. Un appel qui ne produit rien pendant `stall_seconds` (45 s par
+  défaut) est lâché et le modèle de secours répond (`claude_code.stalled`). Un appel lent qui
+  avance continue jusqu'à `timeout_seconds`, qui reste le plafond.
+- **Ce qui n'est pas une réponse en cours ne compte pas** : quand l'API est surchargée ou ne
+  répond pas, Claude Code réessaie lui-même pendant des minutes et le dit (`api_retry`, et des
+  `status` « requesting »). Ces lignes faisaient croire qu'il travaillait ; elles ne repoussent
+  plus le délai, et chaque nouvelle tentative est notée (`claude_code.api_retry`).
+- Les fragments ne sont pas gardés : le résultat final redit tout. Une ligne de stdout peut
+  dépasser les 64 Kio par défaut d'asyncio (une réponse entière et son usage) : la limite passe
+  à 64 Mio.
+
+À surveiller : `claude_code.stalled` sur une réponse qui aurait abouti (une recherche web de
+Claude qui dure plus de 45 s sans rien écrire).
+
+## D228 — ChatGPT : le quota que le forfait ne dit pas
+
+*03/11/2026 · acceptée · complète D190 et D221*
+
+L'écran Utilisation ne montrait rien du forfait ChatGPT. Ce n'est pas un bug de lecture : par
+« Sign in with ChatGPT » (D62), OpenAI n'envoie aucun en-tête `x-codex-*` ni événement de quota,
+et aucune adresse ne donne le pourcentage utilisé ou la remise à zéro (openai/codex#54219, sans
+réponse ; `backend-api/wham/usage` refuse ce jeton, et D62 l'exclut de toute façon). Seule la page
+chatgpt.com/settings/usage le montre.
+
+- **Ce qu'on sait, on le dit** : le forfait épuisé répond 429
+  `subscription_sharing_usage_limit_exceeded`. Ce 429-là n'est plus réessayé quatre fois (il ne
+  reviendra pas en quelques secondes) ; l'erreur nomme le forfait (`ProviderError.used_up`), le
+  routeur le garde même quand le modèle de secours répond, et `plan.exhausted` est journalisé une
+  fois, jusqu'à ce que le forfait réponde de nouveau.
+- **À l'écran** : sous « Forfaits », ChatGPT apparaît « quota non communiqué », avec ses épuisements
+  sur la période (depuis quand, ou de quand à quand), ses tokens et un lien vers sa page
+  d'utilisation. L'évolution de ce qu'Orion en consomme reste la courbe en tokens.
+- Les en-têtes `x-codex-*` sont toujours lus : le jour où OpenAI les envoie, la courbe du quota
+  apparaît sans rien changer. Le journal de diagnostic `chatgpt.no_quota_headers` est retiré.
+
+## D229 — ChatGPT rattrape le forfait Claude : un appel muet, ses tokens, `tell`
+
+*03/11/2026 · acceptée · complète D62, D210, D215, D227*
+
+Les dernières décisions visaient le forfait Claude. Sur ChatGPT, le modèle du propriétaire,
+trois choses étaient restées en arrière.
+
+- **Un appel qui se tait est lâché vite.** Le client attendait 180 s entre deux lectures et
+  réessayait quatre fois une attente dépassée : jusqu'à douze minutes avant le modèle de secours.
+  Le serveur ouvre son flux tout de suite : un appel qui n'a rien envoyé au bout de
+  `stall_seconds` (45 s) est lâché. Une fois commencé, il peut se taire `silence_seconds`
+  (180 s, réfléchir longtemps n'envoie rien). Une attente dépassée n'est plus réessayée : elle
+  durerait autant une seconde fois. Journal : `chatgpt.stalled`.
+- **Ses tokens comptés juste.** `o200k_base`, le tokenizer d'OpenAI, compte 3,7 caractères par
+  token sur le message système avec tous les modules, 3,7 sur les schémas d'outils et 3,6 sur les
+  messages des évaluations, là où Orion en supposait 3. `chars_per_token` vaut 3,5 pour
+  `chatgpt:` et `openai/` : les résultats d'outils (JSON, liens) comptent moins bien, et un chiffre
+  bas coupe plus tôt, pas plus tard. La fenêtre ChatGPT porte donc un peu plus de conversation
+  qu'avant pour le même `max_window_tokens`.
+- **`tell` se dit sur ChatGPT, et seulement là.** Depuis D215, la constitution ne parlait plus de
+  `tell`, toujours proposé aux autres fournisseurs. Avec `agent.model` en `chatgpt:`, elle dit de
+  nouveau que le texte passé à `tell` avec un autre outil part tout de suite, comme celui écrit
+  avec un appel. Claude ne l'a pas ; les autres modèles ne l'entendent pas. Le message système
+  reste fixe tant qu'Orion tourne (contrat du cache).
+
+À surveiller : `chatgpt.stalled` avec `started=false` sur un appel qui aurait abouti, et sur le
+serveur l'écart entre l'estimation et les `prompt_tokens` de ChatGPT (le tokenizer de ses modèles
+n'est pas publié ; `o200k_base` est le plus récent connu).

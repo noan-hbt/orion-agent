@@ -85,6 +85,16 @@ class ChatGPTConfig(BaseModel):
         default="low",
         description="How long the models think when a call asks nothing; none: the model's own",
     )
+    stall_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description="A call that has sent nothing for this long is given up for the fallback model",
+    )
+    silence_seconds: float = Field(
+        default=180.0,
+        gt=0,
+        description="Once started, how long a call may go quiet (thinking sends nothing)",
+    )
 
 
 class ClaudeCodeConfig(BaseModel):
@@ -95,7 +105,12 @@ class ClaudeCodeConfig(BaseModel):
 
     enabled: bool = False
     binary: str = Field(default="claude", description="The Claude Code command")
-    timeout_seconds: float = Field(default=300.0, gt=0)
+    timeout_seconds: float = Field(default=300.0, gt=0, description="The longest a call may take")
+    stall_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description="A call silent this long is given up and the fallback model answers",
+    )
     reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         default="low",
         description="How long the models think when a call asks nothing; none: Claude Code's own",
