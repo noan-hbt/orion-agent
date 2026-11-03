@@ -34,6 +34,7 @@ from evals.harness import (
 )
 from orion.core.events import Trust
 from orion.mail.service import mail_notice
+from orion.places.module import arrival_notice
 
 ASSISTANT_TICS = r"bien sûr ?!|excellente question|n'hésite pas|voici (?:les|la|le|ce)"
 OWNER = (
@@ -861,6 +862,31 @@ CASES: tuple[Case, ...] = (
             Watch(at=paris(2026, 10, 27, 12, 30)),
         ),
         checks=(never_says(r"MAINTENANT", "nothing urgent: nothing goes now"),),
+    ),
+    Case(
+        name="la_notif_de_test",
+        origin="03/11 08h54 : « tu vas en recevoir une de test », Orion « j'attends la notif "
+        "de test » ; l'arrivée à « Boulot » vient, et l'alerte, qui lui disait « il ne "
+        "t'a rien demandé pour ce lieu », finit en SILENCE.",
+        at=paris(2026, 11, 3, 8, 50),
+        facts=OWNER,
+        steps=(
+            Say(
+                "je viens de relier le lieu Boulot dans Raccourcis, préviens-moi quand tu reçois "
+                "la notif d'arrivée, tu vas en recevoir une de test"
+            ),
+            Notice(
+                arrival_notice("Boulot", "arrive", "08:54"),
+                "son téléphone : arrivé à « Boulot »",
+                Trust.OWNER_INSTANCE,
+                at=paris(2026, 11, 3, 8, 54),
+            ),
+        ),
+        checks=(
+            never_says(r"^\s*SILENCE\.?\s*$", "he asked to be told and Orion kept silent"),
+            judged("La réponse lui dit-elle que l'arrivée à « Boulot » est bien arrivée ?"),
+        ),
+        modules=("places",),
     ),
     Case(
         name="un_essai_gratuit_devient_payant",
