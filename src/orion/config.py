@@ -156,6 +156,11 @@ class AgentConfig(BaseModel):
         default=40, ge=1, description="Model calls per turn; browsing a site takes one per page"
     )
     max_tool_calls: int = Field(default=80, ge=0)
+    plan: bool = Field(
+        default=False,
+        description="Gives Orion the `plan` tool for long work (D97); off since D235, to see "
+        "whether he works longer without it",
+    )
     max_cost_usd_per_turn: float = Field(default=0.50, gt=0)
     max_continuations: int = Field(
         default=1,

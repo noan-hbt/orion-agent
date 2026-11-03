@@ -574,8 +574,14 @@ async def run_agent(
         # Not when a call failed, the plan has steps left or nothing was said to the owner.
         # A call that only records (« ok, noté » with `remember`) has nothing to tell it either:
         # asked again, Haiku answered the tool result and then wrote "noté" again (03/11, D223).
+        # Only when the words came with these very calls: records made silently, after words
+        # said earlier in the turn, are steps of a longer work (03/11, a memory sort cut after
+        # each batch of `forget_fact`, D235).
+        records_with_words = bool((response.text or "").strip()) and all(
+            _records(call, registry) for call in calls
+        )
         ended = (
-            (response.ends_turn or all(_records(call, registry) for call in calls))
+            (response.ends_turn or records_with_words)
             and not open_steps
             and not any(result.is_error for _, result, _ in executions)
             and _reached_him(messages[turn_start:])

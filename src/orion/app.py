@@ -220,7 +220,7 @@ def core_tools(plate: Plate) -> list[Tool]:
         "situations_list": "list",
     }
     return [
-        *builtin_tools(),
+        *builtin_tools(plan=plate.config.agent.plan),
         *[t for t in memory if t.name not in commitments and t.name not in situations],
         grouped(
             "situation",

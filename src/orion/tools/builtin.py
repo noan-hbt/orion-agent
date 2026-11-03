@@ -65,14 +65,15 @@ async def _plan(args: Any, _ctx: ToolContext) -> ToolResult:
     return ToolResult(status)
 
 
-def builtin_tools() -> list[Tool]:
+def builtin_tools(plan: bool = True) -> list[Tool]:
+    """`plan`: off, Orion works without one (`[agent] plan`, D235)."""
     common: dict[str, Any] = {
         "effect": Effect.NONE,
         "reversibility": Reversibility.REVERSIBLE,
         "concurrency_safe": True,
         "accepts_untrusted_context": True,
     }
-    return [
+    tools = [
         Tool(
             name="tell",
             description="Send him a message now and keep working: what you just found or did "
@@ -96,3 +97,4 @@ def builtin_tools() -> list[Tool]:
             **common,
         ),
     ]
+    return tools if plan else [t for t in tools if t.name != "plan"]

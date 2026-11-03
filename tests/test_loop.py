@@ -697,6 +697,17 @@ async def test_words_beside_a_call_that_only_records_end_the_turn() -> None:
     assert len(provider.requests) == 1
 
 
+async def test_silent_records_after_earlier_words_keep_the_turn_going() -> None:
+    """03/11: a memory sort, a word, then `forget_fact` alone: the turn was cut there (D235)."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "doublons"}), text="un doublon retiré"),
+        call_tools(("note", {})),
+        reply("tri fini"),
+    )
+    events, _ = await collect(provider, _noting_registry())
+    assert finished(events).text == "tri fini"
+
+
 async def test_a_nudged_reply_is_told_what_already_left() -> None:
     """03/11: the nudge asked for the reply « entière », and it said « noté » a second time."""
     provider = ScriptedProvider(
