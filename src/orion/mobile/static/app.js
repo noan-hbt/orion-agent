@@ -5103,12 +5103,58 @@ function autonomyPanel() {
   });
 }
 
+const ACTIVITY_KINDS = { all: "Tout", conversation: "Conversations", action: "Actions", initiative: "Initiative", memory: "Mémoire", silences: "Silences", system: "Système", technical: "Technique" };
+const ACTIVITY_ICONS = { conversation: "chat", action: "spark", initiative: "orion", memory: "book", system: "server", technical: "blocks" };
+
+function activityIcon(a) {
+  if (a.silence) return "moon";
+  if (a.kind.startsWith("autonomy")) return "shield";
+  if (a.kind.startsWith("mail")) return "mail";
+  if (a.kind.startsWith("calendar")) return "calendar";
+  if (a.kind.startsWith("web") || a.kind.startsWith("browser")) return "search";
+  return ACTIVITY_ICONS[a.category] || "spark";
+}
+
+function activitySheet(a) {
+  sheet(
+    h("h2", {}, a.what),
+    h("p", { class: "label" }, `${SHORT.format(new Date(a.at))} · ${ACTIVITY_KINDS[a.category] || a.category}`),
+    a.detail ? h("p", { class: "quote" }, a.detail) : null,
+    a.fields.length
+      ? h(
+          "div",
+          { class: "list items" },
+          a.fields.map(([key, value]) => h("div", { class: "item" }, h("span", {}, h("small", {}, key), h("span", { class: "text", style: "white-space:pre-wrap;overflow-wrap:anywhere;font-size:15px" }, value)))),
+        )
+      : null,
+    h("p", { class: "hint" }, `${a.kind} · n° ${a.seq}`),
+  );
+}
+
 function activityPanel() {
-  let filter = "all";
-  panel("Ce que j'ai fait", async (refresh) => {
-    const { activity } = await api("api/activity");
-    const shown = activity.filter((a) => filter === "all" || (filter === "silences" ? a.silence : !a.silence));
-    const tab = (key, text) => h("button", { type: "button", role: "tab", "aria-selected": String(filter === key), onclick: () => ((filter = key), refresh()) }, text);
+  let kind = "all";
+  let query = "";
+  let timer = null;
+  let before = null;
+  let shown = [];
+  const body = h("div");
+  const search = h("input", {
+    type: "search",
+    placeholder: "Chercher : Paul, mail, loyer…",
+    "aria-label": "Chercher dans l'activité",
+    oninput: () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => ((query = search.value.trim()), load(true)), 250);
+    },
+  });
+  const chips = Object.entries(ACTIVITY_KINDS).map(([key, text]) =>
+    h("button", { type: "button", class: "chip", "aria-pressed": String(key === kind), onclick: () => {
+      kind = key;
+      chips.forEach((b, i) => b.setAttribute("aria-pressed", String(Object.keys(ACTIVITY_KINDS)[i] === key)));
+      load(true);
+    } }, text),
+  );
+  function paint() {
     const groups = [];
     let day = "";
     for (const a of shown) {
@@ -5119,14 +5165,39 @@ function activityPanel() {
       }
       groups[groups.length - 1].append(
         h(
-          "div",
-          { class: `item ${a.silence ? "quiet" : ""}` },
-          h("span", { class: "ico" }, icon(a.silence ? "moon" : a.kind.startsWith("autonomy") ? "shield" : a.kind.startsWith("mail") ? "mail" : a.kind.startsWith("calendar") ? "calendar" : a.kind.startsWith("web") ? "search" : "spark", 16)),
-          h("span", {}, h("span", { class: "text" }, a.what), h("small", {}, [TIME.format(new Date(a.at)), a.detail].filter(Boolean).join(" · "))),
+          "button",
+          { type: "button", class: `item ${a.silence ? "quiet" : ""}`, onclick: () => activitySheet(a) },
+          h("span", { class: "ico" }, icon(activityIcon(a), 16)),
+          h("span", {}, h("span", { class: "text" }, a.what), h("small", { class: a.failed ? "warn" : "" }, [TIME.format(new Date(a.at)), a.detail].filter(Boolean).join(" · "))),
         ),
       );
     }
-    return [h("div", { class: "tabs", role: "tablist" }, tab("all", "Tout"), tab("actions", "Actions"), tab("silences", "Silences")), groups.length ? groups : h("p", { class: "empty" }, "Rien pour l'instant.")];
+    const more = before
+      ? h("button", { type: "button", class: "pill wide", onclick: () => load(false) }, "Plus ancien")
+      : null;
+    body.replaceChildren(...(groups.length ? groups : [h("p", { class: "empty" }, query ? "Rien trouvé." : "Rien pour l'instant.")]), ...(more ? [more] : []));
+  }
+  async function load(fresh) {
+    if (fresh) before = null;
+    const params = new URLSearchParams({ cat: kind, q: query });
+    if (before) params.set("before", String(before));
+    try {
+      const page = await api(`api/activity?${params}`);
+      shown = fresh ? page.activity : [...shown, ...page.activity];
+      before = page.before;
+      paint();
+    } catch (error) {
+      toast(said(error));
+    }
+  }
+  panel("Ce que j'ai fait", async () => {
+    await load(true);
+    return [
+      h("label", { class: "search glass" }, icon("search", 18), search),
+      h("div", { class: "chips" }, chips),
+      body,
+      h("p", { class: "hint" }, "Tout ce que je fais est noté dans mon journal. Touche une ligne pour voir le détail."),
+    ];
   });
 }
 

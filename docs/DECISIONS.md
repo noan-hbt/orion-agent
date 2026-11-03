@@ -5024,3 +5024,23 @@ derrière tout le reste, et rien ne regroupait par fournisseur.
 - **ChatGPT sans relevé** : aucun `plan.quota` en production malgré D190 et des milliers d'appels ;
   le code lit bien les en-têtes `x-codex-*`, qui semblent absents. Le fournisseur journalise une
   fois les noms d'en-têtes reçus (`chatgpt.no_quota_headers`), pour trancher sur pièce.
+
+## D222 — Activité : tout le journal, lisible et consultable
+
+La page Activité (console et app) ne montrait que onze types d'événements choisis à la main :
+recherches web, tâches, initiatives, autonomie… Tout le reste (messages, outils utilisés, mémoire,
+missions, rappels, réservations, rendez-vous, envois) restait invisible, alors que le journal le
+tient.
+
+- **Tout le journal** (`orion.console.activity`) : chaque événement non effacé est montré. Un type
+  connu a son libellé ; un type inconnu est nommé d'après sa famille et son verbe (`mission ·
+  commencé`), avec l'essentiel de son contenu. Un nouveau module apparaît donc sans rien toucher.
+- **Des catégories** : conversations, actions, initiative, mémoire, système, et silences. La
+  tenue de livres (appels au modèle, dépenses, fins de tour, synchronisations, réécritures de fil)
+  va dans « Technique », hors de « Tout » mais à un filtre de là.
+- **Chercher, remonter** : recherche par mots (tous requis) sur le libellé, le détail et le
+  contenu ; pages de 80 (app) ou 150 (console), « Plus ancien » repart du dernier numéro vu
+  (`GET /app/api/activity?cat=&q=&before=`). Une page parcourt au plus 30 000 événements avant de
+  rendre la main.
+- **Le détail** : toucher une ligne montre tous les champs de l'événement, son type et son
+  numéro. Les champs dont le nom évoque un secret (mot de passe, jeton, cookie…) sont masqués.

@@ -738,8 +738,14 @@ def core_routes(
         await c.take_back(str(request.path_params["action"]))
         return {}
 
-    async def activity(_request: Request, c: Control) -> object:
-        return {"activity": await c.activity()}
+    async def activity(request: Request, c: Control) -> object:
+        params = request.query_params
+        before = params.get("before", "")
+        return await c.activity(
+            before=int(before) if before.isdigit() else None,
+            wanted=params.get("cat", "all"),
+            query=params.get("q", "")[:200],
+        )
 
     async def upcoming(_request: Request, c: Control) -> object:
         return {"planned": await c.upcoming()}
