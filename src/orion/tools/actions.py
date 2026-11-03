@@ -34,6 +34,8 @@ class Action:
     effect: Effect = Effect.INTERNAL
     accepts_untrusted_context: bool = False
     """Like `Tool.accepts_untrusted_context`, for this action alone."""
+    informs: bool = True
+    """Like `Tool.informs`, for this action alone."""
 
 
 class _NoArgs(BaseModel):
@@ -164,6 +166,9 @@ def action_tool(
     def untrusted_of(args: BaseModel) -> bool:
         return accepts_untrusted_context or chosen(args).accepts_untrusted_context
 
+    def informs_of(args: BaseModel) -> bool:
+        return chosen(args).informs
+
     strongest = max((a.effect for a in actions), key=_EFFECT_ORDER.index)
     return Tool(
         name=name,
@@ -176,6 +181,7 @@ def action_tool(
         accepts_untrusted_context=accepts_untrusted_context,
         effect_of=effect_of,
         untrusted_of=untrusted_of,
+        informs_of=informs_of,
         check=check,
     )
 
@@ -200,6 +206,7 @@ def grouped(name: str, description: str, tools: list[Tool], renames: dict[str, s
                 t.handler,
                 t.effect,
                 t.accepts_untrusted_context,
+                t.informs,
             )
             for t in tools
         ],

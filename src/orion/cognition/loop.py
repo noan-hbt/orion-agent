@@ -34,7 +34,6 @@ from orion.providers.base import (
     ToolCall,
     Usage,
     spoken,
-    told,
 )
 from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
 
@@ -106,6 +105,10 @@ class LoopSettings:
     halted: Halted | None = None
     """Whether the work was called off meanwhile (a mission closed while it runs): checked
     before each step, and the calls not run yet are dropped."""
+    must_answer: bool = True
+    """An empty reply with nothing said sends the model back once (`SAY_SOMETHING`). Not where
+    silence is an answer (an initiative, a contact, another Orion): there it would make a
+    message out of a model that chose to say nothing."""
     finish_check: FinishCheck | None = None
     """Asked once per run about the final reply before it goes: a note sends the model back
     to work for one more step (`orion.cognition.finish`)."""
@@ -123,8 +126,14 @@ WRAP_UP_TOLD = (
 
 
 def told_in(messages: Sequence[Message]) -> list[str]:
-    """The texts `tell` sent among these messages, in order."""
-    return [text for message in messages for text in told(message)]
+    """What left during these messages, in order: the words beside each call, and what `tell`
+    sent. Only `tell` counted, and on the Claude plan (no `tell`, D215) a wrap-up repeated the
+    words that had left beside the calls."""
+    return [
+        said
+        for m in messages
+        if m["role"] == "assistant" and m.get("tool_calls") and (said := spoken(m))
+    ]
 
 
 _WHY = {
@@ -417,6 +426,7 @@ async def run_agent(
                 continue
             if (
                 not text.strip()
+                and settings.must_answer
                 and not pressed
                 and reason is StopReason.COMPLETED
                 and room
@@ -440,7 +450,7 @@ async def run_agent(
             checked = True
             if note is not None and usage.cost_usd < max_cost:
                 log.info("loop.not_done_yet", thread=settings.thread_id)
-                said = _said_beside_calls(messages[turn_start:])
+                said = told_in(messages[turn_start:])
                 if said:
                     note += ALREADY_SAID.format(said="\n".join(f"- {t}" for t in said))
                 nudge: Message = {"role": "user", "content": note}
@@ -570,25 +580,21 @@ async def run_agent(
             yield MessageEmitted(unchecked, Trust.SYSTEM)
 
 
-def _said_beside_calls(messages: list[Message]) -> list[str]:
-    """What the words beside the calls sent him during the turn, in order."""
-    return [
-        said
-        for m in messages
-        if m["role"] == "assistant" and m.get("tool_calls") and (said := spoken(m))
-    ]
-
-
 def _records(call: ToolCall, registry: ToolRegistry) -> bool:
     """A call whose result tells the model nothing it needs (`Tool.informs`)."""
     tool = registry.get(call.name)
-    return tool is not None and not tool.informs
+    if tool is None:
+        return False
+    try:
+        return not tool.informs_for(tool.parse(call.arguments))
+    except ToolInputError:
+        return False  # the call fails, and its error comes back to the model
 
 
 def _reached_him(messages: list[Message]) -> bool:
     """Something left during the turn: the words beside a call do. A final reply sent back by a
     nudge never did, and counting it ended a turn in silence (02/11, « Ah voilà », D219)."""
-    return any(spoken(m) for m in messages if m["role"] == "assistant" and m.get("tool_calls"))
+    return bool(told_in(messages))
 
 
 def _open_steps(call: ToolCall) -> list[str]:

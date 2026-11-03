@@ -205,7 +205,7 @@ async def test_what_happened_elsewhere_reaches_the_next_owner_message(
     told = str(provider.requests[-1].messages[-1]["content"])
     assert "<pendant_ce_temps>" in told
     assert "Agatha 180 €" in told  # the pass's report
-    assert "je t'ai envoyé un fichier « Agatha »" in told  # what it sent from elsewhere
+    assert "« Agatha »" in told  # what it sent from elsewhere
 
     provider.extend(reply("Rien depuis."))
     await world.orion.handle_owner_message("owner", "Et là ?", "telegram")
