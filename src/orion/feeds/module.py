@@ -334,6 +334,7 @@ def feed_tools(feeds: Feeds) -> list[Tool]:
             handler=drop,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="feed_list",

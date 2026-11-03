@@ -5044,3 +5044,39 @@ tient.
   rendre la main.
 - **Le détail** : toucher une ligne montre tous les champs de l'événement, son type et son
   numéro. Les champs dont le nom évoque un secret (mot de passe, jeton, cookie…) sont masqués.
+
+## D223 — Ce qui note seulement finit le tour
+
+*03/11/2026 · acceptée · complète D216, D217*
+
+Le 03/11 à 09:55, le propriétaire reçoit encore deux messages pour un seul. À « Nan j'utilise
+plus je crois », Haiku écrit « ok, noté. les clients OAuth… » avec l'appel `remember`, sans
+`<fin/>`. Ce texte part. Redemandé après « Retenu (f_…) », le modèle répond au résultat de
+l'outil comme s'il venait d'Orion (« Je ne vois pas de demande en attente de ta part… Si tu veux
+que je fasse autre chose, dis-le-moi »). Le contrôle de fin voit une proposition et le renvoie
+écrire « ta réponse finale, entière » : « ok, noté pour pagepilot et gen-lang » part en second.
+
+- **Un outil qui note seulement** (`Tool.informs = False` : `remember`, `forget_fact`, les
+  engagements, les situations) ne sert à rien au modèle : son résultat ne dit que « retenu ».
+  Quand tous les appels d'une étape sont de ceux-là et que des mots sont déjà partis, le tour
+  s'arrête comme avec `<fin/>`, avec les mêmes exceptions (un appel en erreur, un plan pas fini,
+  un message du propriétaire entre-temps). Le modèle n'a plus à penser à `<fin/>` dans ce cas.
+- **Le contrôle de fin dit ce qui est déjà parti** : quand des mots écrits avec des appels sont
+  partis pendant le tour, la relance les cite et dit qu'une réponse vide suffit si tout est dit.
+
+- **Les autres outils qui notent** le sont aussi : les règles et réglages (`adapt`, `unlearn`,
+  `initiative_settings`), les rappels (programmer, déplacer, annuler, au lieu), les relations,
+  les intentions (sauf `intention_challenge`, qu'il lit avant de parler), les suivis et
+  `think_later`, les attentes, la concentration, `missed`, `mistake`, `doubt_confirm`,
+  `same_person`, `contact_note`, `library_remove`, `feed_drop`. Un rappel mal daté revient en
+  erreur, donc au modèle. Ce qui lit, cherche ou lance un travail garde la main au modèle.
+- **Le défaut de fond** était dans le protocole de Claude Code : « réponds au dernier message,
+  comme l'assistant ». Après un appel, le dernier bloc est le `<tool_result>` : Haiku y répondait
+  comme à quelqu'un qui lui parle, et parlait du propriétaire à la troisième personne. Le
+  protocole dit maintenant qu'il répond au dernier `<message role="user">`, que ce qui suit est son
+  propre tour en cours, qu'un `<tool_result>` ne lui demande rien, et qu'il parle toujours au
+  propriétaire, jamais à Orion. Le texte reste fixe dans le message système (contrat du cache).
+- Évaluation `note_un_projet_et_ne_redit_pas` : le cas du 03/11.
+
+À surveiller : un message qui parle d'Orion ou du propriétaire à la troisième personne, et
+`loop.not_done_yet` juste après un texte parti avec un appel.

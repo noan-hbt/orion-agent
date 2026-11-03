@@ -70,6 +70,9 @@ class Tool:
     concurrency_safe: bool = False
     accepts_untrusted_context: bool = False
     max_output_chars: int = 20_000
+    informs: bool = True
+    """Whether its result tells the model something it needs to go on. Not for a tool that only
+    records (`remember`): the words written beside it have left, so the turn ends there (D223)."""
     effect_of: Callable[[BaseModel], Effect] | None = None
     """For a tool with several actions (`orion.tools.actions`): the effect of this call."""
     untrusted_of: Callable[[BaseModel], bool] | None = None

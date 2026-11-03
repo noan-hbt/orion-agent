@@ -501,6 +501,7 @@ def chronicle_tools(chronicle: Chronicle) -> list[Tool]:
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
             accepts_untrusted_context=True,
+            informs=False,
         ),
         Tool(
             name="chronicle",

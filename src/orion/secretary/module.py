@@ -614,6 +614,7 @@ def secretary_tools(secretary: Secretary, guardian: GuardianClient | None) -> li
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
             accepts_untrusted_context=True,
+            informs=False,
         ),
         Tool(
             name="contact_message",

@@ -201,6 +201,12 @@ SAY_SOMETHING = (
 )
 """An empty final reply is right when the words beside the tool calls said it all (D216); with
 nothing said at all, the owner would get nothing."""
+ALREADY_SAID = (
+    "\n[Déjà parti pendant ce tour, il l'a lu :\n{said}\nSi ça suffit, ta réponse finale reste "
+    "vide : rien ne part. Sinon, elle ne dit que ce qui manque.]"
+)
+"""A nudge on the final reply asked for it « entière »: Haiku wrote again what had left with
+the calls (03/11, « ok, noté pour pagepilot », D223)."""
 GOING_ON = "C'est plus long que prévu, je continue."
 UNFINISHED = (
     "[Orion · Ta réponse n'est pas encore partie : ton plan a encore {n} étape(s) à faire "
@@ -434,6 +440,9 @@ async def run_agent(
             checked = True
             if note is not None and usage.cost_usd < max_cost:
                 log.info("loop.not_done_yet", thread=settings.thread_id)
+                said = _said_beside_calls(messages[turn_start:])
+                if said:
+                    note += ALREADY_SAID.format(said="\n".join(f"- {t}" for t in said))
                 nudge: Message = {"role": "user", "content": note}
                 messages.append(nudge)
                 yield MessageEmitted(nudge, Trust.SYSTEM)
@@ -530,8 +539,10 @@ async def run_agent(
 
         # Its last word came with the calls (D217): asked again, the model only says it twice.
         # Not when a call failed, the plan has steps left or nothing was said to the owner.
+        # A call that only records (« ok, noté » with `remember`) has nothing to tell it either:
+        # asked again, Haiku answered the tool result and then wrote "noté" again (03/11, D223).
         ended = (
-            response.ends_turn
+            (response.ends_turn or all(_records(call, registry) for call in calls))
             and not open_steps
             and not any(result.is_error for _, result, _ in executions)
             and _reached_him(messages[turn_start:])
@@ -557,6 +568,21 @@ async def run_agent(
             unchecked: Message = {"role": "user", "content": note}
             messages.append(unchecked)
             yield MessageEmitted(unchecked, Trust.SYSTEM)
+
+
+def _said_beside_calls(messages: list[Message]) -> list[str]:
+    """What the words beside the calls sent him during the turn, in order."""
+    return [
+        said
+        for m in messages
+        if m["role"] == "assistant" and m.get("tool_calls") and (said := spoken(m))
+    ]
+
+
+def _records(call: ToolCall, registry: ToolRegistry) -> bool:
+    """A call whose result tells the model nothing it needs (`Tool.informs`)."""
+    tool = registry.get(call.name)
+    return tool is not None and not tool.informs
 
 
 def _reached_him(messages: list[Message]) -> bool:

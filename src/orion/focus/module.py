@@ -232,6 +232,7 @@ def focus_tools(keeper: FocusKeeper) -> list[Tool]:
             handler=start,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="focus_stop",
@@ -240,6 +241,7 @@ def focus_tools(keeper: FocusKeeper) -> list[Tool]:
             handler=stop,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
     ]
 

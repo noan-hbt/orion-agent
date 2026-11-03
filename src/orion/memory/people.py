@@ -208,5 +208,6 @@ def people_tools(memory: MemoryService, owner_names: list[str]) -> list[Tool]:
             handler=same_person,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
     ]

@@ -201,6 +201,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         "effect": Effect.INTERNAL,
         "reversibility": Reversibility.REVERSIBLE,
         "accepts_untrusted_context": False,
+        "informs": False,
     }
     read: dict[str, Any] = {
         "effect": Effect.NONE,
