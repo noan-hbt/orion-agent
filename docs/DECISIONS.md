@@ -5044,3 +5044,25 @@ tient.
   rendre la main.
 - **Le détail** : toucher une ligne montre tous les champs de l'événement, son type et son
   numéro. Les champs dont le nom évoque un secret (mot de passe, jeton, cookie…) sont masqués.
+
+## D223 — Ce qui note seulement finit le tour
+
+*03/11/2026 · acceptée · complète D216, D217*
+
+Le 03/11 à 09:55, le propriétaire reçoit encore deux messages pour un seul. À « Nan j'utilise
+plus je crois », Haiku écrit « ok, noté. les clients OAuth… » avec l'appel `remember`, sans
+`<fin/>`. Ce texte part. Redemandé après « Retenu (f_…) », le modèle répond au résultat de
+l'outil comme s'il venait d'Orion (« Je ne vois pas de demande en attente de ta part… Si tu veux
+que je fasse autre chose, dis-le-moi »). Le contrôle de fin voit une proposition et le renvoie
+écrire « ta réponse finale, entière » : « ok, noté pour pagepilot et gen-lang » part en second.
+
+- **Un outil qui note seulement** (`Tool.informs = False` : `remember`, `forget_fact`, les
+  engagements, les situations) ne sert à rien au modèle : son résultat ne dit que « retenu ».
+  Quand tous les appels d'une étape sont de ceux-là et que des mots sont déjà partis, le tour
+  s'arrête comme avec `<fin/>`, avec les mêmes exceptions (un appel en erreur, un plan pas fini,
+  un message du propriétaire entre-temps). Le modèle n'a plus à penser à `<fin/>` dans ce cas.
+- **Le contrôle de fin dit ce qui est déjà parti** : quand des mots écrits avec des appels sont
+  partis pendant le tour, la relance les cite et dit qu'une réponse vide suffit si tout est dit.
+
+Pas encore couvert : `playbook` (un outil à actions, dont l'apprentissage note seulement), et un
+modèle qui répond au résultat d'un outil qui apporte vraiment quelque chose.

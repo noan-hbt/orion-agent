@@ -669,3 +669,46 @@ async def test_last_words_with_the_calls_end_the_turn_unless_a_call_fails() -> N
     provider = ScriptedProvider(ending(call_tools(("nope", {}), text="ok, noté")), reply("raté"))
     events, _ = await collect(provider)
     assert finished(events).text == "raté"  # the failure came back to the model
+
+
+def _noting_registry() -> ToolRegistry:
+    async def note(_args: Any, _ctx: ToolContext) -> ToolResult:
+        return ToolResult("Retenu (f_1).")
+
+    noting = Tool(
+        name="note",
+        description="d",
+        input_model=_NoInput,
+        handler=note,
+        effect=Effect.INTERNAL,
+        reversibility=Reversibility.REVERSIBLE,
+        informs=False,
+    )
+    return ToolRegistry([*builtin_tools(), echo_tool(), noting])
+
+
+async def test_words_beside_a_call_that_only_records_end_the_turn() -> None:
+    """03/11: « ok, noté » with `remember`, asked again, became a second « ok, noté »."""
+    provider = ScriptedProvider(
+        call_tools(("note", {}), text="ok, noté"), reply("ok, noté pour pagepilot")
+    )
+    events, _ = await collect(provider, _noting_registry())
+    assert finished(events).text == ""
+    assert len(provider.requests) == 1
+
+
+async def test_a_nudged_reply_is_told_what_already_left() -> None:
+    """03/11: the nudge asked for the reply « entière », and it said « noté » a second time."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "42"}), text="ok, noté"),
+        reply("je peux faire autre chose ?"),
+        reply(""),
+    )
+
+    def offers(text: str, _: object) -> str | None:
+        return "[note]" if "?" in text else None
+
+    settings = replace(SETTINGS, finish_check=offers)
+    events, _ = await collect(provider, settings=settings)
+    assert finished(events).text == ""  # nothing more leaves
+    assert "ok, noté" in str(provider.requests[2].messages[-1]["content"])
