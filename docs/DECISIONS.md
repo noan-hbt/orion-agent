@@ -5220,3 +5220,24 @@ de Sonnet, pas du serveur.
 
 À surveiller : `claude_code.stalled` sur une réponse qui aurait abouti (une recherche web de
 Claude qui dure plus de 45 s sans rien écrire).
+
+## D228 — ChatGPT : le quota que le forfait ne dit pas
+
+*03/11/2026 · acceptée · complète D190 et D221*
+
+L'écran Utilisation ne montrait rien du forfait ChatGPT. Ce n'est pas un bug de lecture : par
+« Sign in with ChatGPT » (D62), OpenAI n'envoie aucun en-tête `x-codex-*` ni événement de quota,
+et aucune adresse ne donne le pourcentage utilisé ou la remise à zéro (openai/codex#54219, sans
+réponse ; `backend-api/wham/usage` refuse ce jeton, et D62 l'exclut de toute façon). Seule la page
+chatgpt.com/settings/usage le montre.
+
+- **Ce qu'on sait, on le dit** : le forfait épuisé répond 429
+  `subscription_sharing_usage_limit_exceeded`. Ce 429-là n'est plus réessayé quatre fois (il ne
+  reviendra pas en quelques secondes) ; l'erreur nomme le forfait (`ProviderError.used_up`), le
+  routeur le garde même quand le modèle de secours répond, et `plan.exhausted` est journalisé une
+  fois, jusqu'à ce que le forfait réponde de nouveau.
+- **À l'écran** : sous « Forfaits », ChatGPT apparaît « quota non communiqué », avec ses épuisements
+  sur la période (depuis quand, ou de quand à quand), ses tokens et un lien vers sa page
+  d'utilisation. L'évolution de ce qu'Orion en consomme reste la courbe en tokens.
+- Les en-têtes `x-codex-*` sont toujours lus : le jour où OpenAI les envoie, la courbe du quota
+  apparaît sans rien changer. Le journal de diagnostic `chatgpt.no_quota_headers` est retiré.

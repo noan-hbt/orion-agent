@@ -51,12 +51,14 @@ class Router:
     async def complete(self, request: ModelRequest) -> ModelResponse:
         chain = [request.model, *self._fallbacks.get(request.model, [])]
         last_error: ProviderError | None = None
+        used_up: list[str] = []
         for index, spec in enumerate(chain):
             provider, model = self._resolve(spec)
             try:
                 response = await provider.complete(request.model_copy(update={"model": model}))
             except ProviderError as exc:
                 last_error = exc
+                used_up += [p for p in exc.used_up if p not in used_up]
                 if index + 1 < len(chain):
                     log.warning(
                         "router.fallback", failed=spec, next=chain[index + 1], error=str(exc)
@@ -64,8 +66,11 @@ class Router:
                 continue
             if index:
                 log.warning("router.served_by_fallback", requested=request.model, served=spec)
+            if used_up:
+                response = response.model_copy(update={"used_up": used_up})
             return response
         assert last_error is not None
+        last_error.used_up = used_up
         raise last_error
 
     async def embed(self, model: str, texts: list[str]) -> list[list[float]]:

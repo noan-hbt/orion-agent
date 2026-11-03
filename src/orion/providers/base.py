@@ -212,13 +212,27 @@ class ModelResponse(BaseModel):
         default_factory=list[QuotaWindow],
         description="What the plan's windows have used, when the provider says (a plan only)",
     )
+    used_up: list[str] = Field(
+        default_factory=list[str],
+        description="The plans found used up before a fallback answered (`ProviderError.used_up`)",
+    )
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status: int | None = None,
+        used_up: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
         self.status = status
+        self.used_up: list[str] = [used_up] if used_up else []
+        """The plans whose allowance was found used up on the way (the router adds those it
+        fell back from): a plan that tells nothing of its windows says this much."""
 
 
 class ModelProvider(Protocol):

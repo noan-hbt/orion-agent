@@ -18,10 +18,13 @@ background stops (through the initiative engine: quiet hours apply).
 
 Every call is journaled, a plan's too (it costs nothing per token), with its tokens: the usage
 screen counts them. What a plan's windows have used, as the provider said with the answer, is
-journaled when it changes (`plan.quota`).
+journaled when it changes (`plan.quota`). A plan that says nothing of its windows (ChatGPT)
+still says when it is used up: that is journaled once, until it answers again
+(`plan.exhausted`).
 
     spend.recorded
     plan.quota
+    plan.exhausted
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ log = structlog.get_logger(__name__)
 
 SPENT = "spend.recorded"
 QUOTA = "plan.quota"
+EXHAUSTED = "plan.exhausted"
 
 
 @dataclass
@@ -117,6 +121,8 @@ class Spending:
         self._runner = ProjectionRunner(journal, [self.tally])
         self._quota_seen: dict[str, list[tuple[str, float, str | None]]] = {}
         """Each provider's windows as last journaled: a quota is journaled when it changes."""
+        self._used_up: set[str] = set()
+        """The plans journaled as used up and not heard from since."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -130,11 +136,19 @@ class Spending:
                 raise ProviderError(
                     f"spending ceiling reached ({over}): background paused", retryable=False
                 )
-        response = await self.inner.complete(request)
+        provenance = Provenance(source="orion:spending", actor="orion:spending")
+        try:
+            response = await self.inner.complete(request)
+        except ProviderError as exc:
+            if found := self._exhausted(exc.used_up, request.model, provenance):
+                await self._journal.append(found)
+            raise
         at = self.clock().isoformat()
         usage = response.usage
-        provenance = Provenance(source="orion:spending", actor="orion:spending")
+        provider = response.provider or ""
+        self._used_up.discard(provider)
         events = [
+            *self._exhausted(response.used_up, request.model, provenance),
             NewEvent(
                 kind=SPENT,
                 payload={
@@ -152,9 +166,8 @@ class Spending:
                 },
                 provenance=provenance,
                 trust=Trust.SYSTEM,
-            )
+            ),
         ]
-        provider = response.provider or ""
         windows = [w.model_dump() for w in response.quota]
         if windows and self._quota_seen.get(provider) != _rounded(windows):
             self._quota_seen[provider] = _rounded(windows)
@@ -168,6 +181,21 @@ class Spending:
             )
         await self._journal.append(events)
         return response
+
+    def _exhausted(self, plans: list[str], model: str, provenance: Provenance) -> list[NewEvent]:
+        """`plan.exhausted` for the plans newly found used up."""
+        fresh = [p for p in plans if p not in self._used_up]
+        self._used_up.update(fresh)
+        at = self.clock().isoformat()
+        return [
+            NewEvent(
+                kind=EXHAUSTED,
+                payload={"at": at, "provider": plan, "model": model},
+                provenance=provenance,
+                trust=Trust.SYSTEM,
+            )
+            for plan in fresh
+        ]
 
     def over(self, day: date) -> str | None:
         """Which ceiling the background has reached today, if any."""
