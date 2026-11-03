@@ -75,6 +75,13 @@ def on_chatgpt(spec: str) -> bool:
     return spec.startswith("chatgpt:")
 
 
+def splits_messages(spec: str) -> bool:
+    """Whether Orion may say two things as two messages (`<suite/>`, D163): on the ChatGPT plan
+    only, where the owner finds it reads well (D230). Haiku on the Claude plan used it to say
+    the same thing twice (D214)."""
+    return on_chatgpt(spec)
+
+
 def chars_per_token(spec: str) -> float:
     """How many characters make a token, roughly. Anthropic counts about 2 on Orion's real
     conversations (measured: 12 693 characters, 6 456 tokens). OpenAI's `o200k_base` counts
