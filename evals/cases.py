@@ -575,6 +575,24 @@ CASES: tuple[Case, ...] = (
         checks=(uses("task:start"), avoids("mission:start")),
     ),
     Case(
+        name="ce_qui_ecrit_ne_part_pas_en_tache",
+        origin="03/11 20h02 : « audit approfondi de mes souvenirs », confié à une tâche de fond ; "
+        "`remember` lui est refusé et elle rend un bilan vide (D234).",
+        at=paris(2026, 11, 3, 20, 0),
+        facts=(
+            "S'appelle Noan.",
+            "Noan utilise le pseudo noan.hbt.",
+            "Noan utilise les pseudos noan.hbt et noan_hbt.",
+        ),
+        steps=(
+            Say(
+                "Fais un audit approfondi de mes souvenirs : trouve les doublons et les faits "
+                "obsolètes, et fusionne-les"
+            ),
+        ),
+        checks=(avoids("task:start"),),
+    ),
+    Case(
         name="la_nuit_reprend_ce_qui_reste",
         origin="22-23/10 : la nuit, Orion n'a rien fait, alors que la journée laissait des "
         "choses en plan (« il aurait pu être curieux, chercher, continuer ce qui n'était pas "
