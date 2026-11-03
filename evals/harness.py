@@ -373,9 +373,12 @@ def avoids(*tools: str) -> Check:
     return check
 
 
-def judged(question: str) -> Check:
+def judged(question: str, whole: bool = False) -> Check:
+    """`whole`: the judge reads all he sent during the turn, the words beside his calls too,
+    not just the last reply (his estimate can leave beside the search that checks it)."""
+
     async def check(o: Observation, judge: Judge) -> str | None:
-        verdict = await judge(question, o.last)
+        verdict = await judge(question, "\n\n".join([*o.spoken, *o.replies]) if whole else o.last)
         if verdict is None:  # the judge's failure, not Orion's: said apart
             return f"judge gave no verdict: {question}"
         return None if verdict else f"judge says no: {question}"

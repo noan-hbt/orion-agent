@@ -1123,7 +1123,8 @@ CASES: tuple[Case, ...] = (
             judged(
                 "La réponse donne-t-elle une estimation chiffrée de minutes par mois pour ce "
                 "type d'entreprise (même une fourchette, avec ses hypothèses : appels par jour, "
-                "durée d'un appel), au lieu de dire seulement qu'il n'y a pas de chiffre fiable ?"
+                "durée d'un appel), au lieu de dire seulement qu'il n'y a pas de chiffre fiable ?",
+                whole=True,
             ),
         ),
         live_web=True,
