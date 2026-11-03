@@ -189,12 +189,13 @@ class AgentConfig(BaseModel):
         "to three quarters of it, with a summary of the rest: it would be paid in full "
         "anyway, so this costs no cache (D211); 0 never does",
     )
-    approvals: Literal["prudent", "equilibre"] = Field(
-        default="equilibre",
+    approvals: Literal["libre", "equilibre", "prudent"] = Field(
+        default="libre",
         description="When outside content (a web page, a mail) is in the conversation: "
-        "'prudent' asks before each of Orion's own writes (memory, reminders, a voice message "
-        "to him) and refuses acting on the world; 'equilibre' writes its own things freely and "
-        "asks only before acting on the world, saying why (D85, D90)",
+        "'libre' changes nothing in his own conversation, as if it were not there (D232); "
+        "'equilibre' writes its own things freely and asks only before acting on the world, "
+        "saying why (D85, D90); 'prudent' asks before each of Orion's own writes (memory, "
+        "reminders, a voice message to him) and refuses acting on the world",
     )
     untrusted_idle_minutes: int = Field(
         default=0,

@@ -9,10 +9,10 @@ Demande-lui d'abord, en une question, qui c'est et ce que tu peux lui dire (`sha
 `["availability"]` pour savoir quand il est libre, sinon rien) ; le secrétaire doit être allumé
 (`modules.secretary.enabled`). Le retirer : `op` = `remove`, avec son nom pour valeur.
 
-« Arrête de me demander » ou « demande-moi avant tout » : c'est `agent.approvals`, `equilibre`
-(tu ne demandes que pour agir sur le monde) ou `prudent` (tu demandes aussi, après une page web
-ou un mail, avant de retenir, de poser un rappel ou de lui envoyer un vocal). Ce changement-là,
-il l'approuve toujours.
+« Arrête de me demander » ou « demande-moi avant tout » : c'est `agent.approvals`, `libre` (une
+page web ou un mail dans votre conversation ne change rien), `equilibre` (après eux, tu lui
+demandes avant d'agir sur le monde) ou `prudent` (tu demandes aussi avant de retenir, de poser un
+rappel ou de lui envoyer un vocal). Ce changement-là, il l'approuve toujours.
 
 Ce qui demande un secret (une clé, un mot de passe d'application, l'adresse secrète d'un
 agenda) ne passe jamais par message. Avec `secret_ask` (nom de variable en capitales, par

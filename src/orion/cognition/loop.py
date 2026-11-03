@@ -759,6 +759,7 @@ async def _execute_one(
         grant=decision.grant,
         alone=decision.reason == ALONE,
         approved=decision.reason == APPROVED_DESPITE,
+        unrestricted=guardian.unrestricted(settings.thread_id),
     )
     try:
         result = await tool.handler(arguments, ctx)

@@ -327,3 +327,24 @@ async def test_he_can_have_a_fact_forgotten_from_a_conversation_with_outside_con
     )
     assert not (await forget.handler(args, ctx)).is_error
     assert await memory.store.facts() == []
+
+
+async def test_in_libre_he_can_replace_or_forget_a_fact_after_a_web_page(
+    memory: MemoryService,
+) -> None:
+    """D232: nothing asked, nothing refused; what is written keeps the page's trust."""
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    rent = await memory.remember("Son loyer est de 520 €.", OWNER)
+    tools = {t.name: t for t in memory_tools(memory)}
+    ctx = ToolContext("owner", "c", context_trust=Trust.WEB, unrestricted=True)
+    remember = tools["remember"]
+    said = json.dumps({"statement": "Son loyer est de 560 €.", "replaces": [rent]})
+    assert not (await remember.handler(remember.parse(said), ctx)).is_error
+    [fact] = await memory.store.facts()
+    assert "560" in fact.statement and fact.trust == Trust.WEB
+    forget = tools["forget_fact"]
+    gone = json.dumps({"fact_id": fact.id, "reason": "faux"})
+    assert not (await forget.handler(forget.parse(gone), ctx)).is_error
+    assert await memory.store.facts() == []

@@ -432,7 +432,12 @@ class Hooks:
             raise HookError("args ne sert qu'avec tool.")
 
     async def create(
-        self, spec: HookSpec, by: Provenance, trust: Trust, author: str = "owner"
+        self,
+        spec: HookSpec,
+        by: Provenance,
+        trust: Trust,
+        author: str = "owner",
+        free: bool = False,
     ) -> Hook:
         """Make a hook. From a conversation holding outside content, it is made paused: the
         owner turns it on himself (a mail must not be able to plant one that acts for it)."""
@@ -443,7 +448,7 @@ class Hooks:
             raise HookError(f"Un hook s'appelle déjà « {same[0].name} » ({same[0].id}).")
         hook_id = f"hk_{new_id()}"
         data = {**spec.model_dump(exclude_defaults=True), "id": hook_id, "by": author}
-        if trust < Trust.SYSTEM:
+        if trust < Trust.SYSTEM and not free:  # `free`: his `libre` conversation (D232)
             data["enabled"] = False
         await self._append(CREATED, {"hook": data}, by, trust)
         if spec.on == WEBHOOK:
@@ -451,13 +456,18 @@ class Hooks:
         return self.state.hooks[hook_id]
 
     async def change(
-        self, hook_id: str, changes: dict[str, Any], by: Provenance, trust: Trust
+        self,
+        hook_id: str,
+        changes: dict[str, Any],
+        by: Provenance,
+        trust: Trust,
+        free: bool = False,
     ) -> Hook:
         await self.sync()
         hook = self.state.hooks.get(hook_id)
         if hook is None:
             raise HookError(f"Pas de hook {hook_id}.")
-        if changes.get("enabled") and trust < Trust.SYSTEM and not hook.enabled:
+        if changes.get("enabled") and trust < Trust.SYSTEM and not free and not hook.enabled:
             raise HookError(
                 "Un hook ne s'allume pas depuis une conversation qui contient un contenu venu "
                 "d'ailleurs : il l'allume lui-même, dans l'app (Réglages > Hooks)."

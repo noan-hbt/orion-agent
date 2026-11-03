@@ -125,10 +125,14 @@ class MemoryService:
         category: Category = Category.OTHER,
         valid_from: str | None = None,
         supersedes: list[str] | None = None,
+        guarded: bool = True,
     ) -> str:
-        """The new fact's id, or the id of the same fact already known (nothing is written)."""
+        """The new fact's id, or the id of the same fact already known (nothing is written).
+        `guarded`: outside content may not replace a surer fact (off in his `libre`
+        conversation, D232)."""
         supersedes = list(supersedes or [])
-        await self._may_change(supersedes, origin)
+        if guarded:
+            await self._may_change(supersedes, origin)
         key = same_statement(statement)
         for known in await self.store.facts():
             if known.id in supersedes or same_statement(known.statement) != key:
@@ -168,9 +172,15 @@ class MemoryService:
         )
 
     async def invalidate(
-        self, fact_id: str, reason: str, origin: Origin, valid_to: str | None = None
+        self,
+        fact_id: str,
+        reason: str,
+        origin: Origin,
+        valid_to: str | None = None,
+        guarded: bool = True,
     ) -> None:
-        await self._may_change([fact_id], origin)
+        if guarded:
+            await self._may_change([fact_id], origin)
         await self._write(
             FACT_INVALIDATED,
             FactInvalidated(fact_id=fact_id, reason=reason, valid_to=valid_to),

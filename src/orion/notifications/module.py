@@ -97,7 +97,7 @@ def notification_tool(notifications: Notifications, channels: Callable[[], list[
         return ToolResult("\n".join(lines))
 
     async def choose(args: _Set, ctx: ToolContext) -> ToolResult:
-        if ctx.context_trust < Trust.SYSTEM:
+        if ctx.context_trust < Trust.SYSTEM and not ctx.unrestricted:
             return ToolResult(
                 "Ses notifications ne se changent pas après un contenu venu d'ailleurs : "
                 "propose-lui de le faire dans l'app (Réglages > Notifications).",

@@ -47,6 +47,9 @@ class ToolContext:
     """Done without asking, within an autonomy the owner granted: he is told afterwards."""
     approved: bool = False
     """He said yes to this very call although the context holds outside content (D231)."""
+    unrestricted: bool = False
+    """His conversation, where outside content restricts nothing (`approvals = "libre"`,
+    D232): a guard on the context's trust lets the call through; what is written keeps it."""
 
 
 @dataclass
