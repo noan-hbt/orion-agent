@@ -263,7 +263,12 @@ def tools_text(tools: list[ToolSpec]) -> str:
     )
 
 
-_CALL = re.compile(r"<tool_call\b([^>]*)>(.*?)</tool_call\s*>", re.DOTALL | re.IGNORECASE)
+_CALL = re.compile(
+    r"<(?:[\w-]+:)?(?:tool_call|invoke)\b([^>]*)>(.*?)</(?:[\w-]+:)?(?:tool_call|invoke)\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+"""Orion's `<tool_call>`, and the forms Claude slips into from its own tool use: on 03/11 at
+00:43, `<invoke:tool_call name="web_read">{…}</invoke>` went to the owner as his answer."""
 _ATTRS = re.compile(r'([\w-]+)\s*=\s*"([^"]*)"')
 _DONE = re.compile(r"<fin\s*/>", re.IGNORECASE)
 _OPENING = re.compile(r'^\s*<message\s+role="assistant"\s*>', re.IGNORECASE)

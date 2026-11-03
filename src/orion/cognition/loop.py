@@ -210,6 +210,14 @@ SAY_SOMETHING = (
 )
 """An empty final reply is right when the words beside the tool calls said it all (D216); with
 nothing said at all, the owner would get nothing."""
+UNREPORTED = (
+    "[Orion · ta réponse est vide, mais tu viens de lire le résultat de {tools} et il n'en sait "
+    "rien : ce qui est parti l'a été avant ce résultat.\nDéjà parti :\n{said}\nDis-lui ce que tu "
+    "as trouvé, sans redire ce qui est parti. Si ce résultat ne change vraiment rien pour lui, "
+    "ta réponse reste vide.]"
+)
+"""The words beside a call that reads leave before its result: « je vérifie la date » + a search,
+then an empty reply, and what was found never reached him (03/11)."""
 ALREADY_SAID = (
     "\n[Déjà parti pendant ce tour, il l'a lu :\n{said}\nSi ça suffit, ta réponse finale reste "
     "vide : rien ne part. Sinon, elle ne dit que ce qui manque.]"
@@ -281,6 +289,7 @@ async def run_agent(
     open_steps: list[str] = []  # the plan's steps not done yet, from its last call
     held = 0  # replies held back for an unfinished plan
     worked = False  # tools ran since the last time
+    read: list[str] = []  # tools of the last step whose result the model was to read
     turn_start = len(messages)  # what this turn adds comes after
 
     def finished(reason: StopReason, text: str, detail: str = "") -> Finished:
@@ -368,6 +377,8 @@ async def run_agent(
             return
 
         if not response.tool_calls:
+            if (response.text or "").strip():
+                read = []  # it has spoken since what it read
             reason = (
                 StopReason.TRUNCATED if response.finish_reason == "length" else StopReason.COMPLETED
             )
@@ -431,11 +442,22 @@ async def run_agent(
                 and reason is StopReason.COMPLETED
                 and room
                 and usage.cost_usd < max_cost
-                and not _reached_him(messages[turn_start:])
+                and (read or not _reached_him(messages[turn_start:]))
             ):
-                log.info("loop.empty_reply", thread=settings.thread_id)
+                # Words beside a search left before its result: « je vérifie » is not what it
+                # found (03/11 13:09, the VAT option's start date never came).
+                log.info("loop.empty_reply", thread=settings.thread_id, unread=read)
                 pressed = True
-                press: Message = {"role": "user", "content": SAY_SOMETHING}
+                said = told_in(messages[turn_start:])
+                press: Message = {
+                    "role": "user",
+                    "content": UNREPORTED.format(
+                        tools=", ".join(dict.fromkeys(read)),
+                        said="\n".join(f"- {t}" for t in said),
+                    )
+                    if read and said
+                    else SAY_SOMETHING,
+                }
                 messages.append(press)
                 yield MessageEmitted(press, Trust.SYSTEM)
                 continue
@@ -464,6 +486,7 @@ async def run_agent(
         # A call through the drawer is the call of the drawer's own tool from here on (D151).
         calls = [registry.resolve(call) for call in response.tool_calls]
         called.extend(_called(call) for call in calls)
+        read = [call.name for call in calls if not _records(call, registry)]
         over = (
             "cost budget"
             if usage.cost_usd > max_cost

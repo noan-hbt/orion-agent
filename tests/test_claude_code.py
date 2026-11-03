@@ -189,6 +189,11 @@ def test_calls_are_read_from_the_tags_and_an_invented_result_is_cut() -> None:
     assert read_answer("<fin/>", allowed=True) == ("", [], False)
     _, [broken], _ = read_answer('<tool_call name="echo">{text: 7}</tool_call>', allowed=True)
     assert broken.arguments == "{text: 7}"  # the tool says it is not JSON, the model fixes it
+    # 03/11 00:43: Claude's own tool-use form went to the owner as his answer.
+    text, [slipped], _ = read_answer(
+        '<invoke:tool_call name="web_read">{"url": "https://x.fr"}</invoke>', allowed=True
+    )
+    assert (text, slipped.name) == ("", "web_read")
 
 
 def test_a_web_search_runs_on_claudes_own_search(tmp_path: Path) -> None:

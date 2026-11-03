@@ -730,6 +730,17 @@ async def test_a_grouped_action_that_only_records_ends_the_turn_too() -> None:
     assert len(provider.requests) == 1
 
 
+async def test_words_before_a_search_are_not_what_it_found() -> None:
+    """03/11 13:09: « je vérifie la date d'effet » with a search, then an empty reply."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "1er janvier"}), text="je vérifie la date"),
+        reply(""),
+        reply("ça prend effet au 1er janvier"),
+    )
+    events, _ = await collect(provider)
+    assert "1er janvier" in finished(events).text
+
+
 async def test_an_empty_reply_where_silence_is_an_answer_stays_silent() -> None:
     """An initiative answered with nothing was sent back to « réponds-lui » (D224)."""
     provider = ScriptedProvider(reply(""), reply("un message qui n'aurait pas dû partir"))

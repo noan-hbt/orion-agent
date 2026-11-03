@@ -5176,3 +5176,22 @@ et `notifications`, dans le tiroir, et une consigne lue quand elle sert (D212). 
 `hook.ran`, `hook.capped`, `notification.set` ; les hooks et les choix sont des projections.
 Les adresses passent par Caddy (`/hooks/in/*`, port 8797) : relancer `deploy/install.sh` le
 met à jour sur un serveur déjà installé.
+
+## D226 — « Je vérifie » n'est pas ce qu'il a trouvé
+
+*03/11/2026 · acceptée · complète D216, D217*
+
+Le 03/11, deux réponses que le propriétaire n'a jamais eues :
+
+- **13:09** : « Je vérifie la date d'effet avant de te dire quand ça peut prendre effet », écrit
+  avec un `web_search`, puis une réponse finale vide. Comme ces mots étaient partis, la boucle
+  tenait le tour pour fini (D216) : le résultat de la recherche n'est jamais arrivé, il a dû
+  écrire « Vsy vérifie » onze minutes plus tard. Les mots écrits avec un appel qui lit partent
+  avant son résultat : ils ne peuvent pas l'avoir dit. Une réponse vide après un tel appel est
+  renvoyée une fois au modèle (`UNREPORTED`), avec ce qui est déjà parti : il dit ce qu'il a
+  trouvé, ou reste vide si ça ne change rien. Les appels qui notent seulement finissent toujours
+  le tour (D223), et une initiative peut toujours se taire.
+- **00:43** : à « le dernier match de l'équipe de France, avec le lien », Haiku a écrit
+  `<invoke:tool_call name="web_read">{…}</invoke>`, la forme de ses propres outils, au lieu de
+  `<tool_call>`. Rien ne l'a lu comme un appel : la balise est partie telle quelle comme réponse.
+  `read_answer` lit aussi `<invoke>` et un préfixe `x:` devant le nom de la balise.
