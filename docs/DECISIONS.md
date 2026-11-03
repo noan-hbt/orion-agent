@@ -5112,3 +5112,67 @@ messages. Les noms d'outils et d'actions cités existent, sauf un. Le reste :
   revient plus.
 - **`configure` change** (`offers.md`) s'appelle `configure_change` ; `onboarding.md` disait
   « je te demande » sans qu'on sache qui parle.
+
+## D225 — Les hooks et ses notifications
+
+*03/11/2026 · acceptée · complète D78, D141, D157, D187*
+
+Le propriétaire voulait créer, régler et supprimer des hooks et toutes sortes de notifications,
+et qu'Orion puisse en faire autant. Avant, chaque « quand ceci, alors cela » était à part : les
+consignes de lieu (D187), `later`, les alertes de chaque module, la notification de l'app pour
+chaque message. Rien de commun, rien qu'il puisse régler lui-même.
+
+**Un hook** (module `hooks`, allumé par défaut) : un déclencheur, un filtre, une action.
+
+- **Ce qui le déclenche** (`orion.hooks.catalog`) : tout est déjà un événement du journal, donc
+  un déclencheur est une famille d'événements dite dans ses mots. Sa vie : un mail (ou un mail
+  qu'Orion juge important), son agenda qui bouge, une arrivée ou un départ, son téléphone, un
+  article de ses flux, un proche ou un autre Orion qui écrit, un appel fini, un mot précis qu'il
+  écrit, une réaction, une photo, une situation, un engagement, un papier, son Drive, la fin
+  d'une concentration. Ce que fait Orion : une tâche ou une mission, une demande d'accord, une
+  réservation, sa curiosité, sa veille, sa nuit, un rappel, un tour qui n'aboutit pas, un outil
+  qui échoue, un message qui ne part pas, ses réglages, une autonomie, un appareil relié, un
+  souvenir. Et trois de plus : une **heure** (une ligne cron, dans son fuseau), une **adresse**
+  qu'un service appelle (GitHub, IFTTT, Home Assistant), et **n'importe quel événement** par
+  motif (« mail.* ») pour ce que la liste ne nomme pas. Les familles du travail des hooks
+  eux-mêmes et la comptabilité des appels au modèle n'en déclenchent jamais aucun.
+- **Le filtre** : `match`, des mots que l'événement doit contenir, sans casse ni accents, « | »
+  entre des alternatives. Les déclencheurs trop fréquents (ses messages, ses souvenirs) l'exigent.
+- **L'action**, une ou plusieurs :
+  - `then` : une consigne. Orion est réveillé avec elle et l'événement, par le moteur
+    d'initiative, comme ce qu'il a demandé (`Report`) : tout de suite, heures calmes ou non,
+    comme une consigne de lieu (D187). Il peut se taire.
+  - `tool` + `args` : une **action personnalisée**, un de ses outils appelé tel quel, hors d'un
+    tour (`Orion.call_tool`), en passant par le gardien comme tout appel : ce qui agit dehors
+    lui est demandé, sauf autonomie. Le résultat accompagne la consigne ; un échec sans consigne
+    lui est dit.
+  - `notify` : une notification telle quelle, sans le modèle ({evenement} y met ce qui l'a
+    déclenché).
+- **Une fois**, **jusqu'à un jour**, un **délai minimal** entre deux fois ; des plafonds par hook
+  et par jour, contre un hook qui partirait sur chaque mail.
+
+**La confiance.** Ce que fait un hook n'est jamais plus fiable que le hook et l'événement : un
+mail qui le déclenche reste la parole d'un inconnu, mis entre balises et dit tel. Un hook créé
+dans une conversation qui contient un contenu venu d'ailleurs naît **en pause**, et ne s'allume
+pas depuis là : lui seul l'allume, dans l'app. Un mail ne peut donc pas planter un hook qui agit
+pour lui. L'adresse d'un hook n'est écrite nulle part : elle se refait à partir d'une clé
+d'Orion, du hook et d'un sel (`hook.token`), l'app la remontre, un nouveau sel coupe l'ancienne,
+et le modèle ne la voit jamais.
+
+**Ses notifications** (module `notifications`, allumé par défaut). Chaque message qu'Orion envoie
+est d'un type : ses réponses, ses rappels, ce qu'il lui a confié, les points du jour, ce qu'Orion
+dit de lui-même, ses proches, la dépense, ses hooks, les demandes d'accord. Pour chacun il choisit
+le **niveau** (jamais, sans sonner, normale, même la nuit) et le **canal** (là où il a écrit,
+l'app, Telegram, iMessage, partout). « Jamais » n'existe que pour ce qu'il n'a pas demandé, et le
+moteur ne l'écrit alors même pas ; « même la nuit » passe les heures calmes. **Cinq types
+nouveaux**, éteints tant qu'il ne les veut pas (D141 les avait écartés parce qu'Orion en écrit
+déjà un message) : une tâche de fond finie, l'avancée d'une mission, la fin de sa nuit, quand
+Orion bute, et la sécurité (un appareil relié, une autonomie accordée, ses réglages changés).
+Ils partent en une ligne, sans le modèle, sans sonner en heures calmes sauf « même la nuit ».
+
+Tout se règle dans l'app (Réglages > Notifications, Réglages > Hooks) et par message : `hooks`
+et `notifications`, dans le tiroir, et une consigne lue quand elle sert (D212). Journal :
+`hook.created`, `hook.changed`, `hook.deleted`, `hook.token`, `hook.fired`, `hook.received`,
+`hook.ran`, `hook.capped`, `notification.set` ; les hooks et les choix sont des projections.
+Les adresses passent par Caddy (`/hooks/in/*`, port 8797) : relancer `deploy/install.sh` le
+met à jour sur un serveur déjà installé.

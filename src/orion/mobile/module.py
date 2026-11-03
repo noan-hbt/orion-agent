@@ -37,6 +37,7 @@ from orion.contacts.module import ContactsModule
 from orion.core.web import Server
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.hands.module import HandsModule
+from orion.hooks.module import HooksModule
 from orion.initiative.engine import InitiativeSettings
 from orion.initiative.planned import everything_planned
 from orion.library.module import LibraryModule
@@ -51,6 +52,7 @@ from orion.mobile.push import Pusher, Vapid
 from orion.mobile.server import PREFIX, Gate, core_app, mobile_app
 from orion.mobile.upkeep import GuardianSigner, LocalSigner, Upkeep
 from orion.modules.base import Daemon, Module, ModuleError, ModuleSettings, Plate
+from orion.notifications.module import NotificationsModule
 from orion.papers.module import PapersModule
 from orion.places.module import PlacesModule
 from orion.providers.spending import Spending
@@ -182,6 +184,8 @@ class MobileModule(Module):
         doubt = plate.module(DoubtModule)
         library = plate.module(LibraryModule)
         contacts = plate.module(ContactsModule)
+        hooks_module = plate.module(HooksModule)
+        notes = plate.module(NotificationsModule)
         self.control = Control(
             plate.journal,
             plate.memory,
@@ -201,6 +205,9 @@ class MobileModule(Module):
             missions=lambda: missions.missions if missions is not None else None,
             hands=lambda: hands.desk if hands is not None else None,
             doubt=lambda: doubt.doubt if doubt is not None else None,
+            hooks=lambda: hooks_module.hooks if hooks_module is not None else None,
+            notifications=lambda: notes.notifications if notes is not None else None,
+            channels=lambda: notes.channels() if notes is not None else [],
             code=CODE,
         )
         self.control.upkeep = Upkeep(

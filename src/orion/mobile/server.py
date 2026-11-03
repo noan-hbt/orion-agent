@@ -801,6 +801,35 @@ def core_routes(
 
     # -- what used to need the server's shell (D154) -------------------------------------------
 
+    async def hook_list(_request: Request, c: Control) -> object:
+        return await c.hook_list()
+
+    async def hook_create(request: Request, c: Control) -> object:
+        return await c.hook_create(await body(request))
+
+    async def hook_change(request: Request, c: Control) -> object:
+        return await c.hook_change(str(request.path_params["id"]), await body(request))
+
+    async def hook_delete(request: Request, c: Control) -> object:
+        await c.hook_delete(str(request.path_params["id"]))
+        return {}
+
+    async def hook_test(request: Request, c: Control) -> object:
+        await c.hook_test(str(request.path_params["id"]))
+        return {}
+
+    async def hook_rotate(request: Request, c: Control) -> object:
+        return await c.hook_rotate(str(request.path_params["id"]))
+
+    async def notification_view(_request: Request, c: Control) -> object:
+        return await c.notification_view()
+
+    async def notification_set(request: Request, c: Control) -> object:
+        sent = await body(request)
+        return await c.notification_set(
+            str(sent["kind"]), sent.get("level") or None, sent.get("channel") or None
+        )
+
     def kept(c: Control) -> Upkeep:
         if c.upkeep is None:
             raise ControlError("not available here")
@@ -966,6 +995,14 @@ def core_routes(
         api("chatgpt/start", controls(chatgpt_start), post=True),
         api("chatgpt/finish", controls(chatgpt_finish), post=True),
         api("chatgpt/logout", controls(chatgpt_logout), post=True),
+        api("hooks", controls(hook_list)),
+        api("hooks/new", controls(hook_create), post=True),
+        api("hooks/{id}", controls(hook_change), post=True),
+        api("hooks/{id}/delete", controls(hook_delete), post=True),
+        api("hooks/{id}/test", controls(hook_test), post=True),
+        api("hooks/{id}/rotate", controls(hook_rotate), post=True),
+        api("notifications", controls(notification_view)),
+        api("notifications", controls(notification_set), post=True),
         api("papers", shelf(papers)),
         api("papers/{id}/file", shelf(paper)),
         api("people", shelf(people)),

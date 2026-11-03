@@ -40,6 +40,9 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.autonomy import Autonomy, label
 from orion.hands.desk import HandsDesk
+from orion.hooks.catalog import FAMILIES as TRIGGER_FAMILIES
+from orion.hooks.catalog import TRIGGERS
+from orion.hooks.service import HookError, Hooks, HookSpec
 from orion.initiative.engine import InitiativeSettings, effective_settings
 from orion.memory.doubt import CONFIRMED, Doubt
 from orion.memory.model import MAX_STATEMENT, Category, CommitmentStatus, SettingKey
@@ -50,6 +53,7 @@ from orion.memory.store import Fact, name_key
 from orion.missions.service import Mission, Missions
 from orion.mobile.usage import USAGE_PERIODS, UsageStats
 from orion.modules.base import Planned
+from orion.notifications.policy import NotificationError, Notifications
 from orion.providers.router import Router
 from orion.providers.spending import Spending
 from orion.tasks.service import Tasks
@@ -122,6 +126,12 @@ class Control:
     """What used to need a shell on the server (D154), once the app is served."""
     doubt: Callable[[], Doubt | None] = lambda: None
     """What may have changed since (D83), once its module is assembled."""
+    hooks: Callable[[], Hooks | None] = lambda: None
+    """His hooks and Orion's (D225), once their module is assembled."""
+    notifications: Callable[[], Notifications | None] = lambda: None
+    """What rings, how and where (D225), once its module is assembled."""
+    channels: Callable[[], list[str]] = lambda: []
+    """His channels, once they are served: where a kind of notification may go."""
     _portrait: Portrait = field(default_factory=Portrait, init=False)
     _portrait_runner: ProjectionRunner | None = field(default=None, init=False)
     _usage: UsageStats | None = field(default=None, init=False)
@@ -670,6 +680,89 @@ class Control:
         if name not in desk.state.devices:
             raise ControlError("no such machine")
         await desk.revoke(name)
+
+    # -- his hooks and his notifications (D225) -------------------------------------------------
+
+    def _hooks(self) -> Hooks:
+        hooks = self.hooks()
+        if hooks is None:
+            raise ControlError("hooks are off")
+        return hooks
+
+    async def hook_list(self) -> dict[str, Any]:
+        hooks = self._hooks()
+        await hooks.sync()
+        return {
+            "hooks": [hooks.view(h) for h in hooks.state.hooks.values()],
+            "triggers": [
+                {
+                    "name": t.name,
+                    "label": t.label,
+                    "family": t.family,
+                    "needs": t.needs,
+                    "match_required": t.match_required,
+                }
+                for t in TRIGGERS
+            ],
+            "families": TRIGGER_FAMILIES,
+            "addressed": bool(hooks.public_url),
+        }
+
+    async def hook_create(self, sent: dict[str, Any]) -> dict[str, Any]:
+        hooks = self._hooks()
+        try:
+            hook = await hooks.create(HookSpec.model_validate(sent), FROM_APP, Trust.OWNER)
+        except HookError as exc:
+            raise ControlError(str(exc)) from exc
+        return hooks.view(hook)
+
+    async def hook_change(self, hook_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        hooks = self._hooks()
+        try:
+            hook = await hooks.change(hook_id, changes, FROM_APP, Trust.OWNER)
+        except HookError as exc:
+            raise ControlError(str(exc)) from exc
+        return hooks.view(hook)
+
+    async def hook_delete(self, hook_id: str) -> None:
+        try:
+            await self._hooks().delete(hook_id, FROM_APP, Trust.OWNER)
+        except HookError as exc:
+            raise ControlError(str(exc)) from exc
+
+    async def hook_test(self, hook_id: str) -> None:
+        try:
+            await self._hooks().test(hook_id)
+        except HookError as exc:
+            raise ControlError(str(exc)) from exc
+
+    async def hook_rotate(self, hook_id: str) -> dict[str, Any]:
+        hooks = self._hooks()
+        try:
+            return hooks.view(await hooks.rotate(hook_id, FROM_APP))
+        except HookError as exc:
+            raise ControlError(str(exc)) from exc
+
+    def _notifications(self) -> Notifications:
+        notifications = self.notifications()
+        if notifications is None:
+            raise ControlError("notifications are off")
+        return notifications
+
+    async def notification_view(self) -> dict[str, Any]:
+        notifications = self._notifications()
+        await notifications.sync()
+        return notifications.view(self.channels())
+
+    async def notification_set(
+        self, kind: str, level: str | None, channel: str | None
+    ) -> dict[str, Any]:
+        notifications = self._notifications()
+        try:
+            await notifications.choose(kind, level, channel, FROM_APP, Trust.OWNER, self.channels())
+        except NotificationError as exc:
+            raise ControlError(str(exc)) from exc
+        return notifications.view(self.channels())
 
 
 def server_view(config: OrionConfig) -> dict[str, Any]:
