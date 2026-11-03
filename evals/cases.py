@@ -1043,6 +1043,30 @@ CASES: tuple[Case, ...] = (
         checks=(uses("playbook", "adapt"), says_nothing_twice()),
     ),
     Case(
+        name="note_un_projet_et_ne_redit_pas",
+        origin="03/11 09:55 : « Nan j'utilise plus je crois » ; Orion écrit « ok, noté » avec "
+        "`remember`, répond au résultat de l'outil comme à une demande d'Orion (« Je ne vois pas "
+        "de demande en attente de ta part… »), puis redit « ok, noté pour pagepilot » (D223).",
+        at=paris(2026, 11, 3, 9, 29),
+        facts=OWNER,
+        steps=(
+            Notice(
+                "Nouveau mail : Google Developers — « [Action Advised] Manage your unused OAuth "
+                "clients » : les projets pagepilot-485412 et gen-lang-client-0106801052 ont des "
+                "clients OAuth inactifs, supprimés dans 30 jours sauf action.",
+                why="un mail de Google Developers vient d'arriver",
+            ),
+            Say("Nan j'utilise plus je crois", at=paris(2026, 11, 3, 9, 55)),
+        ),
+        checks=(
+            says_nothing_twice(),
+            never_says(
+                r"\bOrion\b|en attente de ta part|\bNoan (?:est|a|n'|utilise)",
+                "il parle au propriétaire, pas à Orion ni de lui",
+            ),
+        ),
+    ),
+    Case(
         name="un_message_vague_reste_dans_le_fil",
         origin="02/11 22:52 : « T'as pas des réveils automatiques ? » « oui, 8h30 et 19h » puis "
         "« Tu veux en ajouter ? » ; un souvenir sur Angèle dans le message, et Orion répond "

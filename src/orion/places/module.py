@@ -547,6 +547,7 @@ def place_tools(places: Places) -> list[Tool]:
             handler=remind,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="place_reminder_cancel",
@@ -556,6 +557,7 @@ def place_tools(places: Places) -> list[Tool]:
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
             accepts_untrusted_context=True,
+            informs=False,
         ),
         Tool(
             name="places",

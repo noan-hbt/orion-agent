@@ -136,6 +136,7 @@ def adaptation_tools(memory: MemoryService) -> list[Tool]:
 
     write: dict[str, Any] = {
         "effect": Effect.INTERNAL,
+        "informs": False,
         "reversibility": Reversibility.REVERSIBLE,
         "accepts_untrusted_context": False,
     }

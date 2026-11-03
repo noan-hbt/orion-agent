@@ -195,6 +195,7 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             handler=remind_me,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="reminder_cancel",
@@ -203,6 +204,7 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             handler=reminder_cancel,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="reminder_move",
@@ -211,6 +213,7 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
             handler=reminder_move,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="reminders_list",

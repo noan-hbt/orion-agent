@@ -986,6 +986,7 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             handler=promise,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="missed",
@@ -996,6 +997,7 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             handler=missed,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="follow_up",
@@ -1004,6 +1006,7 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             handler=follow_up,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="follow_up_cancel",
@@ -1014,6 +1017,7 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
             accepts_untrusted_context=True,
+            informs=False,
         ),
         Tool(
             name="follow_ups",

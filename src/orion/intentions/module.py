@@ -420,6 +420,7 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
             handler=set_,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="intention_note",
@@ -429,6 +430,7 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
             handler=note,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="intention_challenge",
@@ -447,6 +449,7 @@ def intention_tools(intentions: Intentions) -> list[Tool]:
             handler=drop,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="intentions",

@@ -353,6 +353,7 @@ def library_tools(
             handler=remove,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
     ]
 

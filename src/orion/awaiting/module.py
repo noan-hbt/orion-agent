@@ -473,6 +473,7 @@ def awaiting_tools(awaiting: Awaiting) -> list[Tool]:
             handler=wait,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="awaiting_cancel",
@@ -482,6 +483,7 @@ def awaiting_tools(awaiting: Awaiting) -> list[Tool]:
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
             accepts_untrusted_context=True,
+            informs=False,
         ),
         Tool(
             name="awaiting_list",

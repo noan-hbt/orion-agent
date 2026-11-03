@@ -5064,5 +5064,19 @@ que je fasse autre chose, dis-le-moi »). Le contrôle de fin voit une propositi
 - **Le contrôle de fin dit ce qui est déjà parti** : quand des mots écrits avec des appels sont
   partis pendant le tour, la relance les cite et dit qu'une réponse vide suffit si tout est dit.
 
-Pas encore couvert : `playbook` (un outil à actions, dont l'apprentissage note seulement), et un
-modèle qui répond au résultat d'un outil qui apporte vraiment quelque chose.
+- **Les autres outils qui notent** le sont aussi : les règles et réglages (`adapt`, `unlearn`,
+  `initiative_settings`), les rappels (programmer, déplacer, annuler, au lieu), les relations,
+  les intentions (sauf `intention_challenge`, qu'il lit avant de parler), les suivis et
+  `think_later`, les attentes, la concentration, `missed`, `mistake`, `doubt_confirm`,
+  `same_person`, `contact_note`, `library_remove`, `feed_drop`. Un rappel mal daté revient en
+  erreur, donc au modèle. Ce qui lit, cherche ou lance un travail garde la main au modèle.
+- **Le défaut de fond** était dans le protocole de Claude Code : « réponds au dernier message,
+  comme l'assistant ». Après un appel, le dernier bloc est le `<tool_result>` : Haiku y répondait
+  comme à quelqu'un qui lui parle, et parlait du propriétaire à la troisième personne. Le
+  protocole dit maintenant qu'il répond au dernier `<message role="user">`, que ce qui suit est son
+  propre tour en cours, qu'un `<tool_result>` ne lui demande rien, et qu'il parle toujours au
+  propriétaire, jamais à Orion. Le texte reste fixe dans le message système (contrat du cache).
+- Évaluation `note_un_projet_et_ne_redit_pas` : le cas du 03/11.
+
+À surveiller : un message qui parle d'Orion ou du propriétaire à la troisième personne, et
+`loop.not_done_yet` juste après un texte parti avec un appel.

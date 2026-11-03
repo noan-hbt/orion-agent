@@ -298,6 +298,7 @@ def doubt_tools(doubt: Doubt) -> list[Tool]:
             handler=confirm,
             effect=Effect.INTERNAL,
             reversibility=Reversibility.REVERSIBLE,
+            informs=False,
         ),
         Tool(
             name="doubt_stale",

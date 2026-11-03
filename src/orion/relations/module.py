@@ -475,6 +475,7 @@ def relation_tools(relations: Relations) -> list[Tool]:
 
     internal: dict[str, Any] = {
         "effect": Effect.INTERNAL,
+        "informs": False,
         "reversibility": Reversibility.REVERSIBLE,
     }
     return [
