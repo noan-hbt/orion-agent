@@ -301,6 +301,17 @@ def uses(*tools: str) -> Check:
     return check
 
 
+def digs(at_least: int, *tools: str) -> Check:
+    """At least `at_least` calls among `tools`: he goes on looking when the first page is not
+    the answer (03/11, two searches then « à confirmer sur impots.gouv »)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        count = sum(1 for name, _ in o.tools if name in tools)
+        return None if count >= at_least else f"{count} calls to {'/'.join(tools)} (min {at_least})"
+
+    return check
+
+
 def called_with(tool: str, *fragments: str) -> Check:
     """`tool` was called with arguments holding every fragment (JSON as the model wrote it,
     spaces removed)."""
