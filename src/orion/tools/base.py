@@ -45,6 +45,8 @@ class ToolContext:
     the guardian checks (calling a stranger, writing to another Orion) presents it."""
     alone: bool = False
     """Done without asking, within an autonomy the owner granted: he is told afterwards."""
+    approved: bool = False
+    """He said yes to this very call although the context holds outside content (D231)."""
 
 
 @dataclass

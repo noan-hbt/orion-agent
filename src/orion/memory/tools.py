@@ -7,10 +7,12 @@ side-effect free and allowed everywhere.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from orion.core.events import Trust
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryRefused, MemoryService, Origin
@@ -128,8 +130,11 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
     async def forget_fact(args: Any, ctx: ToolContext) -> ToolResult:
         if await memory.store.fact(args.fact_id) is None:
             return ToolResult(f"No fact with id {args.fact_id}", is_error=True)
+        origin = origin_of(ctx)
+        if ctx.approved:  # he said yes to this very call: his word, not the context's (D231)
+            origin = replace(origin, trust=Trust.OWNER)
         try:
-            await memory.invalidate(args.fact_id, args.reason, origin_of(ctx), args.valid_to)
+            await memory.invalidate(args.fact_id, args.reason, origin, args.valid_to)
         except MemoryRefused as exc:
             return ToolResult(f"Refusé : {exc}", is_error=True)
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")

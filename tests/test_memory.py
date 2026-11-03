@@ -297,3 +297,33 @@ async def test_an_older_store_is_rebuilt_from_the_journal(
 def test_a_message_without_a_subject_searches_nothing() -> None:
     assert fts_query("C qui elle ?") is None
     assert fts_query("Gegele elle aime quoi") is not None
+
+
+async def test_he_can_have_a_fact_forgotten_from_a_conversation_with_outside_content(
+    memory: MemoryService,
+) -> None:
+    """03/11: a task's web results in the conversation, « supprime ce souvenir » was refused
+    by the memory guard. He is asked, and his yes removes it (D231)."""
+    from orion.guardian.policy import APPROVED_DESPITE, ActionProposal, Approval, Guardian
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    class Yes:
+        asked = 0
+
+        async def approve(self, proposal: ActionProposal) -> Approval:
+            Yes.asked += 1
+            return Approval(True)
+
+    rent = await memory.remember("Son loyer est de 520 €.", OWNER)
+    forget = next(t for t in memory_tools(memory) if t.name == "forget_fact")
+    args = forget.parse(json.dumps({"fact_id": rent, "reason": "il a déménagé"}))
+    decision = await Guardian(Yes(), approvals="equilibre").decide(
+        ActionProposal(forget, args, Trust.WEB, "owner")
+    )
+    assert decision.allowed and Yes.asked == 1
+    ctx = ToolContext(
+        "owner", "c", context_trust=Trust.WEB, approved=decision.reason == APPROVED_DESPITE
+    )
+    assert not (await forget.handler(args, ctx)).is_error
+    assert await memory.store.facts() == []
