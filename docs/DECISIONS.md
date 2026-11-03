@@ -5080,3 +5080,35 @@ que je fasse autre chose, dis-le-moi »). Le contrôle de fin voit une propositi
 
 À surveiller : un message qui parle d'Orion ou du propriétaire à la troisième personne, et
 `loop.not_done_yet` juste après un texte parti avec un appel.
+
+## D224 — Relecture de ce qu'Orion reçoit
+
+*03/11/2026 · acceptée · corrige D223 · complète D100, D109, D215*
+
+Après D223, relecture de tout ce que le modèle reçoit : le message système avec tous les
+modules, le protocole de Claude Code, les relances de la boucle et les blocs ajoutés aux
+messages. Les noms d'outils et d'actions cités existent, sauf un. Le reste :
+
+- **D223 ne couvrait pas les outils regroupés.** `playbook` (learn), `commitments`, `situation`,
+  `relations`, `intention`, `reminders`… sont des actions d'un outil regroupé, qui perdait
+  `informs`. `Action.informs` et `Tool.informs_of` le portent maintenant, action par action.
+- **Un rappel reste lu.** `later` lui dit de vérifier le jour de la semaine renvoyé : finir le
+  tour l'en empêchait. `remind_me` et le déplacement d'un rappel gardent la main au modèle ; leur
+  annulation non.
+- **La constitution disait que seule une réponse sans appel finit le tour.** Depuis `<fin/>` et
+  D223, c'est faux : un appel qui ne fait que noter le finit aussi. Elle le dit, et que ce qui
+  reste à faire s'appelle dans le même message.
+- **Une initiative qui se tait était relancée.** Une réponse vide sans rien de parti renvoyait le
+  modèle « réponds-lui », sur tous les tours : une initiative qui répondait `<fin/>` pour se
+  taire en faisait un message. Seul un message du propriétaire est relancé (`must_answer`) ;
+  ailleurs, le silence est une réponse.
+- **Le bilan en fin de limite ne savait pas ce qui était parti.** Il ne citait que `tell`, que
+  Claude n'a plus (D215) : il redisait les mots écrits avec les appels. Il les cite maintenant,
+  comme la relance de fin de réponse.
+- **`<pendant_ce_temps>` mêlait les voix** : « Ce que tu as fait… : je t'ai envoyé… », dans le
+  message du propriétaire. Il parle maintenant à Orion, à la deuxième personne (« tu lui as
+  envoyé »). Et il donnait pour « hors de cette conversation » l'initiative de 09:29, qui y était :
+  une initiative part sous une corrélation à elle. Un texte que la conversation montre déjà n'y
+  revient plus.
+- **`configure` change** (`offers.md`) s'appelle `configure_change` ; `onboarding.md` disait
+  « je te demande » sans qu'on sache qui parle.

@@ -563,6 +563,13 @@ class Orion:
                 await self._journal.read(thread.last_seq, READ_AT_MOST),
                 {thread.last_correlation} if thread.last_correlation else set(),
                 ZoneInfo(self._agent.timezone),
+                frozenset(
+                    m["content"].strip()
+                    for m in window
+                    if m["role"] == "assistant"
+                    and isinstance(m.get("content"), str)
+                    and m["content"].strip()
+                ),
             )
             if elsewhere:
                 blocks.insert(0, elsewhere)
@@ -645,6 +652,7 @@ class Orion:
             reasoning_effort=self._agent.reasoning_effort,
             asking=asking,
             halted=halted,
+            must_answer=kind == "message.received",
             finish_check=finish_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,

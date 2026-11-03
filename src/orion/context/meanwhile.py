@@ -6,6 +6,9 @@ asked from another conversation. So « tu as bossé pendant mon absence ? » onc
 while a mission had run and sent a picture. When the owner writes again, the journal after the
 conversation's last message is read, and what happened elsewhere is attached to their message
 as a dated list: facts from the record, nothing for the model to guess.
+
+It is written to Orion, in the second person: « je t'ai envoyé » inside the owner's message read
+as the owner's own words, and Haiku answered Orion instead of him (03/11, D224).
 """
 
 from __future__ import annotations
@@ -37,13 +40,13 @@ def _line(event: Event, requested: dict[str, str]) -> str | None:
                 f"rapport {_quote(said)}" if said else "rien de neuf"
             )
         case "secretary.replied":
-            return f"j'ai répondu à {p.get('contact', 'un contact')} : {_quote(p.get('reply'))}"
+            return f"tu as répondu à {p.get('contact', 'un contact')} : {_quote(p.get('reply'))}"
         case "federation.chat":
-            line = f"l'Orion de {p.get('label') or p.get('peer')} m'a écrit {_quote(p.get('them'))}"
-            return line + (f", j'ai répondu {_quote(p.get('reply'))}" if p.get("reply") else "")
+            line = f"l'Orion de {p.get('label') or p.get('peer')} t'a écrit {_quote(p.get('them'))}"
+            return line + (f", tu as répondu {_quote(p.get('reply'))}" if p.get("reply") else "")
         case "federation.chat.sent":
             peer = p.get("label") or p.get("peer")
-            return f"j'ai écrit à l'Orion de {peer} : {_quote(p.get('text'))}"
+            return f"tu as écrit à l'Orion de {peer} : {_quote(p.get('text'))}"
         case "meeting.agreed":
             return f"rendez-vous calé avec {p.get('peer')} : {p.get('start', '?')}"
         case "meeting.declined" | "meeting.cancelled":
@@ -54,18 +57,25 @@ def _line(event: Event, requested: dict[str, str]) -> str | None:
                 return None
             return f"accord demandé pour {tool} : {'accepté' if p.get('approved') else 'refusé'}"
         case "thinking.thought":
-            return f"j'ai réfléchi la nuit à {_quote(p.get('question'))}"
+            return f"tu as réfléchi la nuit à {_quote(p.get('question'))}"
         case "outbox.failed":
             return f"un envoi a échoué : {_quote(p.get('error'))}"
         case _:
             return None
 
 
-def meanwhile(events: Sequence[Event], seen_correlations: set[str], zone: ZoneInfo) -> str | None:
+def meanwhile(
+    events: Sequence[Event],
+    seen_correlations: set[str],
+    zone: ZoneInfo,
+    said: frozenset[str] = frozenset(),
+) -> str | None:
     """The block for the owner's message, or None when nothing happened elsewhere.
 
     `events` follow the conversation's last message; `seen_correlations` are the turns whose
-    words are already in the conversation (what they sent is not news)."""
+    words are already in the conversation, and `said` what the conversation already shows Orion
+    saying (what they sent is not news). An initiative is delivered under a correlation of its
+    own: on 03/11, its message, there in the conversation, came back as sent from elsewhere."""
     replied = {e.correlation_id for e in events if e.kind == "secretary.replied"}
     requested = {
         str(e.payload.get("approval_id")): str(e.payload.get("tool"))
@@ -77,10 +87,14 @@ def meanwhile(events: Sequence[Event], seen_correlations: set[str], zone: ZoneIn
         if event.redacted:
             continue
         if event.kind == "outbox.queued":
-            if event.correlation_id in seen_correlations or event.correlation_id in replied:
+            if (
+                event.correlation_id in seen_correlations
+                or event.correlation_id in replied
+                or (str(event.payload.get("text") or "").strip() or None) in said
+            ):
                 continue
             what = "un fichier " if event.payload.get("media") else ""
-            line = f"je t'ai envoyé {what}{_quote(event.payload.get('text'))}"
+            line = f"tu lui as envoyé {what}{_quote(event.payload.get('text'))}"
         else:
             line = _line(event, requested)
         if line is None:

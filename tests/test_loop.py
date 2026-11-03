@@ -712,3 +712,27 @@ async def test_a_nudged_reply_is_told_what_already_left() -> None:
     events, _ = await collect(provider, settings=settings)
     assert finished(events).text == ""  # nothing more leaves
     assert "ok, noté" in str(provider.requests[2].messages[-1]["content"])
+
+
+async def test_a_grouped_action_that_only_records_ends_the_turn_too() -> None:
+    """`playbook` learn is an action of a grouped tool: it lost `informs` on the way (D224)."""
+    from orion.tools.actions import grouped
+
+    noting = _noting_registry().get("note")
+    assert noting is not None
+    playbook = grouped("playbook", "d", [noting], {"note": "learn"})
+    registry = ToolRegistry([*builtin_tools(), echo_tool(), playbook])
+    provider = ScriptedProvider(
+        call_tools(("playbook", {"action": "learn"}), text="ok, noté"), reply("noté, encore")
+    )
+    events, _ = await collect(provider, registry)
+    assert finished(events).text == ""
+    assert len(provider.requests) == 1
+
+
+async def test_an_empty_reply_where_silence_is_an_answer_stays_silent() -> None:
+    """An initiative answered with nothing was sent back to « réponds-lui » (D224)."""
+    provider = ScriptedProvider(reply(""), reply("un message qui n'aurait pas dû partir"))
+    events, _ = await collect(provider, settings=replace(SETTINGS, must_answer=False))
+    assert finished(events).text == ""
+    assert len(provider.requests) == 1
