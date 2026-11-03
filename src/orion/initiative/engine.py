@@ -28,10 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -113,6 +113,44 @@ class Notifier(Protocol):
     async def notify(self, text: str, correlation_id: str) -> None: ...
 
 
+@runtime_checkable
+class SortingNotifier(Notifier, Protocol):
+    """A notifier that knows his choices for each kind of notification (D225): whether it is
+    sent at all, how it rings, where it goes."""
+
+    def level_of(self, kind: str) -> str:
+        """`off`, `muette`, `normale` or `urgente`."""
+        ...
+
+    async def notify_as(
+        self, text: str, correlation_id: str, kind: str, level: str = ""
+    ) -> bool: ...
+
+
+NOTIFICATION_KINDS = {
+    "digest": "point",
+    "almost": "point",
+    "place": "rappel",
+    "birthday": "rappel",
+    "task": "compte_rendu",
+    "job": "compte_rendu",
+    "call": "compte_rendu",
+    "booking": "compte_rendu",
+    "mission": "compte_rendu",
+    "handover": "compte_rendu",
+    "kept": "compte_rendu",
+    "secretary": "proches",
+    "federation": "proches",
+    "meeting": "proches",
+    "spending": "depense",
+    "hook": "hook",
+}
+"""A candidate's key family → the kind of notification it is; anything else is Orion speaking
+of his own accord (`initiative`)."""
+OFF = "off"
+URGENT = "urgente"
+
+
 @dataclass(frozen=True)
 class Report:
     """The outcome of something the owner asked for (a delegated task, a call), to pass on."""
@@ -122,6 +160,10 @@ class Report:
     why: str
     fallback: str
     trust: Trust = Trust.SYSTEM
+    notify_kind: str = ""
+    """The kind of notification it is (`orion.notifications`); empty: read from its key."""
+    level: str = ""
+    """How it rings, when its source says (a hook's own level); empty: his choice for its kind."""
 
 
 ALMOST_KEY = "almost:"
@@ -156,6 +198,8 @@ class Alert:
     """Someone wrote to him (one of his contacts, another Orion): passed on, not Orion's own
     idea, so it does not spend the day's budget (D104). Quiet hours and the arbiter still
     apply."""
+    notify_kind: str = ""
+    level: str = ""
 
 
 class AlertSource(Protocol):
@@ -257,10 +301,21 @@ class Candidate:
     """Spends the day's attention budget: what Orion says of its own accord (D104)."""
     carries: tuple[Candidate, ...] = ()
     """What waited for this point and goes in the same message (D144)."""
+    notify_kind: str = ""
+    level: str = ""
 
     @property
     def kind(self) -> str:
         return self.key.split(":", 1)[0]
+
+    @property
+    def notification(self) -> str:
+        """The kind of notification it is, for his choices of what rings and where (D225)."""
+        if self.notify_kind:
+            return self.notify_kind
+        if self.timer is not None:
+            return "initiative" if self.timer.own else "rappel"
+        return NOTIFICATION_KINDS.get(self.kind, "initiative")
 
 
 @dataclass(frozen=True)
@@ -448,6 +503,13 @@ def _after_review(fallback: str) -> str:
     if not fallback:
         return ""
     return "Ma relecture a bloqué mon message, voici ce que tu m'avais demandé :\n" + fallback
+
+
+def _loudest(levels: Iterable[str]) -> str:
+    """Several messages in one: it rings as the loudest of them."""
+    order = ["", "muette", "normale", URGENT]
+    known = [level for level in levels if level in order]
+    return max(known, key=order.index, default="")
 
 
 def _point(lines: str, extra: list[str]) -> str:
@@ -668,6 +730,8 @@ class InitiativeEngine:
                     fallback=r.fallback,
                     trust=r.trust,
                     explicit=True,
+                    notify_kind=r.notify_kind,
+                    level=r.level,
                 )
                 for r in await source.reports()
             )
@@ -682,6 +746,8 @@ class InitiativeEngine:
                     expires_at=a.expires_at,
                     importance=a.importance,
                     budgeted=not a.spoken_to,
+                    notify_kind=a.notify_kind,
+                    level=a.level,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -870,6 +936,8 @@ class InitiativeEngine:
             timer=parts[0].timer,
             mentions=tuple(m for c in parts for m in c.mentions),
             importance=parts[0].importance,
+            notify_kind=parts[0].notification,
+            level=_loudest(self._level(c) for c in parts),
         )
         if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
@@ -903,7 +971,12 @@ class InitiativeEngine:
             await self._fired((candidate, *together), None, now)
             return False
         correlation_id = new_id()
-        await self._notifier.notify(text, correlation_id)
+        if isinstance(self._notifier, SortingNotifier):
+            await self._notifier.notify_as(
+                text, correlation_id, candidate.notification, candidate.level
+            )
+        else:
+            await self._notifier.notify(text, correlation_id)
         await self._record(
             DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
         )
@@ -948,14 +1021,25 @@ class InitiativeEngine:
         wrote = getattr(self._orion, "owner_wrote_at", None)
         return isinstance(wrote, datetime) and timedelta(0) <= now - wrote < AWAKE
 
+    def _level(self, candidate: Candidate) -> str:
+        """How it rings, by his choice for its kind (D225); "" without such choices."""
+        if candidate.level:
+            return candidate.level
+        if isinstance(self._notifier, SortingNotifier):
+            return self._notifier.level_of(candidate.notification)
+        return ""
+
     def _gate(self, candidate: Candidate, now: datetime) -> str | None:
         if not candidate.notice:
             return "nothing to say"
         if candidate.expires_at is not None and now > candidate.expires_at:
             return "missed its window"
+        level = self._level(candidate)
+        if level == OFF:
+            return "he turned this kind of message off"
         if self._settings.is_paused(now):
             return "paused"
-        if self._settings.is_quiet(now.time()) and not self._owner_is_up(now):
+        if self._settings.is_quiet(now.time()) and not self._owner_is_up(now) and level != URGENT:
             return "quiet hours"
         if (
             candidate.budgeted

@@ -38,6 +38,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.files.module import FilesModule
     from orion.focus.module import FocusModule
     from orion.hands.module import HandsModule
+    from orion.hooks.module import HooksModule
     from orion.intentions.module import IntentionsModule
     from orion.library.module import LibraryModule
     from orion.mail.module import MailModule
@@ -46,6 +47,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.memory.night import NightModule
     from orion.missions.module import MissionsModule
     from orion.mobile.module import MobileModule
+    from orion.notifications.module import NotificationsModule
     from orion.onboarding.module import OnboardingModule
     from orion.papers.module import PapersModule
     from orion.photos.module import PhotosModule
@@ -106,6 +108,8 @@ def builtin_modules() -> list[type[Module]]:
         SecretaryModule,
         ConsoleModule,
         HandsModule,
+        HooksModule,
+        NotificationsModule,
         RecapModule,
         McpModule,
         SkillsModule,

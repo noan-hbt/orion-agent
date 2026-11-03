@@ -12,6 +12,7 @@ extension of what was sent before.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -34,6 +35,7 @@ from orion.cognition.loop import (
     Told,
     ToolExecuted,
     Waiting,
+    execute_call,
     run_agent,
 )
 from orion.config import AgentConfig
@@ -60,7 +62,7 @@ from orion.memory.service import ForgetReport, MemoryService, Origin
 from orion.memory.store import Fact
 from orion.providers.base import Message, ModelProvider, ToolCall, Usage, cache_minutes
 from orion.providers.foreground import foreground
-from orion.tools.base import ToolRegistry
+from orion.tools.base import ToolRegistry, ToolResult
 from orion.tools.builtin import TellInput
 
 log = structlog.get_logger(__name__)
@@ -352,6 +354,54 @@ class Orion:
             max_steps=max_steps,
             max_tool_calls=max_tool_calls,
         )
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, object],
+        trust: Trust,
+        thread_id: str,
+        asking: str = "",
+    ) -> tuple[ToolResult, str]:
+        """One of Orion's tools called with set arguments, outside a turn (a hook's action,
+        D225): the guardian decides as for any call, with `trust` for what the conversation
+        would hold, and `asking` tells the owner why, if he is asked. Journaled like a turn's
+        calls. Returns the result and the guardian's reason."""
+        correlation_id = new_id()
+        call = ToolCall(
+            id=f"call_{correlation_id}",
+            name=name,
+            arguments=json.dumps(arguments, ensure_ascii=False),
+        )
+        settings = LoopSettings(
+            model=self._agent.model,
+            session_id=f"orion:{thread_id}",
+            thread_id=thread_id,
+            correlation_id=correlation_id,
+            timezone=self._agent.timezone,
+            asking=asking,
+        )
+        result, reason = await execute_call(
+            call, self._registry, self._guardian, settings, min(trust, Trust.SYSTEM)
+        )
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind="tool.executed",
+                    payload={
+                        "thread_id": thread_id,
+                        "tool": name,
+                        "arguments": call.arguments,
+                        "is_error": result.is_error,
+                        "decision": reason,
+                    },
+                    provenance=Provenance(source=f"thread:{thread_id}", actor="orion:core"),
+                    trust=Trust.SYSTEM,
+                    correlation_id=correlation_id,
+                )
+            ]
+        )
+        return result, reason
 
     def cuts(self, thread_id: str, notice: str, why: str, now: datetime) -> bool:
         """Whether this initiative would push the thread past its window budget, so that its
