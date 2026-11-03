@@ -5412,3 +5412,7 @@ avait parlé un lot plus tôt et notait en silence avant de continuer.
 - **Sans plan, pour voir** : `[agent] plan = false` par défaut. À 20 h 18, il avait coché
   « 3/3 fait » après un seul lot, et « tout est fait : réponds-lui » l'a renvoyé vers le
   propriétaire. `plan = true` le rend.
+- **Toute sa mémoire d'un coup** : `recall` (everything) rend tous les souvenirs, rangés par
+  catégorie, jusqu'à 40 000 caractères. `<memoire>` n'en montre que le profil et les goûts,
+  dans 2 400 caractères (5 120 de souvenirs le 03/11), et une recherche n'en rend que dix :
+  pour un tri, il ne savait jamais s'il avait tout vu, et passait par `shell`.

@@ -57,8 +57,17 @@ class ForgetFactInput(BaseModel):
 class RecallInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    query: str
+    query: str = Field(default="", description="What to look for; ignored with `everything`")
     include_history: bool = Field(default=False, description="Also return facts no longer true")
+    everything: bool = Field(
+        default=False,
+        description="Every fact you know, by category, not only the closest ten: to review, "
+        "sort or audit the whole memory",
+    )
+
+
+RECALL_ALL_CHARS = 40_000
+"""How much of the whole memory one `recall` everything returns."""
 
 
 class CommitmentAddInput(BaseModel):
@@ -143,10 +152,30 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")
 
     async def recall(args: Any, ctx: ToolContext) -> ToolResult:
+        if args.everything:
+            return await recall_all(args.include_history)
+        if not args.query.strip():
+            return ToolResult("Say what to look for, or ask for `everything`.", is_error=True)
         facts = await memory.search(args.query, limit=10, include_past=args.include_history)
         if not facts:
             return ToolResult("Rien en mémoire sur ce sujet.")
         return ToolResult("\n".join(format_fact(f) for f in facts))
+
+    async def recall_all(include_past: bool) -> ToolResult:
+        facts = await memory.store.facts(include_past)
+        if not facts:
+            return ToolResult("Rien en mémoire.")
+        lines = [f"{len(facts)} souvenirs."]
+        size = len(lines[0])
+        for category in sorted({f.category for f in facts}):
+            group = [format_fact(f) for f in facts if f.category == category]
+            for line in [f"# {category}", *group]:
+                if size + len(line) > RECALL_ALL_CHARS:
+                    lines.append("- … (la suite ne tient pas : cherche par sujet)")
+                    return ToolResult("\n".join(lines))
+                lines.append(line)
+                size += len(line) + 1
+        return ToolResult("\n".join(lines))
 
     async def commitment_add(args: Any, ctx: ToolContext) -> ToolResult:
         cid = await memory.add_commitment(

@@ -348,3 +348,15 @@ async def test_in_libre_he_can_replace_or_forget_a_fact_after_a_web_page(
     gone = json.dumps({"fact_id": fact.id, "reason": "faux"})
     assert not (await forget.handler(forget.parse(gone), ctx)).is_error
     assert await memory.store.facts() == []
+
+
+async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -> None:
+    """03/11: sorting his memories ten at a time, Orion never knew he had seen them all (D235)."""
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    for i in range(15):
+        await memory.remember(f"Souvenir numéro {i} sur un sujet à part.", OWNER)
+    recall = next(t for t in memory_tools(memory) if t.name == "recall")
+    result = await recall.handler(recall.parse('{"everything": true}'), ToolContext("owner", "c"))
+    assert all(f"numéro {i} " in result.content for i in range(15))
