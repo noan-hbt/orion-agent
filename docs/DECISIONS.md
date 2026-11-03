@@ -5394,3 +5394,27 @@ travaux à une tâche, sans dire ce qu'une tâche peut faire.
 - La règle du gardien ne change pas. Un cas d'éval (`ce_qui_ecrit_ne_part_pas_en_tache`)
   rejoue l'audit de mémoire.
 
+
+## D235 — Un long travail ne s'arrête plus à chaque lot
+
+*03/11/2026 · acceptée · précise D217, D223 ; met D97 en pause*
+
+Le 03/11 entre 20 h 12 et 20 h 23, trier ses souvenirs a demandé cinq relances (« fais-le »,
+« cherche », « regarde dans tous »). Chaque tour s'arrêtait après un lot de `forget_fact` :
+un appel qui ne fait que noter, quand quelque chose est déjà parti dans le tour, finissait le
+tour (D223). C'était voulu pour « ok, noté » écrit avec `remember`, pas pour un tri où Orion
+avait parlé un lot plus tôt et notait en silence avant de continuer.
+
+- **La boucle** : un appel qui ne fait que noter ne finit le tour que si les mots viennent avec
+  lui, dans la même réponse. Sinon le travail continue.
+- **La constitution** : un travail long se fait en entier dans le tour, lot après lot ;
+  « pas fini » ou « je ne peux pas garantir » n'est pas une réponse.
+- **Sans plan, pour voir** : `[agent] plan = false` par défaut. À 20 h 18, il avait coché
+  « 3/3 fait » après un seul lot, et « tout est fait : réponds-lui » l'a renvoyé vers le
+  propriétaire. `plan = true` le rend.
+- **Toute sa mémoire d'un coup** : `recall` (everything) rend tous les souvenirs, rangés par
+  catégorie, jusqu'à 40 000 caractères. `<memoire>` n'en montre que le profil et les goûts,
+  dans 2 400 caractères (5 120 de souvenirs le 03/11), et une recherche n'en rend que dix :
+  pour un tri, il ne savait jamais s'il avait tout vu, et passait par `shell`.
+- **`<memoire>` passe de 2 400 à 10 000 caractères**, réglables (`[memory] snapshot_chars`) :
+  le profil et les goûts en faisaient déjà 3 870, et le bloc était coupé.
