@@ -201,6 +201,25 @@ def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def arrival_notice(place: str, when: Moment, at: str) -> str:
+    """What Orion reads when the phone says he arrived or left and no place reminder fired.
+    It must not say he asked nothing: seen for real (03/11), « préviens-moi quand tu reçois
+    l'arrivée de test » in the conversation, and Orion, told « il ne t'a rien demandé », kept
+    silent."""
+    verb = "arrive à" if when == "arrive" else "quitte"
+    return (
+        f"Son téléphone dit qu'il {verb} « {place} » ({at}). Aucun rappel de lieu n'était posé "
+        "pour ce lieu. Relis d'abord la conversation : s'il t'a demandé de le prévenir de ce "
+        "signal ou qu'il l'attend (un test du raccourci, par exemple), réponds-lui, et ne le "
+        "crois pas sur place si c'était un essai. Sinon, prends l'initiative : regarde ce que "
+        "tu sais (son agenda, ce qu'il attend, ses engagements, ce qu'il t'a dit de ce lieu ou "
+        "des gens qui y sont) et fais ce qui l'aiderait maintenant : chercher une info, la "
+        "noter, poser un rappel. Ce qui touche le dehors (écrire à quelqu'un, son agenda), "
+        "propose-le-lui sans le faire. Puis dis-lui en une phrase ce que tu as fait ou "
+        "proposes ; si rien ne vaut vraiment la peine, réponds SILENCE."
+    )
+
+
 class PlaceEvent(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -362,14 +381,7 @@ class Places:
         return [
             Alert(
                 key=f"place:arrival:{a.id}",
-                notice=f"Son téléphone dit qu'il {'arrive à' if a.when == 'arrive' else 'quitte'}"
-                f" « {a.place} » ({a.at.astimezone(zone):%H:%M}). Il ne t'a rien demandé pour ce "
-                "lieu : prends l'initiative. Regarde ce que tu sais (son agenda, ce qu'il attend, "
-                "ses engagements, ce qu'il t'a dit de ce lieu ou des gens qui y sont) et fais ce "
-                "qui l'aiderait maintenant : chercher une info, la noter, poser un rappel. Ce qui "
-                "touche le dehors (écrire à quelqu'un, son agenda), propose-le-lui sans le faire. "
-                "Puis dis-lui en une phrase ce que tu as fait ou proposes ; si rien ne vaut "
-                "vraiment la peine, réponds SILENCE.",
+                notice=arrival_notice(a.place, a.when, f"{a.at.astimezone(zone):%H:%M}"),
                 why=f"son téléphone : {'arrivé à' if a.when == 'arrive' else 'parti de'} "
                 f"« {a.place} »",
                 fallback="",
