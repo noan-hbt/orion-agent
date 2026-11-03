@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from html import escape
-from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 from starlette.applications import Starlette
@@ -21,10 +20,10 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from orion.console.activity import CATEGORIES, read_activity
 from orion.console.auth import COOKIE, SESSION_DAYS, Gate
 from orion.console.dashboard import dashboard
-from orion.core.events import Event, Trust
-from orion.core.hlc import Timestamp
+from orion.core.events import Trust
 from orion.core.journal import EventStore
 from orion.guardian.autonomy import Autonomy, label
 from orion.initiative.engine import InitiativeSettings, effective_settings
@@ -35,19 +34,6 @@ from orion.modules.base import Planned
 from orion.providers.spending import Spending
 
 PREFIX = "/console"
-ACTIVITY = {
-    "initiative.delivered": "a écrit le premier",
-    "initiative.suppressed": "s'est tu",
-    "approval.decided": "a demandé ton accord",
-    "mail.sent": "a envoyé un mail",
-    "calendar.event.added": "a ajouté à l'agenda",
-    "autonomy.granted": "autonomie accordée",
-    "autonomy.revoked": "autonomie retirée",
-    "provenance.contained": "source mise en quarantaine",
-    "job.started": "a lancé une tâche",
-    "job.finished": "tâche terminée",
-    "web.searched": "a cherché sur le web",
-}
 STYLE = """
 :root{--bg:#fafaf8;--fg:#1d1d1b;--muted:#6b6b66;--line:#e3e2dc;--accent:#2f5d8a;--warn:#9a3b1f}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ecebe6;--muted:#9a9a93;
@@ -119,13 +105,6 @@ def _page(title: str, body: str) -> HTMLResponse:
 
 def _button(action: str, text: str) -> str:
     return f'<form method="post" action="{PREFIX}/{action}"><button>{escape(text)}</button></form>'
-
-
-def _when(event: Event, zone: str) -> str:
-    from zoneinfo import ZoneInfo
-
-    moment = datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
-    return f"{moment.astimezone(ZoneInfo(zone)):%d/%m %H:%M}"
 
 
 def console_app(console: Console) -> Starlette:
@@ -390,22 +369,66 @@ def console_app(console: Console) -> Starlette:
             )
         return RedirectResponse(f"{PREFIX}/autonomy", status_code=303)
 
-    async def activity(_request: Request) -> Response:
-        last = await console.journal.last_seq()
-        events = await console.journal.read(max(0, last - 3000), 3000)
-        asked: dict[str, str] = {
-            str(e.payload["approval_id"]): str(e.payload.get("tool"))
-            for e in events
-            if e.kind == "approval.requested"
-        }
+    async def activity(request: Request) -> Response:
+        params = request.query_params
+        wanted = params.get("cat", "all")
+        if wanted not in ("all", "silences", *CATEGORIES):
+            wanted = "all"
+        query = params.get("q", "").strip()
+        before = params.get("before", "")
+        page = await read_activity(
+            console.journal,
+            ZoneInfo(console.timezone),
+            before=int(before) if before.isdigit() else None,
+            limit=150,
+            wanted=wanted,
+            query=query,
+        )
+        tabs = " · ".join(
+            f"<b>{escape(name)}</b>"
+            if key == wanted
+            else f'<a href="{PREFIX}/activity?{urlencode({"cat": key, "q": query})}">'
+            f"{escape(name)}</a>"
+            for key, name in (("all", "Tout"), *CATEGORIES.items(), ("silences", "Silences"))
+        )
+        search = (
+            f'<form method="get" action="{PREFIX}/activity" style="display:block;margin:12px 0">'
+            f'<input type="hidden" name="cat" value="{escape(wanted)}">'
+            f'<input type="text" name="q" value="{escape(query)}" placeholder="Chercher">'
+            " <button>Chercher</button></form>"
+        )
         rows: list[str] = []
-        for e in reversed([e for e in events if e.kind in ACTIVITY and not e.redacted][-150:]):
-            detail = activity_detail(e, asked)
-            rows.append(
-                f"<tr><td class=muted>{_when(e, console.timezone)}</td>"
-                f"<td>{escape(ACTIVITY[e.kind])}</td><td>{escape(detail)}</td></tr>"
+        for e in page.entries:
+            fields = "".join(
+                f"<tr><th>{escape(k)}</th><td><pre style='white-space:pre-wrap;margin:0'>"
+                f"{escape(v)}</pre></td></tr>"
+                for k, v in e.fields
             )
-        return _page("Ce que j'ai fait, et pourquoi", "<table>" + "".join(rows) + "</table>")
+            more = (
+                f"<details><summary class=muted>détails</summary><table>{fields}</table>"
+                f"<p class=muted>{escape(e.kind)} · n° {e.seq}</p></details>"
+                if fields
+                else f"<span class=muted>{escape(e.kind)}</span>"
+            )
+            css = "warn" if e.failed else "muted" if e.silence else ""
+            rows.append(
+                f"<tr><td class=muted>{e.at:%d/%m %H:%M}</td>"
+                f'<td class="{css}">{escape(e.what)}</td>'
+                f"<td>{escape(e.detail)}{more}</td></tr>"
+            )
+        older = (
+            f'<p><a href="{PREFIX}/activity?'
+            + urlencode({"cat": wanted, "q": query, "before": page.before})
+            + '">Plus ancien →</a></p>'
+            if page.before
+            else ""
+        )
+        body = (
+            f"<p>{tabs}</p>{search}"
+            + ("<table>" + "".join(rows) + "</table>" if rows else "<p class=muted>Rien.</p>")
+            + older
+        )
+        return _page("Ce que j'ai fait, et pourquoi", body)
 
     async def sources(request: Request) -> Response:
         source = request.query_params.get("source", "").strip()
@@ -471,27 +494,3 @@ def console_app(console: Console) -> Starlette:
             post("/contain", contain),
         ]
     )
-
-
-def activity_detail(event: Event, asked: dict[str, str]) -> str:
-    p: dict[str, Any] = event.payload
-    if event.kind == "initiative.delivered":
-        return f"{p.get('why', '')} — {p.get('arbiter', '')}".strip(" —")
-    if event.kind == "initiative.suppressed":
-        return f"{p.get('fallback', p.get('key', ''))} ({p.get('reason', '')})"
-    if event.kind == "approval.decided":
-        tool = asked.get(str(p.get("approval_id")), "?")
-        return f"{tool} : {'oui' if p.get('approved') else 'non'} ({p.get('how', '')})"
-    if event.kind == "mail.sent":
-        return f"à {', '.join(p.get('to', []))} : {p.get('subject', '')}"
-    if event.kind == "calendar.event.added":
-        return str(p.get("occurrence", {}).get("title", ""))
-    if event.kind in ("autonomy.granted", "autonomy.revoked"):
-        return label(str(p.get("action", "")))
-    if event.kind == "provenance.contained":
-        return str(p.get("source", ""))
-    if event.kind in ("job.started", "job.finished"):
-        return str(p.get("title") or p.get("job_id", ""))
-    if event.kind == "web.searched":
-        return str(p.get("query", ""))
-    return ""

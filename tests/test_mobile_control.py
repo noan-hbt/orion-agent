@@ -224,7 +224,8 @@ async def test_he_takes_autonomy_back_and_sees_what_happened(controlled: Control
     assert (await http.post("/app/api/autonomy/calendar_add/revoke")).status_code == 200
     assert (await http.post("/app/api/autonomy/call_someone/revoke")).status_code == 404
     activity = (await http.get("/app/api/activity")).json()["activity"]
-    assert [a["what"] for a in activity] == ["autonomie retirée", "autonomie accordée"]
+    told = [a["what"] for a in activity if a["kind"].startswith("autonomy.")]
+    assert told[:2] == ["autonomie retirée", "autonomie accordée"]
     assert (await http.get("/app/api/planned")).json()["planned"][0]["undoable"] is False
 
 

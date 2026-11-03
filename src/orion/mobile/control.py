@@ -33,8 +33,7 @@ import structlog
 
 from orion import __version__
 from orion.awaiting.module import Awaiting
-from orion.console.app import ACTIVITY, activity_detail
-from orion.console.dashboard import moment
+from orion.console.activity import read_activity
 from orion.core.events import Provenance, Trust
 from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
@@ -77,7 +76,6 @@ _OUTSIDE = {
     "library": "lu dans un document",
     "papers": "lu dans un document",
 }
-ACTIVITY_WINDOW = 3000
 
 
 class ControlError(ValueError):
@@ -478,26 +476,14 @@ class Control:
             raise ControlError("no such action")
         await self.autonomy.revoke(action, "depuis l'app", None)
 
-    async def activity(self, limit: int = 120) -> list[dict[str, Any]]:
-        """What it did and chose not to do, newest first."""
-        last = await self.journal.last_seq()
-        events = await self.journal.read(max(0, last - ACTIVITY_WINDOW), ACTIVITY_WINDOW)
-        asked = {
-            str(e.payload["approval_id"]): str(e.payload.get("tool"))
-            for e in events
-            if e.kind == "approval.requested"
-        }
-        shown = [e for e in events if e.kind in ACTIVITY and not e.redacted][-limit:]
-        return [
-            {
-                "kind": e.kind,
-                "what": ACTIVITY[e.kind],
-                "detail": activity_detail(e, asked),
-                "at": moment(e, self.zone).isoformat(),
-                "silence": e.kind == "initiative.suppressed",
-            }
-            for e in reversed(shown)
-        ]
+    async def activity(
+        self, before: int | None = None, wanted: str = "all", query: str = ""
+    ) -> dict[str, Any]:
+        """Everything it did and chose not to do, newest first, a page at a time."""
+        page = await read_activity(
+            self.journal, self.zone, before=before, limit=80, wanted=wanted, query=query
+        )
+        return {"activity": [e.as_json() for e in page.entries], "before": page.before}
 
     async def upcoming(self, days: int = 14) -> list[dict[str, Any]]:
         if self.planned is None:
