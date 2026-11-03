@@ -40,6 +40,7 @@ from orion.providers.base import (
     ModelProvider,
     chars_per_token,
     on_chatgpt,
+    splits_messages,
     window_tokens,
 )
 from orion.providers.spending import Spending, spending_tools, with_spending
@@ -102,6 +103,14 @@ SAID_WITH_TELL = (
 """On the ChatGPT plan, `tell` is offered and the constitution says what it is for; Claude does
 not get it (D215), and the others are not told (D229)."""
 
+NOTHING_NEW = "Rien de neuf, rien à dire."
+TWO_MESSAGES = (
+    "Deux choses à dire à part (la réponse, puis une question ou une remarque) : sépare-les "
+    "par `<suite/>`, il les recevra en deux messages. Jamais pour couper une réponse ni pour "
+    "redire ce que tu viens de dire."
+)
+"""Where the model may split its answer (D163), said only where it is used well (D230)."""
+
 
 def constitution(
     modules: list[Module],
@@ -112,12 +121,16 @@ def constitution(
     """The core constitution, his name, each enabled module's section in loading order, what
     Orion could do with more setup (D64), then the reread before each reply. All fixed while
     Orion runs: the system message is cached. `model` is `agent.model`: on the ChatGPT plan,
-    the constitution speaks of `tell`."""
+    the constitution speaks of `tell` and of `<suite/>`."""
     core = read_resource("constitution.md").strip()
     if on_chatgpt(model):
         if SAID_WITH_A_CALL not in core:
             raise ValueError("constitution.md no longer says what text beside a call does")
         core = core.replace(SAID_WITH_A_CALL, SAID_WITH_TELL, 1)
+    if splits_messages(model):
+        if NOTHING_NEW not in core:
+            raise ValueError("constitution.md no longer ends what it says of messages")
+        core = core.replace(NOTHING_NEW, f"{NOTHING_NEW}\n{TWO_MESSAGES}", 1)
     parts = [core]
     if owner_names:
         # From `[memory] owner_names`: known from the first message, not asked (20/10).

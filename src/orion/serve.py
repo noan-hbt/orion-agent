@@ -23,6 +23,7 @@ from orion.initiative.engine import InitiativeEngine, InitiativeSettings
 from orion.memory.batch import MemoryBatcher
 from orion.memory.extractor import MemoryExtractor
 from orion.modules.base import Daemon, ModuleError
+from orion.providers.base import splits_messages
 from orion.providers.spending import Spending
 from orion.runtime import OWNER_THREAD
 
@@ -33,7 +34,11 @@ ServeError = ModuleError
 
 
 def owner_inbox(app: App) -> OwnerInbox:
-    return OwnerInbox(app.orion, app.config.channels.imessage.coalesce_seconds)
+    return OwnerInbox(
+        app.orion,
+        app.config.channels.imessage.coalesce_seconds,
+        split=splits_messages(app.config.agent.model),
+    )
 
 
 def memory_batcher(app: App) -> MemoryBatcher:
