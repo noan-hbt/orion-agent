@@ -28,6 +28,8 @@ Une partie des outils est rangée dans un tiroir : l'outil `orion` les liste et 
 | `files` | Fabrique et envoie images, PDF, téléchargements (D60, D61) | `file` |
 | `onboarding` | Faire connaissance, une question par jour au plus (D34) | `onboarding_stop` |
 | `focus` | Concentration : seul l'urgent passe (D70) | `focus_start`, `focus_stop` |
+| `hooks` | « Quand ceci arrive, fais cela » : un événement, une heure ou une adresse déclenche une consigne, un outil ou une notification (D225) | `hooks` |
+| `notifications` | Ce qui sonne, comment et où, type par type ; cinq types nouveaux sur demande (D225) | `notifications` |
 | `expert` | Un modèle plus fort pour les questions dures (D46) | `consult_expert`, `think_harder` |
 | `missions` | Des buts poursuivis seul pendant des jours (D47) | `mission`, `missions` |
 | `tasks` | Des tâches de fond (D110) | `task` |
@@ -170,6 +172,7 @@ Tout écoute sur `127.0.0.1` ; Caddy sert le HTTPS devant (`deploy/Caddyfile`).
 | `/voice/live` | 8791 | cœur |
 | `/hands/*` | 8792 | cœur |
 | `/places/*` | 8793 | cœur |
+| `/hooks/in/*` | 8797 | cœur (adresses des hooks, D225) |
 | `/secrets/*` | 8794 | gardien (formulaire des secrets) |
 | `/app/*` | 8795 | gardien (l'app, l'appairage, les signatures, D134) |
 | `/app/api/*` | 8796 | cœur |

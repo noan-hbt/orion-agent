@@ -38,6 +38,7 @@ from orion.channels.markup import plain
 from orion.cognition.loop import StopReason
 from orion.guardian.outbox import SendError
 from orion.guardian.policy import ActionProposal, Approval
+from orion.notifications.policy import Route
 from orion.runtime import (
     OWNER_THREAD,
     Interjection,
@@ -115,6 +116,12 @@ class Outlet(Protocol):
         ...
 
 
+class NotificationPolicy(Protocol):
+    """His choices for each kind of message (`orion.notifications.policy.Notifications`)."""
+
+    def route(self, kind: str) -> Route: ...
+
+
 @runtime_checkable
 class FileOutlet(Outlet, Protocol):
     """A channel that can carry a file to the owner (a picture, a PDF, a voice message)."""
@@ -176,6 +183,8 @@ class OwnerInbox:
         self.last_channel: str | None = None
         """The outlet he last wrote from: where Orion answers him first."""
         self._answering = False
+        self.policy: NotificationPolicy | None = None
+        """His choices of what rings, how and where (the `notifications` module, D225)."""
         orion.owner_waiting = self.owner_waiting
 
     def owner_waiting(self) -> bool:
@@ -194,6 +203,10 @@ class OwnerInbox:
     def submit(self, item: Inbound) -> None:
         self._queue.put_nowait(item)
 
+    def outlet_names(self) -> list[str]:
+        """The owner's channels, in order of preference."""
+        return list(self._outlets)
+
     # -- notifier for the initiative engine ---------------------------------------------------
 
     async def available(self) -> bool:
@@ -204,6 +217,38 @@ class OwnerInbox:
         if outlet is None:
             raise RuntimeError("no owner channel is available")
         await self._say(outlet, text, correlation_id, None)
+
+    def level_of(self, kind: str) -> str:
+        """His choice of how this kind of message rings (D225); "" when he has none."""
+        return self.policy.route(kind).level if self.policy is not None else ""
+
+    async def notify_as(self, text: str, correlation_id: str, kind: str, level: str = "") -> bool:
+        """A message of one kind, rung and sent as he chose for it (D225): `level` overrides
+        his choice (a hook's own). Returns whether it went anywhere: `off` sends nothing."""
+        route = self.policy.route(kind) if self.policy is not None else None
+        level = level or (route.level if route is not None else "")
+        if level == "off":
+            log.info("inbox.notification_off", kind=kind)
+            return False
+        outlets = await self._targets(route.channel if route is not None else "auto")
+        if not outlets:
+            raise RuntimeError("no owner channel is available")
+        for outlet in outlets:
+            await self._say(outlet, text, correlation_id, None, quiet=level == "muette")
+        return True
+
+    async def _targets(
+        self, channel: str, can: Callable[[Outlet], bool] = lambda _: True
+    ) -> list[Outlet]:
+        """Where a kind of message goes: every channel up (`partout`), the one he chose if it is
+        up, or else where he last wrote."""
+        if channel == "partout":
+            return [o for o in self._outlets.values() if can(o) and await o.available()]
+        chosen = self._outlets.get(channel)
+        if chosen is not None and can(chosen) and await chosen.available():
+            return [chosen]
+        preferred = await self._preferred(can)
+        return [preferred] if preferred is not None else []
 
     async def _say(
         self,
@@ -224,8 +269,13 @@ class OwnerInbox:
         await outlet.deliver_file(path, shown(outlet, caption), correlation_id)
 
     async def approve(self, proposal: ActionProposal) -> Approval:
-        """Put an action to the owner where he can answer it; nobody to ask means no."""
-        outlet = await self._preferred(lambda o: isinstance(o, AskingOutlet))
+        """Put an action to the owner where he can answer it; nobody to ask means no. Where
+        he chose to be asked (D225), if that channel is up."""
+        channel = self.policy.route("accord").channel if self.policy is not None else "auto"
+        targets = await self._targets(
+            "auto" if channel == "partout" else channel, lambda o: isinstance(o, AskingOutlet)
+        )
+        outlet = targets[0] if targets else None
         if not isinstance(outlet, AskingOutlet):
             log.warning("inbox.approval_unreachable", tool=proposal.tool.name)
             return Approval(False, reached=False)
@@ -384,7 +434,8 @@ class OwnerInbox:
             # He already read it mid-turn: saying it again is the same message twice.
             log.info("inbox.repeat_dropped", channel=first.channel)
         elif text and reply is not None:
-            await self._say(reply, text, turn.correlation_id, batch[-1])
+            muted = self.policy is not None and self.policy.route("reponse").level == "muette"
+            await self._say(reply, text, turn.correlation_id, batch[-1], quiet=muted)
         elif text:
             log.warning("inbox.no_outlet", channel=first.reply_via or first.channel)
         log.info(

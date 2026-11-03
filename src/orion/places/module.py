@@ -388,6 +388,7 @@ class Places:
                 trust=SIGNAL_TRUST,
                 expires_at=a.at + FRESH,
                 importance=0.3,
+                notify_kind="initiative",
             )
             for a in self.state.arrivals
             if a.flow not in self.state.answered and now - a.at <= FRESH

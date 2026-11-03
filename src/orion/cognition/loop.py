@@ -672,6 +672,20 @@ async def _execute_calls(
     return results
 
 
+async def execute_call(
+    call: ToolCall,
+    registry: ToolRegistry,
+    guardian: Guardian,
+    settings: LoopSettings,
+    context_trust: Trust,
+) -> tuple[ToolResult, str]:
+    """One call outside a turn (a hook's action, D225): the same checks as in the loop, the
+    guardian first. Returns the result and the guardian's reason."""
+    return await _execute_one(
+        registry.resolve(call), registry, guardian, settings, context_trust, Counter(), Budget()
+    )
+
+
 async def _execute_one(
     call: ToolCall,
     registry: ToolRegistry,

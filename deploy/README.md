@@ -9,8 +9,8 @@ Orion tourne en deux processus (D28), sous deux utilisateurs Unix qui partagent 
 
 Caddy, devant eux, sert le HTTPS et ne laisse passer que les chemins d'Orion : l'app
 (`/app/`), la console (`/console/`), le formulaire des secrets (`/secrets/`), les machines
-(`/hands/`), les lieux (`/places/`), le téléphone (`/voice/live`), le webhook Inkbox et la
-fédération. Tout le reste répond 404. La table des ports est dans
+(`/hands/`), les lieux (`/places/`), les hooks (`/hooks/in/`), le téléphone (`/voice/live`), le
+webhook Inkbox et la fédération. Tout le reste répond 404. La table des ports est dans
 [`docs/REFERENCE.md`](../docs/REFERENCE.md#les-ports).
 
 ## Installation

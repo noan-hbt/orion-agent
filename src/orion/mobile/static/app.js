@@ -69,6 +69,7 @@ forget: '<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>',
   rules: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
   wave: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/>',
+  bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
 };
 
 function icon(name, size = 20, stroke = "currentColor") {
@@ -2647,7 +2648,7 @@ const TINTS = {
   toml: "gray", sliders: "gray", blocks: "purple", server: "blue", phone: "green", bell: "red",
   door: "red", shield: "indigo", check: "green", clock: "orange", calendar: "red", spark: "yellow",
   target: "pink", file: "blue", where: "teal", book: "orange", photo: "pink", face: "indigo",
-  people: "teal", rules: "purple", moon: "indigo", wave: "purple", key: "gray",
+  people: "teal", rules: "purple", moon: "indigo", wave: "purple", key: "gray", bolt: "orange",
 };
 
 function tint(name) {
@@ -2762,6 +2763,8 @@ async function settingsFill(refresh) {
         ),
         row("moon", "Heures calmes", `${o.quiet_start} – ${o.quiet_end}`, () => quietHours(o, refresh), "", "je me tais, sauf urgence"),
         row("calendar", "Points du jour", o.digests?.length ? o.digests.join(" · ") : "aucun", () => digestsSheet(o, refresh), "", "ce qui compte, en un message"),
+        row("bell", "Notifications", "", notificationsPanel, "", "ce qui sonne, comment et où"),
+        row("bolt", "Hooks", "", hooksPanel, "", "quand ceci arrive, fais cela"),
       ),
     );
   }
@@ -4228,6 +4231,195 @@ function phoneTokenPanel() {
       "Créer un jeton",
     ),
   ]);
+}
+
+// -- notifications and hooks (D225) -----------------------------------------------------------
+
+const RINGS = { off: "Jamais", muette: "Sans sonner", normale: "Normale", urgente: "Même la nuit" };
+const WHERE = { auto: "Là où tu m'écris", partout: "Partout", mobile: "L'app", telegram: "Telegram", imessage: "iMessage" };
+
+function notificationsPanel() {
+  panel("Notifications", async (refresh) => {
+    const { kinds } = await api("api/notifications");
+    const line = (k) => [RINGS[k.level] || k.level, k.channels.length && k.channel !== "auto" ? WHERE[k.channel] || k.channel : null].filter(Boolean).join(" · ");
+    const item = (k) => row("bell", k.label, line(k), () => notificationSheet(k, refresh), k.level === "off" ? "c-gray" : "", k.help);
+    return [
+      h("p", { class: "hint" }, "Pour chaque sorte de message : s'il sonne, et où il arrive. « Même la nuit » passe les heures calmes ; « Sans sonner » le dépose dans la conversation, sans notification."),
+      h("p", { class: "label" }, "Ce que je t'envoie"),
+      h("div", { class: "list items" }, kinds.filter((k) => !k.direct).map(item)),
+      h("p", { class: "label" }, "Sur demande"),
+      h("div", { class: "list items" }, kinds.filter((k) => k.direct).map(item)),
+      h("p", { class: "hint" }, "Tu peux aussi me le dire : « ne me réveille plus pour les points », « préviens-moi quand une tâche finit »."),
+    ];
+  });
+}
+
+function notificationSheet(k, refresh) {
+  const choose = async (payload) => {
+    try {
+      await api("api/notifications", { kind: k.kind, ...payload });
+      close();
+      refresh();
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+  const chips = (values, current, words, key) =>
+    h("div", { class: "chips" }, values.map((v) => h("button", { type: "button", class: "chip", "aria-pressed": String(v === current), onclick: () => choose({ [key]: v }) }, words[v] || v)));
+  const close = sheet(
+    h("h2", {}, k.label),
+    h("p", { class: "quote" }, k.help),
+    k.levels.length > 1 ? [h("p", { class: "label" }, "Comment"), chips(k.levels, k.level, RINGS, "level")] : null,
+    k.channels.length ? [h("p", { class: "label" }, "Où"), chips(k.channels, k.channel, WHERE, "channel")] : null,
+  );
+}
+
+function hooksPanel() {
+  panel("Hooks", async (refresh) => {
+    const found = await api("api/hooks");
+    const state = (k) => (k.live ? (k.fired ? plural(k.fired, "fois", "fois") : "allumé") : k.done ? "fini" : "en pause");
+    return [
+      h("p", { class: "hint" }, "Un hook, c'est « quand ceci arrive, fais cela » : un mail de ta banque, ton arrivée au bureau, lundi 9 h, un service qui appelle son adresse. J'en pose aussi pour moi ; tu les vois tous ici."),
+      h("button", { class: "pill primary wide", type: "button", onclick: () => hookForm(found, refresh) }, "Nouveau hook"),
+      found.hooks.length
+        ? h(
+            "div",
+            { class: "list items" },
+            found.hooks.map((k) => row("bolt", k.name, state(k), () => hookSheet(k, found, refresh), k.live ? "" : "c-gray", `${k.trigger} → ${k.does}`)),
+          )
+        : h("p", { class: "empty" }, "Aucun hook pour l'instant. Tu peux aussi me le demander : « à chaque mail de ma banque, dis-moi le montant »."),
+    ];
+  });
+}
+
+function hookSheet(k, found, refresh) {
+  const act = (path, payload, done) => async () => {
+    try {
+      const got = await api(path, payload);
+      close();
+      refresh();
+      if (done) done(got);
+    } catch (error) {
+      toast(said(error));
+    }
+  };
+  const close = sheet(
+    h("h2", {}, k.name),
+    h("p", { class: "quote" }, `Quand ${k.trigger} → ${k.does}`),
+    k.by === "orion" ? h("p", { class: "hint" }, "Posé par moi.") : null,
+    k.trusted ? null : h("p", { class: "hint warn" }, "Né d'une conversation qui contenait un contenu venu d'ailleurs : ce qu'il fait dehors te sera demandé à chaque fois."),
+    k.url ? [h("p", { class: "label" }, "Son adresse"), h("p", { class: "hint" }, "Donne-la au service qui doit l'appeler (POST). Garde-la pour toi : elle suffit à le déclencher."), copyable(k.url)] : null,
+    k.on === "webhook" && !found.addressed ? h("p", { class: "hint warn" }, "Il manque l'adresse publique d'Orion (public_url de l'app ou des hooks) pour te montrer la sienne en entier.") : null,
+    k.recent.length
+      ? [
+          h("p", { class: "label" }, "Dernières fois"),
+          h("div", { class: "list items" }, k.recent.map((f) => row("clock", SHORT.format(new Date(f.at)), f.ran ? (f.ran.ok ? "fait" : "raté") : "", null, f.ran && !f.ran.ok ? "wait" : "", f.gist))),
+        ]
+      : null,
+    h(
+      "div",
+      { class: "row2" },
+      h("button", { class: "pill small tinted", type: "button", onclick: act(`api/hooks/${k.id}`, { enabled: !k.enabled }) }, k.enabled ? "Mettre en pause" : "Allumer"),
+      h("button", { class: "pill small tinted", type: "button", disabled: !k.live, onclick: act(`api/hooks/${k.id}/test`, {}, () => toast("Déclenché pour essai.")) }, "Essayer"),
+    ),
+    h(
+      "div",
+      { class: "row2" },
+      h("button", { class: "pill small tinted", type: "button", onclick: () => (close(), hookForm(found, refresh, k)) }, "Modifier"),
+      k.url ? h("button", { class: "pill small tinted", type: "button", onclick: act(`api/hooks/${k.id}/rotate`, {}, () => toast("Nouvelle adresse : l'ancienne ne marche plus.", 4000)) }, "Nouvelle adresse") : null,
+      h("button", { class: "pill small danger", type: "button", onclick: act(`api/hooks/${k.id}/delete`, {}) }, "Supprimer"),
+    ),
+  );
+}
+
+function hookForm(found, refresh, k = null) {
+  const field = (el, label) => h("label", { class: "field-edit" }, h("small", { class: "hint" }, label), el);
+  const prose = "font-family:inherit;font-size:16px;line-height:21px";
+  const name = h("input", { type: "text", value: k?.name || "", placeholder: "Relevés de la banque", "aria-label": "Nom" });
+  const on = h(
+    "select",
+    { "aria-label": "Déclencheur" },
+    Object.entries(found.families).map(([family, title]) =>
+      h("optgroup", { label: title }, found.triggers.filter((t) => t.family === family).map((t) => h("option", { value: t.name, selected: (k?.on || "mail") === t.name }, t.label))),
+    ),
+  );
+  const match = h("input", { type: "text", value: k?.match || "", placeholder: "banque | relevé", "aria-label": "Contient" });
+  const cron = h("input", { type: "text", value: k?.cron || "", placeholder: "0 9 * * 1  (lundi 9 h)", "aria-label": "Cron", spellcheck: false });
+  const pattern = h("input", { type: "text", value: k?.pattern || "", placeholder: "mail.*", "aria-label": "Motif", spellcheck: false });
+  const then = h("textarea", { rows: 4, value: k?.then || "", placeholder: "Regarde si c'est une facture, range-la dans mes papiers et dis-moi le montant.", "aria-label": "Ce que je fais alors", style: prose });
+  const notify = h("input", { type: "text", value: k?.notify || "", placeholder: "Nouveau relevé : {evenement}", "aria-label": "Notification" });
+  const tool = h("input", { type: "text", value: k?.tool || "", placeholder: "nom d'un de mes outils", "aria-label": "Outil", spellcheck: false });
+  const args = h("textarea", { rows: 3, value: k?.args ? JSON.stringify(k.args, null, 1) : "", placeholder: '{"query": "…"}', "aria-label": "Arguments", spellcheck: false });
+  const level = h(
+    "select",
+    { "aria-label": "Sonnerie" },
+    [["", "Comme mes notifications de hooks"], ["muette", "Sans sonner"], ["normale", "Normale"], ["urgente", "Même la nuit"]].map(([v, t]) => h("option", { value: v, selected: (k?.level || "") === v }, t)),
+  );
+  const once = h("input", { type: "checkbox", checked: !!k?.once, "aria-label": "Une seule fois" });
+  const matchField = field(match, "Seulement si ça contient (des mots, « | » entre des choix)");
+  const cronField = field(cron, "Quand (cron : minute heure jour mois jour-de-semaine)");
+  const patternField = field(pattern, "Quels événements de mon journal");
+  const shape = () => {
+    const picked = found.triggers.find((t) => t.name === on.value);
+    cronField.hidden = on.value !== "schedule";
+    patternField.hidden = on.value !== "journal";
+    matchField.hidden = on.value === "schedule";
+    match.placeholder = picked?.match_required ? "obligatoire : quels mots ?" : "banque | relevé";
+  };
+  on.addEventListener("change", shape);
+  shape();
+  const save = async () => {
+    let parsed = {};
+    if (args.value.trim()) {
+      try {
+        parsed = JSON.parse(args.value);
+      } catch {
+        return toast("Les arguments ne sont pas du JSON.");
+      }
+    }
+    const spec = {
+      name: name.value.trim(),
+      on: on.value,
+      match: on.value === "schedule" ? "" : match.value.trim(),
+      cron: on.value === "schedule" ? cron.value.trim() : "",
+      pattern: on.value === "journal" ? pattern.value.trim() : "",
+      then: then.value.trim(),
+      notify: notify.value.trim(),
+      tool: tool.value.trim(),
+      args: parsed,
+      level: level.value,
+      once: once.checked,
+    };
+    try {
+      await api(k ? `api/hooks/${k.id}` : "api/hooks/new", spec);
+      close();
+      refresh();
+      toast(k ? "Hook modifié." : "Hook créé.");
+    } catch (error) {
+      toast(said(error), 4000);
+    }
+  };
+  const close = sheet(
+    h("h2", {}, k ? "Modifier le hook" : "Nouveau hook"),
+    field(name, "Nom"),
+    field(on, "Quand"),
+    matchField,
+    cronField,
+    patternField,
+    h("p", { class: "label" }, "Alors"),
+    field(then, "Ce que je fais (une consigne, je la relis seul)"),
+    field(notify, "Et/ou une notification telle quelle ({evenement} : ce qui l'a déclenché)"),
+    h(
+      "details",
+      {},
+      h("summary", { class: "hint" }, "Avancé"),
+      field(tool, "Appeler un de mes outils, tel quel"),
+      field(args, "Ses arguments (JSON)"),
+      field(level, "Comment ça sonne"),
+      h("label", { class: "hint" }, once, " Une seule fois"),
+    ),
+    h("button", { class: "pill dark wide", type: "button", onclick: save }, k ? "Enregistrer" : "Créer"),
+  );
 }
 
 function peersPanel(refreshSettings) {

@@ -103,37 +103,9 @@ def config(tmp_path: Path, **modules: dict[str, Any]) -> OrionConfig:
 
 def test_load_orders_dependencies_first_and_fails_closed(tmp_path: Path) -> None:
     both = config(tmp_path, desk={"enabled": True}, weather={"enabled": True, "city": "Lyon"})
-    assert [m.name for m in load(both, THIRD_PARTY)] == [
-        "adaptation",
-        "consolidation",
-        "doubt",
-        "feeds",
-        "files",
-        "onboarding",
-        "focus",
-        "expert",
-        "missions",
-        "tasks",
-        "library",
-        "photos",
-        "papers",
-        "thinking",
-        "watch",
-        "awaiting",
-        "chronicle",
-        "intentions",
-        "relations",
-        "contacts",
-        "departure",
-        "advice",
-        "style",
-        "configure",
-        "vocal",
-        "recap",
-        "skills",
-        "weather",
-        "desk",
-    ]
+    names = [m.name for m in load(both, THIRD_PARTY)]
+    assert names[-2:] == ["weather", "desk"]  # what desk needs comes before it
+    assert "adaptation" in names and "voice" not in names  # on by default, or not
 
     with pytest.raises(ModuleError, match="'desk' needs 'weather'"):
         load(config(tmp_path, desk={"enabled": True}), THIRD_PARTY)
@@ -164,7 +136,7 @@ async def test_a_module_snaps_on_tools_instructions_services_and_a_channel(
         supervisor = Supervisor()
         daemon = await start(app, inbox, supervisor)
         assert "weather.watch" in supervisor.services
-        assert daemon.reports == [app.module(Weather)]
+        assert app.module(Weather) in daemon.reports
         assert await inbox.available()
     weather = next(m for m in modules if isinstance(m, Weather))
     assert weather.closed

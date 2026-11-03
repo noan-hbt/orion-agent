@@ -53,6 +53,20 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # [modules.feeds]
 # urls = ["https://example.org/feed"]
 
+# Hooks (D225): « quand ceci arrive, fais cela ». A mail, his agenda, a place, his phone, a feed,
+# what Orion does, an hour (cron) or a service calling the hook's own address sets one off;
+# then Orion is woken with an instruction, one of his tools is called, or a notification goes.
+# Made in the app (Réglages > Hooks), by asking Orion, or by Orion for himself. On by default.
+# [modules.hooks]
+# public_url = ""              # where services reach /hooks/in/…; empty: the app's address
+# per_hook_per_day = 24        # ceilings, against a hook that fires on every mail
+# per_day = 100
+# min_gap_seconds = 30
+
+# What rings, how and where (D225), kind by kind: set in the app (Réglages > Notifications) or
+# by message. On by default; nothing to set here.
+# [modules.notifications]
+
 # His address book (D159): the .vcf his phone exports, given from the app or with
 # `orion contacts import contacts.vcf`. Birthdays are then watched. On by default.
 

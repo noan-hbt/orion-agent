@@ -721,3 +721,4 @@ body.live-refresh .page-body > *, body.live-refresh .panel-content > * { animati
 .card.situations p { margin:0; font-size:15px; line-height:20px; }
 .memory-edit { display:flex; flex-direction:column; gap:10px; }
 .memory-edit textarea { font-family:inherit; font-size:16px; line-height:21px; }
+.pill.wide > code { min-width:0; overflow-wrap:anywhere; text-align:left; font-size:14px; line-height:19px; }
