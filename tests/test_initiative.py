@@ -631,3 +631,27 @@ async def test_a_draft_rejected_twice_is_dropped_unless_he_asked_for_it(world: W
     assert await engine.tick() == []
     assert world.inbox.messages == []
     assert "invented a room" in str((await kinds(world.journal, SUPPRESSED))[-1]["reason"])
+
+
+async def test_a_task_report_is_not_sent_raw_when_orion_fails_to_word_it_once(
+    world: World,
+) -> None:
+    """03/11: a call given up sent the raw « Ta tâche … » fallback; it is tried again (D231)."""
+
+    class Task:
+        async def alerts(self, now: datetime) -> list[Alert]:
+            return [
+                Alert("task:t1:1", "<tache>trois vols trouvés</tache>", "ta tâche t'a écrit",
+                      "Ta tâche « vols » : trois vols trouvés", importance=0.9, spoken_to=True)
+            ]  # fmt: skip
+
+    engine = InitiativeEngine(
+        world.orion, world.journal, world.timers, world.inbox, SETTINGS,
+        memory=world.memory.store, clock=world.clock, alerts=[Task()],
+    )  # fmt: skip
+    world.provider.extend(fail("stalled"))
+    assert await engine.tick() == []
+    assert world.inbox.messages == []
+    world.provider.extend(reply("J'ai trois vols pour toi."))
+    assert await engine.tick() == ["task:t1:1"]
+    assert world.inbox.messages == ["J'ai trois vols pour toi."]

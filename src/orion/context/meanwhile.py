@@ -24,11 +24,15 @@ READ_AT_MOST = 5000
 """Events read after the conversation's last message; a long absence shows its start."""
 SHOWN = 15
 QUOTE = 160
+SENT_QUOTE = 4000
+"""What Orion sent him from outside this conversation is shown whole, or nearly: a message
+the engine sent as its fallback is nowhere else in his conversation, and cut at 160
+characters Orion told him it could not see the rest (03/11, D231)."""
 
 
-def _quote(text: object) -> str:
+def _quote(text: object, at_most: int = QUOTE) -> str:
     flat = " ".join(str(text or "").split())
-    return f"« {flat[:QUOTE]}{'…' if len(flat) > QUOTE else ''} »"
+    return f"« {flat[:at_most]}{'…' if len(flat) > at_most else ''} »"
 
 
 def _line(event: Event, requested: dict[str, str]) -> str | None:
@@ -94,7 +98,7 @@ def meanwhile(
             ):
                 continue
             what = "un fichier " if event.payload.get("media") else ""
-            line = f"tu lui as envoyé {what}{_quote(event.payload.get('text'))}"
+            line = f"tu lui as envoyé {what}{_quote(event.payload.get('text'), SENT_QUOTE)}"
         else:
             line = _line(event, requested)
         if line is None:

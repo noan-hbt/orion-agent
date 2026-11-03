@@ -90,6 +90,12 @@ SOURCES_FOR_OWNER = {
 
 ALONE = "the owner lets Orion do this alone"
 """The reason given when an autonomy the owner granted covers the call."""
+APPROVED_DESPITE = "approved by owner despite untrusted context"
+"""The reason given when he said yes to this very call in a context holding outside content:
+what it writes is his word, not the context's (D231)."""
+ASKED_FROM_UNTRUSTED = frozenset({"forget_fact"})
+"""Internal, yet put to him from a context holding outside content even in `equilibre`: alone,
+it would run at that content's trust and could never remove what he told Orion (D231)."""
 
 NEVER_FROM_UNTRUSTED = frozenset({"module_install", "module_remove"})
 """Never done from a context holding outside content, even with his yes: adding code to Orion
@@ -265,16 +271,14 @@ class Guardian:
                     )
                 approval = await self._approver.approve(replace(proposal, ask_reason=reason))
                 if approval:
-                    return Decision(
-                        Verdict.ALLOW, "approved by owner despite untrusted context", approval.grant
-                    )
+                    return Decision(Verdict.ALLOW, APPROVED_DESPITE, approval.grant)
                 return Decision(
                     Verdict.DENY,
                     f"{tool.name} in a context containing untrusted content "
                     f"(trust {proposal.context_trust.name}) was put to the owner, who did not "
                     "say yes",
                 )
-            if self._approvals == "equilibre":
+            if self._approvals == "equilibre" and tool.name not in ASKED_FROM_UNTRUSTED:
                 return Decision(
                     Verdict.ALLOW,
                     f"{effect.value} effect in an untrusted context ({self._approvals} mode)",
@@ -287,9 +291,7 @@ class Guardian:
                 )
             approval = await self._approver.approve(replace(proposal, ask_reason=reason))
             if approval:
-                return Decision(
-                    Verdict.ALLOW, "approved by owner despite untrusted context", approval.grant
-                )
+                return Decision(Verdict.ALLOW, APPROVED_DESPITE, approval.grant)
             return Decision(
                 Verdict.DENY,
                 f"{tool.name} in a context containing untrusted content "

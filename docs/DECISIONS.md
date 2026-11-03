@@ -5294,3 +5294,28 @@ au milieu du message.
 À surveiller : des doublons d'un message à l'autre sur ChatGPT. Si Claude ou un autre modèle s'en
 sert bien un jour, c'est `splits_messages` qui change.
 
+
+## D231 — Le résultat d'une tâche : dit par Orion, vu en entier, et un souvenir qu'il peut faire oublier
+
+*03/11/2026 · acceptée · complète D26, D85, D109*
+
+Le 03/11 dans l'app, trois choses à la suite. Le résultat d'une tâche de fond est arrivé tel
+quel (« Ta tâche « … » : … ») : Orion n'avait pas réussi à l'écrire (un appel lâché, un tour
+coupé), et le moteur d'initiative avait envoyé le texte de secours. Ce texte n'est pas dans la
+conversation : quelques messages plus tard, Orion ne le voyait que dans `<pendant_ce_temps>`,
+coupé à 160 caractères, et a dit qu'il n'avait pas tout. Enfin, « supprime ce souvenir » a été
+refusé : le rapport de la tâche, venu du web, met la conversation en confiance WEB, et la
+mémoire refuse qu'un contexte WEB retire ce que le propriétaire a dit, même quand il le demande.
+
+- **Une alerte dont la rédaction échoue revient au tick suivant, une fois** (`TRY_AGAIN`,
+  `Candidate.raw_last`), avant que son texte brut parte. Les rappels qu'il a demandés et les
+  points du matin et du soir gardent leur secours immédiat.
+- **Ce qu'Orion lui a envoyé hors de la conversation se lit en entier** dans
+  `<pendant_ce_temps>` (jusqu'à 4 000 caractères, `SENT_QUOTE`) ; le reste garde ses 160.
+- **`forget_fact` depuis un contexte qui contient du contenu extérieur lui est demandé**, même en
+  `equilibre` (`ASKED_FROM_UNTRUSTED`). Son oui vaut sa parole : l'oubli s'écrit en confiance
+  OWNER (`ToolContext.approved`). Sans son oui, la règle reste : le web ne fait rien oublier.
+
+À surveiller : `initiative.compose_failed` ou `compose_incomplete` deux fois de suite sur une
+même tâche, et ce qui fait échouer la rédaction elle-même.
+

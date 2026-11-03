@@ -91,6 +91,9 @@ DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
 GAVE_WAY = "gave way to him"
 """He wrote while Orion was about to speak, or speaking, first: the initiative waits."""
+TRY_AGAIN = "wording failed, tried again later"
+"""Orion could not write it (a call given up, a turn cut short): something he did not ask for
+comes back at a later tick once, rather than going out as its raw fallback (D231)."""
 _OWNER_SIDE = {"owner", "orion"}
 _IDS = re.compile(r"\([a-z]_[0-9A-Z]+\) ")
 CHASE_EVERY_DAYS = 3
@@ -299,6 +302,8 @@ class Candidate:
     importance: float = 0.5
     budgeted: bool = True
     """Spends the day's attention budget: what Orion says of its own accord (D104)."""
+    raw_last: bool = False
+    """An alert: its fallback is only a last resort, after a second failed wording (D231)."""
     carries: tuple[Candidate, ...] = ()
     """What waited for this point and goes in the same message (D144)."""
     notify_kind: str = ""
@@ -538,6 +543,8 @@ class InitiativeEngine:
     ) -> None:
         self._presence = list(presence)
         self._waiting: dict[str, datetime] = {}
+        self._failed_once: set[str] = set()
+        """Candidates whose wording failed once (`TRY_AGAIN`)."""
         """Messages the arbiter held back, since when (asked again each tick)."""
         self._caller = caller
         self._alerts = list(alerts)
@@ -746,6 +753,7 @@ class InitiativeEngine:
                     expires_at=a.expires_at,
                     importance=a.importance,
                     budgeted=not a.spoken_to,
+                    raw_last=True,
                     notify_kind=a.notify_kind,
                     level=a.level,
                 )
@@ -961,7 +969,7 @@ class InitiativeEngine:
         if candidate.timer is not None and candidate.timer.by_call and await self._ring(candidate):
             return True
         text, how = await self._compose(candidate, now)
-        if how == GAVE_WAY:
+        if how in (GAVE_WAY, TRY_AGAIN):
             return False  # neither said nor dropped: it comes back at a later tick
         if not text:  # silence, or a failure with nothing the owner could read as it is
             for item in (candidate, *together):
@@ -1069,6 +1077,15 @@ class InitiativeEngine:
                 lines.append(line)
         return "\n".join(lines)[-VERIFIER_DAY_CHARS:]
 
+    def _failed(self, candidate: Candidate, how: str) -> tuple[str | None, str]:
+        """Orion's wording failed: an alert (a task's report, a contact's message) is tried
+        again once at a later tick before its raw text goes out; the rest falls back (D231)."""
+        if candidate.raw_last and candidate.key not in self._failed_once:
+            self._failed_once.add(candidate.key)
+            return None, TRY_AGAIN
+        self._failed_once.discard(candidate.key)
+        return candidate.fallback, how
+
     async def _compose(self, candidate: Candidate, now: datetime) -> tuple[str | None, str]:
         """Let Orion write the message in its own voice, then have a different model check it
         against the facts. A failure falls back to a plain, correct text, but a draft rejected
@@ -1087,12 +1104,12 @@ class InitiativeEngine:
             )
         except Exception:
             log.exception("initiative.compose_failed", key=candidate.key)
-            return candidate.fallback, "fallback: compose failed"
+            return self._failed(candidate, "fallback: compose failed")
         if turn.reason is StopReason.HALTED:
             return None, GAVE_WAY
         if turn.reason is not StopReason.COMPLETED or not turn.text.strip():
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
-            return candidate.fallback, f"fallback: {turn.reason.value}"
+            return self._failed(candidate, f"fallback: {turn.reason.value}")
         if is_silence(turn.text):
             if candidate.explicit:
                 return candidate.fallback, "fallback: model chose silence"

@@ -24,7 +24,7 @@ from typing import Literal, cast
 import structlog
 
 from orion.core.events import Trust
-from orion.guardian.policy import ALONE, ActionProposal, Guardian
+from orion.guardian.policy import ALONE, APPROVED_DESPITE, ActionProposal, Guardian
 from orion.providers.base import (
     Message,
     ModelProvider,
@@ -758,6 +758,7 @@ async def _execute_one(
         timezone=settings.timezone,
         grant=decision.grant,
         alone=decision.reason == ALONE,
+        approved=decision.reason == APPROVED_DESPITE,
     )
     try:
         result = await tool.handler(arguments, ctx)
