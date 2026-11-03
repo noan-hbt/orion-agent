@@ -352,6 +352,7 @@ async def build_app(
             ),
             agent=config.agent,
             memory=memory,
+            snapshot_chars=config.memory.snapshot_chars,
             extractor=MemoryExtractor(
                 provider, memory, config.agent.extractor_model, config.effort("memory")
             ),

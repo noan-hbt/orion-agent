@@ -295,6 +295,7 @@ embedding_model = "openai/text-embedding-3-small"   # semantic search; remove to
 extract_idle_minutes = 5          # what to remember is read after a pause this long…
 extract_min_messages = 3          # …once this many messages were exchanged…
 extract_max_wait_minutes = 60     # …or after this long anyway (D86)
+snapshot_chars = 10000            # what he knows of you, shown at each conversation's start
 
 # Nightly upkeep: what was not lasting becomes a situation, situations past their horizon
 # close, his portrait is rewritten. Reviewing memory itself is Orion's evening pass (thinking).

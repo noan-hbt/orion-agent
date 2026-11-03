@@ -210,7 +210,7 @@ class Orion:
         agent: AgentConfig,
         memory: MemoryService | None = None,
         extractor: MemoryExtractor | None = None,
-        snapshot_chars: int = 2400,
+        snapshot_chars: int = 10_000,
         recall_limit: int = 6,
         summary_model: str | None = None,
         summary_effort: Effort | None = None,

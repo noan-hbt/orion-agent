@@ -5416,3 +5416,5 @@ avait parlé un lot plus tôt et notait en silence avant de continuer.
   catégorie, jusqu'à 40 000 caractères. `<memoire>` n'en montre que le profil et les goûts,
   dans 2 400 caractères (5 120 de souvenirs le 03/11), et une recherche n'en rend que dix :
   pour un tri, il ne savait jamais s'il avait tout vu, et passait par `shell`.
+- **`<memoire>` passe de 2 400 à 10 000 caractères**, réglables (`[memory] snapshot_chars`) :
+  le profil et les goûts en faisaient déjà 3 870, et le bloc était coupé.

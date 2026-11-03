@@ -309,6 +309,12 @@ class MemoryConfig(BaseModel):
     extract_max_wait_minutes: int = Field(
         default=60, ge=5, description="…or after this long, however few they were"
     )
+    snapshot_chars: int = Field(
+        default=10_000,
+        ge=500,
+        description="Room for what Orion knows of him in `<memoire>`, the block that opens each "
+        "conversation window; his manual is always whole, outside this room (D185, D235)",
+    )
 
 
 class IMessageConfig(BaseModel):
