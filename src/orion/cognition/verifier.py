@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from orion.config import Effort
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 
 log = structlog.get_logger(__name__)
@@ -61,9 +62,10 @@ class Verification:
 
 
 class Verifier:
-    def __init__(self, provider: ModelProvider, model: str) -> None:
+    def __init__(self, provider: ModelProvider, model: str, effort: Effort | None = None) -> None:
         self._provider = provider
         self._model = model
+        self._effort: Effort | None = effort
 
     async def check(self, draft: str, facts: str, conversation: str = "") -> Verification:
         background = f"\n\nRECENT CONVERSATION:\n{conversation}" if conversation else ""
@@ -71,6 +73,7 @@ class Verifier:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self._model,
+                    reasoning_effort=self._effort,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {

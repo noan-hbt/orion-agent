@@ -47,7 +47,12 @@ def memory_batcher(app: App) -> MemoryBatcher:
     return MemoryBatcher(
         app.journal,
         app.memory,
-        MemoryExtractor(app.provider, app.memory, app.config.agent.extractor_model),
+        MemoryExtractor(
+            app.provider,
+            app.memory,
+            app.config.agent.extractor_model,
+            app.config.effort("memory"),
+        ),
         OWNER_THREAD,
         app.config.agent.timezone,
         idle=timedelta(minutes=memory.extract_idle_minutes),
@@ -98,7 +103,9 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
                 verifier=initiative.verifier,
             ),
             memory=app.memory.store,
-            verifier=Verifier(app.provider, app.config.agent.verifier_model),
+            verifier=Verifier(
+                app.provider, app.config.agent.verifier_model, app.config.effort("verifier")
+            ),
             reports=daemon.reports,
             caller=daemon.caller,
             alerts=daemon.alerts,

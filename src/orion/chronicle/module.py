@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.config import STRONG_MODEL
+from orion.config import STRONG_MODEL, Effort
 from orion.context.recent import conversation_since
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import Timestamp
@@ -215,6 +215,7 @@ class Chronicle:
         timezone: str,
         library: Library | None = None,
         clock: Callable[[], datetime] | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._provider = provider
@@ -222,6 +223,7 @@ class Chronicle:
         self.library = library
         self.settings = settings
         self.model = settings.model or STRONG_MODEL
+        self.effort: Effort | None = effort
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = ChronicleState()
@@ -259,6 +261,7 @@ class Chronicle:
                 response = await self._provider.complete(
                     ModelRequest(
                         model=self.model,
+                        reasoning_effort=self.effort,
                         messages=[
                             {"role": "system", "content": NOTICE_PROMPT},
                             {
@@ -321,6 +324,7 @@ class Chronicle:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self.model,
+                    reasoning_effort=self.effort,
                     messages=[
                         {"role": "system", "content": PROMPT},
                         {"role": "user", "content": "\n\n".join(parts)},
@@ -535,6 +539,7 @@ class ChronicleModule(Module):
             plate.memory,
             settings.model_copy(update={"model": model}),
             self.config.agent.timezone,
+            effort=self.config.effort("chronicle"),
         )
         await self.chronicle.sync()
         return chronicle_tools(self.chronicle)

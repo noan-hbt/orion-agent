@@ -29,6 +29,7 @@ class AdaptationModule(Module):
                 plate.provider,
                 plate.memory,
                 self.config.agent.reflection_model or self.config.agent.extractor_model,
+                self.config.effort("reflection"),
             ),
             AdaptationSettings(
                 timezone=self.config.agent.timezone,

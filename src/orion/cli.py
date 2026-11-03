@@ -72,7 +72,7 @@ def _provider(config: OrionConfig) -> Router | None:
             stall=cc.stall_seconds,
         )
     agent = config.agent
-    chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}
+    chains = {m: [f for f in agent.fallback_models if f != m] for m in config.named_models()}
     try:
         return Router(providers, next(iter(providers)), chains)
     except ValueError as exc:
@@ -876,7 +876,7 @@ async def _doctor(config: OrionConfig) -> int:
         from orion.providers.claude_code import is_model_name
 
         prefix = "claude-code:"
-        for spec in config.agent.models():
+        for spec in config.named_models():
             if spec.startswith(prefix) and not is_model_name(spec.removeprefix(prefix)):
                 print(f"claude:     {spec} is not a model name (opus, sonnet, claude-opus-5-5)")
     from orion.providers.base import on_plan
@@ -1072,6 +1072,7 @@ def main(argv: list[str] | None = None) -> int:
     missed = sub.add_parser("misses", help="What went wrong for real, as the evening pass noted it")
     missed.add_argument("--case", type=int, help="Write miss N as an evaluation case")
     sub.add_parser("week", help="The week: turns stopped short, tool errors, corrections, cost")
+    sub.add_parser("models", help="Which model does what, and how long it thinks (D233)")
     contacts = sub.add_parser("contacts", help="His address book")
     contacts_sub = contacts.add_subparsers(dest="contacts_command", required=True)
     contacts_import = contacts_sub.add_parser("import", help="Import his phone's .vcf export")
@@ -1220,6 +1221,11 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_misses(config, args.case))
     if args.command == "week":
         return asyncio.run(_week(config))
+    if args.command == "models":
+        from orion.config import models_view
+
+        print(models_view(config))
+        return 0
     if args.command == "contacts":
         vcf = Path(args.file).read_text(encoding="utf-8", errors="replace")
         return asyncio.run(_contacts_import(config, vcf))

@@ -40,6 +40,7 @@ import structlog
 from pydantic import Field
 
 from orion.cognition.loop import StopReason
+from orion.config import Effort
 from orion.context.recent import conversation_since
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -306,11 +307,13 @@ class Watch:
         model: str,
         timezone: str,
         clock: Callable[[], datetime] | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._memory = memory
         self.settings = settings
         self.model = model
+        self.effort: Effort | None = effort
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = WatchState()
@@ -380,6 +383,7 @@ class Watch:
             Trust.SYSTEM,
             now,
             model=self.model,
+            effort=self.effort,
             max_cost_usd=self.settings.budget_usd,
         )
         log.info("watch.worked", slot=slot, steps=turn.steps, cost=turn.usage.cost_usd)
@@ -561,6 +565,7 @@ class WatchModule(Module):
             settings,
             settings.model or self.config.agent.strong_model,
             self.config.agent.timezone,
+            effort=self.config.effort("watch"),
         )
         await self.watch.sync()
         return []

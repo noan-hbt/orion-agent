@@ -352,8 +352,11 @@ async def build_app(
             ),
             agent=config.agent,
             memory=memory,
-            extractor=MemoryExtractor(provider, memory, config.agent.extractor_model),
+            extractor=MemoryExtractor(
+                provider, memory, config.agent.extractor_model, config.effort("memory")
+            ),
             summary_model=config.agent.summary_model or config.agent.extractor_model,
+            summary_effort=config.effort("summary"),
         )
         await orion.start()
         await plate.timers.sync()

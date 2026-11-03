@@ -22,7 +22,7 @@ from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
-    from orion.config import OrionConfig
+    from orion.config import Effort, OrionConfig
 
 log = structlog.get_logger(__name__)
 
@@ -42,9 +42,19 @@ class TaskSettings(ModuleSettings):
 class TaskWork:
     """Runs each task pass after pass, and hands what they write to Orion as alerts."""
 
-    def __init__(self, tasks: Tasks, orion: Orion, clock: Callable[[], datetime]) -> None:
+    def __init__(
+        self,
+        tasks: Tasks,
+        orion: Orion,
+        clock: Callable[[], datetime],
+        model: str | None = None,
+        effort: Effort | None = None,
+    ) -> None:
         self._tasks = tasks
         self._orion = orion
+        self._model = model
+        """`[models] tasks` (D233); None: the conversation's."""
+        self._effort: Effort | None = effort
         self._clock = clock
         self._woken = asyncio.Event()
         self._running: dict[str, asyncio.Task[None]] = {}
@@ -99,7 +109,14 @@ class TaskWork:
 
         read = len(task.said)
         turn = await self._orion.handle_initiative(
-            task.thread, task.brief_for_pass(now), "tâche de fond", task.trust, now, stopped
+            task.thread,
+            task.brief_for_pass(now),
+            "tâche de fond",
+            task.trust,
+            now,
+            stopped,
+            model=self._model,
+            effort=self._effort,
         )
         current = await self._tasks.get(task.id)
         if current is None:
@@ -350,6 +367,12 @@ class TasksModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.tasks is None:  # pragma: no cover - assemble always runs first
             return
-        work = TaskWork(self.tasks, daemon.orion, self._clock)
+        work = TaskWork(
+            self.tasks,
+            daemon.orion,
+            self._clock,
+            self.config.models.tasks.model,
+            self.config.effort("tasks"),
+        )
         daemon.alerts.append(work)
         daemon.add_service("tasks.work", work.run)

@@ -38,7 +38,7 @@ from orion.cognition.loop import (
     execute_call,
     run_agent,
 )
-from orion.config import AgentConfig
+from orion.config import AgentConfig, Effort
 from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
 from orion.context.summary import SUMMARY_CHARS, previous, sides, summarize, summary_block
@@ -213,10 +213,12 @@ class Orion:
         snapshot_chars: int = 2400,
         recall_limit: int = 6,
         summary_model: str | None = None,
+        summary_effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._summary_model = summary_model
         """Summarizes what a rebase drops (None: dropped turns are left to memory alone)."""
+        self._summary_effort: Effort | None = summary_effort
         self._memory = memory
         self._extractor = extractor
         self._snapshot_chars = snapshot_chars
@@ -313,6 +315,7 @@ class Orion:
         now: datetime | None = None,
         halted: Halted | None = None,
         model: str | None = None,
+        effort: Effort | None = None,
         max_cost_usd: float | None = None,
         max_steps: int | None = None,
         max_tool_calls: int | None = None,
@@ -320,8 +323,9 @@ class Orion:
         """Orion speaks first: a notice from the initiative engine becomes a turn in the owner's
         thread, so the owner's answer has the context. The reply may be `SILENCE` (nothing worth
         sending), which callers must not deliver. `halted` stops work called off meanwhile.
-        `model` and the limits replace the agent's for this turn (Orion's night, D117): a
-        thread that always passes the same model keeps its prompt cache."""
+        `model`, `effort` and the limits replace the agent's for this turn (Orion's night,
+        D117; `[models]`, D233): a thread that always passes the same model keeps its prompt
+        cache."""
         body = _initiative(notice, why)
         waiting = self.owner_waiting
         if thread_id == OWNER_THREAD and waiting is not None:
@@ -350,6 +354,7 @@ class Orion:
             owner_text="",
             halted=halted,
             model=model,
+            effort=effort,
             max_cost_usd=max_cost_usd,
             max_steps=max_steps,
             max_tool_calls=max_tool_calls,
@@ -506,6 +511,7 @@ class Orion:
         asking: str = "",
         halted: Halted | None = None,
         model: str | None = None,
+        effort: Effort | None = None,
         max_cost_usd: float | None = None,
         max_steps: int | None = None,
         max_tool_calls: int | None = None,
@@ -528,6 +534,7 @@ class Orion:
                 asking,
                 halted,
                 model=model,
+                effort=effort,
                 max_cost_usd=max_cost_usd,
                 max_steps=max_steps,
                 max_tool_calls=max_tool_calls,
@@ -552,6 +559,7 @@ class Orion:
         halted: Halted | None = None,
         *,
         model: str | None = None,
+        effort: Effort | None = None,
         max_cost_usd: float | None = None,
         max_steps: int | None = None,
         max_tool_calls: int | None = None,
@@ -699,7 +707,7 @@ class Orion:
             correlation_id=correlation_id,
             origin_event_id=received.id,
             timezone=self._agent.timezone,
-            reasoning_effort=self._agent.reasoning_effort,
+            reasoning_effort=effort or self._agent.reasoning_effort,
             asking=asking,
             halted=halted,
             must_answer=kind == "message.received",
@@ -961,6 +969,7 @@ class Orion:
             dropped,
             f"orion:{thread.id}:summary",
             before=previous(thread.window()),
+            effort=self._summary_effort,
         )
 
     def _prunable(self, thread: Thread, when: datetime) -> list[int]:

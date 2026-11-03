@@ -38,6 +38,17 @@ image_model = "google/gemini-3.1-flash-image"       # makes the pictures you ask
 # [modules.delegation] model, [modules.watch] model. [memory] embedding_model is the
 # embeddings model.
 
+# [models]: one line per role, which model and how long it thinks (D233); either is enough.
+# `orion models` shows what each role really uses, and where it comes from. A role's model set
+# here and in its old place (agent.*_model, [modules.<name>] model) must agree.
+# [models]
+# conversation = { effort = "medium" }                        # your conversation, initiative
+# tasks        = { model = "deepseek/deepseek-v4.1-flash" }   # background tasks and missions
+# memory       = { effort = "low" }
+# thinking     = { model = "anthropic/claude-opus-5.5", effort = "high" }
+# Roles: conversation, tasks, web_search, memory, summary, reflection, portrait, verifier,
+# vision, expert, thinking, curiosity, watch, chronicle.
+
 # Orion's watch (D150): a few times a day he steps back and looks at your life as a whole
 # (what is going on, your agenda, what falls due, what you said), prepares what he can, and
 # tells you only what is worth it. On by default. A mail he judged worth telling you, or a

@@ -10,7 +10,7 @@ import os
 import tomllib
 from datetime import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
@@ -524,6 +524,122 @@ class BudgetConfig(BaseModel):
     )
 
 
+Effort = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+
+
+class RoleModel(BaseModel):
+    """One line of `[models]`: which model does this work, and how long it thinks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str | None = Field(default=None, description="none: the role's default")
+    effort: Effort | None = Field(
+        default=None, description="How long it thinks; none: the role's default"
+    )
+
+
+ROLES: dict[str, str] = {
+    "conversation": "te répond, et parle le premier",
+    "tasks": "les tâches et les missions de fond",
+    "web_search": "les recherches web",
+    "memory": "retient ce que vous vous dites",
+    "summary": "résume ce qu'une conversation laisse derrière elle",
+    "reflection": "apprend tes habitudes, range la mémoire la nuit",
+    "portrait": "ton portrait, la nuit",
+    "verifier": "relit les messages qu'il t'envoie de lui-même",
+    "vision": "regarde tes photos, lit les documents",
+    "expert": "le modèle qu'il consulte",
+    "thinking": "sa réflexion de nuit",
+    "curiosity": "sa curiosité",
+    "watch": "sa veille",
+    "chronicle": "la chronique de la semaine",
+}
+"""Every role of `[models]`, with what it does (shown by `orion models`)."""
+
+MODEL_HOMES: dict[str, tuple[str, ...]] = {
+    "conversation": ("agent", "model"),
+    "memory": ("agent", "extractor_model"),
+    "summary": ("agent", "summary_model"),
+    "reflection": ("agent", "reflection_model"),
+    "verifier": ("agent", "verifier_model"),
+    "vision": ("agent", "vision_model"),
+    **{
+        m: ("modules", m, "model")
+        for m in ("expert", "thinking", "curiosity", "watch", "chronicle")
+    },
+}
+"""Where a role's model was always set: `[models]` writes it there, so every reader keeps
+reading the one place (D233). The roles absent here are read from `[models]` itself."""
+EFFORT_HOMES: dict[str, tuple[str, ...]] = {"conversation": ("agent", "reasoning_effort")}
+LOOP_ROLES = ("conversation", "tasks", "thinking", "watch")
+"""Roles that are Orion's own turns: their effort defaults to the conversation's."""
+
+
+class ModelsConfig(BaseModel):
+    """`[models]`: one line per kind of work, which model and how long it thinks (D233)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    conversation: RoleModel = RoleModel()
+    tasks: RoleModel = RoleModel()
+    web_search: RoleModel = RoleModel()
+    memory: RoleModel = RoleModel()
+    summary: RoleModel = RoleModel()
+    reflection: RoleModel = RoleModel()
+    portrait: RoleModel = RoleModel()
+    verifier: RoleModel = RoleModel()
+    vision: RoleModel = RoleModel()
+    expert: RoleModel = RoleModel()
+    thinking: RoleModel = RoleModel()
+    curiosity: RoleModel = RoleModel()
+    watch: RoleModel = RoleModel()
+    chronicle: RoleModel = RoleModel()
+
+    def line(self, role: str) -> RoleModel:
+        return cast(RoleModel, getattr(self, role))
+
+
+class Choice(BaseModel):
+    """What a role uses, and where each half comes from (`OrionConfig.choice`)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    model: str
+    model_from: str
+    effort: Effort | None
+    effort_from: str
+
+
+def _models_table(data: dict[str, Any]) -> dict[str, Any]:
+    """The raw config with each `[models]` model (and the conversation's effort) also written
+    where it was always set. Raises ValueError when both places say different things."""
+    table = data.get("models")
+    if not isinstance(table, dict):
+        return data
+    data = dict(data)
+    for role, line in cast(dict[str, Any], table).items():
+        if not isinstance(line, dict):
+            continue  # the model reports it
+        for key, home in (("model", MODEL_HOMES.get(role)), ("effort", EFFORT_HOMES.get(role))):
+            if home is None or key not in line:
+                continue
+            value = cast(dict[str, Any], line)[key]
+            section = data
+            for part in home[:-1]:
+                inner = section.get(part)
+                inner = dict(cast(dict[str, Any], inner)) if isinstance(inner, dict) else {}
+                section[part] = inner
+                section = inner
+            said = section.get(home[-1])
+            if said is not None and said != value:
+                raise ValueError(
+                    f"models.{role}.{key} = {value!r} but {'.'.join(home)} = {said!r}: "
+                    "keep only one of them"
+                )
+            section[home[-1]] = value
+    return data
+
+
 class OrionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -535,6 +651,7 @@ class OrionConfig(BaseModel):
     data_dir: Path = Path("data")
     logging: LoggingConfig = LoggingConfig()
     agent: AgentConfig = AgentConfig()
+    models: ModelsConfig = ModelsConfig()
     providers: ProvidersConfig = ProvidersConfig()
     memory: MemoryConfig = MemoryConfig()
     channels: ChannelsConfig = ChannelsConfig()
@@ -552,6 +669,69 @@ class OrionConfig(BaseModel):
 
     source: Path | None = Field(default=None, exclude=True)
     """The orion.toml this was read from (None: defaults); Orion edits it to configure itself."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _models_in_place(cls, data: Any) -> Any:
+        return _models_table(cast(dict[str, Any], data)) if isinstance(data, dict) else data
+
+    def choice(self, role: str) -> Choice:
+        """The model and effort `role` (one of `ROLES`) uses, as the code resolves them."""
+        agent, line = self.agent, self.models.line(role)
+
+        def told(home: str) -> str:
+            return f"models.{role}" if line.model is not None else home
+
+        model: str
+        if role == "conversation":
+            model, model_from = agent.model, told("agent.model")
+        elif role in ("tasks", "web_search", "portrait"):
+            model, model_from = line.model or agent.model, told("conversation")
+        elif role == "memory":
+            model, model_from = agent.extractor_model, told("agent.extractor_model")
+        elif role in ("summary", "reflection"):
+            own: str | None = getattr(agent, f"{role}_model")
+            model = own or agent.extractor_model
+            model_from = told(f"agent.{role}_model" if own else "memory")
+        elif role == "verifier":
+            model, model_from = agent.verifier_model, told("agent.verifier_model")
+        elif role == "vision":
+            photos = self.modules.get("photos", {}).get("model")
+            if photos:  # the photos module's own model comes first (photos/module.py)
+                model, model_from = str(photos), "modules.photos.model"
+            else:
+                model, model_from = agent.vision_model, told("agent.vision_model")
+        else:
+            given = self.modules.get(role, {}).get("model")
+            model = str(given) if given else agent.strong_model
+            model_from = told(f"modules.{role}.model" if given else "agent.strong_model")
+        effort, effort_from = self._effort(role, line, model)
+        return Choice(model=model, model_from=model_from, effort=effort, effort_from=effort_from)
+
+    def _effort(self, role: str, line: RoleModel, model: str) -> tuple[Effort | None, str]:
+        if line.effort is not None:
+            return line.effort, f"models.{role}"
+        if role in LOOP_ROLES and self.agent.reasoning_effort is not None:
+            return self.agent.reasoning_effort, (
+                "agent.reasoning_effort" if role == "conversation" else "conversation"
+            )
+        provider = model.partition(":")[0] if ":" in model else ""
+        if provider == "chatgpt":
+            return self.providers.chatgpt.reasoning_effort, "providers.chatgpt"
+        if provider == "claude-code":
+            return self.providers.claude_code.reasoning_effort, "providers.claude_code"
+        return None, "défaut du modèle"
+
+    def effort(self, role: str) -> Effort | None:
+        """What `role` asks for in each request: None lets the provider's default apply."""
+        line = self.models.line(role)
+        if line.effort is not None:
+            return line.effort
+        return self.agent.reasoning_effort if role in LOOP_ROLES else None
+
+    def named_models(self) -> set[str]:
+        """Every model the config names for a role."""
+        return self.agent.models() | {self.choice(role).model for role in ROLES}
 
     @property
     def journal_path(self) -> Path:
@@ -580,6 +760,35 @@ class OrionConfig(BaseModel):
     def workspaces_path(self) -> Path:
         """One folder per delegated job."""
         return self.data_dir / "workspaces"
+
+
+def _origin(where: str) -> str:
+    return f"comme {where}" if where in ROLES else where
+
+
+def models_view(config: OrionConfig) -> str:
+    """Which model each role uses and how long it thinks, with where each comes from (D233)."""
+    rows = [("rôle", "modèle", "raisonnement", "fait quoi")]
+    origins: list[str] = []
+    for role, what in ROLES.items():
+        chosen = config.choice(role)
+        rows.append((role, chosen.model or "aucun", chosen.effort or "celui du modèle", what))
+        origins.append(f"{_origin(chosen.model_from)} · {_origin(chosen.effort_from)}")
+    widths = [max(len(row[i]) for row in rows) for i in range(3)]
+    lines = [
+        "  ".join(cell.ljust(width) for cell, width in zip(row[:3], widths, strict=True))
+        + f"  {row[3]}"
+        for row in rows
+    ]
+    lines[1:] = [
+        f"{line}\n{' ' * (widths[0] + 2)}↳ {origin}"
+        for line, origin in zip(lines[1:], origins, strict=True)
+    ]
+    lines.append(
+        '\nPour changer un rôle, dans orion.toml : [models] <rôle> = { model = "…", effort = '
+        '"low" | "medium" | "high" | "xhigh" } (l\'un ou l\'autre suffit).'
+    )
+    return "\n".join(lines)
 
 
 def load_config(path: Path | None = None) -> OrionConfig:

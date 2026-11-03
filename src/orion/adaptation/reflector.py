@@ -21,6 +21,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from orion.adaptation.signals import Signal
+from orion.config import Effort
 from orion.core.events import Trust
 from orion.memory.model import RuleBasis, RuleScope
 from orion.memory.render import format_rule
@@ -109,10 +110,17 @@ def render_signals(signals: list[Signal]) -> str:
 
 
 class Reflector:
-    def __init__(self, provider: ModelProvider, memory: MemoryService, model: str) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        memory: MemoryService,
+        model: str,
+        effort: Effort | None = None,
+    ) -> None:
         self._provider = provider
         self._memory = memory
         self._model = model
+        self._effort: Effort | None = effort
 
     async def reflect(self, signals: list[Signal]) -> ReflectionReport:
         rules = await self._memory.store.rules()
@@ -130,6 +138,7 @@ class Reflector:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self._model,
+                    reasoning_effort=self._effort,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user},

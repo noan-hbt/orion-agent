@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 
+from orion.config import Effort
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.hlc import Timestamp
 from orion.core.ids import new_id
@@ -112,6 +113,7 @@ async def write_portrait(
     provider: ModelProvider,
     model: str,
     now: datetime,
+    effort: Effort | None = None,
 ) -> str | None:
     """Write tonight's portrait from what is trusted; None when there is nothing to go on."""
     store = memory.store
@@ -149,6 +151,7 @@ async def write_portrait(
     response = await provider.complete(
         ModelRequest(
             model=model,
+            reasoning_effort=effort,
             messages=[
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": "\n".join(lines)},

@@ -17,6 +17,7 @@ from typing import Annotated, Literal, cast
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
+from orion.config import Effort
 from orion.core.events import Trust
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
@@ -189,10 +190,17 @@ class ExtractionReport(BaseModel):
 
 
 class MemoryExtractor:
-    def __init__(self, provider: ModelProvider, memory: MemoryService, model: str) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        memory: MemoryService,
+        model: str,
+        effort: Effort | None = None,
+    ) -> None:
         self._provider = provider
         self._memory = memory
         self._model = model
+        self._effort: Effort | None = effort
 
     async def consolidate(
         self,
@@ -243,6 +251,7 @@ class MemoryExtractor:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self._model,
+                    reasoning_effort=self._effort,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user},

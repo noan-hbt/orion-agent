@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from orion.config import Effort
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -124,9 +125,13 @@ class Consolidator:
         timezone: str,
         clock: Callable[[], datetime] | None = None,
         portrait_model: str | None = None,
+        effort: Effort | None = None,
+        portrait_effort: Effort | None = None,
     ) -> None:
         self._portrait_model = portrait_model
         """Writes his portrait once memory is tidied (D144); None: no portrait."""
+        self._effort: Effort | None = effort
+        self._portrait_effort: Effort | None = portrait_effort
         self._journal = journal
         self._memory = memory
         self._provider = provider
@@ -164,7 +169,12 @@ class Consolidator:
         if self._portrait_model is not None:
             try:
                 await write_portrait(
-                    self._journal, self._memory, self._provider, self._portrait_model, now
+                    self._journal,
+                    self._memory,
+                    self._provider,
+                    self._portrait_model,
+                    now,
+                    effort=self._portrait_effort,
                 )
             except ProviderError:  # yesterday's portrait stays; tomorrow night tries again
                 log.warning("memory.portrait_failed", exc_info=True)
@@ -207,6 +217,7 @@ class Consolidator:
         response = await self._provider.complete(
             ModelRequest(
                 model=self._model,
+                reasoning_effort=self._effort,
                 messages=[
                     {"role": "system", "content": SORT_PROMPT.format(today=now.date())},
                     {"role": "user", "content": f"FACTS:\n{listed}"},
@@ -279,7 +290,9 @@ class NightModule(Module):
             self.config.agent.reflection_model or self.config.agent.extractor_model,
             settings,
             self.config.agent.timezone,
-            portrait_model=self.config.agent.model,
+            portrait_model=self.config.choice("portrait").model,
+            effort=self.config.effort("reflection"),
+            portrait_effort=self.config.effort("portrait"),
         )
         await consolidator.start()
         self.consolidator = consolidator

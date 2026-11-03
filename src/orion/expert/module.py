@@ -24,7 +24,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.loop import SWITCH_COST, SWITCH_MODEL
-from orion.config import STRONG_MODEL
+from orion.config import STRONG_MODEL, Effort
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -107,6 +107,7 @@ class Expert:
         settings: ExpertSettings,
         timezone: str = "Europe/Paris",
         clock: Callable[[], datetime] | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._provider = provider
@@ -115,6 +116,7 @@ class Expert:
         self._clock = clock or (lambda: datetime.now(zone))
         """The owner's day: the daily allowance resets at his midnight, not the server's."""
         self.model = settings.model or STRONG_MODEL
+        self.effort: Effort | None = effort
         self._day = _Day()
         self._runner = ProjectionRunner(journal, [self._day])
 
@@ -131,6 +133,7 @@ class Expert:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self.model,
+                    reasoning_effort=self.effort,
                     messages=[
                         {"role": "system", "content": ADVISOR},
                         {"role": "user", "content": content},
@@ -246,6 +249,7 @@ class ExpertModule(Module):
                 plate.provider,
                 settings.model_copy(update={"model": model}),
                 self.config.agent.timezone,
+                effort=self.config.effort("expert"),
             )
         )
 

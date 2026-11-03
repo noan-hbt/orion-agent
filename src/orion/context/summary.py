@@ -22,6 +22,7 @@ from typing import Any
 
 import structlog
 
+from orion.config import Effort
 from orion.providers.base import Message, ModelProvider, ModelRequest, ProviderError, spoken
 
 log = structlog.get_logger(__name__)
@@ -96,6 +97,7 @@ async def summarize(
     messages: list[Message],
     session_id: str,
     before: str | None = None,
+    effort: Effort | None = None,
 ) -> str | None:
     """Where the conversation stands once `messages` leave the window, merged with `before`
     (the latest summary), or None if there is nothing or it failed."""
@@ -106,6 +108,7 @@ async def summarize(
     parts.append(f"<echanges>\n{transcript}\n</echanges>")
     request = ModelRequest(
         model=model,
+        reasoning_effort=effort,
         messages=[
             {"role": "system", "content": PROMPT},
             {"role": "user", "content": "\n\n".join(parts)},

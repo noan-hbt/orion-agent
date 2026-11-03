@@ -5345,3 +5345,36 @@ paramètre ». Il veut que les sources extérieures ne restreignent plus la sess
 Un `orion.toml` qui écrit `approvals = "equilibre"` le garde : passer à `"libre"` ou retirer la
 ligne.
 
+
+## D233 — `[models]` : quel modèle fait quoi, et combien il réfléchit
+
+*03/11/2026 · acceptée · complète D62, D114, D147*
+
+Le 03/11, après le passage à `gpt-6.1-terra`, le propriétaire ne savait pas lequel de ses trois
+`reasoning_effort` était effectif : `[agent]` réglait les tours d'Orion, `[providers.chatgpt]`
+tout le reste, sans qu'il le voie (la mémoire tournait en `xhigh`, la conversation en
+`medium`). Les modèles, eux, se réglaient à dix endroits (`agent.*_model`,
+`[modules.<nom>] model`), et les tâches de fond n'avaient pas le leur. Il veut plus de
+contrôle.
+
+- **`[models]`, une ligne par rôle** : `conversation`, `tasks` (tâches et missions),
+  `web_search`, `memory`, `summary`, `reflection`, `portrait`, `verifier`, `vision`, `expert`,
+  `thinking`, `curiosity`, `watch`, `chronicle`, chacun `{ model = "…", effort = "…" }`, l'un
+  ou l'autre suffit (`ModelsConfig`, `ROLES`).
+- **Un seul endroit compte** : le modèle d'un rôle qui avait déjà sa place y est écrit au
+  chargement (`MODEL_HOMES` : `agent.extractor_model`, `[modules.thinking] model`…), et l'effort
+  de la conversation dans `agent.reasoning_effort`. Les deux qui disent autre chose : la config
+  est refusée (« keep only one of them »). Les anciens réglages restent valables.
+- **L'effort va jusqu'à chaque appel** : chaque rôle met le sien dans sa requête
+  (`OrionConfig.effort`). Sans effort, les tours d'Orion (`tasks`, `thinking`, `watch`)
+  réfléchissent comme la conversation, comme avant ; le reste prend le défaut du fournisseur
+  (`providers.*.reasoning_effort`), comme avant.
+- **`tasks`, `web_search` et `portrait` suivent la conversation** sans réglage : D114 tient
+  par défaut. Leur donner un autre modèle est son choix.
+- **`orion models`** montre pour chaque rôle le modèle et l'effort effectifs, et d'où vient
+  chacun (`models_view`). Orion le voit aussi dans `configure_show`, et `models` est une
+  section qu'il peut changer par message, comme `agent`.
+
+Ne sont pas des rôles : l'image, la voix, la transcription, les embeddings (des outils, pas des
+esprits, D114) et le secrétaire.
+

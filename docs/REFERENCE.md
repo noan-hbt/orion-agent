@@ -121,6 +121,7 @@ l'utilisateur du gardien (ou du cœur avec `--core`).
 | `contain SOURCE [--apply]` | Met en quarantaine une source et ce qu'elle a touché (D38) |
 | `misses [--case N]` | Ses ratés ; `--case` en fait un cas d'évaluation |
 | `week` | Sa semaine : tours interrompus, erreurs d'outils, corrections, coût |
+| `models` | Quel modèle fait quoi, combien il réfléchit, et d'où vient chaque réglage (D233) |
 | `simulate [--days 7]` | Ce qu'il enverrait, sans rien envoyer |
 | `reminders list \| cancel ID` | Les rappels |
 | `contacts import FICHIER.vcf` | Importer un carnet d'adresses |
@@ -150,6 +151,7 @@ coffre du gardien quand ils viennent de l'app.
 | Section | Contenu |
 |---|---|
 | `[agent]` | Modèles (`model`, `strong_model`, `vision_model`…), accords (`approvals` : `equilibre` ou `prudent`, D85) |
+| `[models]` | Une ligne par rôle (`conversation`, `tasks`, `memory`, `thinking`…) : `model` et `effort` (D233) |
 | `[budget]` | Plafond de dépense par jour et par mois (D79) |
 | `[providers.openrouter]`, `[providers.chatgpt]` | Les fournisseurs |
 | `[channels.telegram]`, `[channels.imessage]`, `[voice]` | Les canaux |
