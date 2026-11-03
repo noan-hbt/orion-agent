@@ -95,7 +95,12 @@ class ClaudeCodeConfig(BaseModel):
 
     enabled: bool = False
     binary: str = Field(default="claude", description="The Claude Code command")
-    timeout_seconds: float = Field(default=300.0, gt=0)
+    timeout_seconds: float = Field(default=300.0, gt=0, description="The longest a call may take")
+    stall_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description="A call silent this long is given up and the fallback model answers",
+    )
     reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = Field(
         default="low",
         description="How long the models think when a call asks nothing; none: Claude Code's own",

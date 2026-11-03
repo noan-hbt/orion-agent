@@ -65,6 +65,7 @@ def _provider(config: OrionConfig) -> Router | None:
             cc.binary,
             cc.timeout_seconds,
             default_effort=cc.reasoning_effort,
+            stall=cc.stall_seconds,
         )
     agent = config.agent
     chains = {m: [f for f in agent.fallback_models if f != m] for m in agent.models()}

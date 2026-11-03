@@ -5195,3 +5195,28 @@ Le 03/11, deux réponses que le propriétaire n'a jamais eues :
   `<invoke:tool_call name="web_read">{…}</invoke>`, la forme de ses propres outils, au lieu de
   `<tool_call>`. Rien ne l'a lu comme un appel : la balise est partie telle quelle comme réponse.
   `read_answer` lit aussi `<invoke>` et un préfixe `x:` devant le nom de la balise.
+
+## D227 — Un appel à Claude qui se tait est lâché vite
+
+*03/11/2026 · acceptée · complète D100, D208*
+
+Le 03/11 vers 15:00, juste après le passage à Sonnet, l'app affiche « écrit… » pendant cinq
+minutes : un appel à `claude-code:sonnet` ne répond pas, et Orion attend les 300 s de
+`timeout_seconds` avant de passer à son modèle de secours. Une étape prend d'habitude 5 à 20 s.
+Au même moment, une évaluation lancée depuis une autre machine bute pareil : un ralentissement
+de Sonnet, pas du serveur.
+
+- **Claude Code écrit sa réponse au fur et à mesure** (`--include-partial-messages`) et Orion
+  lit sa sortie ligne par ligne. Un appel qui ne produit rien pendant `stall_seconds` (45 s par
+  défaut) est lâché et le modèle de secours répond (`claude_code.stalled`). Un appel lent qui
+  avance continue jusqu'à `timeout_seconds`, qui reste le plafond.
+- **Ce qui n'est pas une réponse en cours ne compte pas** : quand l'API est surchargée ou ne
+  répond pas, Claude Code réessaie lui-même pendant des minutes et le dit (`api_retry`, et des
+  `status` « requesting »). Ces lignes faisaient croire qu'il travaillait ; elles ne repoussent
+  plus le délai, et chaque nouvelle tentative est notée (`claude_code.api_retry`).
+- Les fragments ne sont pas gardés : le résultat final redit tout. Une ligne de stdout peut
+  dépasser les 64 Kio par défaut d'asyncio (une réponse entière et son usage) : la limite passe
+  à 64 Mio.
+
+À surveiller : `claude_code.stalled` sur une réponse qui aurait abouti (une recherche web de
+Claude qui dure plus de 45 s sans rien écrire).

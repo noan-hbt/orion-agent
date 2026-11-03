@@ -245,6 +245,38 @@ async def test_a_cancelled_turn_leaves_no_claude_running(tmp_path: Path) -> None
         os.kill(int(pid_file.read_text()), 0)
 
 
+async def test_a_slow_answer_goes_on_and_a_silent_one_is_given_up(tmp_path: Path) -> None:
+    """03/11 14:00: a Sonnet call that never answered held the owner 300 s before the fallback."""
+    import time
+
+    def claude(name: str, body: str) -> str:
+        script = tmp_path / name
+        script.write_text(
+            f"#!{sys.executable}\nimport json, sys, time\nsys.stdin.read()\n"
+            'def say(e):\n    print(json.dumps(e, separators=(",", ":")), flush=True)\n' + body
+        )
+        script.chmod(0o755)
+        return str(script)
+
+    result: dict[str, Any] = {"type": "result", "subtype": "success", "result": "ok", "usage": {}}
+    slow = claude(
+        "slow",
+        "for _ in range(6):\n    say({'type': 'stream_event'}); time.sleep(0.2)\n"
+        f"say({result!r})\n",
+    )
+    response = await ClaudeCodeProvider(tmp_path / "w", slow, stall=0.6).complete(request())
+    assert response.text == "ok"  # 1.2 s in all, never 0.6 s silent
+
+    # Claude Code retrying the API on its own says so, and that is no answer under way.
+    retry = {"type": "system", "subtype": "api_retry", "attempt": 1, "error_status": 529}
+    stuck = claude("stuck", f"for _ in range(150):\n    say({retry!r}); time.sleep(0.2)\n")
+    started = time.monotonic()
+    with pytest.raises(ProviderError) as caught:
+        await ClaudeCodeProvider(tmp_path / "w", stuck, stall=0.6).complete(request())
+    assert caught.value.retryable  # the fallback model answers
+    assert time.monotonic() - started < 5
+
+
 def test_the_plans_windows_come_with_the_answer(tmp_path: Path) -> None:
     lines: list[dict[str, Any]] = [
         {"type": "system", "subtype": "init"},
