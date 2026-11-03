@@ -55,8 +55,10 @@ def provider() -> ScriptedProvider:
     return ScriptedProvider()
 
 
-@pytest.fixture
-async def inbox(journal: SqliteJournal, provider: ScriptedProvider) -> AsyncIterator[OwnerInbox]:
+@asynccontextmanager
+async def running(
+    journal: SqliteJournal, provider: ScriptedProvider, split: bool = False
+) -> AsyncGenerator[OwnerInbox]:
     orion = Orion(
         journal=journal,
         provider=provider,
@@ -65,12 +67,18 @@ async def inbox(journal: SqliteJournal, provider: ScriptedProvider) -> AsyncIter
         compiler=ContextCompiler("C"),
         agent=AgentConfig(),
     )
-    inbox = OwnerInbox(orion, coalesce_seconds=0.05)
+    inbox = OwnerInbox(orion, coalesce_seconds=0.05, split=split, beat_seconds=0.0)
     worker = asyncio.create_task(inbox.run())
     yield inbox
     worker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await worker
+
+
+@pytest.fixture
+async def inbox(journal: SqliteJournal, provider: ScriptedProvider) -> AsyncIterator[OwnerInbox]:
+    async with running(journal, provider) as inbox:
+        yield inbox
 
 
 async def test_bursts_coalesce_per_channel_and_answer_where_they_came_from(
@@ -101,6 +109,20 @@ async def test_an_answer_is_one_message_even_with_an_old_split_marker(
     inbox.submit(Inbound("imessage", ("a",), "c'est quand ?"))
     await until(lambda: len(imessage.sent) == 1)
     assert imessage.sent == ["Jeudi 18 h, c'est bon.\n\nTu y vas avec Léa ?"]
+
+
+async def test_where_the_model_splits_two_things_go_as_two_messages(
+    journal: SqliteJournal, provider: ScriptedProvider
+) -> None:
+    """On the ChatGPT plan, `<suite/>` starts another message, typed again first (D230)."""
+    async with running(journal, provider, split=True) as inbox:
+        imessage = Outlet("imessage")
+        inbox.register(imessage)
+        provider.extend(reply("Jeudi 18 h, c'est bon.<suite/>Tu y vas avec Léa ?"))
+        inbox.submit(Inbound("imessage", ("a",), "c'est quand ?"))
+        await until(lambda: len(imessage.sent) == 2)
+        assert imessage.sent == ["Jeudi 18 h, c'est bon.", "Tu y vas avec Léa ?"]
+        assert imessage.shown == ["c'est quand ?", "c'est quand ?"]
 
 
 async def test_words_beside_a_tool_call_can_be_the_whole_answer(

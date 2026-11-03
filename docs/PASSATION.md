@@ -28,8 +28,8 @@ D84) ; la refonte de fiabilité dans `architecture/05-refonte.md`. La passation 
   un seul `later`, constitution courte, `orion misses` et `orion week`, contacts, flux, colis,
   Home Assistant.
 - **La parole** : un message ne dit que ce qui est neuf, `tell` pour parler en cours de tour
-  (D173), une réponse en un seul message (D214, plus de `<suite/>`), plus de barre de
-  progression (D169).
+  (D173), une réponse en un seul message (D214), sauf sur ChatGPT où `<suite/>` en fait deux
+  (D230), plus de barre de progression (D169).
 - **La nuit** : une seule grande passe sur toute la mémoire, avec ses limites (D174) ; la passe
   du soir voit toutes les sections côte à côte (D176) et relève les ratés (D177).
 - **Le serveur** : mise à jour automatique avec retour arrière (D94), remise à zéro et

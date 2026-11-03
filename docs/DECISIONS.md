@@ -5270,3 +5270,27 @@ trois choses étaient restées en arrière.
 À surveiller : `chatgpt.stalled` avec `started=false` sur un appel qui aurait abouti, et sur le
 serveur l'écart entre l'estimation et les `prompt_tokens` de ChatGPT (le tokenizer de ses modèles
 n'est pas publié ; `o200k_base` est le plus récent connu).
+
+
+## D230 — Sur ChatGPT, de nouveau deux messages pour deux choses
+
+*03/11/2026 · acceptée · complète D163, D214*
+
+D214 avait retiré `<suite/>` pour tous parce que Haiku, sur le forfait Claude, s'en servait pour
+redire ce qu'il venait de dire. Le propriétaire aimait pourtant recevoir la réponse puis, à
+part, la question qui suit ; sur ChatGPT (`gpt-6.1-terra`), il trouve que ça passe bien. Et
+l'imitation des anciennes réponses laissait déjà, à la place de la balise, un paragraphe vide
+au milieu du message.
+
+- **`splits_messages(agent.model)`, vrai sur `chatgpt:` seulement.** La constitution y ajoute,
+  après « Rien de neuf, rien à dire. », la ligne de D163 : deux choses à part, séparées par
+  `<suite/>`, jamais pour couper ni pour redire. Ailleurs elle n'en parle pas. Le message
+  système reste fixe tant qu'Orion tourne (contrat du cache).
+- **`OwnerInbox(split=…)`** coupe alors à chaque `<suite/>`, trois messages au plus, chacun
+  après une pause comme tapé (`messages_of`, `beat`, retrouvés de D163). Sans, la balise reste
+  un saut de paragraphe (D214).
+- L'évaluation `deux_messages_seulement_pour_deux_choses` revient.
+
+À surveiller : des doublons d'un message à l'autre sur ChatGPT. Si Claude ou un autre modèle s'en
+sert bien un jour, c'est `splits_messages` qui change.
+
