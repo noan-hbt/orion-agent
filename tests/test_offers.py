@@ -61,3 +61,9 @@ def test_only_the_chatgpt_plan_is_told_about_tell() -> None:
     assert "`tell`" in constitution([], model="chatgpt:gpt-6-luna")
     assert "`tell`" not in constitution([], model="claude-code:sonnet")
     assert "`tell`" not in constitution([])
+
+
+def test_only_the_chatgpt_plan_may_split_an_answer() -> None:
+    """Haiku used `<suite/>` to say the same thing twice (D214); GPT uses it well (D230)."""
+    assert "<suite/>" in constitution([], model="chatgpt:gpt-6.1-terra")
+    assert "<suite/>" not in constitution([], model="claude-code:haiku")
