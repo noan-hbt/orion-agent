@@ -5296,3 +5296,29 @@ mémoire refuse qu'un contexte WEB retire ce que le propriétaire a dit, même q
 À surveiller : `initiative.compose_failed` ou `compose_incomplete` deux fois de suite sur une
 même tâche, et ce qui fait échouer la rédaction elle-même.
 
+
+## D232 — `libre` : le contenu extérieur ne restreint plus sa conversation
+
+*03/11/2026 · acceptée · complète D26, D85, D90, D168, D200, D231*
+
+D85 (`equilibre`), D168 et D200 avaient chacun allégé la règle de D26, sans la lever : une page
+web ou un rapport de tâche dans la conversation suffisait encore à faire refuser un oubli, un
+remplacement de souvenir, un hook ou une notification, et à faire demander ce qui ne l'aurait pas
+été. Le 03/11, après un rapport de tâche venu du web, le propriétaire : « j'en ai marre de ce
+paramètre ». Il veut que les sources extérieures ne restreignent plus la session.
+
+- **`agent.approvals = "libre"`, le nouveau défaut.** Dans sa conversation (`owner`), le
+  gardien décide comme dans une conversation propre : ce qui est interne passe, ce qui agit sur
+  le monde lui est demandé comme d'habitude (ou fait seul si une autonomie le couvre), même
+  `module_install`. `Guardian.unrestricted`, `ToolContext.unrestricted`.
+- **Les gardes sur la confiance du contexte s'ouvrent aussi** : la mémoire laisse remplacer ou
+  oublier un fait plus sûr (`guarded=False`), un hook se crée et s'allume, ses notifications se
+  changent.
+- **La confiance écrite reste vraie** : un fait retenu après une page web garde la confiance WEB,
+  et ce qui en dépend (la veille, la chronique, le résumé d'un rebase) le lit comme avant.
+- **Ce qui reste gardé** : les conversations des autres (un contact, un autre Orion), les tâches
+  de fond, la nuit et la veille. `equilibre` et `prudent` restent au choix.
+
+Un `orion.toml` qui écrit `approvals = "equilibre"` le garde : passer à `"libre"` ou retirer la
+ligne.
+

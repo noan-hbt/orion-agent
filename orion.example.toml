@@ -21,9 +21,9 @@ prune_idle_minutes = 10      # after a pause, old bulky tool results are shown s
 fresh_idle_minutes = 0       # > 0: after such a pause, only the latest exchanges are carried on,
 fresh_window_tokens = 16000  # within this size, with a summary of the rest (D123); 0: never (D200)
 cold_window_tokens = 40000   # cache expired and window above this: cut, with a summary (D211); 0: never
-approvals = "equilibre"      # web page or mail in the conversation: "equilibre" asks only before
-                             # acting on the world, saying why (D90); "prudent" refuses that, and
-                             # asks before each memory, reminder or voice message (D85)
+approvals = "libre"          # web page or mail in your conversation: "libre" changes nothing (D232);
+                             # "equilibre" asks before acting on the world, saying why (D90);
+                             # "prudent" refuses that, and asks before each memory or reminder (D85)
 extractor_model = "deepseek/deepseek-v4.1-flash"     # background work: memory, reflection
 fallback_models = ["anthropic/claude-haiku-5.5"]     # tried in order if a model call fails
 verifier_model = "anthropic/claude-haiku-5.5"        # checks proactive messages; another family

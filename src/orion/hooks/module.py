@@ -119,7 +119,9 @@ def hook_tool(hooks: Hooks) -> Tool:
 
     def author(ctx: ToolContext) -> str:
         """His words in his conversation: his hook; anything else is Orion's own."""
-        asked = ctx.thread_id == OWNER_THREAD and ctx.context_trust >= Trust.OWNER
+        asked = ctx.thread_id == OWNER_THREAD and (
+            ctx.context_trust >= Trust.OWNER or ctx.unrestricted
+        )
         return "owner" if asked else "orion"
 
     async def triggers(_args: Any, _ctx: ToolContext) -> ToolResult:
@@ -146,6 +148,7 @@ def hook_tool(hooks: Hooks) -> Tool:
                 provenance(ctx),
                 ctx.context_trust,
                 author(ctx),
+                free=ctx.unrestricted,
             )
         except HookError as exc:
             return ToolResult(str(exc), is_error=True)
@@ -174,7 +177,9 @@ def hook_tool(hooks: Hooks) -> Tool:
         if not changes:
             return ToolResult("Rien à changer.", is_error=True)
         try:
-            hook = await hooks.change(args.hook, changes, provenance(ctx), ctx.context_trust)
+            hook = await hooks.change(
+                args.hook, changes, provenance(ctx), ctx.context_trust, free=ctx.unrestricted
+            )
         except HookError as exc:
             return ToolResult(str(exc), is_error=True)
         state = "allumé" if hook.enabled else "en pause"

@@ -122,6 +122,7 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
                 category=args.category,
                 valid_from=args.valid_from,
                 supersedes=args.replaces,
+                guarded=not ctx.unrestricted,
             )
         except MemoryRefused as exc:
             return ToolResult(f"Refusé : {exc}", is_error=True)
@@ -134,7 +135,9 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         if ctx.approved:  # he said yes to this very call: his word, not the context's (D231)
             origin = replace(origin, trust=Trust.OWNER)
         try:
-            await memory.invalidate(args.fact_id, args.reason, origin, args.valid_to)
+            await memory.invalidate(
+                args.fact_id, args.reason, origin, args.valid_to, guarded=not ctx.unrestricted
+            )
         except MemoryRefused as exc:
             return ToolResult(f"Refusé : {exc}", is_error=True)
         return ToolResult(f"Fait {args.fact_id} marqué comme plus vrai (gardé en historique).")

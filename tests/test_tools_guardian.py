@@ -140,7 +140,22 @@ async def test_in_balanced_mode_orion_writes_its_own_state_without_asking() -> N
     assert "une page web" in no.reasons[0] and "vérifie" in no.reasons[0]
     yes = _Approver(answer=True)
     assert (await Guardian(yes, approvals="equilibre").decide(proposal(SEND, Trust.WEB))).allowed
-    assert AgentConfig().approvals == "equilibre"
+
+
+async def test_in_libre_outside_content_restricts_nothing_in_his_conversation() -> None:
+    """03/11: « j'en ai marre » of a web page blocking the conversation (D232). In his own
+    conversation it is as if it were not there; a contact's conversation still is guarded."""
+    install = Tool(name="module_install", description="i", input_model=_Args, handler=_noop)
+    yes = _Approver(answer=True)
+    free = Guardian(yes, approvals="libre")
+    assert AgentConfig().approvals == "libre"
+    assert (await free.decide(ActionProposal(install, _Args(to="x"), Trust.WEB, "owner"))).allowed
+    assert yes.asked == ['module_install({"to":"x"})']  # asked as in a clean conversation
+    no = _Approver(answer=False)
+    contact = await Guardian(no, approvals="libre").decide(
+        ActionProposal(SEND, _Args(to="x"), Trust.THIRD_PARTY, "contact:paul")
+    )
+    assert not contact.allowed
 
 
 async def test_autonomy_from_a_tainted_conversation_is_asked_never_taken() -> None:

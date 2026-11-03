@@ -172,8 +172,13 @@ UNTRUSTED_SOURCES = {
 """What lowered a context to this trust, in words the model can repeat to the owner."""
 
 
-Approvals = Literal["prudent", "equilibre"]
-"""What the owner is asked in a context holding outside content (`agent.approvals`, D85)."""
+Approvals = Literal["libre", "equilibre", "prudent"]
+"""What the owner is asked in a context holding outside content (`agent.approvals`, D85);
+`libre`: in his own conversation, nothing more than in a clean one (D232)."""
+
+OWNER_THREAD = "owner"
+"""His conversation with Orion, where `libre` applies; a contact's or another Orion's
+conversation is never freed, nor Orion's own threads."""
 
 Autonomous = Callable[[str, dict[str, Any]], Awaitable[bool]]
 """Whether the owner let Orion do this action alone, with these parameters, within the limits
@@ -213,6 +218,11 @@ class Guardian:
             "this call only: if he asks again later, call the tool again, the rules may differ."
         )
 
+    def unrestricted(self, thread_id: str) -> bool:
+        """Whether outside content restricts nothing in this conversation: his own, when he
+        chose `libre` (D232). What it writes still carries its true trust."""
+        return self._approvals == "libre" and thread_id == OWNER_THREAD
+
     async def _alone(self, tool: Tool, proposal: ActionProposal) -> bool:
         """The owner let Orion do this alone, with these parameters."""
         return (
@@ -249,8 +259,10 @@ class Guardian:
                 if proposal.thread_id == NIGHT_THREAD and await self._alone(tool, proposal):
                     return Decision(Verdict.ALLOW, ALONE)
                 return Decision(Verdict.DENY, refusal.format(tool=tool.name))
-        if proposal.context_trust < TRUSTED_FLOOR and not tool.accepts_untrusted_for(
-            proposal.arguments
+        if (
+            proposal.context_trust < TRUSTED_FLOOR
+            and not self.unrestricted(proposal.thread_id)
+            and not tool.accepts_untrusted_for(proposal.arguments)
         ):
             # Content from elsewhere may have steered the model. An internal write (memory,
             # reminders, playbook) is put to the owner (D26), unless he chose not to be asked
