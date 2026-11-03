@@ -483,7 +483,7 @@ def test_claude_counts_a_window_as_bigger_and_rebases_it_sooner() -> None:
     from orion.providers.base import Message, chars_per_token
 
     assert chars_per_token("claude-code:opus") == 2
-    assert chars_per_token("chatgpt:gpt-6-luna") == 3
+    assert chars_per_token("claude-code:opus") < chars_per_token("chatgpt:gpt-6-luna")
     messages: list[Message] = [{"role": "user", "content": "x" * 3_000}] * 4
     thread = Thread("t", messages=messages, seqs=[1, 2, 3, 4], trusts=[Trust.OWNER] * 4)
     assert ContextCompiler("C", 5_000, chars_per_token=3).rebase_point(thread, []) is None

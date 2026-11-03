@@ -95,6 +95,8 @@ image_hosts = { "deepseek/deepseek-v4.1-flash" = ["deepinfra", "together"] }
 [providers.chatgpt]
 enabled = false
 reasoning_effort = "low"         # when a call asks nothing; "medium", "high", "xhigh"
+stall_seconds = 45               # nothing at all for this long: given up, the fallback answers
+silence_seconds = 180            # once started, how long it may go quiet (thinking sends nothing)
 
 # iMessage through an Inkbox managed line. Run `uv run orion inkbox setup` once, then text the
 # connect command it prints from your phone: Orion can only write to you after you wrote first.

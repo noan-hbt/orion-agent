@@ -47,8 +47,12 @@ def _provider(config: OrionConfig) -> Router | None:
         auth = ChatGPTAuth(config.chatgpt_path)
         if auth.load() is None:  # he signs in from the app, Orion running (D154)
             print("Pas encore connecté à ChatGPT : connecte-toi dans l'app (Réglages > ChatGPT).")
+        plan = config.providers.chatgpt
         providers["chatgpt"] = ChatGPTProvider(
-            auth, default_effort=config.providers.chatgpt.reasoning_effort
+            auth,
+            default_effort=plan.reasoning_effort,
+            stall_seconds=plan.stall_seconds,
+            silence_seconds=plan.silence_seconds,
         )
     if config.providers.claude_code.enabled:
         from orion.providers.claude_code import ClaudeCodeProvider

@@ -85,6 +85,16 @@ class ChatGPTConfig(BaseModel):
         default="low",
         description="How long the models think when a call asks nothing; none: the model's own",
     )
+    stall_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description="A call that has sent nothing for this long is given up for the fallback model",
+    )
+    silence_seconds: float = Field(
+        default=180.0,
+        gt=0,
+        description="Once started, how long a call may go quiet (thinking sends nothing)",
+    )
 
 
 class ClaudeCodeConfig(BaseModel):

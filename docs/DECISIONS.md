@@ -5241,3 +5241,32 @@ chatgpt.com/settings/usage le montre.
   d'utilisation. L'évolution de ce qu'Orion en consomme reste la courbe en tokens.
 - Les en-têtes `x-codex-*` sont toujours lus : le jour où OpenAI les envoie, la courbe du quota
   apparaît sans rien changer. Le journal de diagnostic `chatgpt.no_quota_headers` est retiré.
+
+## D229 — ChatGPT rattrape le forfait Claude : un appel muet, ses tokens, `tell`
+
+*03/11/2026 · acceptée · complète D62, D210, D215, D227*
+
+Les dernières décisions visaient le forfait Claude. Sur ChatGPT, le modèle du propriétaire,
+trois choses étaient restées en arrière.
+
+- **Un appel qui se tait est lâché vite.** Le client attendait 180 s entre deux lectures et
+  réessayait quatre fois une attente dépassée : jusqu'à douze minutes avant le modèle de secours.
+  Le serveur ouvre son flux tout de suite : un appel qui n'a rien envoyé au bout de
+  `stall_seconds` (45 s) est lâché. Une fois commencé, il peut se taire `silence_seconds`
+  (180 s, réfléchir longtemps n'envoie rien). Une attente dépassée n'est plus réessayée : elle
+  durerait autant une seconde fois. Journal : `chatgpt.stalled`.
+- **Ses tokens comptés juste.** `o200k_base`, le tokenizer d'OpenAI, compte 3,7 caractères par
+  token sur le message système avec tous les modules, 3,7 sur les schémas d'outils et 3,6 sur les
+  messages des évaluations, là où Orion en supposait 3. `chars_per_token` vaut 3,5 pour
+  `chatgpt:` et `openai/` : les résultats d'outils (JSON, liens) comptent moins bien, et un chiffre
+  bas coupe plus tôt, pas plus tard. La fenêtre ChatGPT porte donc un peu plus de conversation
+  qu'avant pour le même `max_window_tokens`.
+- **`tell` se dit sur ChatGPT, et seulement là.** Depuis D215, la constitution ne parlait plus de
+  `tell`, toujours proposé aux autres fournisseurs. Avec `agent.model` en `chatgpt:`, elle dit de
+  nouveau que le texte passé à `tell` avec un autre outil part tout de suite, comme celui écrit
+  avec un appel. Claude ne l'a pas ; les autres modèles ne l'entendent pas. Le message système
+  reste fixe tant qu'Orion tourne (contrat du cache).
+
+À surveiller : `chatgpt.stalled` avec `started=false` sur un appel qui aurait abouti, et sur le
+serveur l'écart entre l'estimation et les `prompt_tokens` de ChatGPT (le tokenizer de ses modèles
+n'est pas publié ; `o200k_base` est le plus récent connu).

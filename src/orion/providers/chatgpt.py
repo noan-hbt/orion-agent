@@ -170,7 +170,8 @@ class ChatGPTProvider:
         auth: ChatGPTAuth,
         *,
         base_url: str = API_URL,
-        timeout: float = 180.0,
+        stall_seconds: float = 45.0,
+        silence_seconds: float = 180.0,
         max_attempts: int = 4,
         max_backoff: float = 20.0,
         default_effort: str | None = "low",
@@ -179,7 +180,16 @@ class ChatGPTProvider:
         self._auth = auth
         self._default_effort = default_effort
         """With no effort asked, reasoning models think at length: a text reply should not."""
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout, transport=transport)
+        self._stall = stall_seconds
+        """How long a call may say nothing at all before it is given up (D229): the server
+        starts its stream at once, so silence there means it will not answer soon."""
+        self._silence = silence_seconds
+        """How long a started call may then go quiet: thinking at length sends nothing."""
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=httpx.Timeout(silence_seconds, connect=stall_seconds),
+            transport=transport,
+        )
         self._max_attempts = max_attempts
         self._max_backoff = max_backoff
         self._turn_state: dict[str, str] = {}
@@ -271,10 +281,13 @@ class ChatGPTProvider:
             elif state := self._turn_state.get(session):
                 headers[TURN_STATE] = state
         items: list[dict[str, Any]] = []
+        started = False
+        clock = asyncio.get_running_loop()
         try:
-            async with self._client.stream(
-                "POST", "/responses", json=body, headers=headers
-            ) as response:
+            async with (
+                asyncio.timeout(self._stall) as watch,
+                self._client.stream("POST", "/responses", json=body, headers=headers) as response,
+            ):
                 if response.status_code >= 400:
                     text = (await response.aread()).decode("utf-8", "replace")
                     if response.status_code == 401:
@@ -296,6 +309,8 @@ class ChatGPTProvider:
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
+                    started = True
+                    watch.reschedule(clock.time() + self._silence)
                     event = cast(dict[str, Any], json.loads(line[5:]))
                     kind = event.get("type")
                     if kind == "response.output_item.done":
@@ -307,7 +322,16 @@ class ChatGPTProvider:
                         return parsed.model_copy(update={"quota": quota})
                     elif kind in ("response.failed", "error"):
                         raise self._failure(event)
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            # Asking again would wait as long once more: the fallback model answers (D229).
+            waited = self._silence if started else self._stall
+            log.warning("chatgpt.stalled", started=started, seconds=waited, attempt=attempt)
+            raise ProviderError(
+                f"ChatGPT said nothing for {waited:.0f} s"
+                + (" after it started" if started else ""),
+                retryable=False,
+            ) from exc
+        except httpx.TransportError as exc:
             raise ProviderError(f"transport error: {exc!r}", retryable=True) from exc
         except json.JSONDecodeError as exc:
             raise ProviderError("invalid event from provider", retryable=True) from exc
