@@ -5378,3 +5378,19 @@ contrôle.
 Ne sont pas des rôles : l'image, la voix, la transcription, les embeddings (des outils, pas des
 esprits, D114) et le secrétaire.
 
+## D234 — Orion sait qu'une tâche ne fait que lire
+
+*03/11/2026 · acceptée · précise D110, D195*
+
+Le 03/11, deux tâches de fond se sont arrêtées au premier pas avec un bilan vide. L'une devait
+lire les journaux du serveur, et `shell` lui a été refusé. L'autre devait fusionner des
+souvenirs, et `remember` lui a été refusé. Le gardien avait raison : une tâche lit et rapporte
+(D110, D195). Le problème venait de la consigne : `tasks.md` disait à Orion de confier les gros
+travaux à une tâche, sans dire ce qu'une tâche peut faire.
+
+- **La consigne le dit** : une tâche cherche et lit (web, navigateur, mails, conversations,
+  agenda). Ce qui écrit ou agit (shell, mémoire, envoi), Orion le fait lui-même. Une tâche peut
+  chercher pour lui ce qu'il faudrait faire.
+- La règle du gardien ne change pas. Un cas d'éval (`ce_qui_ecrit_ne_part_pas_en_tache`)
+  rejoue l'audit de mémoire.
+
