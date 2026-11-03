@@ -28,7 +28,12 @@ class WebModule(Module):
     async def assemble(self, plate: Plate) -> list[Tool]:
         settings: WebSettings = self.settings
         if self.desk is None:
-            searcher = WebSearch(plate.provider, self.config.agent.model, settings.max_results)
+            searcher = WebSearch(
+                plate.provider,
+                self.config.choice("web_search").model,
+                settings.max_results,
+                self.config.effort("web_search"),
+            )
             self.desk = WebDesk(plate.journal, searcher)
         await self.desk.start()
         return web_tools(self.desk)
@@ -38,4 +43,5 @@ class WebModule(Module):
             await self.desk.aclose()
 
     def doctor(self) -> list[str]:
-        return [f"search through {self.config.agent.model}; Orion reads the pages itself (D114)"]
+        model = self.config.choice("web_search").model
+        return [f"search through {model}; Orion reads the pages itself (D114)"]

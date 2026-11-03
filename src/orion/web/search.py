@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from orion.config import Effort
 from orion.providers.base import ModelProvider, ModelRequest, ProviderError
 from orion.web.fetch import Link, Page, normalize
 
@@ -66,9 +67,16 @@ def reading(page: Page) -> Reading:
 
 
 class WebSearch:
-    def __init__(self, provider: ModelProvider, model: str, max_results: int = 6) -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        model: str,
+        max_results: int = 6,
+        effort: Effort | None = None,
+    ) -> None:
         self._provider = provider
         self._model = model
+        self._effort: Effort | None = effort
         self._max_results = max_results
 
     async def search(self, query: str) -> Findings:
@@ -76,6 +84,7 @@ class WebSearch:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self._model,
+                    reasoning_effort=self._effort,
                     messages=[
                         {"role": "system", "content": SEARCH_PROMPT},
                         {"role": "user", "content": _clip(query, 300)},

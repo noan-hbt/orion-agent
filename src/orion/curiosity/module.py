@@ -34,7 +34,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
-from orion.config import STRONG_MODEL
+from orion.config import STRONG_MODEL, Effort
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -255,6 +255,7 @@ class Curiosity:
         settings: CuriositySettings,
         timezone: str,
         clock: Callable[[], datetime] | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._provider = provider
@@ -262,6 +263,7 @@ class Curiosity:
         self._memory = memory
         self.settings = settings
         self.model = settings.model or STRONG_MODEL
+        self.effort: Effort | None = effort
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = CuriosityState()
@@ -375,6 +377,7 @@ class Curiosity:
             response = await self._provider.complete(
                 ModelRequest(
                     model=self.model,
+                    reasoning_effort=self.effort,
                     messages=[
                         {"role": "system", "content": system},
                         {"role": "user", "content": user},
@@ -649,6 +652,7 @@ class CuriosityModule(Module):
             plate.memory,
             settings.model_copy(update={"model": model}),
             self.config.agent.timezone,
+            effort=self.config.effort("curiosity"),
         )
         await self.curiosity.sync()
         return [

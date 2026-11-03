@@ -23,7 +23,7 @@ from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 if TYPE_CHECKING:
-    from orion.config import OrionConfig
+    from orion.config import Effort, OrionConfig
 
 log = structlog.get_logger(__name__)
 
@@ -40,10 +40,19 @@ class MissionWork:
     """Runs due missions, each in its own thread, and offers what they found as alerts."""
 
     def __init__(
-        self, missions: Missions, orion: Orion, clock: Callable[[], datetime], tick: float
+        self,
+        missions: Missions,
+        orion: Orion,
+        clock: Callable[[], datetime],
+        tick: float,
+        model: str | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._missions = missions
         self._orion = orion
+        self._model = model
+        """`[models] tasks` (D233); None: the conversation's."""
+        self._effort: Effort | None = effort
         self._clock = clock
         self._tick = tick
         self._woken = asyncio.Event()
@@ -84,7 +93,14 @@ class MissionWork:
         # What they wrote is theirs: the pass is never more trusted than it.
         trust = min(mission.trust, Trust.THIRD_PARTY) if talks else mission.trust
         turn = await self._orion.handle_initiative(
-            mission.thread, mission.brief(talks), "mission", trust, now=now, halted=closed
+            mission.thread,
+            mission.brief(talks),
+            "mission",
+            trust,
+            now=now,
+            halted=closed,
+            model=self._model,
+            effort=self._effort,
         )
         if turn.reason is StopReason.HALTED:
             log.info("mission.called_off", mission=mission.id, steps=turn.steps)
@@ -533,7 +549,14 @@ class MissionsModule(Module):
         if self.missions is None:  # pragma: no cover - assemble always runs first
             return
         settings: MissionSettings = self.settings
-        work = MissionWork(self.missions, daemon.orion, self._clock, settings.tick_minutes * 60.0)
+        work = MissionWork(
+            self.missions,
+            daemon.orion,
+            self._clock,
+            settings.tick_minutes * 60.0,
+            self.config.models.tasks.model,
+            self.config.effort("tasks"),
+        )
         daemon.alerts.append(work)
         daemon.orion.situation.append(self)
         daemon.add_service("missions.work", work.run)

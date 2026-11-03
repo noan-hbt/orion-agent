@@ -227,6 +227,7 @@ def editable_sections(config: OrionConfig) -> dict[str, Any]:
 def editable_view(config: OrionConfig) -> str:
     """Every setting that can be changed by message, and every installed module with whether
     it is on: a module absent from the file can be turned on all the same."""
+    from orion.config import models_view
     from orion.modules.registry import discover
 
     sections = {name for name in (*ORION_SECTIONS, *OWNER_SECTIONS) if name != "modules"}
@@ -241,6 +242,11 @@ def editable_view(config: OrionConfig) -> str:
     if config.modules:
         lines.append("Réglages de modules écrits dans le fichier :")
         lines.append(json.dumps(config.modules, ensure_ascii=False, indent=1))
+    lines.append(
+        "Quel modèle fait quoi, et combien il réfléchit (change un rôle par "
+        "`models.<rôle>.model` ou `models.<rôle>.effort`) :"
+    )
+    lines.append(models_view(config))
     lines.append(
         f"Sont à lui ({', '.join(OWNER_SECTIONS)}, les comptes, "
         f"{', '.join(OWNER_PATHS)}) : il dit oui à chaque changement, tu ne le fais jamais "

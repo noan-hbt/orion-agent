@@ -45,7 +45,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.channels.inbox import Attachment
-from orion.config import AUDIO_MODEL, VISION_MODEL
+from orion.config import AUDIO_MODEL, VISION_MODEL, Effort
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import REDACTED_KIND, EventStore
@@ -335,6 +335,7 @@ class Photos:
         folder: Path,
         fetch: Fetch | None = None,
         names: Sequence[str] = (),
+        effort: Effort | None = None,
     ) -> None:
         self.names = list(names)
         self.owner = self.names[0] if self.names else "son propriétaire"
@@ -342,6 +343,7 @@ class Photos:
         self._provider = provider
         self._settings = settings
         self.model = settings.model or VISION_MODEL
+        self.effort: Effort | None = effort
         self.folder = folder
         self._fetch = fetch or _download
         self._kept = _Kept()
@@ -625,6 +627,7 @@ class Photos:
         response = await self._provider.complete(
             ModelRequest(
                 model=model or self.model,
+                reasoning_effort=self.effort,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": content},
@@ -740,6 +743,7 @@ class PhotosModule(Module):
             ),
             self.config.data_dir / "photos",
             names=self.config.memory.owner_names,
+            effort=self.config.effort("vision"),
         )
         await self.photos.sync()
         from orion.files.module import FilesModule

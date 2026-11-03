@@ -19,7 +19,16 @@ from typing import Any, Literal, cast
 
 Tier = Literal["orion", "owner"]
 
-ORION_SECTIONS = ("agent", "initiative", "adaptation", "memory", "modules", "voice", "delegation")
+ORION_SECTIONS = (
+    "agent",
+    "models",
+    "initiative",
+    "adaptation",
+    "memory",
+    "modules",
+    "voice",
+    "delegation",
+)
 """Top-level sections that are Orion's own."""
 OWNER_SECTIONS = ("guardian", "channels", "federation", "budget", "logging", "providers")
 """Top-level sections only the owner's yes changes."""

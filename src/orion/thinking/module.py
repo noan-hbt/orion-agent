@@ -49,7 +49,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.adaptation.misses import MISSED, dislikes
 from orion.cognition.loop import StopReason
-from orion.config import STRONG_MODEL
+from orion.config import STRONG_MODEL, Effort
 from orion.context.recent import day_since, elsewhere
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
@@ -413,6 +413,7 @@ class Thinking:
         timezone: str,
         clock: Callable[[], datetime] | None = None,
         memory: MemoryService | None = None,
+        effort: Effort | None = None,
     ) -> None:
         self._journal = journal
         self._memory = memory
@@ -425,6 +426,7 @@ class Thinking:
         """Everything planned (D78), for the evening review; None: his own follow-ups only."""
         self.settings = settings
         self.model = settings.model or STRONG_MODEL
+        self.effort: Effort | None = effort
         self.zone = ZoneInfo(timezone)
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = ThinkingState()
@@ -650,6 +652,7 @@ class Thinking:
                 trust,
                 now,
                 model=self.model,
+                effort=self.effort,
                 max_cost_usd=cost_left,
                 max_steps=steps_left,
                 max_tool_calls=self.settings.max_tool_calls,
@@ -1049,6 +1052,7 @@ class ThinkingModule(Module):
             settings.model_copy(update={"model": model}),
             self.config.agent.timezone,
             memory=plate.memory,
+            effort=self.config.effort("thinking"),
         )
         self.thinking.modules = plate.modules
         self.thinking.planned = lambda now, until: everything_planned(
