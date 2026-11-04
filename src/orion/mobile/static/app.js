@@ -783,7 +783,10 @@ function dayLabel(date) {
 function add(message, live = true) {
   if (state.refs.has(message.ref)) return;
   state.refs.add(message.ref);
-  const mine = state.pending.findIndex((p) => p.ref === message.ref);
+  // The owner's message is already on screen: the real one takes its place and carries on its
+  // entrance where it was, whether the answer to the send or the stream brings it first.
+  const mine = state.pending.findIndex((p) => p.ref === message.ref || (message.who === "owner" && p.text === (message.text || "")));
+  const risen = mine >= 0 ? performance.now() - state.pending[mine].at : 0;
   if (mine >= 0) {
     state.pending[mine].el.remove();
     state.pending.splice(mine, 1);
@@ -793,7 +796,12 @@ function add(message, live = true) {
   view.list.querySelector(".first")?.remove();
   const els = render(message, state.messages[state.messages.length - 2]);
   // A message that arrives now rises into place; history does not.
-  if (live) for (const el of els) el.classList?.add("new");
+  if (live && risen < 450) {
+    for (const el of els) {
+      el.classList?.add("new");
+      if (risen) el.querySelectorAll?.(":scope > .bubble").forEach((bubble) => (bubble.style.animationDelay = `-${risen}ms`));
+    }
+  }
   view.list.append(...els);
   if (live && message.who !== "owner") {
     for (const el of els) if (el.matches?.(".msg")) el.querySelectorAll(":scope > .bubble").forEach(unfold);
@@ -1299,15 +1307,18 @@ async function send(text, files) {
   retail();
   view.field.classList.remove("pulse");
   requestAnimationFrame(() => view.field.classList.add("pulse"));
-  const entry = { ref: `local-${Date.now()}`, el };
+  const entry = { ref: `local-${Date.now()}`, text, el, at: performance.now() };
   state.pending.push(entry);
   bottom(true, true);
   try {
     const payload = { text, files: await Promise.all(files.map(encode)) };
     const { message } = await api("api/send", payload);
-    el.remove();
-    state.pending.splice(state.pending.indexOf(entry), 1);
+    entry.ref = message.ref;
     add(message); // unless the stream brought it first
+    if (state.pending.includes(entry)) {
+      el.remove();
+      state.pending.splice(state.pending.indexOf(entry), 1);
+    }
   } catch (error) {
     el.classList.remove("pending");
     el.classList.add("failed");
@@ -2343,6 +2354,13 @@ function paintTopbar(key) {
   view.dock.hidden = key === "talk";
 }
 
+// A refresh that finds the same thing touches nothing: no blink, no animation starting over, and
+// what is being typed or read stays as it is.
+function swap(parent, nodes) {
+  const same = nodes.length === parent.children.length && nodes.every((node, i) => node === parent.children[i] || node.outerHTML === parent.children[i].outerHTML);
+  if (!same) parent.replaceChildren(...nodes);
+}
+
 // The planet itself crosses between the home screen and the conversation (D242). The ghost is
 // always the large one, so it stays sharp at every size.
 let planetFlight = null;
@@ -2460,7 +2478,8 @@ function page(title, fill, subtitle) {
     busy = true;
     line.textContent = subtitle ? subtitle() : "";
     try {
-      body.replaceChildren(...[await fill(el.refresh)].flat(Infinity).filter(Boolean));
+      swap(body, [await fill(el.refresh)].flat(Infinity).filter(Boolean));
+      el.classList.add("filled");
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return welcome("Ta session a expiré.");
       body.replaceChildren(h("p", { class: "empty" }, said(error)));
@@ -2576,7 +2595,7 @@ function paintNowWork() {
   }
   view.nowWork.classList.toggle("busy", !!work);
   view.nowWork.classList.toggle("still", !work && !!o?.paused_until);
-  view.nowWork.replaceChildren(...[
+  swap(view.nowWork, [
     h("p", { class: "home-date" }, DAY_TITLE.format(new Date())),
     h("button", { class: "home-planet", type: "button", "aria-label": "Ouvrir la conversation", onclick: () => show("talk") }, planet(210, carrying)),
     h("h1", {}, title),

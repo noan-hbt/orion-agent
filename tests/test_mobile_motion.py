@@ -1,5 +1,6 @@
 """How the app moves: the typing dots and the keyboard, run in a real browser."""
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,86 @@ async def test_a_message_sent_after_a_pause_shows_its_time_once() -> None:
         }""",
     )
     assert result == 2
+
+
+async def _in_the_app(act: str) -> tuple[list[str], Any]:
+    """What enters the screen while the real app, on a fake server, does `act`, and its result."""
+    message = {"who": "owner", "files": [], "text": "Salut", "at": "2026-11-04T14:00:00Z"}
+    answers: dict[str, Any] = {
+        "me": {"device": "d", "push_key": ""},
+        "api/messages": {"more": False, "messages": [{**message, "ref": "a", "seq": 1}]},
+        "api/for-you": {"questions": [], "waiting_on": [], "tasks": []},
+        "approvals": {"approvals": []},
+        "api/agenda": {"events": []},
+        "api/nights": {"notes": [], "nights": []},
+        "api/browser": {"handovers": []},
+        "api/logins/asked": {"asked": []},
+        "api/missions": {"missions": []},
+        "api/send": {"message": {**message, "ref": "b", "seq": 2, "text": "Test"}},
+    }
+
+    async def serve(route: Any) -> None:
+        path = route.request.url.split("/app/")[-1].split("?")[0]
+        if (APP_DIR / (path or "index.html")).is_file():
+            await route.fulfill(path=str(APP_DIR / (path or "index.html")))
+        elif path == "api/stream":
+            await route.abort()
+        elif path == "api/send":
+            await asyncio.sleep(0.2)
+            await route.fulfill(json=answers[path])
+        else:
+            await route.fulfill(json=answers.get(path, {}))
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page(viewport={"width": 390, "height": 844})
+        await page.route("**/app/**", serve)
+        await page.goto("http://orion.test/app/")
+        await page.wait_for_selector(".msg")
+        await page.evaluate(
+            """() => {
+              window.seen = [];
+              addEventListener("animationstart", (e) => seen.push(e.animationName), true);
+            }"""
+        )
+        result = await page.evaluate(act)
+        await page.wait_for_timeout(800)
+        seen = await page.evaluate("seen")
+        await browser.close()
+    return seen, result
+
+
+async def test_a_message_sent_keeps_rising_when_the_server_answers() -> None:
+    """Seen for real: the bubble rose, then rose again from the bottom on the server's answer."""
+    _, progress = await _in_the_app(
+        """async () => {
+          document.querySelector(".composer textarea:not(.twin)").value = "Test";
+          document.querySelector(".composer").requestSubmit();
+          let bubble = null;
+          while (!(bubble = document.querySelector('.msg[data-ref="b"] > .bubble'))) {
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          return bubble.getAnimations()[0].effect.getComputedTiming().progress;
+        }"""
+    )
+    assert progress > 0.5
+
+
+async def test_a_page_seen_again_does_not_enter_again() -> None:
+    """Seen for real: back on a page, its content blanked and rebuilt once the data arrived."""
+    seen, _ = await _in_the_app(
+        """async () => {
+          const pause = () => new Promise((r) => setTimeout(r, 300));
+          document.querySelector(".top-back").click();
+          while (!document.querySelector(".home-planet")) await pause();
+          await pause();
+          document.querySelector(".home-planet").click();
+          await pause();
+          seen.length = 0;
+          document.querySelector(".top-back").click();
+        }"""
+    )
+    assert "row-in" not in seen
 
 
 async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:
