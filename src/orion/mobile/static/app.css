@@ -581,11 +581,11 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 
 /* Only transforms, opacity and filters animate. */
 .tab.enter-right,.tab.enter-left { z-index:1; }
-.tab.enter-right { animation:tab-right .5s var(--spring); }
-.tab.enter-left { animation:tab-left .5s var(--spring); }
+.tab.enter-right { animation:tab-right .5s var(--spring) .08s backwards; }
+.tab.enter-left { animation:tab-left .5s var(--spring) .08s backwards; }
 .tab.leave-left,.tab.leave-right { position:absolute; inset:0; z-index:0; pointer-events:none; }
-.tab.leave-left { animation:tab-leave-left .32s cubic-bezier(.4,0,.2,1) forwards; }
-.tab.leave-right { animation:tab-leave-right .32s cubic-bezier(.4,0,.2,1) forwards; }
+.tab.leave-left { animation:tab-leave-left .16s ease-out forwards; }
+.tab.leave-right { animation:tab-leave-right .16s ease-out forwards; }
 .page-body > *,.panel-content > *,.list > .item { animation:row-in .55s var(--spring) backwards; }
 .page-body > :nth-child(2),.panel-content > :nth-child(2),.list > .item:nth-child(2) { animation-delay:30ms; }
 .page-body > :nth-child(3),.panel-content > :nth-child(3),.list > .item:nth-child(3) { animation-delay:60ms; }
@@ -670,7 +670,7 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
   .sheet { width:calc(100% - 16px); }
 }
 /* A page enters once: what a refresh brings afterwards does not make it enter again. */
-.page.filled .page-body > * { animation:none; }
+.page.filled .page-body > * { animation:live-fade .35s ease; }
 /* D242: the home and the conversation breathe, the planet travels, Orion's words unfold. */
 .talk-tab,.page.home { isolation:isolate; }
 .talk-tab::before,.page.home::before { content:""; position:absolute; z-index:-1; inset:-30%; pointer-events:none; background:radial-gradient(38% 30% at 28% 62%,rgba(140,153,255,.24),transparent 70%),radial-gradient(34% 28% at 74% 36%,rgba(214,180,255,.22),transparent 70%); animation:aurora 26s ease-in-out infinite alternate; transition:opacity .25s ease; }
@@ -686,8 +686,15 @@ body.keyboard .talk-tab::before,body.keyboard .page.home::before { opacity:0; }
 .attached > .pop { animation:badge-pop .45s var(--bounce); }
 .attached > .out { animation:attach-out .18s ease forwards; pointer-events:none; }
 @keyframes attach-out { to { opacity:0; transform:scale(.6); } }
-body.arriving #app { animation:fade-in .5s ease; }
-body.arriving .home-planet,body.arriving .avatar.mini { animation:mark-in .9s var(--bounce) backwards; }
+/* D243: the launch, and buttons that fade rather than snap. */
+html.booting,html.booting body,html.landing,html.landing body { background:var(--wash); }
+html.booting #app { opacity:0; pointer-events:none; }
+html.landing #app { animation:fade-in .6s ease; }
+.planet-launch svg { animation:launch-in .6s var(--spring); }
+@keyframes launch-in { from { opacity:0; transform:scale(.86); } }
+.chrome-in { animation:fade-in .28s ease; }
+.chrome-out { animation:fade-out .18s ease forwards; pointer-events:none; }
+.chrome-out > * { pointer-events:none; }
 
 @media (prefers-reduced-transparency:reduce) {
   .glass,.sheet { background:#fff; -webkit-backdrop-filter:none; backdrop-filter:none; }

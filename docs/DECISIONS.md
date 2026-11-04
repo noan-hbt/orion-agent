@@ -5550,3 +5550,20 @@ on ajoute ce qui manquait et ce qui donne une identité, sans refaire ce qui mar
 - **Reste vrai :** transform et opacité pour ce qui joue en boucle, rien sous « réduire les
   animations ».
 
+## D243 — Le lancement est un seul geste, et rien ne saute entre deux écrans
+
+*04/11/2026 · acceptée · complète D242*
+
+L'owner voyait la planète se téléporter au lancement et des transitions brutes. Filmées image par
+image : un écran blanc au démarrage, les boutons du haut et du bas qui disparaissent d'un coup, les
+textes de deux écrans qui se superposent.
+
+- **Lancement.** La planète attend seule sur le lavande, grande et au centre, pendant que l'app se
+  prépare, puis rejoint sa place dans la conversation pendant que l'écran apparaît. Plus de blanc,
+  ni dans la page ni dans le fond déclaré au système. Sans réponse du serveur, l'app s'affiche au
+  bout de quatre secondes.
+- **Entre deux écrans.** L'ancien s'efface vite avant que le nouveau n'arrive, pour que les textes
+  ne se croisent plus. Les boutons se fondent au lieu de sauter.
+- **L'accueil est prêt d'avance**, dès le lancement, pour que la planète puisse y voyager dès la
+  première fois. Cela ajoute quelques requêtes au démarrage.
+

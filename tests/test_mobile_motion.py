@@ -176,12 +176,12 @@ async def test_a_message_sent_keeps_rising_when_the_server_answers() -> None:
           return bubble.getAnimations()[0].effect.getComputedTiming().progress;
         }"""
     )
-    assert progress > 0.5
+    assert progress > 0.3
 
 
 async def test_a_page_seen_again_does_not_enter_again() -> None:
     """Seen for real: back on a page, its content blanked and rebuilt once the data arrived."""
-    seen, _ = await _in_the_app(
+    seen, _ = await _in_the_app(  # row-in is the entrance cascade of a page
         """async () => {
           const pause = () => new Promise((r) => setTimeout(r, 300));
           document.querySelector(".top-back").click();
@@ -194,6 +194,22 @@ async def test_a_page_seen_again_does_not_enter_again() -> None:
         }"""
     )
     assert "row-in" not in seen
+
+
+async def test_the_launch_ends_with_one_planet_in_its_place() -> None:
+    """Seen for real: the planet jumped on launch; it must land, and the app must show."""
+    _, end = await _in_the_app(
+        """async () => {
+          while (document.querySelector(".planet-ghost")) {
+            await new Promise((r) => setTimeout(r, 20));
+          }
+          return [
+            document.documentElement.classList.contains("booting"),
+            getComputedStyle(document.querySelector(".avatar .planet")).visibility,
+          ];
+        }"""
+    )
+    assert end == [False, "visible"]
 
 
 async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:

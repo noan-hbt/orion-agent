@@ -301,12 +301,49 @@ window.addEventListener("resize", fit);
 window.addEventListener("orientationchange", () => (roomy = 0));
 addEventListener("focusout", () => setTimeout(fit, 0));
 fit();
-document.body.classList.add("arriving");
-setTimeout(() => document.body.classList.remove("arriving"), 2500);
+
+// The launch (D243): the planet waits alone on the lavender while the app gets ready, then goes to
+// its place in the conversation as the screen appears around it. Nothing appears before it.
+let launchPlanet = null;
+let launchAt = 0;
+function liftOff() {
+  launchAt = performance.now();
+  setTimeout(land, 4000); // a server that does not answer never keeps the app hidden
+  if (still()) return land();
+  launchPlanet = planet(210);
+  launchPlanet.classList.add("planet-ghost", "planet-launch");
+  Object.assign(launchPlanet.style, { left: `${(innerWidth - 210) / 2}px`, top: `${(innerHeight - 210) / 2 - 40}px`, width: "210px", height: "210px" });
+  document.body.append(launchPlanet);
+}
+
+async function land() {
+  // Long enough to be seen as one gesture, even on a server that answers at once.
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, 450 - (performance.now() - launchAt))));
+  const ghost = launchPlanet;
+  launchPlanet = null;
+  const root = document.documentElement;
+  if (root.classList.replace("booting", "landing")) setTimeout(() => root.classList.remove("landing"), 700);
+  if (!ghost) return;
+  const to = view.talk && !view.talk.hidden ? view.avatar?.querySelector(".planet") : null;
+  const box = ghost.getBoundingClientRect();
+  const end = to?.getBoundingClientRect();
+  if (!end?.width) {
+    ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250 }).onfinish = () => ghost.remove();
+    return;
+  }
+  view.avatar.classList.add("planet-away");
+  const dx = end.left + end.width / 2 - box.left - box.width / 2;
+  const dy = end.top + end.height / 2 - box.top - box.height / 2;
+  ghost.animate([{ transform: "none" }, { transform: `translate(${dx}px,${dy}px) scale(${end.width / box.width})` }], { duration: 700, easing: "cubic-bezier(.32,.72,0,1)" }).onfinish = () => {
+    ghost.remove();
+    view.avatar.classList.remove("planet-away");
+  };
+}
 
 // -- start ------------------------------------------------------------------------------------
 
 async function start() {
+  liftOff();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register(`${BASE}sw.js`, { scope: BASE }).catch((error) => {
       console.warn("service worker", error);
@@ -324,6 +361,7 @@ async function start() {
       offlineStart();
     }
   }
+  land();
 }
 
 function offlineStart() {
@@ -569,6 +607,7 @@ async function conversation() {
   listen();
   offerNotifications();
   show(state.tab);
+  view.tabs.now.refresh(); // ready before the first visit, so the planet can cross to it
   grow();
   if (location.hash.length > 1) goTo(location.hash.slice(1));
 }
@@ -2349,8 +2388,23 @@ function paintTopbar(key) {
   const items = key === "now"
     ? [round("book", "Carnet", () => show("notebook")), h("span", { class: "grow" }), find, round("sliders", "Réglages", () => show("settings"))]
     : [round("back", "Accueil", () => show("now")), h("span", { class: "grow" }), key === "notebook" ? find : null];
+  // Buttons never snap: the old ones fade where they were while the new ones come.
+  const fade = (el, hidden) => {
+    if (!el.hidden && !still()) {
+      const old = el.cloneNode(true);
+      old.classList.add("chrome-out");
+      old.classList.remove("chrome-in");
+      el.after(old);
+      setTimeout(() => old.remove(), 200);
+    }
+    el.classList.remove("chrome-in");
+    void el.offsetWidth;
+    if (!hidden) el.classList.add("chrome-in");
+  };
+  fade(view.topbar, key === "talk");
   view.topbar.replaceChildren(...items.filter(Boolean));
   view.topbar.hidden = key === "talk";
+  if (view.dock.hidden !== (key === "talk")) fade(view.dock, key === "talk");
   view.dock.hidden = key === "talk";
 }
 
