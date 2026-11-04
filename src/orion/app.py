@@ -91,9 +91,10 @@ class App:
         return self.plate.module(kind)
 
 
-MAX_SECTION_CHARS = 2_500
-"""A module's section of the constitution, at most (D84): every turn pays for it, and a long
-section drowns the others. What a tool does belongs in its description, read when it matters."""
+MAX_SECTION_CHARS = 3_000
+"""A module's section of the constitution, at most (D84; 3k since D245): every turn pays for it,
+and a long section drowns the others. What a tool does belongs in its description, read when it
+matters."""
 
 
 SAID_WITH_A_CALL = "Ce texte écrit avec un appel d'outil part"
