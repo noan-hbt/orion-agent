@@ -5471,3 +5471,27 @@ partout, comme des copies.
 - **Une carte hors de la boîte de réception ne se range ni ne se marque** : son uid vaut dans
   un autre dossier, et `mail_tidy`/`mail_mark` agissent dans `folder`. Elles ne font pas non
   plus d'alerte.
+
+## D239 — L'accueil est une planète, et une seule conversation s'écrit ou se dit
+
+*04/11/2026 · acceptée · révise D139 et D183, complète D125*
+
+Cinq habillages en dix jours : le problème était la structure, pas la peau. Exploration sur un
+canevas (pistes, puis « Planète + voix » ; variante F1 retenue).
+
+- **Plus de barre d'onglets.** L'accueil mène partout : Carnet en haut à gauche, chercher et
+  Réglages à droite ; Carnet et Réglages reviennent à l'accueil. En bas de chaque écran, un
+  seul champ « Écris à Orion… » et un rond pour parler.
+- **L'accueil est la planète** (le logo de D183) : un satellite par chose qu'Orion porte en fond
+  (tâche, personne attendue, mission), qui tourne lentement sauf si le mouvement est réduit.
+  Dessous, la phrase d'état et les sections de Maintenant, inchangées.
+- **La conversation en grand texte, sans bulles** : Orion à l'encre, l'owner plus clair, tous
+  deux à gauche ; un long message d'Orion passe en texte courant. Les pièces (choix, cartes,
+  « fait ») restent, sur verre blanc. Fond lavande partout sauf Carnet et Réglages.
+- **Une conversation, deux entrées.** Toucher le champ écrit. Le rond : maintenu, il enregistre
+  un vocal (relâcher envoie, glisser vers le haut garde le micro, vers la gauche annule) ;
+  touché, il ouvre le mode voix, sombre, la planète au centre, le dernier échange en haut. Tout
+  arrive dans le même fil.
+- **La voix elle-même ne change pas ici** : même enregistrement, même transcription, même
+  lecture à voix haute. Le temps réel sera un chantier à part.
+- Au passage : une règle CSS fusionnée par erreur (#72) colorait en rouge pilules et ronds.
