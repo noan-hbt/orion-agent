@@ -1584,9 +1584,18 @@ async function catchUp() {
   }
 }
 
+// Back on the page: iOS kills the socket of a hidden page without a word, and the stream still
+// says it is open. Past a few seconds away it is opened again, which also catches up.
+let hiddenAt = 0;
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && view.thread && (!source || source.readyState === EventSource.CLOSED)) listen();
+  if (document.visibilityState === "hidden") {
+    hiddenAt = Date.now();
+  } else if (view.thread && (!source || source.readyState === EventSource.CLOSED || Date.now() - hiddenAt > 4000)) {
+    listen();
+  }
 });
+window.addEventListener("pageshow", (event) => event.persisted && view.thread && listen());
+window.addEventListener("online", () => view.thread && listen());
 
 function setLive(on) {
   state.live = on;
@@ -2398,7 +2407,13 @@ function page(title, fill, subtitle) {
 let nowTimer = null;
 function nowChanged() {
   clearTimeout(nowTimer);
-  nowTimer = setTimeout(() => state.tab === "now" && view.tabs?.now.refresh(), 500);
+  nowTimer = setTimeout(() => {
+    if (state.tab !== "now") return;
+    // A quiet cross-fade, not the entrance cascade: the page is already there.
+    document.body.classList.add("live-refresh");
+    setTimeout(() => document.body.classList.remove("live-refresh"), 700);
+    view.tabs?.now.refresh();
+  }, 500);
 }
 
 function talkAbout(text) {

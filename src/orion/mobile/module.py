@@ -294,6 +294,10 @@ class MobileModule(Module):
         desk = self.notebook.browser() if self.notebook is not None else None
         if desk is not None:
             desk.in_app = True  # a hand-over shows in Maintenant (D135)
+            # Fixed words: the page's address is not his to vouch for, Orion reads the tab.
+            desk.resume = lambda: channel.receive(
+                "navigateur", "J'ai fini dans ton navigateur, tu peux reprendre."
+            )
         daemon.plate.approver.target = daemon.inbox  # it asks where he last wrote from
         self.app = channel
         daemon.add_service("mobile.changes", channel.changes)  # the open app follows (D140)
