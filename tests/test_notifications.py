@@ -127,24 +127,28 @@ async def test_a_kind_he_turned_off_is_not_even_written_and_urgent_passes_the_ni
         assert dropped["key"] == "watch:1"
 
 
-async def test_a_new_kind_is_one_line_once_he_turns_it_on(
+async def test_a_finished_task_never_goes_out_raw(
     journal: SqliteJournal, inbox: OwnerInbox, tmp_path: Path
 ) -> None:
+    """04/11: « Tâche finie : <the task's own summary> » reached him as is (D236)."""
     app = Outlet("mobile")
     inbox.register(app)
     module = NotificationsModule(OrionConfig.model_validate({"data_dir": tmp_path}))
     module.notifications = Notifications(journal)
     inbox.policy = module.notifications
+    turned_on = NewEvent(  # his choice from before D236 stays in the journal
+        kind="notification.set",
+        payload={"kind": "tache", "level": "normale"},
+        provenance=BY_HIM,
+        trust=Trust.OWNER,
+    )
     done = NewEvent(
         kind="task.finished",
         payload={"task_id": "t_1", "how": "done", "summary": "Trois vols trouvés pour Lisbonne"},
         provenance=Provenance(source="task:t_1", actor="orion:tasks"),
         trust=Trust.SYSTEM,
     )
-    [event] = await journal.append([done])
+    [_, event] = await journal.append([turned_on, done])
+    await module.notifications.sync()
     await module._direct(inbox, event)  # pyright: ignore[reportPrivateUsage]
-    assert app.sent == []  # off until he wants it
-
-    await module.notifications.choose("tache", "urgente", None, BY_HIM, Trust.OWNER, ["mobile"])
-    await module._direct(inbox, event)  # pyright: ignore[reportPrivateUsage]
-    assert len(app.sent) == 1 and "Lisbonne" in app.sent[0]
+    assert app.sent == []

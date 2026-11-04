@@ -5418,3 +5418,20 @@ avait parlé un lot plus tôt et notait en silence avant de continuer.
   pour un tri, il ne savait jamais s'il avait tout vu, et passait par `shell`.
 - **`<memoire>` passe de 2 400 à 10 000 caractères**, réglables (`[memory] snapshot_chars`) :
   le profil et les goûts en faisaient déjà 3 870, et le bloc était coupé.
+
+
+## D236 — Plus de notification « tache » : le résultat d'une tâche, c'est Orion qui le dit
+
+*04/11/2026 · acceptée · précise D225, D231*
+
+Le 04/11 à 5 h 35, une recherche de ses traces publiques finit. Trois secondes plus tard, il
+reçoit « Tâche finie : Recherche publique : fiche Le Figaro lue https://… SIREN/SIRET et
+adresse précise… » : le bilan interne de la tâche, tel quel. D231 avait fermé le texte de
+secours de l'initiative ; ce message venait d'un autre chemin, le type direct `tache` de D225,
+qu'il avait allumé. Ce type écrit sans le modèle le `summary` que la tâche laisse pour Orion.
+
+- **Le type `tache` disparaît.** Le résultat d'une tâche passe par l'initiative
+  (`compte_rendu`), rédigé par Orion. Pour qu'il sonne autrement, c'est `compte_rendu` qui se
+  règle.
+- Un `notification.set` « tache » déjà au journal reste là et ne fait plus rien : la projection
+  ignore les types inconnus.
