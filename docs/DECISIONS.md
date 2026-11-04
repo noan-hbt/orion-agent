@@ -5532,3 +5532,21 @@ canevas ; variante « Deux bulles » retenue.
   chat, ouvre « Bientôt, de moi-même ». L'accueil ne les montre plus.
 - **Le rond voix ne change pas** (touché, mode voix ; maintenu, vocal). La goutte qui regrouperait
   les actions reste à décider, car elle prendrait ce geste.
+
+## D242 — L'app bouge davantage : la planète voyage, les mots d'Orion arrivent
+
+*04/11/2026 · acceptée · complète D138 et D170*
+
+L'owner veut de belles animations partout, peaufinées. Presque tout bougeait déjà (D139, D170) :
+on ajoute ce qui manquait et ce qui donne une identité, sans refaire ce qui marche.
+
+- **La planète voyage** entre l'accueil et la conversation, au lieu de disparaître d'un écran
+  pour réapparaître sur l'autre. Une seule planète à l'écran pendant le trajet.
+- **Les mots d'Orion arrivent** un à un sur un message reçu en direct, jamais sur l'historique,
+  puis la bulle redevient du texte simple. Au-delà de 400 mots, pas d'effet.
+- **La petite planète répond** quand Orion parle. Une lueur très lente dérive sur l'accueil et la
+  conversation, et s'efface clavier ouvert. Tout bouton répond au doigt ; les pièces jointes et ce
+  qu'on écarte entrent et sortent en douceur ; l'app apparaît au lancement au lieu de surgir.
+- **Reste vrai :** transform et opacité pour ce qui joue en boucle, rien sous « réduire les
+  animations ».
+

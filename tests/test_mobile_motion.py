@@ -128,3 +128,32 @@ async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:
         band, wash = await page.evaluate(behind), await page.evaluate(tab)
         await browser.close()
     assert band == wash
+
+
+async def test_orion_words_unfold_then_the_bubble_is_plain_text_again() -> None:
+    """The reveal must never lose a word or leave its spans behind in the thread."""
+    helpers = """
+      function still() { return false; }
+      function h(tag, attrs, text) {
+        const el = document.createElement(tag);
+        el.className = attrs.class;
+        el.textContent = text;
+        return el;
+      }
+    """
+    result = await _run(
+        helpers + _piece("function unfold(", "\n}\n") + "\nwindow.unfold = unfold;",
+        """async () => {
+          const bubble = document.createElement("div");
+          bubble.innerHTML = "Deux rendez-vous, <b>rien d'urgent</b> ici.";
+          document.body.append(bubble);
+          const before = bubble.textContent;
+          unfold(bubble);
+          const during = [bubble.querySelectorAll(".word").length > 0, bubble.textContent];
+          await new Promise((r) => setTimeout(r, 1600));
+          return [during, bubble.querySelectorAll(".word").length, bubble.textContent === before];
+        }""",
+    )
+    assert result[0][0] is True
+    assert result[0][1] == "Deux rendez-vous, rien d'urgent ici."
+    assert result[1:] == [0, True]
