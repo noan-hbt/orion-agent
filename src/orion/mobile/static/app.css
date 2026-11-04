@@ -669,6 +669,8 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
   .panel,.voice,.scrim,.tapback-overlay,.viewer { max-width:560px; margin-right:auto; margin-left:auto; }
   .sheet { width:calc(100% - 16px); }
 }
+/* A page enters once: what a refresh brings afterwards does not make it enter again. */
+.page.filled .page-body > * { animation:none; }
 /* D242: the home and the conversation breathe, the planet travels, Orion's words unfold. */
 .talk-tab,.page.home { isolation:isolate; }
 .talk-tab::before,.page.home::before { content:""; position:absolute; z-index:-1; inset:-30%; pointer-events:none; background:radial-gradient(38% 30% at 28% 62%,rgba(140,153,255,.24),transparent 70%),radial-gradient(34% 28% at 74% 36%,rgba(214,180,255,.22),transparent 70%); animation:aurora 26s ease-in-out infinite alternate; transition:opacity .25s ease; }
