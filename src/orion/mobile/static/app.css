@@ -225,6 +225,9 @@ body.keyboard .scroll-bottom { bottom:66px; }
 .send.stopping .mode-send { opacity:0; transform:scale(.3) rotate(65deg); }
 .field.pulse { animation:composer-pulse .45s var(--spring); }
 body.keyboard .composer { padding-bottom:8px; }
+/* iOS draws its own bar over the page above the keyboard (no web API hides it): the lavender runs on behind it. */
+html:has(body.keyboard .talk-tab:not([hidden])),html:has(body.keyboard .talk-tab:not([hidden])) body,html:has(body.keyboard .page.home:not([hidden])),html:has(body.keyboard .page.home:not([hidden])) body { background:var(--wash); }
+body.keyboard .talk-tab { background:linear-gradient(transparent calc(100% - 72px),var(--wash)),radial-gradient(420px 420px at 0% 92%,rgba(140,153,255,.42),transparent 70%),radial-gradient(360px 360px at 100% 72%,rgba(179,204,255,.7),transparent 70%),var(--wash); }
 .attached { position:relative; z-index:3; display:flex; gap:8px; flex:0 0 auto; padding:5px 16px; overflow-x:auto; background:#fff; }
 .attached > div { position:relative; flex-shrink:0; }
 .attached img,.attached .doc { display:flex; align-items:center; justify-content:center; width:64px; height:64px; padding:4px; border-radius:14px; background:var(--grouped); color:var(--label-2); object-fit:cover; font-size:11px; line-height:14px; text-align:center; overflow:hidden; }

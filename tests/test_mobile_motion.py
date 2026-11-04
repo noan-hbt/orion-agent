@@ -5,7 +5,8 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
-APP = (Path(__file__).parents[1] / "src/orion/mobile/static/app.js").read_text(encoding="utf-8")
+APP_DIR = Path(__file__).parents[1] / "src/orion/mobile/static"
+APP = (APP_DIR / "app.js").read_text(encoding="utf-8")
 
 
 def _piece(start: str, end: str) -> str:
@@ -112,3 +113,18 @@ async def test_a_message_sent_after_a_pause_shows_its_time_once() -> None:
         }""",
     )
     assert result == 2
+
+
+async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:
+    """Seen for real: a white strip around iOS's form bar, under the lavender conversation."""
+    css = (APP_DIR / "app.css").read_text(encoding="utf-8")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch()
+        page = await browser.new_page(viewport={"width": 390, "height": 844})
+        await page.set_content(f"<style>{css}</style><body><div class='tab talk-tab'></div></body>")
+        behind = "() => getComputedStyle(document.documentElement).backgroundColor"
+        tab = "() => getComputedStyle(document.querySelector('.talk-tab')).backgroundColor"
+        await page.evaluate("document.body.classList.add('keyboard')")
+        band, wash = await page.evaluate(behind), await page.evaluate(tab)
+        await browser.close()
+    assert band == wash
