@@ -31,6 +31,7 @@ from evals.harness import (
     says_nothing_twice,
     silent_while_working,
     spoke_while_working,
+    together,
     uses,
     works_at_night,
 )
@@ -278,6 +279,16 @@ CASES: tuple[Case, ...] = (
         facts=OWNER,
         steps=(Say("Envoie mon attestation d'assurance habitation à l'agence immo"),),
         checks=(uses("papers:find"), avoids("mail_send")),
+    ),
+    Case(
+        name="deux_recherches_d_un_coup",
+        origin="04/11 : un outil par réponse, même quand les recherches ne dépendent pas l'une "
+        "de l'autre. Deux villes, deux recherches, une seule réponse du modèle.",
+        at=paris(2026, 11, 4, 10, 0),
+        steps=(Say("Quelle est la population de Lyon et celle de Marseille ? Cherche sur le web"),),
+        checks=(together("web_search"),),
+        live_web=True,
+        modules=("web",),
     ),
     Case(
         name="un_dentiste_apres_18h",
