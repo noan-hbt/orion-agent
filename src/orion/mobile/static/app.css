@@ -35,6 +35,8 @@ textarea:focus-visible,.search input:focus-visible { outline:none; }
 .pill.wide { width:100%; }
 .round { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; width:44px; height:44px; border-radius:50%; }
 .round:not(.glass) { background:var(--fill); }
+:where(button) { transition:transform .35s var(--spring); }
+:where(button:not(:disabled):active) { transform:scale(.97); transition-duration:.08s; }
 .pill:not(:disabled):active,.round:not(:disabled):active,button.tile:active,.bento button:active,.chip:active,.talk:active { transform:scale(.96); transition-duration:.08s; }
 .danger,.error { color:var(--red); }
 .hint,.empty { color:var(--label-2); font-size:13px; line-height:18px; }
@@ -228,7 +230,7 @@ body.keyboard .composer { padding-bottom:8px; }
 /* iOS draws its own bar over the page above the keyboard (no web API hides it): the lavender runs on behind it. */
 html:has(body.keyboard .talk-tab:not([hidden])),html:has(body.keyboard .talk-tab:not([hidden])) body,html:has(body.keyboard .page.home:not([hidden])),html:has(body.keyboard .page.home:not([hidden])) body { background:var(--wash); }
 body.keyboard .talk-tab { background:linear-gradient(transparent calc(100% - 72px),var(--wash)),radial-gradient(420px 420px at 0% 92%,rgba(140,153,255,.42),transparent 70%),radial-gradient(360px 360px at 100% 72%,rgba(179,204,255,.7),transparent 70%),var(--wash); }
-.attached { position:relative; z-index:3; display:flex; gap:8px; flex:0 0 auto; padding:5px 16px; overflow-x:auto; background:#fff; }
+.attached { position:relative; z-index:3; display:flex; gap:8px; flex:0 0 auto; padding:5px 16px; overflow-x:auto; }
 .attached > div { position:relative; flex-shrink:0; }
 .attached img,.attached .doc { display:flex; align-items:center; justify-content:center; width:64px; height:64px; padding:4px; border-radius:14px; background:var(--grouped); color:var(--label-2); object-fit:cover; font-size:11px; line-height:14px; text-align:center; overflow:hidden; }
 .attached button { position:absolute; right:-3px; top:-3px; width:23px; height:23px; border:2px solid #fff; border-radius:50%; background:#8E8E93; color:#fff; font-size:17px; line-height:17px; }
@@ -667,6 +669,24 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
   .panel,.voice,.scrim,.tapback-overlay,.viewer { max-width:560px; margin-right:auto; margin-left:auto; }
   .sheet { width:calc(100% - 16px); }
 }
+/* D242: the home and the conversation breathe, the planet travels, Orion's words unfold. */
+.talk-tab,.page.home { isolation:isolate; }
+.talk-tab::before,.page.home::before { content:""; position:absolute; z-index:-1; inset:-30%; pointer-events:none; background:radial-gradient(38% 30% at 28% 62%,rgba(140,153,255,.24),transparent 70%),radial-gradient(34% 28% at 74% 36%,rgba(214,180,255,.22),transparent 70%); animation:aurora 26s ease-in-out infinite alternate; transition:opacity .25s ease; }
+body.keyboard .talk-tab::before,body.keyboard .page.home::before { opacity:0; }
+@keyframes aurora { to { transform:translate(6%,-5%) rotate(10deg) scale(1.08); } }
+.planet-ghost { position:fixed; z-index:8; pointer-events:none; }
+.planet-away .planet,.avatar.mini.planet-away > .planet { visibility:hidden; }
+.word { display:inline-block; animation:word-in .42s var(--spring) backwards; animation-delay:calc(var(--i) * 22ms); }
+@keyframes word-in { from { opacity:0; transform:translateY(5px); } }
+.avatar.mini.ping .planet .body { animation:planet-pop .55s var(--bounce); }
+.avatar.ping::after { content:""; position:absolute; inset:-2px; border:2px solid rgba(91,108,255,.5); border-radius:50%; animation:halo .9s ease-out; pointer-events:none; }
+@keyframes planet-pop { 40% { transform:scale(1.14); } }
+.attached > .pop { animation:badge-pop .45s var(--bounce); }
+.attached > .out { animation:attach-out .18s ease forwards; pointer-events:none; }
+@keyframes attach-out { to { opacity:0; transform:scale(.6); } }
+body.arriving #app { animation:fade-in .5s ease; }
+body.arriving .home-planet,body.arriving .avatar.mini { animation:mark-in .9s var(--bounce) backwards; }
+
 @media (prefers-reduced-transparency:reduce) {
   .glass,.sheet { background:#fff; -webkit-backdrop-filter:none; backdrop-filter:none; }
   .page-inline-title,.panel > header::before { background:var(--grouped); -webkit-backdrop-filter:none; backdrop-filter:none; }

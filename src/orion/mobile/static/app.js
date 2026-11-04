@@ -301,6 +301,8 @@ window.addEventListener("resize", fit);
 window.addEventListener("orientationchange", () => (roomy = 0));
 addEventListener("focusout", () => setTimeout(fit, 0));
 fit();
+document.body.classList.add("arriving");
+setTimeout(() => document.body.classList.remove("arriving"), 2500);
 
 // -- start ------------------------------------------------------------------------------------
 
@@ -793,12 +795,62 @@ function add(message, live = true) {
   // A message that arrives now rises into place; history does not.
   if (live) for (const el of els) el.classList?.add("new");
   view.list.append(...els);
+  if (live && message.who !== "owner") {
+    for (const el of els) if (el.matches?.(".msg")) el.querySelectorAll(":scope > .bubble").forEach(unfold);
+    ping();
+  }
   retail();
   if (live && (wasNear || message.who === "owner")) bottom(true, true);
   else if (live) {
     view.unread = true;
     scrollButton();
   }
+}
+
+// Orion's words arrive one after the other (D242), then the bubble is plain text again.
+function unfold(bubble) {
+  if (still()) return;
+  const nodes = [];
+  const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+  while (walker.nextNode()) if (!walker.currentNode.parentElement.closest("pre")) nodes.push(walker.currentNode);
+  const count = nodes.reduce((sum, node) => sum + node.data.split(/\s+/).length, 0);
+  if (count > 400) return;
+  let i = 0;
+  const words = [];
+  for (const node of nodes) {
+    const parts = node.data.split(/(\s+)/).map((part) => {
+      if (!part.trim()) return part;
+      const word = h("span", { class: "word" }, part);
+      word.style.setProperty("--i", String(Math.min(i++, 40)));
+      words.push(word);
+      return word;
+    });
+    node.replaceWith(...parts);
+  }
+  setTimeout(() => {
+    for (const word of words) word.replaceWith(word.textContent);
+    bubble.normalize();
+  }, 1500);
+}
+
+// The small planet answers when Orion speaks.
+function ping() {
+  const avatar = view.avatar;
+  if (!avatar || still()) return;
+  avatar.classList.remove("ping");
+  void avatar.offsetWidth;
+  avatar.classList.add("ping");
+  setTimeout(() => avatar.classList.remove("ping"), 900);
+}
+
+// Something taken away folds shut rather than leaving a hole.
+function vanish(el) {
+  if (still()) return el.remove();
+  el.style.overflow = "hidden";
+  el.animate(
+    [{ height: `${el.offsetHeight}px`, opacity: 1, transform: "scale(1)" }, { height: "0px", marginTop: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0, opacity: 0, transform: "scale(.96)" }],
+    { duration: 300, easing: "cubic-bezier(.32,.72,0,1)" },
+  ).onfinish = () => el.remove();
 }
 
 function prepend(messages) {
@@ -1311,20 +1363,23 @@ function pick(input) {
 function paintAttached() {
   view.attached.hidden = !state.attached.length;
   view.attached.replaceChildren(
-    ...state.attached.map((file, i) =>
+    ...state.attached.map((file) =>
       h(
         "div",
-        {},
+        { class: file.shown ? "" : "pop" },
         file.preview ? h("img", { src: file.preview, alt: file.name }) : h("span", { class: "doc" }, file.name),
         h(
           "button",
           {
             type: "button",
             "aria-label": `Retirer ${file.name}`,
-            onclick: () => {
-              state.attached.splice(i, 1);
-              paintAttached();
-              sendMode();
+            onclick: (event) => {
+              event.currentTarget.parentElement.classList.add("out");
+              setTimeout(() => {
+                state.attached.splice(state.attached.indexOf(file), 1);
+                paintAttached();
+                sendMode();
+              }, still() ? 0 : 180);
             },
           },
           "×",
@@ -1332,6 +1387,7 @@ function paintAttached() {
       ),
     ),
   );
+  for (const file of state.attached) file.shown = true;
 }
 
 // -- voice ------------------------------------------------------------------------------------
@@ -2287,6 +2343,39 @@ function paintTopbar(key) {
   view.dock.hidden = key === "talk";
 }
 
+// The planet itself crosses between the home screen and the conversation (D242). The ghost is
+// always the large one, so it stays sharp at every size.
+let planetFlight = null;
+function flyPlanet(fromKey, toKey) {
+  const ends = { now: view.nowWork, talk: view.avatar };
+  if (still() || !ends[fromKey] || !ends[toKey]) return;
+  const from = ends[fromKey].querySelector(".planet");
+  const to = ends[toKey].querySelector(".planet");
+  if (!from || !to) return;
+  planetFlight?.cancel();
+  const large = toKey === "now" ? to : from;
+  const box = large.getBoundingClientRect();
+  const placed = (el) => {
+    const r = el.getBoundingClientRect();
+    return `translate(${r.left + r.width / 2 - box.left - box.width / 2}px,${r.top + r.height / 2 - box.top - box.height / 2}px) scale(${r.width / box.width})`;
+  };
+  const ghost = large.cloneNode(true);
+  ghost.classList.add("planet-ghost");
+  Object.assign(ghost.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` });
+  document.body.append(ghost);
+  ends.now.classList.add("planet-away");
+  ends.talk.classList.add("planet-away");
+  const flight = ghost.animate([{ transform: placed(from) }, { transform: placed(to) }], { duration: 560, easing: "cubic-bezier(.32,.72,0,1)" });
+  planetFlight = flight;
+  flight.onfinish = flight.oncancel = () => {
+    ghost.remove();
+    if (planetFlight !== flight) return;
+    planetFlight = null;
+    ends.now.classList.remove("planet-away");
+    ends.talk.classList.remove("planet-away");
+  };
+}
+
 function show(key) {
   if (!view.tabs[key]) key = "now";
   const from = TABS.findIndex(([k]) => k === state.tab);
@@ -2301,8 +2390,10 @@ function show(key) {
       tab.classList.remove("enter-left", "enter-right", "leave-left", "leave-right");
     }
     void el.offsetWidth;
-    el.classList.add(to > from ? "enter-right" : "enter-left");
+    // Measured once the old screen left the flow, and before the new one starts sliding.
     leaving.classList.add(to > from ? "leave-left" : "leave-right");
+    flyPlanet(state.tab, key);
+    el.classList.add(to > from ? "enter-right" : "enter-left");
     leaving.leaveTimer = setTimeout(() => {
       leaving.classList.remove("leave-left", "leave-right");
       if (view.tabs[state.tab] !== leaving) leaving.hidden = true;
@@ -5657,7 +5748,7 @@ function offerNotifications() {
           class: "pill",
           type: "button",
           onclick: () => {
-            card.remove();
+            vanish(card);
             try {
               localStorage.setItem("orion.notify.later", "1");
             } catch {
@@ -5667,7 +5758,7 @@ function offerNotifications() {
         },
         "Plus tard",
       ),
-      h("button", { class: "pill dark", type: "button", onclick: () => (card.remove(), enableNotifications()) }, "Activer"),
+      h("button", { class: "pill dark", type: "button", onclick: () => (vanish(card), enableNotifications()) }, "Activer"),
     ),
   );
   view.asks.before(card);
