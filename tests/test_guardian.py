@@ -343,12 +343,15 @@ async def test_calendars_and_mail_are_read_by_the_guardian(
         sender: str | None,
         limit: int,
         now: datetime,
+        box: str = "inbox",
     ) -> list[RawMail]:
         assert account.password.resolve().get_secret_value() == "app-pw"
         assert (since.month, before, sender, limit) == (5, None, "paul", 50)
         return [mail]
 
-    async def pick(account: MailAccount, uid: int, message_id: str, index: int) -> Attached:
+    async def pick(
+        account: MailAccount, uid: int, message_id: str, index: int, box: str = "inbox"
+    ) -> Attached:
         assert (uid, message_id, index) == (7, "<m@x>", 1)
         return Attached("devis.pdf", "application/pdf", 3, b"%PD")
 

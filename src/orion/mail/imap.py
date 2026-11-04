@@ -10,17 +10,26 @@ from __future__ import annotations
 import email
 import email.policy
 import imaplib
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from email.utils import parseaddr, parsedate_to_datetime
+from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from html.parser import HTMLParser
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 BODY_CHARS = 6000
 MAX_ATTACHMENTS = 20
 _BULK = {"bulk", "list", "junk"}
+SENT = "\\Sent"
+ALL = "\\All"
+ARCHIVE = "\\Archive"
+"""Special-use folders (RFC 6154): the server says which of its folders is the sent mail or all
+of it ("[Gmail]/Sent Mail", "[Gmail]/Messages envoyés", "Sent Messages"), whatever its name."""
+Box = Literal["inbox", "sent", "archive"]
+"""Where a mail is read: the inbox (synced), his sent mail, or his archived mail (Gmail: all of
+it). Only the inbox is synced; the others are read when Orion asks (D238)."""
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,8 @@ class RawMail:
     """Mailing list or bulk mail (List-Unsubscribe, Precedence): no need to read it closely."""
     attachments: tuple[Attached, ...] = ()
     """Its attached files, without their bytes."""
+    to: str = ""
+    """Its recipients, as « Name <address>, … » (clipped)."""
 
 
 class _Text(HTMLParser):
@@ -141,7 +152,50 @@ def parse_message(uid: int, raw: bytes, fallback_time: datetime) -> RawMail:
         body=" ".join(body.split())[:BODY_CHARS],
         bulk=message.get("List-Unsubscribe") is not None or precedence in _BULK,
         attachments=tuple(info for info, _ in _files(message)),
+        to=_recipients(message),
     )
+
+
+def _recipients(message: EmailMessage) -> str:
+    found = getaddresses([str(v) for v in message.get_all("To", []) + message.get_all("Cc", [])])
+    named = [f"{' '.join(n.split())} <{a}>" if n.strip() else a for n, a in found if a]
+    return ", ".join(named)[:300]
+
+
+def _quoted(folder: str) -> str:
+    if re.fullmatch(r"[\w./\[\]&+-]+", folder):
+        return folder
+    return '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def special_folder(imap: imaplib.IMAP4, use: str) -> str:
+    """The folder the server marks with that special use (`SENT`, `ALL`); for `ALL`, a server
+    without one (iCloud) gives its `ARCHIVE`."""
+    status, listed = imap.list()
+    marked: dict[str, str] = {}
+    for line in listed if status == "OK" else []:
+        text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+        found = re.match(r'\((?P<flags>[^)]*)\) (?:"[^"]*"|NIL) (?P<name>.+)$', text)
+        if found is None:
+            continue
+        name = found["name"].strip()
+        if name.startswith('"') and name.endswith('"'):
+            name = name[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        for flag in found["flags"].lower().split():
+            marked.setdefault(flag, name)
+    for wanted in (use, ARCHIVE) if use == ALL else (use,):
+        if wanted.lower() in marked:
+            return marked[wanted.lower()]
+    raise imaplib.IMAP4.error(f"the server marks no folder {use}")
+
+
+def open_folder(imap: imaplib.IMAP4, folder: str) -> None:
+    """Opens `folder` read-only; a special use (`SENT`, `ALL`) is looked up on the server."""
+    if folder.startswith("\\"):
+        folder = special_folder(imap, folder)
+    status, _ = imap.select(_quoted(folder), readonly=True)
+    if status != "OK":
+        raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
 
 
 @dataclass(frozen=True)
@@ -169,9 +223,7 @@ def fetch_since(
     the server renumbered the folder), newest `limit` only. Blocking: run it in a thread."""
     with imaplib.IMAP4_SSL(host, port, timeout=30) as imap:
         imap.login(username, password)
-        status, _ = imap.select(folder, readonly=True)
-        if status != "OK":
-            raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
+        open_folder(imap, folder)
         _, values = imap.response("UIDVALIDITY")
         current = int(values[0]) if values and values[0] else 0
         if current != uidvalidity or not last_uid:
@@ -207,22 +259,22 @@ def search_window(
     sender: str | None,
     limit: int,
     now: datetime,
+    by: str = "FROM",
 ) -> list[RawMail]:
-    """Messages received between `since` and `before` (from `sender` if given), newest `limit`
-    only, read live on the server however old they are (D171). Blocking: run it in a thread."""
+    """Messages received between `since` and `before` (from `sender` if given, or to them with
+    `by` "TO"), newest `limit` only, read live on the server however old they are (D171).
+    Blocking: run it in a thread."""
     with imaplib.IMAP4_SSL(host, port, timeout=30) as imap:
         imap.login(username, password)
-        status, _ = imap.select(folder, readonly=True)
-        if status != "OK":
-            raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
+        open_folder(imap, folder)
         criteria = ["SINCE", since.strftime("%d-%b-%Y")]
         if before is not None:
             # BEFORE is a day, exclusive: the day itself is in the window.
             criteria += ["BEFORE", (before + timedelta(days=1)).strftime("%d-%b-%Y")]
         if sender and sender.isascii():
-            criteria += ["FROM", '"' + sender.replace("\\", "").replace('"', "") + '"']
+            criteria += [by, '"' + sender.replace("\\", "").replace('"', "") + '"']
         elif sender:  # "Enchères": imaplib sends ASCII only, so the name goes as a literal
-            criteria = ["CHARSET", "UTF-8", *criteria, "FROM"]
+            criteria = ["CHARSET", "UTF-8", *criteria, by]
             imap.literal = sender.encode()  # pyright: ignore[reportAttributeAccessIssue]
         _, data = imap.uid("SEARCH", *criteria)
         found = sorted(int(u) for u in (data[0] or b"").split())
@@ -252,9 +304,7 @@ def fetch_attachment(
     server may have renumbered the folder). Blocking: run it in a thread."""
     with imaplib.IMAP4_SSL(host, port, timeout=60) as imap:
         imap.login(username, password)
-        status, _ = imap.select(folder, readonly=True)
-        if status != "OK":
-            raise imaplib.IMAP4.error(f"cannot open folder {folder!r}")
+        open_folder(imap, folder)
         _, fetched = imap.uid("FETCH", str(uid), "(BODY.PEEK[])")
         for item in fetched:
             if isinstance(item, tuple):

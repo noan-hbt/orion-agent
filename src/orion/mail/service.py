@@ -29,7 +29,17 @@ from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Alert, DigestLine
 from orion.mail.card import Card, Category, Importance, headers_card
-from orion.mail.imap import Attached, Batch, RawMail, fetch_attachment, fetch_since, search_window
+from orion.mail.imap import (
+    ALL,
+    SENT,
+    Attached,
+    Batch,
+    Box,
+    RawMail,
+    fetch_attachment,
+    fetch_since,
+    search_window,
+)
 from orion.memory.model import COMMITMENT_CREATED
 from orion.modules.base import ModuleSettings
 
@@ -67,6 +77,18 @@ class MailAccount(BaseModel):
         default=None,
         description="Where deleted mail goes, e.g. '[Gmail]/Trash'; default: the server's own",
     )
+    sent_folder: str | None = Field(
+        default=None,
+        description="His sent mail, e.g. '[Gmail]/Sent Mail'; default: the server's own",
+    )
+
+    def folder_of(self, box: Box) -> str:
+        """That box's folder on this server (a special use is looked up when opened)."""
+        if box == "sent":
+            return self.sent_folder or SENT
+        if box == "archive":
+            return self.archive_folder or ALL
+        return self.folder
 
 
 class MailSettings(ModuleSettings):
@@ -107,6 +129,10 @@ class MailCard:
     attachments: tuple[Attached, ...] | None = ()
     """Its attached files (name, type, size), read on the server when asked for; None for cards
     made before attachments were recorded (`Mailbox.files` reads the mail again)."""
+    box: Box = "inbox"
+    """Where it was read, and where its `uid` holds (D238)."""
+    to: str = ""
+    """Its recipients: who he wrote to, for his sent mail."""
 
     @property
     def sender(self) -> str:
@@ -127,8 +153,13 @@ class MailCard:
             tags.append(f"{len(self.attachments)} pièce(s) jointe(s)")
         when = self.received_at.astimezone(zone)
         about = f" : {c.summary}" if c.summary else ""
+        who = f"{self.sender} <{self.from_addr}>"
+        if self.box == "sent":
+            who = f"envoyé par lui à {self.to or '?'}"
+        elif self.box == "archive":
+            tags.append("archivé")
         return (
-            f"({self.id}) {when:%d/%m %H:%M} {self.sender} <{self.from_addr}> — "
+            f"({self.id}) {when:%d/%m %H:%M} {who} — "
             f"« {self.subject or '(sans objet)'} »{about} [{', '.join(tags)}]"
         )
 
@@ -178,6 +209,8 @@ class MailState:
                     Attached(str(a["name"]), str(a["type"]), int(a["size"]))
                     for a in payload["attachments"]
                 ),
+                box=_box(payload.get("box")),
+                to=str(payload.get("to", "")),
             )
             self.cards[card.id] = card
         elif event.kind == COMMITMENT_CREATED and (event.correlation_id or "").startswith("m_"):
@@ -187,6 +220,10 @@ class MailState:
             account = str(payload["account"])
             self.cursors[account] = (int(payload["uidvalidity"]), int(payload["last_uid"]))
             self.synced[account] = datetime.fromisoformat(str(payload["at"]))
+
+
+def _box(value: object) -> Box:
+    return "sent" if value == "sent" else "archive" if value == "archive" else "inbox"
 
 
 Fetch = Callable[[MailAccount, int, int, int, int, datetime], Awaitable[Batch]]
@@ -219,9 +256,11 @@ async def imap_fetch(
 
 
 Search = Callable[
-    [MailAccount, datetime, datetime | None, str | None, int, datetime], Awaitable[list[RawMail]]
+    [MailAccount, datetime, datetime | None, str | None, int, datetime, Box],
+    Awaitable[list[RawMail]],
 ]
-"""(account, since, before, sender, limit, now) → the mail of that window, read live (D171)."""
+"""(account, since, before, sender, limit, now, box) → the mail of that window, read live
+(D171); in his sent mail, `sender` is who he wrote to (D238)."""
 
 
 async def imap_search(
@@ -231,6 +270,7 @@ async def imap_search(
     sender: str | None,
     limit: int,
     now: datetime,
+    box: Box = "inbox",
 ) -> list[RawMail]:
     password = account.password.resolve().get_secret_value()
     return await asyncio.to_thread(
@@ -239,21 +279,22 @@ async def imap_search(
         account.port,
         account.username,
         password,
-        account.folder,
+        account.folder_of(box),
         since,
         before,
         sender,
         limit,
         now,
+        "TO" if box == "sent" else "FROM",
     )
 
 
-Pick = Callable[[MailAccount, int, str, int], Awaitable[Attached | None]]
-"""(account, uid, message_id, index) → that attached file, with its bytes."""
+Pick = Callable[[MailAccount, int, str, int, Box], Awaitable[Attached | None]]
+"""(account, uid, message_id, index, box) → that attached file, with its bytes."""
 
 
 async def imap_attachment(
-    account: MailAccount, uid: int, message_id: str, index: int
+    account: MailAccount, uid: int, message_id: str, index: int, box: Box = "inbox"
 ) -> Attached | None:
     password = account.password.resolve().get_secret_value()
     return await asyncio.to_thread(
@@ -262,7 +303,7 @@ async def imap_attachment(
         account.port,
         account.username,
         password,
-        account.folder,
+        account.folder_of(box),
         uid,
         message_id,
         index,
@@ -343,9 +384,16 @@ class Mailbox:
                 added[account.name] = await self._record(account.name, batch, now)
             return added
 
-    async def dig(self, since: datetime, before: datetime | None, sender: str | None) -> int:
-        """Reads that window on the server itself, however old (D171): the mail not yet known
-        becomes cards like the rest. Returns the number of new cards."""
+    async def dig(
+        self,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        box: Box = "inbox",
+    ) -> int:
+        """Reads that window on the server itself, however old (D171), in his inbox, his sent
+        mail or his archived mail (D238): the mail not yet known becomes cards like the rest.
+        Returns the number of new cards."""
         async with self._lock:
             await self._runner.catch_up()
             now = self._clock()
@@ -354,15 +402,17 @@ class Mailbox:
             correlation = new_id()
             for account in self.settings.accounts:
                 try:
-                    mails = await self._search(account, since, before, sender, DIG_LIMIT, now)
+                    mails = await self._search(account, since, before, sender, DIG_LIMIT, now, box)
                 except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
-                    log.warning("mail.dig_failed", account=account.name, error=repr(exc))
+                    log.warning("mail.dig_failed", account=account.name, box=box, error=repr(exc))
                     continue
                 for mail in mails:
-                    if mail.from_addr in self._owners or (account.name, mail.message_id) in known:
+                    if (account.name, mail.message_id) in known:
                         continue
+                    if box != "sent" and mail.from_addr in self._owners:
+                        continue  # his own, outside his sent mail: a copy, a note to self
                     known.add((account.name, mail.message_id))
-                    events.append(self._card_event(account.name, mail, correlation))
+                    events.append(self._card_event(account.name, mail, correlation, box))
             if events:
                 await self._journal.append(events)
                 await self._runner.catch_up()
@@ -395,9 +445,10 @@ class Mailbox:
                 account,
                 card.received_at - day,
                 card.received_at + day,
-                card.from_addr or None,
+                None if card.box == "sent" else card.from_addr or None,
                 DIG_LIMIT,
                 self._clock(),
+                card.box,
             )
         except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
             log.warning("mail.reread_failed", account=account.name, error=repr(exc))
@@ -409,7 +460,7 @@ class Mailbox:
         account = next((a for a in self.settings.accounts if a.name == card.account), None)
         if account is None or not card.uid:
             return None
-        return await self._pick(account, card.uid, card.message_id, index)
+        return await self._pick(account, card.uid, card.message_id, index, card.box)
 
     async def _record(self, account: str, batch: Batch, now: datetime) -> int:
         events: list[NewEvent] = []
@@ -438,7 +489,9 @@ class Mailbox:
             log.info("mail.synced", account=account, new=len(events) - 1)
         return len(events) - 1
 
-    def _card_event(self, account: str, mail: RawMail, correlation: str) -> NewEvent:
+    def _card_event(
+        self, account: str, mail: RawMail, correlation: str, box: Box = "inbox"
+    ) -> NewEvent:
         card = headers_card(mail.bulk)
         return NewEvent(
             kind=CARD,
@@ -458,6 +511,8 @@ class Mailbox:
                     {"name": a.name, "type": a.content_type, "size": a.size}
                     for a in mail.attachments
                 ],
+                "box": box,
+                "to": mail.to,
             },
             provenance=Provenance(source=f"mail:{account}:{mail.message_id}", actor="orion:mail"),
             trust=Trust.THIRD_PARTY,
@@ -471,14 +526,20 @@ class Mailbox:
     # -- reading ------------------------------------------------------------------------------
 
     def recent(
-        self, since: datetime, worth_it: bool = False, before: datetime | None = None
+        self,
+        since: datetime,
+        worth_it: bool = False,
+        before: datetime | None = None,
+        sent: bool = False,
     ) -> list[MailCard]:
         """Cards received since `since` (and before `before`), newest first; `worth_it` drops
-        newsletters, notifications, spam and anything marked low."""
+        newsletters, notifications, spam and anything marked low; `sent`: his sent mail instead
+        of what he received."""
         found = [
             c
             for c in self.state.cards.values()
-            if c.received_at >= since
+            if (c.box == "sent") == sent
+            and c.received_at >= since
             and (before is None or c.received_at < before)
             and (
                 not worth_it
@@ -524,7 +585,7 @@ class Mailbox:
                 importance=0.6,
             )
             for c in self.recent(now - timedelta(hours=12), worth_it=True)
-            if c.text
+            if c.text and c.box == "inbox"  # an archived mail read again has not just come
         ]
 
     async def digest(

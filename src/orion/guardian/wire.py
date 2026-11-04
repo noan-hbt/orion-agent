@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.mail.imap import Attached, Batch, RawMail
+from orion.mail.imap import Attached, Batch, Box, RawMail
 
 
 class ApprovalRequest(BaseModel):
@@ -35,6 +35,7 @@ class MailPick(BaseModel):
     uid: int = Field(ge=1)
     message_id: str = Field(max_length=1000)
     index: int = Field(ge=1, le=100)
+    box: Box = "inbox"
 
 
 class MailSearch(BaseModel):
@@ -45,6 +46,7 @@ class MailSearch(BaseModel):
     sender: str | None = Field(default=None, max_length=200)
     limit: int = Field(ge=1, le=200)
     now: datetime
+    box: Box = "inbox"
 
 
 def mail_request(body: bytes) -> MailRequest:
@@ -65,6 +67,7 @@ def mails_to_json(mails: list[RawMail]) -> list[dict[str, Any]]:
             "attachments": [
                 {"name": a.name, "type": a.content_type, "size": a.size} for a in m.attachments
             ],
+            "to": m.to,
         }
         for m in mails
     ]
@@ -85,6 +88,7 @@ def mails_from_json(data: list[dict[str, Any]]) -> list[RawMail]:
                 Attached(str(a["name"]), str(a["type"]), int(a["size"]))
                 for a in m.get("attachments", [])
             ),
+            str(m.get("to", "")),
         )
         for m in data
     ]

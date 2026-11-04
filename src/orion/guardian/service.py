@@ -1420,7 +1420,13 @@ class GuardianService:
             return refused("malformed mail search", 400)
         try:
             mails = await self._search_mail(
-                account, query.since, query.before, query.sender, query.limit, query.now
+                account,
+                query.since,
+                query.before,
+                query.sender,
+                query.limit,
+                query.now,
+                query.box,
             )
         except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
             log.warning("guardian.mail_search_failed", account=name, error=repr(exc))
@@ -1438,7 +1444,9 @@ class GuardianService:
         except ValidationError:
             return refused("malformed attachment request", 400)
         try:
-            found = await self._pick_mail(account, query.uid, query.message_id, query.index)
+            found = await self._pick_mail(
+                account, query.uid, query.message_id, query.index, query.box
+            )
         except (LookupError, OSError, TimeoutError, imaplib.IMAP4.error) as exc:
             log.warning("guardian.mail_attachment_failed", account=name, error=repr(exc))
             return refused(f"mailbox {name!r} unreadable: {exc!r}", 502)

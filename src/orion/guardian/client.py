@@ -27,7 +27,7 @@ from orion.guardian.wire import (
     batch_from_json,
     mails_from_json,
 )
-from orion.mail.imap import Attached, Batch, RawMail
+from orion.mail.imap import Attached, Batch, Box, RawMail
 from orion.mail.service import MailAccount
 
 BASE_URL = "http://guardian"
@@ -160,17 +160,18 @@ class GuardianClient:
         sender: str | None,
         limit: int,
         now: datetime,
+        box: Box = "inbox",
     ) -> list[RawMail]:
         """That window of the mailbox, read live by the guardian (D171)."""
-        query = MailSearch(since=since, before=before, sender=sender, limit=limit, now=now)
+        query = MailSearch(since=since, before=before, sender=sender, limit=limit, now=now, box=box)
         data = await self.post(f"/v1/mail/{account.name}/search", query.model_dump(mode="json"))
         return mails_from_json(data["mails"])
 
     async def mail_attachment(
-        self, account: MailAccount, uid: int, message_id: str, index: int
+        self, account: MailAccount, uid: int, message_id: str, index: int, box: Box = "inbox"
     ) -> Attached | None:
         """One attached file of a mail, read by the guardian."""
-        query = MailPick(uid=uid, message_id=message_id, index=index)
+        query = MailPick(uid=uid, message_id=message_id, index=index, box=box)
         data = await self.post(f"/v1/mail/{account.name}/attachment", query.model_dump())
         if not data["found"]:
             return None

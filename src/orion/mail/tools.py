@@ -34,7 +34,15 @@ class MailInput(BaseModel):
     everything: bool = Field(
         default=False, description="Include newsletters, notifications and low-importance mail"
     )
-    sender: str | None = Field(default=None, description="Only mail whose sender contains this")
+    sender: str | None = Field(
+        default=None,
+        description="Only mail whose sender contains this (in `sent`: whom he wrote to)",
+    )
+    box: Literal["inbox", "sent", "archive"] = Field(
+        default="inbox",
+        description="`sent`: the mail he sent himself; `archive`: his archived mail, no longer "
+        "in his inbox (Gmail: all of it)",
+    )
     bulk: bool = Field(
         default=False,
         description="Newsletters and mailing lists grouped by sender, most frequent first: "
@@ -174,6 +182,11 @@ def mail_tools(
         unknown = [c for c in cards if c not in mailbox.state.cards]
         if unknown:
             return ToolResult(f"No mail card {', '.join(unknown)}.", is_error=True)
+        elsewhere = [c for c in cards if mailbox.state.cards[c].box != "inbox"]
+        if elsewhere:  # its uid holds in another folder: acting on it in the inbox hits another
+            return ToolResult(
+                f"Only mail in his inbox: {', '.join(elsewhere)} is not.", is_error=True
+            )
         uids: dict[str, list[int]] = defaultdict(list)
         for card_id in cards:
             card = mailbox.state.cards[card_id]
@@ -253,14 +266,22 @@ def mail_tools(
         before = now - timedelta(days=args.until_days) if args.until_days else None
         if before is not None and before <= since:
             return ToolResult("`until_days` must be less than `days`.", is_error=True)
-        if args.days > mailbox.settings.lookback_days or before is not None:
+        sent = args.box == "sent"
+        if args.box != "inbox":  # only the inbox is synced: the rest is read now (D238)
+            await mailbox.dig(since, before, args.sender, args.box)
+        elif args.days > mailbox.settings.lookback_days or before is not None:
             await mailbox.dig(since, before, args.sender)  # further back than the sync keeps
         if args.bulk:
             return ToolResult(_bulk(mailbox.recent(since, before=before)), trust=Trust.THIRD_PARTY)
-        cards = mailbox.recent(since, worth_it=not args.everything, before=before)
+        worth_it = not args.everything and not sent
+        cards = mailbox.recent(since, worth_it=worth_it, before=before, sent=sent)
         if args.sender:
             needle = args.sender.lower()
-            cards = [c for c in cards if needle in f"{c.from_name} {c.from_addr}".lower()]
+            cards = [
+                c
+                for c in cards
+                if needle in (c.to if sent else f"{c.from_name} {c.from_addr}").lower()
+            ]
         if not cards:
             return ToolResult("Aucun mail correspondant.")
         lines = [mailbox.describe(c) for c in cards[:30]]
@@ -425,6 +446,7 @@ def mail_tools(
             name="mail",
             description="The owner's recent mail (sender, subject, date), and a mail's whole "
             "text with `read`, its attached files with `attachment`: you read it yourself. "
+            "`box`: what he sent, or his archived mail. "
             "Read-only: `mail_send`, `mail_draft`, `mail_mark` and `mail_tidy` write.",
             input_model=MailInput,
             handler=mail,

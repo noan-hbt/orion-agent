@@ -302,6 +302,7 @@ async def test_the_tool_reads_the_mailbox_now_and_months_back(journal: SqliteJou
         sender: str | None,
         limit: int,
         now: datetime,
+        box: str = "inbox",
     ) -> list[RawMail]:
         searches.append((since, before, sender))
         return [bill, own]
@@ -329,6 +330,70 @@ async def test_the_tool_reads_the_mailbox_now_and_months_back(journal: SqliteJou
     assert rebuilt.cards == box.state.cards
     bad = await tool.handler(tool.parse('{"days": 10, "until_days": 10}'), ctx)
     assert bad.is_error
+
+
+async def test_the_tool_reads_what_he_sent(journal: SqliteJournal) -> None:
+    """He asked about a mail he had sent: Orion only ever read his inbox (2026-11-04)."""
+    server = Server(parse_message(10, PLAIN, NOW))
+    sent = RawMail(
+        5,
+        "<sent@x>",
+        OWNER,
+        "Noan",
+        "Re: Diner",
+        NOW - timedelta(hours=3),
+        "Oui samedi !",
+        False,
+        to="Paul Martin <paul@example.com>",
+    )
+    boxes: list[str] = []
+
+    async def search(
+        account: MailAccount,
+        since: datetime,
+        before: datetime | None,
+        sender: str | None,
+        limit: int,
+        now: datetime,
+        box: str = "inbox",
+    ) -> list[RawMail]:
+        boxes.append(box)
+        return [sent] if box == "sent" else []
+
+    async def tidy(*_: object) -> Any:
+        raise AssertionError("never reached")
+
+    mails = Mailbox(journal, settings(), "Europe/Paris", server.fetch, lambda: NOW, search)
+    await mails.start()
+    tool, tidy_tool = mail_tools(mails, tidy=tidy)
+    ctx = ToolContext(thread_id="o", correlation_id="c")
+
+    received = await tool.handler(tool.parse("{}"), ctx)
+    assert "Paul Martin" in received.content and "Re: Diner" not in received.content
+    result = await tool.handler(tool.parse('{"box": "sent", "sender": "paul"}'), ctx)
+    assert (
+        boxes == ["sent"] and "Re: Diner" in result.content and "paul@example.com" in result.content
+    )
+    [card] = [c for c in mails.state.cards.values() if c.box == "sent"]
+    refused = await tidy_tool.handler(
+        tidy_tool.parse(json.dumps({"action": "trash", "cards": [card.id], "senders": ["moi"]})),
+        ctx,
+    )
+    assert refused.is_error  # its uid is in another folder than the inbox
+
+
+def test_the_sent_folder_is_the_one_the_server_marks() -> None:
+    class Listing:
+        def list(self) -> tuple[str, list[bytes]]:
+            return "OK", [
+                b'(\\HasNoChildren) "/" "INBOX"',
+                b'(\\All \\HasNoChildren) "/" "[Gmail]/Tous les messages"',
+                b'(\\HasNoChildren \\Sent) "/" "[Gmail]/Messages envoy&AOk-s"',
+            ]
+
+    listing = Listing()
+    assert imap.special_folder(listing, imap.SENT) == "[Gmail]/Messages envoy&AOk-s"  # pyright: ignore[reportArgumentType]
+    assert imap.special_folder(listing, imap.ALL) == "[Gmail]/Tous les messages"  # pyright: ignore[reportArgumentType]
 
 
 def test_a_mail_cannot_close_its_own_tag() -> None:
@@ -423,6 +488,7 @@ async def test_a_mail_whose_text_was_not_kept_is_read_on_the_server(
         sender: str | None,
         limit: int,
         now: datetime,
+        box: str = "inbox",
     ) -> list[RawMail]:
         return [news]
 
@@ -462,7 +528,7 @@ async def test_an_attached_file_is_listed_and_opened(journal: SqliteJournal) -> 
     kept: list[tuple[str, bytes]] = []
 
     async def pick(
-        account: MailAccount, uid: int, message_id: str, index: int
+        account: MailAccount, uid: int, message_id: str, index: int, box: str = "inbox"
     ) -> imap.Attached | None:
         assert (uid, message_id) == (20, "<devis@garage.example>")
         return imap.attachment_of(INVOICE, index)
