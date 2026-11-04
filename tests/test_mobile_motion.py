@@ -212,6 +212,24 @@ async def test_the_launch_ends_with_one_planet_in_its_place() -> None:
     assert end == [False, "visible"]
 
 
+async def test_the_dock_field_leads_to_the_chat_with_the_keyboard_up() -> None:
+    """Seen for real: the bottom field threw the owner onto the chat with no transition."""
+    seen, end = await _in_the_app(
+        """async () => {
+          const pause = () => new Promise((r) => setTimeout(r, 300));
+          document.querySelector(".top-back").click();
+          while (!document.querySelector(".ask-open")) await pause();
+          await pause();
+          seen.length = 0;
+          document.querySelector(".ask-open").click();
+          const field = document.querySelector(".composer .field");
+          return [field.getAnimations().length > 0, document.activeElement.tagName];
+        }"""
+    )
+    assert end == [True, "TEXTAREA"]
+    assert "fade-in" in seen and "tab-right" not in seen and "tab-left" not in seen
+
+
 async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:
     """Seen for real: a white strip around iOS's form bar, under the lavender conversation."""
     css = (APP_DIR / "app.css").read_text(encoding="utf-8")
