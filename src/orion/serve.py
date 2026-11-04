@@ -52,6 +52,7 @@ def memory_batcher(app: App) -> MemoryBatcher:
             app.memory,
             app.config.agent.extractor_model,
             app.config.effort("memory"),
+            told_later=app.timers.told_later,
         ),
         OWNER_THREAD,
         app.config.agent.timezone,

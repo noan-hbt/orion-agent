@@ -167,6 +167,19 @@ class Report:
     """The kind of notification it is (`orion.notifications`); empty: read from its key."""
     level: str = ""
     """How it rings, when its source says (a hook's own level); empty: his choice for its kind."""
+    skippable: bool = False
+    """Orion may find it pointless by now (done, already said): SILENCE then means nothing goes."""
+
+
+def reminder_notice(moment: str, text: str) -> str:
+    """A reminder he asked for, at its time. Orion can read the conversation, so it knows what
+    the clock does not: the thing may be done already (D246)."""
+    return (
+        f"Il t'a demandé de lui rappeler ça, prévu {moment} : {text}\n"
+        "C'est le moment. Dis-lui la chose en une phrase, directement, sans le mot « rappel » et "
+        "sans parler de ce que tu as programmé. Si la conversation montre que c'est déjà fait, "
+        "ou que tu viens de le lui dire, réponds SILENCE."
+    )
 
 
 ALMOST_KEY = "almost:"
@@ -295,6 +308,8 @@ class Candidate:
     fallback: str
     trust: Trust = Trust.SYSTEM
     explicit: bool = False
+    skippable: bool = False
+    """See `Report.skippable`."""
     """Explicitly requested by the owner: bypasses quiet hours and the budget, never dropped."""
     timer: Timer | None = None
     mentions: tuple[str, ...] = ()
@@ -737,6 +752,7 @@ class InitiativeEngine:
                     fallback=r.fallback,
                     trust=r.trust,
                     explicit=True,
+                    skippable=r.skippable,
                     notify_kind=r.notify_kind,
                     level=r.level,
                 )
@@ -812,11 +828,12 @@ class InitiativeEngine:
         )
         return Candidate(
             key=f"timer:{timer.id}",
-            notice=f"Rappel demandé par ton propriétaire, prévu {moment} : {timer.text}",
+            notice=reminder_notice(moment, timer.text),
             why=why,
             fallback=f"Rappel : {timer.text}",
             trust=timer.trust,
             explicit=True,
+            skippable=True,
             timer=timer,
         )
 
@@ -941,6 +958,7 @@ class InitiativeEngine:
             fallback="\n".join(c.fallback for c in (asked or parts)),
             trust=min(c.trust for c in parts),
             explicit=bool(asked),
+            skippable=all(c.skippable for c in asked),
             timer=parts[0].timer,
             mentions=tuple(m for c in parts for m in c.mentions),
             importance=parts[0].importance,
@@ -1089,8 +1107,9 @@ class InitiativeEngine:
     async def _compose(self, candidate: Candidate, now: datetime) -> tuple[str | None, str]:
         """Let Orion write the message in its own voice, then have a different model check it
         against the facts. A failure falls back to a plain, correct text, but a draft rejected
-        twice is dropped unless he asked for it. Explicit reminders are always delivered, even
-        if the model says SILENCE. Returns (text, how)."""
+        twice is dropped unless he asked for it. What he asked for goes out even if the model
+        says SILENCE, unless Orion may judge it pointless by now (a reminder, D246). Returns
+        (text, how)."""
         waiting = self._orion.owner_waiting
         if self._settings.thread_id == OWNER_THREAD and waiting is not None and waiting():
             return None, GAVE_WAY
@@ -1111,7 +1130,7 @@ class InitiativeEngine:
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
             return self._failed(candidate, f"fallback: {turn.reason.value}")
         if is_silence(turn.text):
-            if candidate.explicit:
+            if candidate.explicit and not candidate.skippable:
                 return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
@@ -1167,7 +1186,7 @@ class InitiativeEngine:
             if is_silence(again.text):
                 return (
                     (_after_review(candidate.fallback), "fallback: silence after a rejection")
-                    if (candidate.explicit)
+                    if candidate.explicit and not candidate.skippable
                     else (None, "silence")
                 )
             draft = again.text.strip()

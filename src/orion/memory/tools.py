@@ -274,7 +274,8 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         Tool(
             name="commitment_add",
             description="Record a promise: something the owner owes someone, someone owes the "
-            "owner, or you (Orion) promised to do. Include a due date when there is one.",
+            "owner, or you (Orion) promised to do. Include a due date when there is one. Not on "
+            "top of a reminder (`later`) for the same thing: one is enough.",
             input_model=CommitmentAddInput,
             handler=commitment_add,
             **write,

@@ -91,6 +91,8 @@ class PlaceReminder:
     """Every time (« à chaque fois que j'arrive à l'école »), until cancelled; else once."""
     until: datetime | None = None
     """Once, but not after this (« aujourd'hui » ends tonight)."""
+    own: bool = False
+    """Something Orion does then: `what` is its instruction, never a text for him (D246)."""
 
     def holds(self, now: datetime) -> bool:
         return self.until is None or now <= self.until
@@ -165,6 +167,7 @@ class PlaceState:
                 event.trust,
                 every=bool(payload.get("every")),
                 until=datetime.fromisoformat(str(until)) if until else None,
+                own=bool(payload.get("own")),
             )
             self.reminders[reminder.id] = reminder
         elif event.kind == CANCELLED:
@@ -364,10 +367,12 @@ class Places:
                 f" « {r.place} ». Il t'avait demandé "
                 f"{'de le faire à chaque fois' if r.every else 'pour cette fois'} : {r.what}\n"
                 "Fais-le maintenant : un rappel, dis-le-lui en une phrase ; une action, fais-la, "
-                "puis dis-lui en une phrase ce que tu as fait.",
+                "puis dis-lui en une phrase ce que tu as fait. Si la conversation montre que "
+                "c'est déjà fait, ou si tu n'as rien à lui dire, réponds SILENCE.",
                 why=f"ce qu'il t'a demandé pour « {r.place} »",
-                fallback=f"Rappel ({r.place}) : {r.what}",
+                fallback="" if r.own else f"Rappel ({r.place}) : {r.what}",
                 trust=min(r.trust, Trust.SYSTEM),
+                skippable=True,
             )
             for event_id, r, at in self.state.fired
             if now - at <= FIRED_KEPT
@@ -438,8 +443,13 @@ class RemindInput(BaseModel):
     what: str = Field(
         min_length=2,
         max_length=500,
-        description="Self-contained: what to remind him of, or what to do (« écris à maman "
-        "que je suis arrivé »)",
+        description="Self-contained: what to tell him, addressed to him; with `own`, what "
+        "you do then",
+    )
+    own: bool = Field(
+        default=False,
+        description="Something you do then (look up his room, write to his mother, schedule "
+        "a reminder): he hears the outcome, never this text",
     )
     when: Moment = Field(default="arrive", description="'arrive' or 'leave'")
     every: bool = Field(
@@ -477,6 +487,8 @@ def place_tools(places: Places) -> list[Tool]:
             "what": args.what,
             "when": args.when,
         }
+        if args.own:
+            payload["own"] = True
         if args.every:
             payload["every"] = True
         elif args.until.strip():
@@ -502,6 +514,14 @@ def place_tools(places: Places) -> list[Tool]:
             )
             + " : sinon dis-lui d'ajouter une automatisation Raccourcis pour lui (voir `list`)."
         )
+        last = places.state.last_place
+        if last and args.when == last[1] and same_place(last[0], args.place):
+            when = last[2].astimezone(ZoneInfo(ctx.timezone))
+            hint += (
+                f" Dernier signal de son téléphone : déjà ça, à « {last[0]} », le "
+                f"{when:%d/%m à %H:%M}. S'il y est encore, ça ne partira qu'à la prochaine fois : "
+                "si c'est pour maintenant, fais-le ou dis-le-lui tout de suite."
+            )
         verb = "arrivera à" if args.when == "arrive" else "quittera"
         often = "à chaque fois" if args.every else "une fois"
         return ToolResult(

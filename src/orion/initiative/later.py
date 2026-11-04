@@ -155,8 +155,9 @@ def later_tool() -> Tool:
         "him, come back or keep an eye without it. When (`at`, `every_hours`, or `reply_from` "
         "for an answer awaited), then what. « Rappelle-moi jeudi » → tell; « tous les lundis » "
         "→ tell with repeat; « vérifie à 6h si j'ai cours », or a note to yourself → check, "
-        "never tell (tell sends him `what` as it is); how an interview or a doctor went → ask, "
-        "hours after; « laisse-moi y réfléchir » → think; following a search over days → "
+        "never tell (with tell, `what` is the thing to say to him, addressed to him); how an "
+        "interview or a doctor went → ask, hours after; « laisse-moi y réfléchir » → think; "
+        "following a search over days → "
         "work. What can be done now is done now. Check the weekday it gives back.",
         input_model=LaterInput,
         handler=unresolved,

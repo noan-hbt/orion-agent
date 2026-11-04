@@ -22,6 +22,15 @@ async def call(tools: dict[str, Tool], name: str, **args: object) -> str:
     return result.content
 
 
+async def signal(places: Places, place: str) -> None:
+    token = await places.new_token()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=places.app()), base_url="http://orion"
+    ) as http:
+        auth = {"Authorization": f"Bearer {token}"}
+        assert (await http.post(PATH, json={"place": place}, headers=auth)).status_code == 200
+
+
 def test_places_match_loosely() -> None:
     assert same_place("boulangerie", "La Boulangerie")
     assert same_place("la boulangerie", "Boulangerie Paul")
@@ -146,3 +155,24 @@ async def test_every_arrival_wakes_orion_and_standing_wishes_hold(journal: Sqlit
     assert await places.signal(token, "école", "arrive") == []  # that day is past
     assert len(await places.reports()) == 2
     assert len(await places.alerts(datetime.now().astimezone())) == 2  # the first, and école
+
+
+async def test_what_orion_does_at_a_place_is_never_sent_to_him_raw(journal: SqliteJournal) -> None:
+    places = Places(journal)
+    tools = {t.name: t for t in place_tools(places)}
+    await call(tools, "remind_at_place", place="maman", what="programmer un rappel", own=True)
+    await call(tools, "remind_at_place", place="maman", what="prends la manette")
+    await signal(places, "maman")
+
+    own, told = sorted(await places.reports(), key=lambda r: "programmer" not in r.notice)
+    assert own.fallback == ""
+    assert "prends la manette" in told.fallback
+    assert own.skippable and told.skippable
+
+
+async def test_he_hears_when_he_is_already_at_the_place(journal: SqliteJournal) -> None:
+    places = Places(journal)
+    tools = {t.name: t for t in place_tools(places)}
+    await signal(places, "Boulot")
+    said = await call(tools, "remind_at_place", place="boulot", what="envoie la carte grise")
+    assert "Dernier signal" in said
