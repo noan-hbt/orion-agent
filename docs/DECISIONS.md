@@ -5450,3 +5450,24 @@ plus à chaque fois.
   même réponse.
 - **L'éval** `deux_recherches_d_un_coup` vérifie qu'au moins deux `web_search` partent dans une
   même réponse (`together`).
+
+
+## D238 — Orion lit aussi ses mails envoyés et archivés
+
+*04/11/2026 · acceptée*
+
+`mail` ne lisait que `folder` (INBOX) : ce qu'il avait envoyé, et ce qu'il avait archivé (sorti
+de la boîte de réception), Orion ne le voyait pas. Les mails de l'owner étaient en plus écartés
+partout, comme des copies.
+
+- **`mail` prend `box`** : `inbox` (par défaut), `sent` ou `archive`. Seule la boîte de
+  réception est synchronisée ; les deux autres sont lues en direct à la demande (comme D171),
+  et deviennent des cartes `mail.card` avec `box` et `to` (les destinataires).
+- **Le dossier** : `sent_folder` du compte, sinon celui que le serveur marque `\Sent`
+  (RFC 6154, quel que soit son nom : « [Gmail]/Messages envoyés »). Pour `archive` :
+  `archive_folder`, sinon `\All` (Gmail), sinon `\Archive` (iCloud).
+- **Dans `sent`, `sender` vise le destinataire** (IMAP `TO`), et ses propres mails ne sont pas
+  écartés.
+- **Une carte hors de la boîte de réception ne se range ni ne se marque** : son uid vaut dans
+  un autre dossier, et `mail_tidy`/`mail_mark` agissent dans `folder`. Elles ne font pas non
+  plus d'alerte.
