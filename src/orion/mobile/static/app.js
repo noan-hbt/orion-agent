@@ -70,7 +70,44 @@ forget: '<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>',
   wave: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/>',
   bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M8 14h8"/>',
 };
+
+// The planet (D183, D239): Orion, and around him one satellite per thing he carries in the
+// background (a task, someone he waits on, a mission). They drift on the orbit unless motion is
+// reduced. Only numbers and fixed colours go into the markup.
+const SATELLITE = { task: "#34C759", wait: "#FF9500", mission: "#8E8CFF" };
+const ORBIT = "M4,50 a46,15 0 1,0 92,0 a46,15 0 1,0 -92,0";
+
+function planet(size, carrying = [], { dark = false } = {}) {
+  const sats = carrying.slice(0, 5);
+  const big = size > 60;
+  const moving = big && !still();
+  // The offset follows the clock: a repaint never makes the satellites jump.
+  const satellites = sats
+    .map((s, i) => {
+      const r = big ? 3.4 : 5.5;
+      const fill = SATELLITE[s.kind] || SATELLITE.mission;
+      const share = i / sats.length;
+      if (moving) {
+        return `<circle r="${r}" fill="${fill}"><animateMotion dur="48s" repeatCount="indefinite" begin="-${((Date.now() / 1000 + share * 48) % 48).toFixed(2)}s" path="${ORBIT}"/></circle>`;
+      }
+      const a = Math.PI * 2 * share + 0.6;
+      return `<circle cx="${(50 + 46 * Math.cos(a)).toFixed(1)}" cy="${(50 + 15 * Math.sin(a)).toFixed(1)}" r="${r}" fill="${fill}"/>`;
+    })
+    .join("");
+  const ring = dark ? "rgba(242,241,250,.22)" : "rgba(26,20,51,.16)";
+  const wrap = document.createElement("span");
+  wrap.className = "planet";
+  wrap.setAttribute("aria-hidden", "true");
+  wrap.innerHTML =
+    `<svg width="${size}" height="${size}" viewBox="0 0 100 100" overflow="visible">` +
+    `<path d="${ORBIT}" transform="rotate(-14 50 50)" fill="none" stroke="${ring}" stroke-width="${big ? 0.6 : 1.6}"/>` +
+    `<g class="body"><circle cx="50" cy="50" r="28" fill="var(--accent)"/>` +
+    `<circle cx="41" cy="41" r="12" fill="#EEF3FF" fill-opacity=".85"/></g>` +
+    `<g transform="rotate(-14 50 50)">${satellites}</g></svg>`;
+  return wrap;
+}
 
 function icon(name, size = 20, stroke = "currentColor") {
   const wrap = document.createElement("span");
@@ -471,15 +508,15 @@ async function conversation() {
   const top = h(
     "header",
     { class: "top" },
-    h("button", { class: "round glass top-back", type: "button", "aria-label": "Maintenant", onclick: () => show("now") }, icon("back", 20)),
+    h("button", { class: "round glass top-back with-badge", type: "button", "aria-label": "Accueil", onclick: () => show("now") }, icon("back", 20), view.badge),
     h(
       "div",
       { class: "who" },
-      (view.avatar = h("span", { class: "avatar" }, h("img", { src: `${BASE}orion-avatar.svg`, alt: "" }))),
-      h("span", { class: "who-name glass" }, h("h1", {}, "Orion"), h("span", { class: "who-chevron" }, icon("chevron", 10))),
+      (view.avatar = h("span", { class: "avatar mini" }, planet(44))),
+      h("span", { class: "who-name glass" }, h("h1", {}, "Orion")),
       view.status,
     ),
-    h("button", { class: "round glass", type: "button", "aria-label": "Mode voix", onclick: voiceMode }, icon("wave", 20)),
+    h("span"),
   );
 
   view.talk = h(
@@ -494,6 +531,7 @@ async function conversation() {
       { class: "composer", onsubmit: (event) => (event.preventDefault(), submit()) },
       h("button", { class: "round attach", type: "button", "aria-label": "Joindre", onpointerdown: (event) => event.preventDefault(), onclick: actions }, icon("plus", 20)),
       view.field,
+      talkButton(() => view.field),
     ),
     view.files,
     view.camera,
@@ -606,12 +644,13 @@ function sendMode() {
   const empty = !view.text.value.trim() && !state.attached.length;
   if (recorder.active) return;
   const stop = empty && !!state.work;
-  view.send.className = `send${stop ? " stopping" : empty ? " mic" : ""}`;
+  // Empty, the field has no button: speaking is the round beside it (D239).
+  view.send.className = `send${stop ? " stopping" : empty ? " idle" : ""}`;
   if (!view.send.querySelector(".send-icon")) {
     view.send.replaceChildren(...[["mic", "mic"], ["send", "up"], ["stop", "stop"]].map(([mode, name]) => h("span", { class: `send-icon mode-${mode}` }, icon(name, 18))));
   }
-  view.send.disabled = stop && !!state.work.stopping;
-  view.send.setAttribute("aria-label", stop ? "Arrêter Orion" : empty ? "Message vocal" : "Envoyer");
+  view.send.disabled = (stop && !!state.work.stopping) || (empty && !stop);
+  view.send.setAttribute("aria-label", stop ? "Arrêter Orion" : "Envoyer");
 }
 
 // A thread read at its end stays at its end: an image that loads, the dots, a question, a
@@ -1170,12 +1209,10 @@ function first() {
 // -- sending ----------------------------------------------------------------------------------
 
 function sendOrRecord() {
-  if (recorder.active) return recorder.stop();
   if (!view.text.value.trim() && !state.attached.length && state.work) {
     view.send.disabled = true;
     return api("api/stop", {}).catch((error) => (view.send.disabled = false, toast(said(error))));
   }
-  if (!view.text.value.trim() && !state.attached.length) return recorder.start();
   submit();
 }
 
@@ -1302,63 +1339,153 @@ function paintAttached() {
 
 const recorder = {
   active: false,
-  async start() {
+  starting: false,
+  locked: false,
+  // `slot` shows the recording in place of what it holds (the field, or the home capsule).
+  // Locked, the owner's hands are free: it ends on Envoyer or Annuler, not on release.
+  async start(slot, { locked = false } = {}) {
+    if (this.active || this.starting) return;
     if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Le micro n'est pas disponible ici.");
+    this.starting = true;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
       return toast("Micro refusé : autorise-le dans Réglages › Safari.");
+    } finally {
+      this.starting = false;
     }
     const type = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
     const media = new MediaRecorder(stream, type ? { mimeType: type } : {});
     const chunks = [];
+    const kept = [...slot.childNodes];
     media.ondataavailable = (event) => event.data.size && chunks.push(event.data);
     media.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
       clearInterval(this.timer);
       this.active = false;
-      view.field.replaceChildren(view.text, view.send);
+      slot.classList.remove("recording");
+      slot.replaceChildren(...kept);
       sendMode();
       if (this.cancelled) return;
       const mime = (media.mimeType || "audio/mp4").split(";")[0];
       const blob = new Blob(chunks, { type: mime });
       const ext = mime.includes("webm") ? "webm" : "m4a";
+      // Said from the home screen, it lands in the conversation, where the answer comes.
+      if (state.tab !== "talk" && !voice.on) show("talk");
       send("", [{ blob, name: `vocal.${ext}`, type: mime, size: blob.size, preview: null }]);
     };
     this.media = media;
+    this.slot = slot;
     this.cancelled = false;
     this.active = true;
-    const started = Date.now();
-    const clock = h("span", {}, "0:00");
+    this.started = Date.now();
+    this.clock = h("span", { class: "clock" }, "0:00");
     this.timer = setInterval(() => {
-      const s = Math.floor((Date.now() - started) / 1000);
-      clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      const s = Math.floor((Date.now() - this.started) / 1000);
+      this.clock.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
       if (s >= 300) this.stop();
     }, 250);
-    view.field.replaceChildren(
-      h(
-        "div",
-        { class: "recorder" },
-        h("i"),
-        clock,
-        h(
-          "button",
-          { type: "button", class: "pill small ghost", onclick: () => ((this.cancelled = true), media.stop()) },
-          "Annuler",
-        ),
-      ),
-      view.send,
-    );
-    view.send.className = "send recording";
-    view.send.replaceChildren(icon("stop", 18));
-    view.send.setAttribute("aria-label", "Arrêter et envoyer");
+    slot.classList.add("recording");
+    this.paint(locked);
     media.start();
+  },
+  paint(locked) {
+    this.locked = locked;
+    this.slot.replaceChildren(
+      h("div", { class: "recorder" },
+        h("i"),
+        this.clock,
+        locked
+          ? h("button", { type: "button", class: "pill small ghost", onclick: () => this.cancel() }, "Annuler")
+          : h("span", { class: "rec-hint" }, "‹ glisse pour annuler · ↑ pour garder"),
+      ),
+      ...(locked ? [h("button", { type: "button", class: "send rec-send", "aria-label": "Envoyer le vocal", onclick: () => this.stop() }, icon("up", 18))] : []),
+    );
+  },
+  lock() {
+    if (!this.active || this.locked) return;
+    this.paint(true);
+    navigator.vibrate?.(8);
+  },
+  cancel() {
+    this.cancelled = true;
+    this.stop();
   },
   stop() {
     if (this.media && this.media.state !== "inactive") this.media.stop();
   },
 };
+
+// The round beside the field (D239). Held, it records a voice message, as in Messages: release
+// sends it, sliding up keeps the microphone open, sliding left drops it. Tapped, it opens the
+// voice mode. `slot` says where the recording shows.
+function talkButton(slot) {
+  const b = h("button", { class: "talk", type: "button", "aria-label": "Parler à Orion", title: "Touche : mode voix · maintiens : message vocal" }, icon("wave", 22));
+  let from = null;
+  let timer = 0;
+  let held = false;
+  let released = null; // how the finger left while the microphone was still opening
+  const finish = (dropped) => {
+    if (dropped) return recorder.cancel();
+    if (Date.now() - recorder.started < 700) {
+      recorder.cancel();
+      return toast("Garde le doigt sur le rond pendant que tu parles.");
+    }
+    recorder.stop();
+  };
+  const begin = async () => {
+    held = true;
+    released = null;
+    b.classList.add("held");
+    navigator.vibrate?.(10);
+    await recorder.start(slot());
+    if (!recorder.active) return b.classList.remove("held");
+    if (released) finish(released === "cancel");
+  };
+  b.addEventListener("pointerdown", (event) => {
+    if (event.button || recorder.active || recorder.starting) return;
+    event.preventDefault();
+    b.setPointerCapture?.(event.pointerId);
+    from = { x: event.clientX, y: event.clientY };
+    timer = setTimeout(begin, 260);
+  });
+  b.addEventListener("pointermove", (event) => {
+    if (!from || !held || !recorder.active || recorder.locked) return;
+    const dx = event.clientX - from.x;
+    const dy = event.clientY - from.y;
+    if (dy < -60) {
+      recorder.lock();
+      b.classList.remove("held");
+    } else if (dx < -80) {
+      from = null;
+      held = false;
+      b.classList.remove("held");
+      recorder.cancel();
+    }
+  });
+  const end = (event) => {
+    clearTimeout(timer);
+    if (!from) return;
+    from = null;
+    b.classList.remove("held");
+    if (!held) {
+      if (event.type === "pointerup") voiceMode();
+      return;
+    }
+    held = false;
+    if (!recorder.active) {
+      released = event.type === "pointercancel" ? "cancel" : "up";
+      return;
+    }
+    if (!recorder.locked) finish(event.type === "pointercancel");
+  };
+  b.addEventListener("pointerup", end);
+  b.addEventListener("pointercancel", end);
+  b.addEventListener("click", (event) => event.detail === 0 && voiceMode());
+  b.addEventListener("contextmenu", (event) => event.preventDefault());
+  return b;
+}
 
 // -- live: the stream -------------------------------------------------------------------------
 
@@ -1539,7 +1666,12 @@ function setWork(work) {
 }
 
 function paintStatus() {
-  const [text, kind] = !state.live ? ["hors ligne", ""] : state.typing ? ["écrit…", "busy"] : ["en ligne", "live"];
+  const carrying = state.carrying || [];
+  const [text, kind] = !state.live
+    ? ["hors ligne", ""]
+    : state.typing
+      ? ["écrit…", "busy"]
+      : [carrying.length ? `${plural(carrying.length, "chose", "choses")} en fond` : "en ligne", "live"];
   if (view.status.textContent !== text) {
     view.status.textContent = text;
     view.status.classList.remove("swap");
@@ -1547,6 +1679,12 @@ function paintStatus() {
   }
   view.status.className = `status ${kind} swap`;
   view.avatar.classList.toggle("busy", state.typing || !!state.work);
+  // The small planet of the conversation carries the same satellites as the home screen.
+  const sats = carrying.map((c) => c.kind).join();
+  if (view.avatar.dataset.sats !== sats) {
+    view.avatar.dataset.sats = sats;
+    view.avatar.replaceChildren(planet(44, carrying));
+  }
 }
 
 // -- approvals: yes takes Face ID, no does not ------------------------------------------------
@@ -2060,7 +2198,7 @@ function actions(event) {
     ["camera", "Caméra", "c-gray", () => view.camera.click()],
     ["photo", "Photos", "c-photos", () => view.photos.click()],
     ["file", "Fichier", "c-blue", () => view.files.click()],
-    ["mic", "Vocal", "c-orange", () => recorder.start()],
+    ["mic", "Vocal", "c-orange", () => recorder.start(view.field, { locked: true })],
     ["clock", "Rappel", "c-red", prefill("Rappelle-moi ")],
     ["target", "Mission", "c-green", prefill("Nouvelle mission : ")],
     ["spark", "Recherche", "c-indigo", prefill("Cherche en tâche de fond : ")],
@@ -2111,32 +2249,34 @@ const TABS = [
 const DAY_TITLE = new Intl.DateTimeFormat("fr-FR", { weekday: "long", day: "numeric", month: "long" });
 
 function shell() {
-  view.nowWork = h("section", { class: "hero card", "aria-live": "polite" });
+  view.nowWork = h("section", { class: "home-hero", "aria-live": "polite" });
   view.tabs = {
     now: page("Maintenant", nowFill, () => DAY_TITLE.format(new Date())),
     talk: view.talk,
     notebook: page("Carnet", notebookFill, () => "Tout ce que je garde à l'œil pour toi"),
     settings: page("Réglages", settingsFill),
   };
-  view.tabButtons = {};
-  // The chosen tab sits on a lens that slides from one tab to the next.
-  view.lens = h("span", { class: "lens", "aria-hidden": "true" });
-  const bar = h(
-    "nav",
-    { class: "tabbar glass", "aria-label": "Onglets" },
-    view.lens,
-    TABS.map(([key, title, name]) =>
-      (view.tabButtons[key] = h(
-        "button",
-        { type: "button", onclick: () => show(key) },
-        icon(name, 24),
-        h("span", {}, title),
-        key === "now" ? view.badge : null,
-      )),
-    ),
+  // No tab bar (D239): the home screen leads everywhere, Carnet and Réglages come back to it,
+  // and one field writes to Orion from anywhere; the round beside it speaks to him.
+  view.topbar = h("div", { class: "topbar" });
+  view.homeSlot = h(
+    "div",
+    { class: "ask-field glass" },
+    h("button", { type: "button", class: "ask-open", onclick: () => (show("talk"), view.text.focus()) }, "Écris à Orion…"),
   );
-  const find = h("button", { class: "find glass", type: "button", "aria-label": "Chercher dans ce que je sais", onclick: memoryPanel }, icon("search", 22));
-  app.replaceChildren(...Object.values(view.tabs), h("div", { class: "dock" }, bar, find));
+  view.dock = h("div", { class: "dock" }, view.homeSlot, talkButton(() => view.homeSlot));
+  app.replaceChildren(...Object.values(view.tabs), view.topbar, view.dock);
+}
+
+function paintTopbar(key) {
+  const round = (name, label, onclick) => h("button", { class: "round glass", type: "button", "aria-label": label, onclick }, icon(name, 20));
+  const find = round("search", "Chercher dans ce que je sais", memoryPanel);
+  const items = key === "now"
+    ? [round("book", "Carnet", () => show("notebook")), h("span", { class: "grow" }), find, round("sliders", "Réglages", () => show("settings"))]
+    : [round("back", "Accueil", () => show("now")), h("span", { class: "grow" }), key === "notebook" ? find : null];
+  view.topbar.replaceChildren(...items.filter(Boolean));
+  view.topbar.hidden = key === "talk";
+  view.dock.hidden = key === "talk";
 }
 
 function show(key) {
@@ -2145,7 +2285,7 @@ function show(key) {
   const to = TABS.findIndex(([k]) => k === key);
   const leaving = from >= 0 && from !== to ? view.tabs[state.tab] : null;
   if (leaving) {
-    // The new tab comes in from the side of its button while the old one slips away under it.
+    // The new screen comes in from its side while the old one slips away under it.
     const el = view.tabs[key];
     el.hidden = false;
     for (const tab of [el, leaving]) {
@@ -2155,46 +2295,29 @@ function show(key) {
     void el.offsetWidth;
     el.classList.add(to > from ? "enter-right" : "enter-left");
     leaving.classList.add(to > from ? "leave-left" : "leave-right");
-    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
     leaving.leaveTimer = setTimeout(() => {
       leaving.classList.remove("leave-left", "leave-right");
       if (view.tabs[state.tab] !== leaving) leaving.hidden = true;
-    }, still ? 0 : 320);
+    }, still() ? 0 : 320);
   }
   state.tab = key;
   try {
     localStorage.setItem("orion.tab", key);
   } catch {
-    // private mode: the app opens on Maintenant next time
+    // private mode: the app opens on the home screen next time
   }
   for (const [k, el] of Object.entries(view.tabs)) if (el !== leaving) el.hidden = k !== key;
-  for (const [k, b] of Object.entries(view.tabButtons)) b.setAttribute("aria-current", k === key ? "page" : "false");
-  const selected = view.tabButtons[key];
-  selected.classList.remove("selected-pop");
-  requestAnimationFrame(() => selected.classList.add("selected-pop"));
-  placeLens(!!leaving);
+  paintTopbar(key);
   if (key === "talk") bottom(true);
   else view.tabs[key].refresh();
 }
-
-function placeLens(moving = false) {
-  const b = view.tabButtons?.[state.tab];
-  if (!b || !view.lens) return;
-  view.lens.style.width = `${b.offsetWidth}px`;
-  view.lens.style.transform = `translateX(${b.offsetLeft}px)`;
-  // On its way, the lens stretches like a drop of liquid, then settles.
-  if (moving && view.lens.animate && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    view.lens.animate([{ scale: "1 1" }, { scale: "1.18 .86", offset: 0.35 }, { scale: ".97 1.03", offset: 0.7 }, { scale: "1 1" }], { duration: 520, easing: "ease-out" });
-  }
-}
-addEventListener("resize", () => placeLens());
 
 // A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
 function page(title, fill, subtitle) {
   const line = h("p", { hidden: !subtitle });
   const body = h("div", { class: "page-body" });
   const pull = title === "Maintenant" ? h("div", { class: "pull-refresh", "aria-hidden": "true" }, spinner()) : null;
-  const el = h("section", { class: "tab page", "aria-label": title }, h("div", { class: "page-inline-title", "aria-hidden": "true" }, title), pull, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
+  const el = h("section", { class: `tab page${title === "Maintenant" ? " home" : ""}`, "aria-label": title }, h("div", { class: "page-inline-title", "aria-hidden": "true" }, title), pull, h("header", { class: "page-head" }, line, h("h1", {}, title)), body);
   let scrollFrame = 0;
   el.addEventListener("scroll", () => {
     if (scrollFrame) return;
@@ -2292,7 +2415,8 @@ function paintNowWork() {
   const o = state.overview;
   const work = state.work;
   const waiting = state.approvals.size + (state.questions || 0);
-  const orb = h("button", { class: `orb ${work ? "busy" : o?.paused_until ? "still" : ""}`, type: "button", "aria-label": "Conversation", onclick: () => show("talk") }, h("img", { class: "orb-avatar", src: `${BASE}orion-avatar.svg`, alt: "" }));
+  const carrying = state.carrying || [];
+  const next = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "";
   let title;
   let line;
   let acts = [];
@@ -2309,18 +2433,25 @@ function paintNowWork() {
     acts = [h("button", { class: "pill small primary", type: "button", onclick: () => api("api/control/pause", { minutes: null }).then(nowChanged, (e) => toast(said(e))) }, "Reprendre")];
   } else if (waiting) {
     title = waiting > 1 ? `J'ai besoin de toi pour ${waiting} choses.` : "J'ai besoin de toi pour une chose.";
-    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "";
+    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : next;
+  } else if (carrying.length) {
+    title = carrying.length > 1 ? `Je porte ${carrying.length} choses pour toi.` : "Je porte une chose pour toi.";
+    line = o?.quiet_now ? "heures calmes : je veille sans t'écrire" : next || "en fond, sans te déranger";
   } else {
-    title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Rien en cours. Je garde un œil sur tout.";
-    line = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "écris-moi quand tu veux";
+    title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Au calme. Je garde un œil sur tout.";
+    line = next || "écris-moi quand tu veux";
   }
   view.nowWork.classList.toggle("busy", !!work);
   view.nowWork.classList.toggle("still", !work && !!o?.paused_until);
-  view.nowWork.replaceChildren(
-    h("div", { class: "state-head" }, orb, h("span", {}, h("b", {}, title), line ? h("small", {}, line) : null)),
-    ...(acts.length ? [h("div", { class: "row2" }, acts)] : []),
-    ...(state.glance?.length ? [h("div", { class: "glance" }, state.glance)] : []),
-  );
+  view.nowWork.replaceChildren(...[
+    h("p", { class: "home-date" }, DAY_TITLE.format(new Date())),
+    h("button", { class: "home-planet", type: "button", "aria-label": "Ouvrir la conversation", onclick: () => show("talk") }, planet(210, carrying)),
+    h("h1", {}, title),
+    line ? h("p", { class: "home-line" }, line) : null,
+    acts.length ? h("div", { class: "row2" }, acts) : null,
+    state.glance?.length ? h("div", { class: "glance" }, state.glance) : null,
+  ].filter(Boolean));
+  paintStatus();
 }
 
 // The day at a glance, under the state: each count leads to its section.
@@ -2447,6 +2578,12 @@ async function nowFill(refresh) {
       ),
     );
   }
+  // What he carries in the background orbits the planet: one satellite each.
+  state.carrying = [
+    ...found.tasks.map(() => ({ kind: "task" })),
+    ...found.waiting_on.map(() => ({ kind: "wait" })),
+    ...missions.map(() => ({ kind: "mission" })),
+  ];
   state.glance = glance.length > 1 ? glance : [];
   paintNowWork();
   return sections;
@@ -4718,39 +4855,57 @@ const voice = { on: false, el: null, said: null };
 
 function voiceMode() {
   if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Le micro n'est pas disponible ici.");
+  if (voice.on) return;
   voice.on = true;
-  const line = h("p", { class: "voice-line" }, "Touche le rond et parle. Touche encore pour m'envoyer.");
-  const orb = h("button", { class: "orb voice-orb", type: "button", "aria-label": "Parler", onclick: () => {
-        if (recorder.active) {
-          recorder.stop();
-          line.textContent = "J'ai entendu, je réfléchis…";
-        } else {
-          window.speechSynthesis?.cancel();
-          recorder.start();
-          line.textContent = "Je t'écoute… touche encore pour m'envoyer.";
-          orb.classList.add("busy");
-        }
-      } }, icon("mic", 36, "#fff"));
+  // The screen darkens and Orion grows; what was just said, written or spoken, stays on top:
+  // it is the same conversation (D239).
+  const past = state.messages.filter((m) => m.text).slice(-2);
+  const line = h("p", { class: "voice-line", "aria-live": "polite" }, "Touche le rond et parle.");
+  const main = h("button", { class: "voice-main", type: "button" });
+  const paint = (listening) => {
+    voice.el.classList.toggle("listening", listening);
+    main.replaceChildren(icon(listening ? "up" : "mic", 30));
+    main.setAttribute("aria-label", listening ? "Envoyer" : "Parler");
+  };
+  const toggle = async () => {
+    if (recorder.active) {
+      recorder.stop();
+      paint(false);
+      line.textContent = "J'ai entendu, je réfléchis…";
+      return;
+    }
+    window.speechSynthesis?.cancel();
+    await recorder.start(view.field, { locked: true });
+    if (!recorder.active || !voice.on) return;
+    paint(true);
+    line.textContent = "Je t'écoute… touche encore pour m'envoyer.";
+  };
+  main.addEventListener("click", toggle);
+  const orb = h("button", { class: "voice-orb", type: "button", "aria-label": "Parler", onclick: toggle }, h("i", { class: "ring" }), h("i", { class: "ring r2" }), planet(190, state.carrying || [], { dark: true }));
   voice.line = line;
   voice.orb = orb;
   voice.el = h(
     "section",
-    { class: "voice", role: "dialog", "aria-modal": "true", "aria-label": "Me parler" },
-    h("button", { class: "round glass voice-close", type: "button", "aria-label": "Fermer", onclick: () => stopVoice() }, icon("close", 20)),
+    { class: "voice", role: "dialog", "aria-modal": "true", "aria-label": "Parler à Orion" },
+    h("div", { class: "voice-past" }, past.map((m) => h("p", { class: m.who }, excerpt(m.text, 140)))),
     orb,
     line,
-    h("p", { class: "hint" }, "Je te réponds à voix haute. Ce qu'on se dit reste dans la conversation."),
+    h(
+      "div",
+      { class: "voice-acts" },
+      h("button", { class: "round voice-key", type: "button", "aria-label": "Écrire plutôt", onclick: () => (stopVoice(), show("talk"), view.text.focus()) }, icon("keyboard", 24)),
+      main,
+      h("button", { class: "round voice-key", type: "button", "aria-label": "Fermer", onclick: () => stopVoice() }, icon("close", 22)),
+    ),
   );
+  paint(false);
   stack(stopVoice);
   layer.append(voice.el);
 }
 
 function stopVoice() {
   voice.on = false;
-  if (recorder.active) {
-    recorder.cancelled = true;
-    recorder.media?.stop();
-  }
+  if (recorder.active) recorder.cancel();
   window.speechSynthesis?.cancel();
   voice.el?.remove();
   unstack(stopVoice);
@@ -4759,7 +4914,6 @@ function stopVoice() {
 function speak(message) {
   // In voice mode, Orion's answers are read aloud (his own audio when he sent one).
   if (!voice.on || message.who !== "orion") return;
-  voice.orb?.classList.remove("busy");
   const audio = (message.files || []).find((f) => (f.type || "").startsWith("audio/"));
   if (audio) {
     new Audio(fileUrl(audio)).play().catch((error) => console.warn("voice", error));
