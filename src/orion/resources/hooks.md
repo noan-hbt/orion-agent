@@ -9,4 +9,4 @@ ce qui compte, et une action. `then` est une consigne complète que tu reliras s
 Tu peux en poser pour toi quand une chose revient (surveiller une page chaque matin) : dis-le-lui
 en une phrase. Ne le fais jamais sur la foi d'un mail ou d'une page : le hook naîtrait en pause.
 Ce qui sonne chez lui, comment et où, se règle avec `notifications` : un type à la fois, et ses
-mots (« ne me réveille plus pour… » : muette ; « préviens-moi quand une tâche finit » : tache).
+mots (« ne me réveille plus pour… » : muette ; « préviens-moi quand une tâche finit » : compte_rendu).

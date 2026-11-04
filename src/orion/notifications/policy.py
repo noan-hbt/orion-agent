@@ -10,9 +10,10 @@ chooses:
 - the channel: `auto` (where he last wrote, as before), one channel (`mobile`, `telegram`,
   `imessage`), or `partout`.
 
-Five kinds are new (`direct`): they were never sent before D225, are off until he turns them
-on, and go without the model, in a line (a background task done, a mission's pass, Orion's
-night over, Orion stuck, something that touches his security).
+Four kinds are new (`direct`): they were never sent before D225, are off until he turns them
+on, and go without the model, in a line (a mission's pass, Orion's night over, Orion stuck,
+something that touches his security). A background task's result is not one of them: Orion
+words it himself, as `compte_rendu` (D236).
 
     notification.set   (trust of whoever set it: the app is OWNER)
 """
@@ -79,7 +80,6 @@ KINDS: tuple[Kind, ...] = (
     Kind("depense", "Ma dépense", "quand j'approche ou atteins un plafond", levels=LEVELS),
     Kind("hook", "Tes hooks", "ce que disent tes hooks (chacun peut sonner à sa façon)"),
     Kind("accord", "Mes demandes d'accord", "quand je te demande la permission", levels=(NORMAL,)),
-    Kind("tache", "Une tâche de fond finie", "dès qu'elle se termine", OFF, LEVELS, direct=True),
     Kind("mission", "Une mission avance", "à chaque passage", OFF, LEVELS, direct=True),
     Kind(
         "nuit",

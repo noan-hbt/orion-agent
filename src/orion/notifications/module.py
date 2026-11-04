@@ -48,7 +48,6 @@ GAP = timedelta(seconds=60)
 with its own failures."""
 
 DIRECT: dict[str, tuple[tuple[str, ...], frozenset[str], Callable[[str], str]]] = {
-    "tache": (("task_done",), frozenset(), lambda g: f"Tâche finie : {g}"),
     "mission": (("mission",), frozenset(), lambda g: f"Mission : {g}"),
     "nuit": (
         ("night",),
@@ -81,7 +80,7 @@ def direct_line(kind: str, event: Event, zone: ZoneInfo) -> str | None:
 class _Set(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: str = Field(description="Which kind (`list`): rappel, initiative, tache…")
+    kind: str = Field(description="Which kind (`list`): rappel, initiative, compte_rendu…")
     level: str = Field(default="", description="off, muette, normale or urgente")
     channel: str = Field(default="", description="auto, partout, or a channel (mobile…)")
 
