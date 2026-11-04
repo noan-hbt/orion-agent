@@ -10,7 +10,7 @@ critical path.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date
 from typing import Annotated, Literal, cast
 
@@ -76,8 +76,9 @@ Rules:
 - When the owner corrects or changes something already in memory, use update_fact (or
   invalidate_fact if there is no replacement). Never delete history yourself.
 - A commitment is a concrete promise with someone owing something: "je dois envoyer le devis à
-  Paul vendredi", "Léa me rend mon livre", "rappelle-moi de…" (debtor: orion). Resolve relative
-  dates against today's date.
+  Paul vendredi", "Léa me rend mon livre". Resolve relative dates against today's date. A request to
+  be reminded is not one, nor is anything already in "Reminders already scheduled": the reminder
+  will be told, a commitment would tell it a second time.
 - Tastes are durable facts: what the owner, or someone in their life, likes or dislikes (food,
   places, films, music, gifts, brands, styles), and what they turned down and why. Category
   "preference" for the owner, "person" for someone else (name them in `about`).
@@ -196,7 +197,9 @@ class MemoryExtractor:
         memory: MemoryService,
         model: str,
         effort: Effort | None = None,
+        told_later: Callable[[], Awaitable[list[str]]] | None = None,
     ) -> None:
+        self._told_later = told_later
         self._provider = provider
         self._memory = memory
         self._model = model
@@ -227,6 +230,7 @@ class MemoryExtractor:
         known = {f.id: f for f in [*related, *recorded]}
         commitments = await self._memory.store.commitments()
         situations = self._memory.situations.current()
+        reminders = await self._told_later() if self._told_later else []
         user = "\n".join(
             [
                 f"Today: {today.isoformat()} ({today.strftime('%A')})",
@@ -239,6 +243,10 @@ class MemoryExtractor:
                 "Open situations:",
                 *(s.line() for s in situations),
                 "" if situations else "(none)",
+                "",
+                "Reminders already scheduled:",
+                *(f"- {text}" for text in reminders),
+                "" if reminders else "(none)",
                 "",
                 *(
                     line

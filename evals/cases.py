@@ -6,8 +6,11 @@ from datetime import date, timedelta
 
 from evals.harness import (
     Case,
+    Check,
+    Judge,
     Night,
     Notice,
+    Observation,
     Say,
     Watch,
     asks,
@@ -36,6 +39,7 @@ from evals.harness import (
     works_at_night,
 )
 from orion.core.events import Trust
+from orion.initiative.engine import reminder_notice
 from orion.mail.service import mail_notice
 from orion.places.module import arrival_notice
 
@@ -52,9 +56,104 @@ AWAITING_OWNER = (
     "vaut plus la peine, réponds SILENCE."
 )
 """The notice `awaiting` writes for a question to him left unanswered (D109)."""
+
+
+def _argument(tool: str, piece: str) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        calls = [a for t, a in o.tools if t == tool]
+        if any(piece in a.replace('":true', '": true') for a in calls):
+            return None
+        return f"{tool} without {piece}: {calls}"
+
+    return check
+
+
+def _never_used(*tools: str) -> Check:
+    async def check(o: Observation, _j: Judge) -> str | None:
+        hit = [t for t, _ in o.tools if t in tools]
+        return f"used {hit}" if hit else None
+
+    return check
+
+
 WEEKDAY_OR_DATE = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|\b\d{1,2}/\d{1,2}\b"
 
+
 CASES: tuple[Case, ...] = (
+    Case(
+        name="rappel_fait_annule",
+        origin="26/10 et 03/11 : il dit « c bon », ce qui devait le lui rappeler doit tomber, "
+        "à la lecture, sans mot-clé dans le code (D246).",
+        at=paris(2026, 11, 3, 10, 0),
+        facts=OWNER,
+        steps=(
+            Say("Rappelle-moi à 18h d'envoyer ma carte grise à l'assurance"),
+            Say("D'ailleurs je viens d'envoyer la carte grise c bon"),
+        ),
+        checks=(uses("reminders:cancel", "reminder_cancel"),),
+    ),
+    Case(
+        name="rappel_deja_fait_se_tait",
+        origin="04/11 : « pense à refaire ton pointage » alors qu'il l'avait fait (D246).",
+        at=paris(2026, 11, 3, 17, 0),
+        facts=OWNER,
+        steps=(
+            Say("C'est bon j'ai refait mon pointage d'aujourd'hui"),
+            Notice(
+                reminder_notice("mardi 2026-11-03 à 18:00", "refais ton pointage d'aujourd'hui"),
+                "tu m'as demandé de te le rappeler",
+                Trust.OWNER,
+                at=paris(2026, 11, 3, 18, 0),
+            ),
+        ),
+        checks=(says(r"^\s*SILENCE", "it reminded him of what he just said was done"),),
+    ),
+    Case(
+        name="rappel_dit_la_chose",
+        origin="28/10 : à 18 h, « anniversaire noté cadeau rappelé à 19h » au lieu de lui dire "
+        "de penser au cadeau (D246).",
+        at=paris(2026, 10, 28, 9, 0),
+        facts=OWNER,
+        steps=(
+            Say("Rappelle-moi à 18h de penser au cadeau d'anniversaire d'Angèle"),
+            Notice(
+                reminder_notice(
+                    "mercredi 2026-10-28 à 18:00",
+                    "pense au cadeau d'anniversaire d'Angèle avant de la voir ce soir",
+                ),
+                "tu m'as demandé de te le rappeler",
+                Trust.OWNER,
+                at=paris(2026, 10, 28, 18, 0),
+            ),
+        ),
+        checks=(
+            says(r"(?i)cadeau", "it does not tell him about the gift"),
+            never_says(r"(?i)not[ée]|programm|SILENCE", "it talks about the scheduling"),
+        ),
+    ),
+    Case(
+        name="rappel_de_lieu_pour_orion",
+        origin="04/11 : « Rappel (Maison de maman) : À l'arrivée, programmer un rappel… » lui "
+        "est parti brut : une consigne pour Orion, marquée comme un texte pour lui (D246).",
+        at=paris(2026, 11, 4, 13, 0),
+        facts=OWNER,
+        steps=(
+            Say(
+                "Quand j'arrive chez maman, attends 5 minutes puis dis-moi de prendre une "
+                "manette de PlayStation"
+            ),
+        ),
+        checks=(_argument("remind_at_place", '"own": true'),),
+    ),
+    Case(
+        name="rappel_sans_engagement_en_double",
+        origin="26/10 : carte grise, un rappel et un engagement pour la même chose, donc "
+        "plusieurs messages (D246).",
+        at=paris(2026, 10, 26, 10, 15),
+        facts=OWNER,
+        steps=(Say("Rappelle-moi ce soir à 19h d'envoyer ma carte grise à l'assurance"),),
+        checks=(reminder_on(date(2026, 10, 26), 19), _never_used("commitment_add")),
+    ),
     Case(
         name="demain_a_1h_du_matin",
         origin="20/10 01h16 : « Demain faudra que je pense… », rappel mis au mercredi au lieu "

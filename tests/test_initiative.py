@@ -287,6 +287,24 @@ async def test_explicit_reminders_ignore_quiet_hours_and_survive_model_failure(
     assert world.inbox.messages == ["Rappel : Sortir la poubelle"]
 
 
+async def test_a_reminder_already_done_stays_quiet_and_its_series_goes_on(world: World) -> None:
+    await world.timers.schedule(
+        at(19, 18, 30),
+        "Fais ton pointage",
+        "owner",
+        OWNER_PROVENANCE,
+        Trust.OWNER,
+        repeat="daily",
+        timezone="Europe/Paris",
+    )
+    world.clock.now = at(19, 18, 31)
+    world.provider.extend(reply("SILENCE"))
+    await world.engine().tick()
+    assert world.inbox.messages == []
+    [next_one] = world.timers.projection.pending()
+    assert next_one.due_at > world.clock.now
+
+
 async def test_reminder_is_kept_when_no_channel_is_available(world: World) -> None:
     await world.timers.schedule(at(19, 18, 30), "Truc", "owner", OWNER_PROVENANCE, Trust.OWNER)
     world.clock.now = at(19, 18, 31)

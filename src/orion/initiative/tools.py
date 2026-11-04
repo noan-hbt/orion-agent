@@ -50,7 +50,7 @@ class RemindMeInput(BaseModel):
         description="ISO date-time of the reminder, e.g. '2026-10-23T09:00'. Local time unless "
         "an offset is given."
     )
-    what: str = Field(description="What to remind the owner of, self-contained")
+    what: str = Field(description="What to tell the owner, addressed to him, self-contained")
     by_call: bool = Field(
         default=False, description="Call the owner instead of messaging (e.g. a wake-up call)"
     )

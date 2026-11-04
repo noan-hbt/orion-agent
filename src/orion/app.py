@@ -355,7 +355,11 @@ async def build_app(
             memory=memory,
             snapshot_chars=config.memory.snapshot_chars,
             extractor=MemoryExtractor(
-                provider, memory, config.agent.extractor_model, config.effort("memory")
+                provider,
+                memory,
+                config.agent.extractor_model,
+                config.effort("memory"),
+                told_later=plate.timers.told_later,
             ),
             summary_model=config.agent.summary_model or config.agent.extractor_model,
             summary_effort=config.effort("summary"),

@@ -225,6 +225,11 @@ class Timers:
             None,
         )
 
+    async def told_later(self) -> list[str]:
+        """What is already scheduled to be told to the owner."""
+        await self.sync()
+        return [t.text for t in self.projection.pending() if not t.own]
+
     async def move(
         self, timer_id: str, due_at: datetime, provenance: Provenance, timezone: str
     ) -> str:

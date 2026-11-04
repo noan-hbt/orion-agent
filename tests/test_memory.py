@@ -360,3 +360,13 @@ async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -
     recall = next(t for t in memory_tools(memory) if t.name == "recall")
     result = await recall.handler(recall.parse('{"everything": true}'), ToolContext("owner", "c"))
     assert all(f"numéro {i} " in result.content for i in range(15))
+
+
+async def test_the_reader_sees_what_is_already_scheduled(memory: MemoryService) -> None:
+    async def scheduled() -> list[str]:
+        return ["envoie la carte grise"]
+
+    provider = ScriptedProvider(json_reply({"operations": []}))
+    extractor = MemoryExtractor(provider, memory, "fake", told_later=scheduled)
+    await extractor.consolidate("ok", "ok", OWNER, date(2026, 10, 19), [])
+    assert "envoie la carte grise" in provider.requests[-1].messages[-1]["content"]

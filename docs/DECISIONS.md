@@ -5633,3 +5633,32 @@ Rejeté : une passation qui survit au redémarrage. Le jeton reste en mémoire ;
 
 La limite d'une section de module passe de 2 500 à 3 000 caractères (D84) : `computer.md` en fait 2 675,
 et le core refusait de démarrer sur le serveur.
+
+## D246 — Un rappel dit la chose, une seule fois, et se tait si c'est déjà fait
+
+*04/11/2026 · acceptée · révise D193 et le « toujours délivré » de D197*
+
+Le propriétaire trouvait que les rappels étaient mal interprétés. Le journal le confirme : sur 33
+rappels partis (heure et lieu), 10 sont partis en texte brut. Le 4 novembre : « Rappel (Maison de
+maman) : À l'arrivée, programmer un rappel 5 minutes plus tard… » ; Orion avait fait le travail et
+répondu SILENCE, et le code envoyait quand même la consigne.
+
+- **Un rappel peut se taire.** Orion lit la conversation au moment de l'envoi : si c'est fait, ou
+  s'il vient de le dire, SILENCE ne part plus en texte de secours (`Report.skippable`). Un rappel
+  à répétition continue. Le texte de secours reste pour les vraies pannes.
+- **Pour lui, ou pour Orion.** `remind_at_place` a maintenant `own`, comme `later` avec `check` :
+  c'est une consigne, jamais un texte pour lui, et il n'y a pas de secours.
+- **Il dit la chose.** Le rappel d'heure demande une phrase directe, ni le mot « rappel » ni ce
+  qui est programmé (« anniversaire noté cadeau rappelé à 19h », 28/10).
+- **Une seule fois.** Une demande de rappel n'est plus un engagement : le lecteur de mémoire voit
+  les rappels déjà programmés, et `commitment_add` dit de ne pas doubler `later`. La carte grise
+  avait fait un rappel et deux engagements.
+- **Son « c bon » est lu, pas reconnu.** Aucun mot-clé dans le code : c'est le modèle qui comprend
+  et annule (`planned`, puis `later` cancel), et le cas d'éval `rappel_fait_annule` le garde.
+- **Déjà sur place.** `remind_at_place` lui signale le dernier signal du téléphone : sinon le
+  rappel attend la prochaine arrivée sans que personne le sache (carte grise, 8 h 54).
+
+Rejeté : relier une réponse à un rappel par son identifiant ou par des mots, et un bouton « fait ».
+La conversation suffit à Orion ; on y reviendra si les évals disent le contraire. Risque accepté :
+un SILENCE à tort fait perdre un rappel. `initiative.suppressed` le journalise, et
+`rappel_dit_la_chose` surveille ce cas.
