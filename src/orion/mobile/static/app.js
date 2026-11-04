@@ -2376,10 +2376,27 @@ function shell() {
   view.homeSlot = h(
     "div",
     { class: "ask-field glass" },
-    h("button", { type: "button", class: "ask-open", onclick: () => (show("talk"), view.text.focus()) }, "Écris à Orion…"),
+    h("button", { type: "button", class: "ask-open", onclick: writeFromDock }, "Écris à Orion…"),
   );
   view.dock = h("div", { class: "dock" }, view.homeSlot, talkButton(() => view.homeSlot));
   app.replaceChildren(...Object.values(view.tabs), view.topbar, view.dock);
+}
+
+// The field of the dock becomes the field of the conversation: it glides to its place and the
+// chat fades in around it, no sideways slide. The focus stays in the tap, or iOS keeps its keyboard.
+function writeFromDock() {
+  const from = view.homeSlot.getBoundingClientRect();
+  show("talk", { rise: true });
+  view.text.focus();
+  if (still()) return;
+  const to = view.field.getBoundingClientRect();
+  view.field.animate(
+    [
+      { transform: `translate(${from.left - to.left}px,${from.top - to.top}px) scaleX(${from.width / to.width})`, transformOrigin: "left center" },
+      { transform: "none", transformOrigin: "left center" },
+    ],
+    { duration: 420, easing: "cubic-bezier(.32,.72,0,1)" },
+  );
 }
 
 function paintTopbar(key) {
@@ -2448,7 +2465,7 @@ function flyPlanet(fromKey, toKey) {
   };
 }
 
-function show(key) {
+function show(key, { rise = false } = {}) {
   if (!view.tabs[key]) key = "now";
   const from = TABS.findIndex(([k]) => k === state.tab);
   const to = TABS.findIndex(([k]) => k === key);
@@ -2459,13 +2476,13 @@ function show(key) {
     el.hidden = false;
     for (const tab of [el, leaving]) {
       clearTimeout(tab.leaveTimer);
-      tab.classList.remove("enter-left", "enter-right", "leave-left", "leave-right");
+      tab.classList.remove("enter-left", "enter-right", "enter-rise", "leave-left", "leave-right");
     }
     void el.offsetWidth;
     // Measured once the old screen left the flow, and before the new one starts sliding.
     leaving.classList.add(to > from ? "leave-left" : "leave-right");
     flyPlanet(state.tab, key);
-    el.classList.add(to > from ? "enter-right" : "enter-left");
+    el.classList.add(rise ? "enter-rise" : to > from ? "enter-right" : "enter-left");
     leaving.leaveTimer = setTimeout(() => {
       leaving.classList.remove("leave-left", "leave-right");
       if (view.tabs[state.tab] !== leaving) leaving.hidden = true;

@@ -583,6 +583,7 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 .tab.enter-right,.tab.enter-left { z-index:1; }
 .tab.enter-right { animation:tab-right .5s var(--spring) .08s backwards; }
 .tab.enter-left { animation:tab-left .5s var(--spring) .08s backwards; }
+.tab.enter-rise { animation:fade-in .32s ease; }
 .tab.leave-left,.tab.leave-right { position:absolute; inset:0; z-index:0; pointer-events:none; }
 .tab.leave-left { animation:tab-leave-left .16s ease-out forwards; }
 .tab.leave-right { animation:tab-leave-right .16s ease-out forwards; }
