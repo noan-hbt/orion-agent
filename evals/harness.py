@@ -89,6 +89,8 @@ class Observation:
     """What Orion wrote to the owner beside his tool calls, before his replies (D162)."""
     tools: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
     """(tool, arguments) in call order."""
+    rounds: list[list[str]] = field(default_factory=list[list[str]])
+    """The tools of each model answer in the owner's thread, one list per answer."""
     night_tools: list[str] = field(default_factory=list[str])
     """What Orion used during his night (`tool` or `tool:action`)."""
     reminders: list[datetime] = field(default_factory=list[datetime])
@@ -322,6 +324,19 @@ def digs(at_least: int, *tools: str) -> Check:
     return check
 
 
+def together(tool: str, at_least: int = 2) -> Check:
+    """At least `at_least` calls to `tool` in one model answer: independent calls go out
+    together, not one per answer (04/11)."""
+
+    async def check(o: Observation, _j: Judge) -> str | None:
+        most = max((r.count(tool) for r in o.rounds), default=0)
+        if most >= at_least:
+            return None
+        return f"at most {most} {tool} per answer (min {at_least}; answers: {o.rounds})"
+
+    return check
+
+
 def called_with(tool: str, *fragments: str) -> Check:
     """`tool` was called with arguments holding every fragment (JSON as the model wrote it,
     spaces removed)."""
@@ -523,10 +538,14 @@ async def run_case(
                     payload: dict[str, Any] = event.payload
                     if event.kind == "tool.executed":
                         observation.tools.append((str(payload["tool"]), str(payload["arguments"])))
+                        if payload.get("thread_id") == OWNER_THREAD and observation.rounds:
+                            observation.rounds[-1].append(str(payload["tool"]))
                         if payload.get("thread_id") in (NIGHT_THREAD, WATCH_THREAD):
                             action = _action(str(payload["arguments"]))
                             tool = str(payload["tool"])
                             observation.night_tools.append(f"{tool}:{action}" if action else tool)
+                    elif event.kind == "model.usage" and payload.get("thread_id") == OWNER_THREAD:
+                        observation.rounds.append([])
                     elif event.kind == "model.usage" and event.payload.get("thread_id") in (
                         NIGHT_THREAD,
                         WATCH_THREAD,

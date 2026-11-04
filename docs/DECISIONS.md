@@ -5435,3 +5435,18 @@ qu'il avait allumé. Ce type écrit sans le modèle le `summary` que la tâche l
   règle.
 - Un `notification.set` « tache » déjà au journal reste là et ne fait plus rien : la projection
   ignore les types inconnus.
+
+
+## D237 — Des appels indépendants partent dans la même réponse
+
+*04/11/2026 · acceptée*
+
+La boucle exécute déjà en parallèle les appels sans effet d'une même réponse (`concurrency_safe`),
+et tous les providers savent en rendre plusieurs. Mais rien dans la constitution ne le
+demandait : Orion faisait souvent une recherche par réponse, un aller-retour avec le modèle de
+plus à chaque fois.
+
+- **La constitution** : des appels qui ne dépendent pas l'un de l'autre se font tous dans la
+  même réponse.
+- **L'éval** `deux_recherches_d_un_coup` vérifie qu'au moins deux `web_search` partent dans une
+  même réponse (`together`).
