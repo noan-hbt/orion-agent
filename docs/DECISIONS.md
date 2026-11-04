@@ -5587,3 +5587,46 @@ réservées aux moments rares, et aucune ne prend jamais le doigt ni ne bloque l
   et parfois une étoile filante. Heures fixes, sans demander où est l'owner. C'est le seul endroit
   sombre de l'app, et seulement sur l'accueil la nuit : ce n'est pas un mode sombre.
 
+## D245 — Le navigateur revu : il voit, il suit, il garde
+
+*04/11/2026 · acceptée · complète D116, D119, D145*
+
+Relevé sur le journal du serveur (1083 actions du navigateur, 127 erreurs, 51 passations) : Orion
+passait la main pour des menus qu'il ne voyait pas (Hyperplanning, Nibelis), un lien « qui ne réagit
+pas » (INPI) ou une connexion déjà au coffre, et l'owner devait se reconnecter après un redémarrage.
+
+**Ce qu'Orion voit.**
+
+- Les éléments cliquables seulement par script (curseur main, rôles de menu, `label`, shadow DOM)
+  sont listés, avec leur état : valeur, coché, ouvert, désactivé, options d'une liste. Une icône sans
+  texte prend son `aria-label`, ou les mots de son id. 11 % des éléments n'avaient aucun nom.
+- Un numéro reste à son élément tant que le document vit, et une action sur la même page ne renvoie
+  que ce qui a changé, ou dit que rien n'a changé. `read` montre tout ; avec `find`, il retrouve aussi
+  un élément au-delà des 150 affichés.
+
+**Ce qu'il peut faire.**
+
+- Un lien qui ouvre un onglet l'y emmène, `back` l'en ramène. Avant, l'onglet était perdu.
+- Un clic qui ne passe pas en 3 s (au lieu de 8) presse l'élément directement et dit ce qui le
+  couvrait. Sur téléphone, un clic est un vrai toucher, comme le doigt de l'owner.
+- Une confirmation est acceptée et dite : Playwright la refusait en silence.
+- Ce qu'une page donne (bulletin, contrat) est gardé dans les fichiers, avec les cookies du site :
+  `file` download ne les a pas.
+- Nouvelles actions : `press`, `hover`, `upload` (l'owner approuve : ses documents sortent), `view`
+  (cet onglet en ordinateur ou en téléphone).
+- `login` fait tout d'un coup : il ouvre, tape touche par touche, envoie, sur les sites du login
+  seulement. La page de connexion dit si le coffre a ce site. `fill` reste pour les codes.
+
+**Ce qu'il garde.**
+
+- Les cookies de session sont écrits toutes les 20 s d'usage, et `KillMode=mixed` laisse Orion fermer
+  Chromium à l'arrêt : un redémarrage ne déconnecte plus l'owner.
+- Un onglet fermé ou perdu : la dernière page vient du journal, et `read` la rouvre.
+- Un reCAPTCHA invisible derrière un formulaire n'est plus pris pour un mur.
+
+**Pour l'owner.** Réglages > Mon navigateur : ouvrir un site lui-même dans le navigateur d'Orion pour
+s'y connecter une fois, voir les sites gardés, s'en déconnecter. Cet onglet est à lui : Orion n'est ni
+réveillé ni dérangé. Quand Orion attend ses mains, « Prendre la main » s'affiche aussi sous la
+conversation, plus seulement dans Maintenant.
+
+Rejeté : une passation qui survit au redémarrage. Le jeton reste en mémoire ; à voir si ça gêne encore.

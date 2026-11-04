@@ -19,25 +19,29 @@ can be traced and contained (`memory.provenance`).
 from __future__ import annotations
 
 import asyncio
+import json
+import mimetypes
 import re
 import secrets as tokens
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlsplit
 
 import structlog
 from playwright.async_api import Page
 from pydantic import BaseModel, ConfigDict, Field
 
-from orion.computer.browser import BrowserError, Session, Snapshot
+from orion.computer.browser import KEPT_COOKIES, MAX_ELEMENTS, BrowserError, Session, Snapshot
 from orion.computer.vault import LocalVault, LoginKeeper, VaultError
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
+from orion.guardian.limits import host_in
 from orion.guardian.logins import site_of
 from orion.initiative.engine import Alert
 from orion.runtime import OWNER_THREAD
@@ -52,6 +56,10 @@ IDLE_SECONDS = 600.0
 SHOWN_CHARS = 4000
 """Page text shown after each action; `browser` read gives the rest, part by part."""
 READ_CHARS = 60_000
+FOUND_ELEMENTS = 1000
+"""How far `browser` read looks for an element by its words, past what a page shows."""
+HANDS = "hands"
+"""His own tab, when he opens the browser himself (D245): Orion's stays as it is."""
 _HREF = re.compile(r" -> (https?://\S+)$")
 
 
@@ -60,6 +68,15 @@ class BrowsingState(WebState):
     """`WebState` plus the pages the browser showed and their links."""
 
     name: str = "browser"
+    last: dict[str, str] = field(default_factory=dict[str, str])
+    """Conversation → the last page it showed: a tab closed or lost is not a thread lost."""
+    visited: set[str] = field(default_factory=set[str])
+    """The sites Orion's browser went to: the rest of its cookies are their trackers."""
+
+    async def reset(self) -> None:
+        await super().reset()
+        self.last.clear()
+        self.visited.clear()
 
     async def apply(self, event: Event) -> None:
         await super().apply(event)
@@ -69,6 +86,10 @@ class BrowsingState(WebState):
             payload: dict[str, Any] = event.payload
             self.allowed.add(str(payload["url"]))
             self.allowed.update(str(link) for link in payload.get("links", []))
+            self.last[str(payload.get("thread_id", ""))] = str(payload["url"])
+            site = site_of(str(payload["url"]))
+            if site:
+                self.visited.add(site)
 
 
 class Refused(ValueError):
@@ -89,6 +110,12 @@ class _Live:
     """A login the vault lent for this browser: username, password, sites, code (D111, D120)."""
     hidden: set[str] = field(default_factory=set[str])
     """What Orion must never read: the password, and the codes typed."""
+    others: list[Page] = field(default_factory=list[Page])
+    """The tabs it came from, when a page opened another: closed with it, reached by `back`."""
+    shown: Snapshot | None = None
+    """The page as Orion last read it: the next action tells only what changed."""
+    hinted: set[str] = field(default_factory=set[str])
+    """Sites it was already told it has a login for, or not."""
 
 
 MASK = "••••••"
@@ -105,6 +132,10 @@ BROWSING = frozenset(
         "browser_read",
         "browser_login",
         "browser_fill",
+        "browser_press",
+        "browser_hover",
+        "browser_upload",
+        "browser_view",
     }
 )
 """The tools that drive the page: a long turn says « je navigue sur le site » for them."""
@@ -120,6 +151,8 @@ class HandOver:
     the vault once he is done (D120). In memory only, never journaled."""
     offered: str = ""
     """The token of the offer to keep that login, once he is done: the app asks him at once."""
+    asked: bool = True
+    """Orion asked for his hands, and waits. False: he opened the browser himself (D245)."""
 
 
 @dataclass
@@ -190,6 +223,12 @@ class BrowserDesk:
         """The app shows a hand-over under way in Maintenant, with the live tab (D135)."""
         self.on_telegram: Callable[[], bool] = lambda: False
         """Whether he last wrote from Telegram: with the app there, the button goes only then."""
+        self.profile: Path | None = None
+        """The browser's folder: its kept cookies say where it is signed in (D245)."""
+        self.keep_file: Keep | None = None
+        """Where a file a page gave goes (`orion.files`)."""
+        self.read_file: ReadFile | None = None
+        """A kept file, to put into a form."""
 
     @property
     def session(self) -> Session:
@@ -230,11 +269,40 @@ class BrowserDesk:
             live.closer.cancel()
         live.closer = asyncio.create_task(self._close_later(thread))
 
+    def _in_hand(self, thread: str) -> bool:
+        now = time.monotonic()
+        return thread in self.held and any(
+            h.thread == thread and h.until > now for h in self.handovers.values()
+        )
+
     async def _close_later(self, thread: str) -> None:
-        await asyncio.sleep(self._idle)
-        async with self._lock:  # never under an action running on that tab
-            if thread not in self.held:
-                await self.close(thread)
+        while True:
+            await asyncio.sleep(self._idle)
+            async with self._lock:  # never under an action running on that tab
+                if not self._in_hand(thread):  # a hand-over forgotten does not keep it for ever
+                    await self.close(thread)
+                    return
+
+    def _follow(self, live: _Live) -> None:
+        """The conversation goes where the page went: a tab it opened, or back from one."""
+        now = self.session.current()
+        if now is not live.page and not live.page.is_closed():
+            live.others.append(live.page)
+        live.page = now
+        live.others = [p for p in live.others if p is not now and not p.is_closed()]
+
+    async def _need_tab(self, thread: str) -> None:
+        """No tab, no element to act on: where it was is told, not a blank page opened."""
+        if thread in self._live and (self._session is None or self._session.alive):
+            return
+        await self._runner.catch_up()
+        last = self.state.last.get(thread)
+        if last is None:
+            raise Refused("No page is open: browser open first.")
+        raise Refused(
+            f"Ton onglet s'est fermé (inactif, ou redémarrage), sa page était {last}. "
+            "`browser` read la rouvre, avec de nouveaux numéros."
+        )
 
     def tab(self, thread: str) -> _Live | None:
         return self._live.get(thread)
@@ -250,6 +318,9 @@ class BrowserDesk:
             # Before the last tab goes: the full Chromium ends its session with it, and its
             # session cookies (a school's sign-in) with them.
             await self._session.keep_cookies()
+        for other in live.others:
+            if not other.is_closed():
+                await other.close()
         await live.page.close()
         log.info("browser.closed", thread=thread)
         if not self._live and self._session is not None:  # the last tab: the browser goes
@@ -266,8 +337,11 @@ class BrowserDesk:
         async with self._lock:
             if thread not in self._live:
                 raise Refused("That tab is closed.")
-            await self._tab(thread)
-            return await action(self.session)
+            live = await self._tab(thread)
+            done = await action(self.session)
+            self._follow(live)
+            await self.session.keep_cookies_soon()  # he signed in: a restart must not undo it
+            return done
 
     # -- actions ------------------------------------------------------------------------------
 
@@ -277,40 +351,75 @@ class BrowserDesk:
             raise Refused(f"{url} is not a web address (http or https).")
         return await self._act(ctx, lambda s: s.goto(address))
 
+    async def _on_page(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
+        await self._need_tab(ctx.thread_id)
+        return await self._act(ctx, action)
+
     async def click(self, element: int, ctx: ToolContext) -> str:
-        return await self._act(ctx, lambda s: s.click(element))
+        return await self._on_page(ctx, lambda s: s.click(element))
 
     async def type(self, element: int, text: str, enter: bool, ctx: ToolContext) -> str:
-        return await self._act(ctx, lambda s: s.type(element, text, enter))
+        return await self._on_page(ctx, lambda s: s.type(element, text, enter))
 
     async def select(self, element: int, option: str, ctx: ToolContext) -> str:
-        return await self._act(ctx, lambda s: s.select(element, option))
+        return await self._on_page(ctx, lambda s: s.select(element, option))
 
     async def scroll(self, down: bool, ctx: ToolContext) -> str:
-        return await self._act(ctx, lambda s: s.scroll(down))
+        return await self._on_page(ctx, lambda s: s.scroll(down))
 
     async def back(self, ctx: ToolContext) -> str:
-        return await self._act(ctx, lambda s: s.back())
+        return await self._on_page(ctx, lambda s: s.back())
+
+    async def press(self, key: str, element: int | None, ctx: ToolContext) -> str:
+        return await self._on_page(ctx, lambda s: s.press(key, element))
+
+    async def hover(self, element: int, ctx: ToolContext) -> str:
+        return await self._on_page(ctx, lambda s: s.hover(element))
+
+    async def view(self, screen: str, ctx: ToolContext) -> str:
+        await self._need_tab(ctx.thread_id)
+        return await self._act(ctx, lambda s: s.view(screen == "computer"), whole=True)
+
+    async def upload(self, element: int, file_id: str, ctx: ToolContext) -> str:
+        found = self.read_file(file_id) if self.read_file is not None else None
+        if found is None:
+            raise Refused(f"No file {file_id}: `file` lists those you have.")
+        name, data, kind = found
+        return await self._on_page(ctx, lambda s: s.upload(element, name, data, kind))
 
     async def read(self, part: int, find: str, ctx: ToolContext) -> str:
-        live = self._live.get(ctx.thread_id)
-        if live is None:
-            raise Refused("No page is open: browser open first.")
+        reopened = ""
+        if ctx.thread_id not in self._live or (self._session and not self._session.alive):
+            await self._runner.catch_up()
+            last = self.state.last.get(ctx.thread_id)
+            if last is None:
+                raise Refused("No page is open: browser open first.")
+            await self._act(ctx, lambda s: s.goto(last), whole=True)
+            reopened = "[Ton onglet s'était fermé : rouvert sur sa dernière page.]\n\n"
+        live = self._live[ctx.thread_id]
 
         async def look(_session: Session) -> None:
             return None
 
         # Always the page as it is now: what was read after the last action may have been a
         # « veuillez patienter » long gone (seen for real on Hyperplanning, D119).
-        page = await self._act(ctx, look)
+        page = await self._act(
+            ctx, look, whole=True, elements=FOUND_ELEMENTS if find else MAX_ELEMENTS
+        )
         text = live.text
         if not find and (part == 0 or (part == 1 and len(text) <= SHOWN_CHARS)):
-            return page  # it fits: the whole page, as it is now
+            return reopened + page  # it fits: the whole page, as it is now
         if find:
+            shown = live.shown.elements if live.shown is not None else []
+            live.shown = None  # read wider than a page: the next action shows it whole
+            found = [e for e in shown if find.lower() in e.lower()][:20]
             spots = [m.start() for m in re.finditer(re.escape(find), text, re.IGNORECASE)][:5]
-            if not spots:
-                return f"« {find} » n'apparaît pas sur la page."
-            return "\n\n".join(f"…{text[max(0, i - 300) : i + 700]}…" for i in spots)
+            if not spots and not found:
+                return f"{reopened}« {find} » n'apparaît pas sur la page."
+            said = [f"…{text[max(0, i - 300) : i + 700]}…" for i in spots]
+            if found:
+                said.append("Éléments (utilise leur numéro) :\n" + "\n".join(found))
+            return reopened + "\n\n".join(said)
         start = part * SHOWN_CHARS
         if start >= len(text):
             return f"La page s'arrête avant la partie {part} ({len(text)} caractères)."
@@ -318,16 +427,35 @@ class BrowserDesk:
         more = len(text) > start + SHOWN_CHARS
         return chunk + (f"\n[suite : browser read, part={part + 1}]" if more else "\n[fin]")
 
+    async def _login_name(self, url: str, thread: str) -> str:
+        """No login named: the vault's one for the page asked, or the page open."""
+        if self.vault is None:
+            raise Refused(NO_VAULT)
+        live = self._live.get(thread)
+        address = url or (live.page.url if live is not None else "")
+        site = site_of(address)
+        try:
+            kept = await self.vault.accounts()
+        except (GuardianUnavailableError, VaultError) as exc:
+            raise Refused(f"The vault did not answer: {exc}") from exc
+        for login in kept["logins"]:
+            if site and site in login["sites"]:
+                return str(login["name"])
+        raise Refused(
+            f"Ton coffre n'a rien pour {site or 'cette page'} : save_password lui demande "
+            "l'identifiant, ou hand_over s'il faut qu'il se connecte lui-même."
+        )
+
     async def login(self, args: Any, ctx: ToolContext) -> str:
-        """A login from the vault (D111, D120), for a sign-in form: `fill` types it, Orion
-        never sees it. Opens `url`, or the login's own page."""
+        """A login from the vault (D111, D120) typed into the page's sign-in form and sent, in
+        one go (D245): Orion never sees it. Opens `url` or the login's own page, unless it is
+        already on the login's site, a step or a button further."""
         vault = self.vault
         if vault is None:
             raise Refused(NO_VAULT)
+        name = args.login or await self._login_name(str(args.url), ctx.thread_id)
         try:
-            lent = await vault.lend_login(
-                args.login, {"action": "login", "login": args.login}, ctx.grant
-            )
+            lent = await vault.lend_login(name, {"action": "login", "login": name}, ctx.grant)
         except (GuardianUnavailableError, VaultError) as exc:
             raise Refused(f"The vault did not lend it: {exc}") from exc
         sites = list(lent["sites"])
@@ -335,20 +463,46 @@ class BrowserDesk:
         start = start or str(lent.get("url") or "") or (f"https://{sites[0]}/" if sites else "")
         async with self._lock:
             live = await self._tab(ctx.thread_id)
-            name, loan = args.login, str(lent["loan"])
+            loan = str(lent["loan"])
 
             async def code() -> str:
                 return await vault.login_code(name, loan)
 
             live.login = {**lent, "code": code}
             live.hidden.add(str(lent["password"]))
-        said = await self._act(ctx, lambda s: s.goto(start)) if start else ""
-        return (
-            "Identifiant prêt : `browser` fill tape l'identifiant, le mot de passe ou le code "
-            "(tu ne les vois jamais), puis clique pour te connecter.\n\n" + said
-        )
+            here = urlsplit(live.page.url).hostname or ""
+            go = start if args.url or not host_in(here, sites) else ""
+        sent: dict[str, bool] = {}
+        still = [False]
+
+        async def signing_in(session: Session) -> None:
+            nonlocal sent
+            if go:
+                await session.goto(go)
+                await session.ready()
+            sent = await session.sign_in_lent(str(lent["username"]), str(lent["password"]), sites)
+            still[0] = bool(sent.get("password")) and await session.shows_password_field()
+
+        said = await self._act(ctx, signing_in, whole=True)
+        if not sent.get("username") and not sent.get("password"):
+            head = (
+                "Je ne vois pas de formulaire de connexion ici : clique ce qui y mène, puis "
+                "`browser` login à nouveau (ou fill sur un champ précis)."
+            )
+        elif still[0]:
+            head = (
+                "Identifiant envoyé, mais le formulaire de connexion est encore là : mot de passe "
+                "refusé, captcha ou étape de plus. Regarde la page ; en dernier recours, hand_over."
+            )
+        else:
+            head = (
+                "Identifiant tapé et envoyé (tu ne le vois jamais). Un code demandé ensuite : fill "
+                "avec field=code, s'il y a sa clé, sinon demande-le-lui."
+            )
+        return f"{head}\n\n{said}"
 
     async def fill(self, element: int, what: str, ctx: ToolContext) -> str:
+        await self._need_tab(ctx.thread_id)
         live = self._live.get(ctx.thread_id)
         if live is None or live.login is None:
             raise Refused("No login is lent to this browser: `browser` login first.")
@@ -424,7 +578,15 @@ class BrowserDesk:
         url = live.page.url if live is not None else ""
         if live is not None:
             live.text = ""  # what Orion last read is not the page any more
+            live.shown = None
             self._arm(found.thread, live)
+        if not found.asked:  # he opened it himself: nobody waits, his tab goes when he is done
+            if self._session is not None:
+                await self._session.keep_cookies()
+            await self._offer_typed(found, live)
+            async with self._lock:
+                await self.close(found.thread)
+            return url
         if done:
             if self._session is not None:
                 await self._session.keep_cookies()  # signed in: kept at once
@@ -676,6 +838,55 @@ class BrowserDesk:
         elif typed.get("value"):
             found.typed["username"] = typed["value"]
 
+    # -- the browser in his own hands, when he wants it (D245) -----------------------------------
+
+    async def take(self, url: str = "") -> dict[str, str]:
+        """He opens Orion's browser himself: to sign in once and for all, or just to see. A tab
+        of his own, with the same sign-ins; nothing is asked of Orion."""
+        address = normalize(url) if url else ""
+        if url and not address:
+            raise Refused(f"{url} n'est pas une adresse web.")
+        why = "Ton navigateur, avec mes connexions : ce que tu y fais, je le garde."
+        async with self._lock:
+            await self._tab(HANDS)
+            self.held.add(HANDS)
+            if address:
+                await self.session.goto(address)
+        token = tokens.token_urlsafe(24)
+        now = time.monotonic()
+        self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
+        self.handovers[token] = HandOver(HANDS, why, now + HANDOVER_SECONDS, asked=False)
+        return {"token": token, "why": why}
+
+    async def sites(self) -> list[str]:
+        """The sites its browser keeps cookies of, among those it went to: not all signed in,
+        but all it would be signed in to."""
+        await self._runner.catch_up()
+        async with self._lock:
+            if self._session is not None and self._session.alive:
+                await self._session.keep_cookies()
+        kept = self.profile / KEPT_COOKIES if self.profile is not None else None
+        if kept is None or not kept.is_file():
+            return []
+        now = time.time()
+        found: set[str] = set()
+        for cookie in json.loads(kept.read_text(encoding="utf-8")):
+            expires = float(cookie.get("expires", -1))
+            site = site_of(str(cookie.get("domain", "")).lstrip("."))
+            if site in self.state.visited and (expires < 0 or expires > now):
+                found.add(site)
+        return sorted(found)
+
+    async def sign_out(self, site: str) -> None:
+        """From the app: signed out of a site, the browser opened for that if need be."""
+        async with self._lock:
+            mine = HANDS not in self._live
+            await self._tab(HANDS)
+            await self.session.forget(site)
+            await self.session.keep_cookies()
+            if mine:
+                await self.close(HANDS)
+
     async def forget(self, site: str, ctx: ToolContext) -> str:
         """Signed out of a site (its cookies go), or of every site."""
         async with self._lock:
@@ -691,22 +902,76 @@ class BrowserDesk:
             await self._tab(ctx.thread_id)
             return await self.session.screenshot(full)
 
-    async def _act(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
+    async def _act(
+        self,
+        ctx: ToolContext,
+        action: Callable[[Session], Any],
+        whole: bool = False,
+        elements: int = MAX_ELEMENTS,
+    ) -> str:
         async with self._lock:
             live = await self._tab(ctx.thread_id)
             session = self.session
             blocked_before = len(session.blocked)
+            before = None if whole else live.shown
             live.text = ""
+            live.shown = None
             await action(session)
-            snapshot = await session.snapshot(READ_CHARS)
+            self._follow(live)
+            snapshot = await session.snapshot(READ_CHARS, elements)
+            await session.files_landed()
+            self._follow(live)
             if live.hidden:
                 snapshot.url = masked(snapshot.url, live.hidden)
                 snapshot.text = masked(snapshot.text, live.hidden)
                 snapshot.elements = [masked(e, live.hidden) for e in snapshot.elements]
             live.text = snapshot.text
+            live.shown = snapshot
             blocked = session.blocked[blocked_before:]
+            notes = [masked(n, live.hidden) for n in session.take_notes()]
+            files = session.take_files()
+            await session.keep_cookies_soon()
+            hint = await self._login_hint(session, live, snapshot.url)
         await self._record(snapshot, ctx)
-        return _render(snapshot, blocked)
+        notes += [await self._keep_given(name, data, ctx) for name, data in files]
+        said = _changes(before, snapshot) if before is not None else None
+        said = said if said is not None else _render(snapshot, blocked)
+        return "\n\n".join([*([hint] if hint else []), said, *notes])
+
+    async def _keep_given(self, name: str, data: bytes, ctx: ToolContext) -> str:
+        """A file the page gave: kept like a download, worth what the page is worth."""
+        if self.keep_file is None:
+            return f"[La page a donné le fichier {name}, mais je n'ai nulle part où le garder.]"
+        kind = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        try:
+            kept = await self.keep_file(name, data, kind, ctx, "download")
+        except ValueError as exc:
+            return f"[La page a donné le fichier {name}, pas gardé : {exc}.]"
+        return (
+            f"[La page a donné un fichier : {name} ({kept}). `attachment_look` pour le lire, "
+            "`file` send pour le lui envoyer.]"
+        )
+
+    async def _login_hint(self, session: Session, live: _Live, url: str) -> str:
+        """A sign-in page, once per site: whether the vault can do it, rather than guess."""
+        site = site_of(url)
+        if self.vault is None or not site or site in live.hinted:
+            return ""
+        form = await session.sign_in_form()
+        if form is None or not form["password"]:
+            return ""
+        live.hinted.add(site)
+        try:
+            kept = await self.vault.accounts()
+        except (GuardianUnavailableError, VaultError) as exc:
+            log.warning("browser.vault_silent", error=str(exc))
+            return ""
+        for login in kept["logins"]:
+            if site in login["sites"]:
+                return f"[Page de connexion. Ton coffre a « {login['name']} » : `browser` login.]"
+        return (
+            f"[Page de connexion. Ton coffre n'a rien pour {site} : save_password, ou hand_over.]"
+        )
 
     async def _record(self, snapshot: Snapshot, ctx: ToolContext) -> None:
         links = [m.group(1) for e in snapshot.elements if (m := _HREF.search(e))]
@@ -736,6 +1001,42 @@ MOVING = (
 )
 
 
+NOTHING_CHANGED = (
+    "[Rien n'a changé sur la page : elle et ses numéros sont comme à ta dernière lecture. Si tu "
+    "attendais autre chose : hover, press, une capture (screenshot), ou view computer.]"
+)
+
+
+def _changes(before: Snapshot, after: Snapshot) -> str | None:
+    """What an action changed on the page, rather than all of it again; None when it is another
+    page, or so changed that it is better read whole."""
+    if before.url != after.url or before.title != after.title or after.blocked:
+        return None
+    old_lines = set(before.text.splitlines())
+    new_lines = after.text.splitlines()
+    added = [line for line in new_lines if line.strip() and line not in old_lines]
+    kept_lines = set(new_lines)
+    gone = [line for line in before.text.splitlines() if line.strip() and line not in kept_lines]
+    old_elements = set(before.elements)
+    new_elements = set(after.elements)
+    came = [e for e in after.elements if e not in old_elements]
+    left = [e.split(" ", 1)[0] for e in before.elements if e not in new_elements]
+    moving = [MOVING] if not after.steady else []
+    if not (added or gone or came or left):
+        return "\n".join([f"URL : {after.url}", NOTHING_CHANGED, *moving])
+    if len(added) + len(came) > max(6, (len(new_lines) + len(after.elements)) // 2):
+        return None
+    lines = [f"URL : {after.url}", "Même page ; ce qui a changé (`browser` read : tout) :"]
+    lines += [f"+ {line}" for line in added]
+    lines += [f"- {line}" for line in gone[:10]]
+    if came:
+        lines += ["Éléments nouveaux ou changés :", *came]
+    if left:
+        lines.append("Éléments partis : " + " ".join(left[:30]))
+    said = "\n".join([*lines, *moving])
+    return said if len(said) <= SHOWN_CHARS else None
+
+
 def _render(snapshot: Snapshot, blocked: list[str]) -> str:
     text = snapshot.text[:SHOWN_CHARS]
     more = (
@@ -752,6 +1053,8 @@ def _render(snapshot: Snapshot, blocked: list[str]) -> str:
         "Éléments (utilise leur numéro) :",
         *snapshot.elements,
     ]
+    if snapshot.omitted:
+        lines += [f"[{snapshot.omitted} autres éléments plus bas : browser read, avec find]"]
     if snapshot.images:
         lines += ["", "Images de la page (à envoyer avec `file`, action download) :"]
         lines += [f"- {text or 'image'} — {url}" for url, text in snapshot.images]
@@ -785,7 +1088,7 @@ class TypeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     element: int = Field(ge=1)
-    text: str = Field(max_length=200)
+    text: str = Field(max_length=5000)
     enter: bool = Field(default=False, description="Press Enter after typing")
 
 
@@ -819,10 +1122,46 @@ class ScreenshotInput(BaseModel):
     full: bool = Field(default=False, description="The whole page, not only what is visible")
 
 
+class PressInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: Literal[
+        "Enter",
+        "Escape",
+        "Tab",
+        "Space",
+        "Backspace",
+        "ArrowDown",
+        "ArrowUp",
+        "ArrowLeft",
+        "ArrowRight",
+        "PageDown",
+        "PageUp",
+        "Home",
+        "End",
+    ]
+    element: int | None = Field(default=None, ge=1, description="Empty: what has the focus")
+
+
+class UploadInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    element: int = Field(ge=1, description="The file field, or the button that opens the picker")
+    file: str = Field(pattern=r"^fi_", max_length=60, description="A file you have (`fi_…`)")
+
+
+class ViewInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    screen: Literal["computer", "phone"]
+
+
 class LoginInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    login: str = Field(max_length=60, description="A login in your vault (accounts)")
+    login: str = Field(
+        default="", max_length=60, description="A login in your vault; empty: the page's site's"
+    )
     url: str = Field(default="", max_length=500, description="The sign-in page to open")
 
 
@@ -857,12 +1196,15 @@ class ForgetInput(BaseModel):
     )
 
 
-Keep = Callable[[str, bytes, str, ToolContext], Awaitable[str]]
-"""(name, data, content type, ctx) → the id of the file kept (`orion.files`)."""
+Keep = Callable[[str, bytes, str, ToolContext, str], Awaitable[str]]
+"""(name, data, content type, ctx, how it came) → the id of the file kept (`orion.files`)."""
+ReadFile = Callable[[str], tuple[str, bytes, str] | None]
+"""A kept file's id → (name, data, content type)."""
 
 
 def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = False) -> list[Tool]:
     """`looks`: `attachment_look` can look at a screenshot (the photos module is on)."""
+    desk.keep_file = keep
 
     def run(act: Callable[[Any, ToolContext], Any]) -> Any:
         async def handler(args: Any, ctx: ToolContext) -> ToolResult:
@@ -881,7 +1223,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         except (Refused, BrowserError) as exc:
             return ToolResult(str(exc), is_error=True)
         kind = "image/jpeg" if args.full else "image/png"
-        file_id = await keep("capture", data, kind, ctx)
+        file_id = await keep("capture", data, kind, ctx, "screenshot")
         look = (
             f" Tu ne la vois pas : `attachment_look` ({file_id}) te dit ce qu'elle montre."
             if looks
@@ -969,22 +1311,45 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         ),
         tool(
             "browser_read",
-            "More of the page shown: the next part of its text, or where a word appears.",
+            "The page as it is now, whole; or the next part of its text; or, with find, where "
+            "a word appears in it and which elements bear it.",
             ReadInput,
             run(lambda a, c: desk.read(a.part, a.find, c)),
+        ),
+        tool(
+            "browser_press",
+            "Press a key, on an element or on what has the focus: Escape closes a menu, the "
+            "arrows move in a list.",
+            PressInput,
+            run(lambda a, c: desk.press(a.key, a.element, c)),
+        ),
+        tool(
+            "browser_hover",
+            "Put the pointer over an element: a menu that opens only then.",
+            ElementInput,
+            run(lambda a, c: desk.hover(a.element, c)),
+        ),
+        tool(
+            "browser_view",
+            "Show this tab as a computer's or a phone's, and reload it: a site that gives a "
+            "phone only half of itself, or turns one away. Your browser is a phone's until then.",
+            ViewInput,
+            run(lambda a, c: desk.view(a.screen, c)),
         ),
         tool("browser_close", "Close your browser when you are done.", NoInput, close),
         tool(
             "browser_login",
-            "A password from your vault, for a sign-in form: then fill types it "
-            "without you seeing it.",
+            "Sign in with your vault, in one go: opens the sign-in page, types his username "
+            "and password into the form and sends it, without you seeing them. No form yet: "
+            "reach it, then login again.",
             LoginInput,
             run(lambda a, c: desk.login(a, c)),
             Effect.INTERNAL,
         ),
         tool(
             "browser_fill",
-            "After login with a login: type his username, password or 2FA code into a field.",
+            "After login: type his username, password or 2FA code into one field (for a code, "
+            "or a form login did not find).",
             FillInput,
             run(lambda a, c: desk.fill(a.element, a.field, c)),
         ),
@@ -1019,6 +1384,20 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             PasswordInput,
             save_password,
             Effect.INTERNAL,
+        ),
+        *(
+            [
+                tool(
+                    "browser_upload",
+                    "Put a file you have into a form of the page: a document of his goes out "
+                    "to that site, so he approves.",
+                    UploadInput,
+                    run(lambda a, c: desk.upload(a.element, a.file, c)),
+                    Effect.EXTERNAL,
+                )
+            ]
+            if desk.read_file is not None
+            else []
         ),
         *(
             [

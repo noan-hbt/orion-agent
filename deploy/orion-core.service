@@ -15,6 +15,9 @@ Environment=CLAUDE_CONFIG_DIR=/srv/orion/data/claude-code/login
 Environment=DISABLE_AUTOUPDATER=1
 ExecStart=/srv/orion/app/.venv/bin/orion --config /srv/orion/orion.toml serve
 Restart=always
+# SIGTERM to Orion alone: it writes the browser's cookies and closes Chromium itself. With the
+# whole group killed at once, session cookies, so sign-ins, were lost at every restart (D245).
+KillMode=mixed
 RestartSec=5
 # Its shell may use sudo (D164): no privilege lock, no read-only system, or root could not act.
 PrivateTmp=true

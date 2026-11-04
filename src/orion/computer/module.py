@@ -78,6 +78,7 @@ class ComputerModule(Module):
             session = Session(False, executable=executable)
             session.profile = profile
             session.phone = PHONE
+            session.keep_downloads = True
             if self.exit is not None:
                 session.proxy, session.through = self.exit.proxy, self.exit.through
             return session
@@ -86,6 +87,7 @@ class ComputerModule(Module):
         # The guardian keeps the logins when it runs apart (D111); else Orion does (D120).
         vault = LocalVault(self.config) if plate.guardian is None else None
         self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian, vault=vault)
+        self.desk.profile = profile
         from orion.files.module import FilesModule
 
         files = plate.module(FilesModule)
@@ -94,17 +96,27 @@ class ComputerModule(Module):
         if store is not None:
             kept_by = store
 
-            async def keep_file(name: str, data: bytes, kind: str, ctx: ToolContext) -> str:
-                return (await kept_by.save(name, data, kind, "screenshot", ctx, Trust.WEB)).id
+            async def keep_file(
+                name: str, data: bytes, kind: str, ctx: ToolContext, how: str
+            ) -> str:
+                return (await kept_by.save(name, data, kind, how, ctx, Trust.WEB)).id
+
+            def read_file(file_id: str) -> tuple[str, bytes, str] | None:
+                made = kept_by.get(file_id)
+                if made is None or not made.path.is_file():
+                    return None
+                return made.name, made.path.read_bytes(), made.content_type
 
             keep = keep_file
+            self.desk.read_file = read_file
         return [
             grouped(
                 "browser",
                 "Your own browser, which you drive yourself, page by page: open a page and see "
                 "it (its text and numbered elements), then act on the page shown: click, type, "
-                "send forms. It stays signed in to the sites he signed in to; a page that needs "
-                "him (sign in, a code): hand_over.",
+                "send forms. After an action on the same page you see only what changed. It "
+                "stays signed in to the sites he signed in to; a page that needs him (a code, a "
+                "captcha): hand_over.",
                 browser_tools(self.desk, keep, looks=plate.has("photos")),
                 {
                     "browser_open": "open",
@@ -114,6 +126,9 @@ class ComputerModule(Module):
                     "browser_scroll": "scroll",
                     "browser_back": "back",
                     "browser_read": "read",
+                    "browser_press": "press",
+                    "browser_hover": "hover",
+                    "browser_view": "view",
                     "browser_close": "close",
                     "browser_login": "login",
                     "browser_fill": "fill",
@@ -121,7 +136,11 @@ class ComputerModule(Module):
                     "browser_hand_over": "hand_over",
                     "browser_forget": "forget",
                     "browser_save_password": "save_password",
-                    **({"browser_screenshot": "screenshot"} if keep is not None else {}),
+                    **(
+                        {"browser_screenshot": "screenshot", "browser_upload": "upload"}
+                        if keep is not None
+                        else {}
+                    ),
                 },
             ),
         ]
