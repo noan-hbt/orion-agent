@@ -170,3 +170,31 @@ async def test_with_the_app_the_hand_over_goes_where_he_is(
         assert len(buttons) == 1 and "Telegram" in said
     finally:
         await desk.aclose()
+
+
+async def test_his_done_wakes_orion_at_once_in_the_app(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """« J'ai fini » is his word in the conversation, not an alert that can wait or stay silent."""
+    desk = desk_for(journal, School(), tmp_path / "profile")
+    desk.in_app = True
+    woken: list[str] = []
+
+    async def resume() -> None:
+        woken.append("yes")
+
+    desk.resume = resume
+    tools = {t.name: t for t in browser_tools(desk)}
+    ctx = ToolContext("owner", "t1")
+
+    async def use(name: str, **args: object) -> None:
+        await tools[name].handler(tools[name].parse(json.dumps(args)), ctx)
+
+    try:
+        await use("browser_open", url="https://ecole.test/edt")
+        await use("browser_hand_over", why="Connecte-toi")
+        [token] = desk.handovers
+        await desk.give_back(token, done=True)
+        assert woken == ["yes"] and await desk.alerts(datetime.now(UTC)) == []
+    finally:
+        await desk.aclose()

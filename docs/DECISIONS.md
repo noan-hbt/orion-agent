@@ -5495,3 +5495,22 @@ canevas (pistes, puis « Planète + voix » ; variante F1 retenue).
 - **La voix elle-même ne change pas ici** : même enregistrement, même transcription, même
   lecture à voix haute. Le temps réel sera un chantier à part.
 - Au passage : une règle CSS fusionnée par erreur (#72) colorait en rouge pilules et ronds.
+
+
+## D240 — « J'ai fini » réveille Orion, et il vérifie avant de nier
+
+*04/11/2026 · acceptée · complète D116*
+
+Retours du propriétaire, et l'autodiagnostic d'Orion.
+
+- **« J'ai fini » est un message de lui.** C'était une alerte de l'initiative : jusqu'à 30 s
+  d'attente, et elle pouvait finir en silence, être refusée par le vérificateur ou coupée avec
+  les comptes rendus (au journal, 4 reprises supprimées sur 9, raisons non relues). Dans l'app, le
+  bouton écrit désormais dans la conversation, avec des mots fixes : l'adresse de la page ne passe
+  pas pour sa parole, Orion lit l'onglet. L'alerte reste pour Telegram et les autres fils.
+- **Retour sur la page.** iOS coupe la connexion d'une page cachée sans le dire et le flux se dit
+  encore ouvert : après quelques secondes d'absence, il est rouvert, ce qui rattrape le fil.
+- **Vérifier avant de nier.** Orion a nié lire ses envoyés et annoncé une limite inventée : la
+  constitution lui demande de vérifier avant de dire « je ne peux pas » ou « pas parti », et
+  de ne citer aucune limite qu'un résultat ne lui a pas donnée. `mail.md` nomme `box`. Il clôt
+  les engagements réglés dès qu'il le voit, et fait lui-même quelques recherches avant une tâche.

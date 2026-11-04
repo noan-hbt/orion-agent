@@ -40,6 +40,7 @@ from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.logins import site_of
 from orion.initiative.engine import Alert
+from orion.runtime import OWNER_THREAD
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 from orion.web.fetch import normalize
 from orion.web.service import WebState
@@ -178,6 +179,9 @@ class BrowserDesk:
         """One-time token → the tab the owner was handed (D116)."""
         self.finished: list[tuple[str, HandOver, str, datetime]] = []
         """Hand-overs he finished: (token, which, the page he left, when), for Orion to resume."""
+        self.resume: Callable[[], Awaitable[object]] | None = None
+        """« J'ai fini » as a message of his in the app: answered at once, like anything he
+        says, where an alert could wait, or end in silence."""
         self.notify: Callable[[str, str], Awaitable[None]] | None = None
         """(text, address) → the owner gets a Telegram button opening that address."""
         self.base_url = ""
@@ -422,10 +426,13 @@ class BrowserDesk:
             live.text = ""  # what Orion last read is not the page any more
             self._arm(found.thread, live)
         if done:
-            self.finished.append((token, found, url, datetime.now(UTC)))
             if self._session is not None:
                 await self._session.keep_cookies()  # signed in: kept at once
             await self._offer_typed(found, live)
+            if self.resume is not None and found.thread == OWNER_THREAD and not self.on_telegram():
+                await self.resume()
+            else:
+                self.finished.append((token, found, url, datetime.now(UTC)))
         return url
 
     async def _offer_typed(self, found: HandOver, live: _Live | None) -> None:
