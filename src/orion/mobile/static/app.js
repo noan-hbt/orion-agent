@@ -565,6 +565,7 @@ async function conversation() {
     view.thread,
     view.scrollBottom,
     view.attached,
+    (view.handChip = h("button", { class: "hand-chip pill primary", type: "button", hidden: true }, icon("key", 16), "Prendre la main")),
     h(
       "form",
       { class: "composer", onsubmit: (event) => (event.preventDefault(), submit()) },
@@ -2784,9 +2785,19 @@ function page(title, fill, subtitle) {
 
 // Things changed while he looks at Maintenant: paint it again, a little later, once.
 let nowTimer = null;
+// When Orion waits for his hands, the way in is right under the conversation, not only in Maintenant.
+async function handCheck() {
+  if (!view.handChip) return;
+  const { handovers } = await api("api/browser").catch(() => ({ handovers: [] }));
+  const waiting = handovers[0];
+  view.handChip.hidden = !waiting;
+  view.handChip.onclick = waiting ? () => browserPanel(waiting) : null;
+}
+
 function nowChanged() {
   clearTimeout(nowTimer);
   nowTimer = setTimeout(() => {
+    handCheck();
     if (state.tab !== "now") return;
     // A quiet cross-fade, not the entrance cascade: the page is already there.
     document.body.classList.add("live-refresh");
@@ -3312,7 +3323,7 @@ async function settingsFill(refresh) {
   if (vault) {
     parts.push(
       h("p", { class: "label" }, "Mes accès"),
-      h("div", { class: "list items" }, row("key", "Mots de passe", vault.length ? plural(vault.length, "gardé", "gardés") : "aucun", vaultPanel, "", "je me connecte pour toi, sans les voir")),
+      h("div", { class: "list items" }, row("shield", "Mon navigateur", "", browserHome, "", "ouvrir un site, voir où je suis connecté"), row("key", "Mots de passe", vault.length ? plural(vault.length, "gardé", "gardés") : "aucun", vaultPanel, "", "je me connecte pour toi, sans les voir")),
     );
   }
   parts.push(
@@ -4563,6 +4574,54 @@ function browserPanel(handover) {
 }
 
 // -- his vault: the logins Orion signs in with, never shown again (D142) --------------------------
+
+function browserHome() {
+  // His own way into Orion's browser (D245): sign in to a site once and for all, without waiting
+  // for Orion to ask; see which sites it keeps; sign it out of one.
+  panel("Mon navigateur", async (refresh) => {
+    const { sites } = await api("api/browser/sites");
+    const address = h("input", { type: "url", inputmode: "url", autocapitalize: "none", spellcheck: false, placeholder: "Une adresse, ou rien", "aria-label": "Adresse à ouvrir" });
+    const open = async (url) => {
+      try {
+        browserPanel(await api("api/browser/open", { url }));
+      } catch (error) {
+        toast(said(error));
+      }
+    };
+    const leave = (site) => {
+      const done = sheet(
+        h("h2", {}, `Me déconnecter de ${site} ?`),
+        h("button", {
+          class: "pill primary wide",
+          type: "button",
+          onclick: async () => {
+            done();
+            try {
+              await api("api/browser/sign-out", { site });
+              toast("Déconnecté.");
+              refresh();
+            } catch (error) {
+              toast(said(error));
+            }
+          },
+        }, "Me déconnecter"),
+      );
+    };
+    return [
+      h(
+        "form",
+        { class: "login-form", onsubmit: (event) => (event.preventDefault(), open(address.value.trim())) },
+        h("label", { class: "field-edit" }, address),
+        h("button", { class: "pill primary wide", type: "submit" }, "Ouvrir"),
+      ),
+      h("p", { class: "hint" }, "Tu y es dans mon navigateur : connecte-toi une fois à un site, et je le reste."),
+      h("p", { class: "label" }, "Les sites que je garde"),
+      sites.length
+        ? h("div", { class: "list items" }, sites.map((site) => row("shield", site, "", () => leave(site))))
+        : h("p", { class: "empty" }, "Aucun pour l'instant."),
+    ];
+  });
+}
 
 function vaultPanel() {
   let query = "";

@@ -116,7 +116,9 @@ async def test_an_element_redrawn_since_is_said_gone(tools: dict[str, Tool]) -> 
     gone = await use(tools, "browser_click", element=number(page, "Voir"))
     assert gone.startswith("ERROR") and "n'existe plus" in gone and "Relis-la" in gone
     again = await use(tools, "browser_read")
-    assert "Voir" in await use(tools, "browser_click", element=number(again, "Voir"))
+    assert not (await use(tools, "browser_click", element=number(again, "Voir"))).startswith(
+        "ERROR"
+    )
 
 
 async def test_a_page_that_never_gets_ready_says_so(

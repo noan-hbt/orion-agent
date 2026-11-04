@@ -925,6 +925,16 @@ def core_routes(
     async def handovers(_request: Request, n: Notebook) -> object:
         return {"handovers": n.handovers()}
 
+    async def browser_open(request: Request, n: Notebook) -> object:
+        return await n.browser_open(str((await body(request)).get("url") or "")[:2000])
+
+    async def browser_sites(_request: Request, n: Notebook) -> object:
+        return {"sites": await n.browser_sites()}
+
+    async def browser_sign_out(request: Request, n: Notebook) -> object:
+        await n.browser_sign_out(str((await body(request))["site"])[:200])
+        return {"ok": True}
+
     async def browser_shot(request: Request, n: Notebook) -> Response:
         picture = await n.shot(str(request.path_params["token"]))
         return Response(picture, media_type="image/png", headers=API_HEADERS)
@@ -1012,6 +1022,9 @@ def core_routes(
         api("mails", shelf(mails)),
         api("nights", shelf(nights)),
         api("browser", shelf(handovers)),
+        api("browser/open", shelf(browser_open), post=True),
+        api("browser/sites", shelf(browser_sites)),
+        api("browser/sign-out", shelf(browser_sign_out), post=True),
         api("browser/{token}/shot", shelf(browser_shot)),
         api("browser/{token}/act", shelf(browser_act), post=True),
         api("logins/asked", shelf(logins_asked)),

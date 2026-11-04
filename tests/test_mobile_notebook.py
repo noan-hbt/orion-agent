@@ -222,6 +222,9 @@ async def test_he_takes_orions_browser_in_hand_from_the_app(
             async def sign_in_form(self) -> None:
                 return None
 
+            async def size(self) -> dict[str, int]:
+                return {"width": 412, "height": 860}
+
         return await action(Tab())
 
     desk.on_tab = on_tab  # type: ignore[method-assign]

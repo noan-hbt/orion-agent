@@ -60,6 +60,15 @@ INIT = """(() => {
 })();"""
 """Run in every page and frame before the site's own scripts."""
 
+COMPUTER_INIT = """(() => {
+  const define = (proto, name, value) => {
+    try { Object.defineProperty(proto, name, {get: value, configurable: true}); } catch (e) {}
+  };
+  define(Navigator.prototype, 'platform', () => 'Linux x86_64');
+  define(Navigator.prototype, 'maxTouchPoints', () => 0);
+})();"""
+"""A tab shown as a computer's (`view`, D245): what pages read to tell which they serve."""
+
 
 def init_script(phone: bool) -> str:
     return INIT.replace("MOBILE", "true" if phone else "false")
@@ -137,8 +146,13 @@ BLOCKED = (
     return {by: 'PerimeterX', puzzle: true};
   if (has(/^access denied$/i) && /reference #/i.test(text))
     return {by: 'Akamai', puzzle: false};
+  // A sign-in form with an invisible reCAPTCHA behind it is no wall: only a puzzle on show is.
   const puzzles = /hcaptcha\\.com|google\\.com\\/recaptcha|recaptcha\\.net/;
-  if (puzzles.test(frames) && text.length < 1500)
+  const onShow = [...document.querySelectorAll('iframe')].some(f => {
+    const r = f.getBoundingClientRect();
+    return puzzles.test(f.src || '') && r.width > 60 && r.height > 60;
+  });
+  if (onShow && text.length < 1500 && !document.querySelector('input[type=password]'))
     return {by: 'captcha', puzzle: true};
   return null;
 }""".replace("REFUSED", _REFUSED)

@@ -263,8 +263,25 @@ class Notebook:
         return [
             {"token": token, "why": found.why}
             for token, found in list(desk.handovers.items())
-            if desk.handover(token) is not None
+            if desk.handover(token) is not None and found.asked
         ]
+
+    async def browser_open(self, url: str) -> dict[str, str]:
+        """He opens Orion's browser himself (D245)."""
+        try:
+            return await self._desk().take(url)
+        except (BrowserError, Refused) as exc:
+            raise ControlError(f"Pas pu : {exc}") from exc
+
+    async def browser_sites(self) -> list[str]:
+        desk = self.browser()
+        return await desk.sites() if desk is not None else []
+
+    async def browser_sign_out(self, site: str) -> None:
+        try:
+            await self._desk().sign_out(site)
+        except (BrowserError, Refused) as exc:
+            raise ControlError(f"Pas pu : {exc}") from exc
 
     async def shot(self, token: str) -> bytes:
         desk = self._desk()

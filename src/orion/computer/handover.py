@@ -144,8 +144,7 @@ async def act_on(session: Session, do: str, body: dict[str, Any]) -> dict[str, i
         await session.back()
     elif do != "start":
         raise BrowserError(f"unknown action {do!r}")
-    viewport = session.page.viewport_size if session.page is not None else None
-    return {"width": viewport["width"], "height": viewport["height"]} if viewport else {}
+    return await session.size()
 
 
 def _escape(text: str) -> str:

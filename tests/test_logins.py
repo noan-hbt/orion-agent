@@ -175,6 +175,9 @@ class Lender(GuardianClient):
 
     grants: list[str | None]
 
+    async def accounts(self) -> dict[str, Any]:
+        return {"logins": []}
+
     async def lend_login(
         self, name: str, params: dict[str, Any], grant: str | None
     ) -> dict[str, Any]:
@@ -216,8 +219,10 @@ async def test_orion_signs_in_himself_without_seeing_the_password(
 
     try:
         page = await use("browser_login", login="compte")
-        assert lender.grants == ["g1"] and "Identifiant prêt" in page and "Connexion" in page
-        assert "username" not in page and PASSWORD not in page
+        assert lender.grants == ["g1"] and "Bienvenue" in page and PASSWORD not in page
+        assert "Tr0ub4dor%263" in account.posted[0]  # in one go, by code
+        account.posted.clear()
+        await use("browser_open", url="https://compte.test/login")  # field by field, for a code
         await use("browser_fill", element=1, field="username")
         await use("browser_fill", element=2, field="password")
         await use("browser_fill", element=3, field="code")

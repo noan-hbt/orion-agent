@@ -8,8 +8,9 @@ page makes, not by asking the model:
 - a read-only job sends nothing: every request but GET and HEAD is aborted, so no form is
   submitted, no message posted, nothing bought.
 
-Downloads are refused. A job's browser keeps nothing; Orion's own browser (D116) keeps its
-profile and cookies (0600) so a site it signed in to stays signed in.
+A job's browser keeps nothing and refuses downloads; Orion's own browser (D116) keeps its profile
+and cookies (0600) so a site it signed in to stays signed in, and takes the files a page gives it
+(D245).
 """
 
 from __future__ import annotations
@@ -17,11 +18,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -30,7 +33,10 @@ import structlog
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    Dialog,
+    Download,
     Error,
+    FilePayload,
     Frame,
     Locator,
     Page,
@@ -39,8 +45,9 @@ from playwright.async_api import (
     async_playwright,
 )
 from playwright.async_api import Request as PwRequest
+from playwright.async_api import TimeoutError as PlaywrightTimeout
 
-from orion.computer.disguise import BLOCKED, LAUNCH_ARGS, init_script, user_agent
+from orion.computer.disguise import BLOCKED, COMPUTER_INIT, LAUNCH_ARGS, init_script, user_agent
 from orion.core.private import write_private
 from orion.guardian.limits import host_in
 from orion.web.fetch import FetchError, check_public
@@ -56,27 +63,100 @@ CONFIG_HOME = Path(tempfile.gettempdir()) / "orion-chromium"
 there and aborts the browser at start when it cannot write it, as under a home it does not
 own (`/srv/orion` on the server): the session closes before it opens (D171, D172)."""
 HostCheck = Callable[[str, int], Awaitable[None]]
+_Send = Callable[[str, dict[str, Any] | None], Awaitable[Any]]
 
-_SNAPSHOT = """({textChars, start}) => {
-  document.querySelectorAll('[data-orion-id]').forEach(e => e.removeAttribute('data-orion-id'));
-  const sel = 'a[href], button, input:not([type=hidden]), select, textarea, ' +
-              '[role=button], [role=link], [role=checkbox], [role=tab], [onclick]';
+_SNAPSHOT = """({textChars, start, maxElements}) => {
+  const plain = 'a[href], button, input:not([type=hidden]), select, textarea, summary, ' +
+    '[role=button], [role=link], [role=checkbox], [role=radio], [role=switch], [role=tab], ' +
+    '[role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=option], ' +
+    '[role=combobox], [role=treeitem], [onclick], [contenteditable=true], [tabindex="0"]';
+  const nodes = [];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (nodes.length >= 6000) return;
+      nodes.push(el);
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  if (document.body) walk(document.body);
+  const acts = (el) => {
+    if (el.matches(plain)) return true;
+    if (el.tagName === 'LABEL')
+      return !!el.control && ['checkbox', 'radio', 'file'].includes(el.control.type);
+    // What only a script makes clickable says so by its pointer: the outermost one counts.
+    if (getComputedStyle(el).cursor !== 'pointer' || el.closest(plain)) return false;
+    const up = el.parentElement;
+    return !up || getComputedStyle(up).cursor !== 'pointer';
+  };
+  const clean = (t) => (t || '').replace(/\\s+/g, ' ').trim();
+  const hint = (el) => {
+    const inner = el.querySelector('svg, i, img, use');
+    // A site's own names say what an icon is; its generated class names (« iafu ») say nothing.
+    const classes = [typeof el.className === 'string' ? el.className : '',
+      inner ? inner.getAttribute('class') : ''].join(' ').split(/[^a-zA-Z]+/).filter(w =>
+      /menu|grid|burger|search|close|user|account|profile|home|back|next|prev|more|setting|notif|cart|filter|add|delete|edit|share|calendar|apps|nav/i.test(w));
+    const said = [el.id, el.getAttribute('data-testid'), inner ? inner.getAttribute('href') : '',
+      ...classes].join(' ');
+    const words = said.split(/[^a-zA-Z]+/).filter(w => w.length > 2 && w.length < 16 &&
+      !/^(btn|button|icon|mat|mdc|css|ng|svg|class)$/i.test(w));
+    return words.length ? `(indice : ${[...new Set(words)].slice(0, 4).join(' ')})` : '';
+  };
+  const named = (el) => {
+    const by = el.getAttribute('aria-labelledby');
+    const labelled = by ? by.split(/\\s+/).map(i => {
+      const found = document.getElementById(i);
+      return found ? found.innerText : '';
+    }).join(' ') : '';
+    const pressed = ['submit', 'button', 'reset'].includes(el.type) ? el.value : '';
+    const inner = el.querySelector('img[alt], [aria-label], svg title');
+    return clean(el.innerText) || clean(pressed) || clean(el.getAttribute('aria-label')) ||
+      clean(labelled) || clean(el.labels && el.labels[0] ? el.labels[0].innerText : '') ||
+      clean(el.placeholder) || clean(el.title) || clean(el.getAttribute('alt')) ||
+      clean(el.name) || (inner ? clean(inner.getAttribute('alt') ||
+      inner.getAttribute('aria-label') || inner.textContent) : '') || hint(el);
+  };
+  const state = (el, r) => {
+    const out = [];
+    const tag = el.tagName;
+    if (tag === 'SELECT') {
+      const picked = el.selectedOptions[0];
+      if (picked) out.push(`= "${clean(picked.text).slice(0, 40)}"`);
+      const all = [...el.options].slice(0, 12).map(o => clean(o.text).slice(0, 30));
+      out.push(`options : ${all.join(' | ')}${el.options.length > 12 ? ' | …' : ''}`);
+    } else if (el.type === 'password') {
+      if (el.value) out.push('(rempli)');
+    } else if (['INPUT', 'TEXTAREA'].includes(tag) &&
+               !['checkbox', 'radio', 'submit', 'button', 'reset', 'file'].includes(el.type)) {
+      if (el.value) out.push(`= "${clean(el.value).slice(0, 60)}"`);
+    }
+    if (el.checked || el.getAttribute('aria-checked') === 'true') out.push('(coché)');
+    if (el.getAttribute('aria-selected') === 'true') out.push('(choisi)');
+    const open = el.getAttribute('aria-expanded');
+    if (open) out.push(open === 'true' ? '(ouvert)' : '(fermé)');
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') out.push('(désactivé)');
+    if (el.required) out.push('(requis)');
+    if (r.right <= 0 || r.left >= innerWidth) out.push("(hors de l'écran)");
+    return out.length ? ' ' + out.join(' ') : '';
+  };
   const out = [];
   let n = start;
-  for (const el of document.querySelectorAll(sel)) {
+  let omitted = 0;
+  for (const el of nodes) {
     const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) continue;
-    if (getComputedStyle(el).visibility === 'hidden') continue;
-    n += 1;
-    el.setAttribute('data-orion-id', String(n));
-    const tag = el.tagName.toLowerCase();
-    const kind = el.type && tag !== 'a' ? `(${el.type})` : '';
-    const value = el.type === 'password' ? '' : el.value;
-    const label = (el.innerText || value || el.placeholder || el.getAttribute('aria-label') ||
-                   el.title || el.name || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
-    const href = tag === 'a' && el.href ? ` -> ${el.href}` : '';
-    out.push(`[${n}] ${tag}${kind} ${label}${href}`);
-    if (n - start >= MAX_ELEMENTS) break;
+    const file = el.tagName === 'INPUT' && el.type === 'file';  // often hidden behind a button
+    if (!file && r.width === 0 && r.height === 0) continue;
+    if (!file && getComputedStyle(el).visibility === 'hidden') continue;
+    if (!acts(el)) continue;
+    if (out.length >= maxElements) { omitted += 1; continue; }
+    // A number stays with its element for as long as the document lasts: an app that redraws a
+    // part of itself leaves the rest as it was read.
+    let id = el.getAttribute('data-orion-id');
+    if (!id) { n += 1; id = String(n); el.setAttribute('data-orion-id', id); }
+    const tag = el.getAttribute('role') || el.tagName.toLowerCase();
+    const kind = el.tagName === 'INPUT' ? `(${el.type})` : '';
+    const label = named(el).slice(0, 80);
+    const href = el.tagName === 'A' && el.href ? ` -> ${el.href}` : '';
+    out.push(`[${id}] ${tag}${kind} ${label}${state(el, r)}${href}`);
   }
   const pictures = [];
   const meta = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
@@ -98,8 +178,26 @@ _SNAPSHOT = """({textChars, start}) => {
   }
   return {title: document.title, url: location.href,
           text: (document.body ? document.body.innerText : '').slice(0, textChars), elements: out,
-          images};
-}""".replace("MAX_ELEMENTS", str(MAX_ELEMENTS)).replace("MAX_IMAGES", str(MAX_IMAGES))
+          images, next: n, omitted};
+}""".replace("MAX_IMAGES", str(MAX_IMAGES))
+_NEXT = "() => +(document.documentElement.getAttribute('data-orion-next') || 0)"
+_SET_NEXT = "(n) => document.documentElement.setAttribute('data-orion-next', String(n))"
+"""The next element's number, kept with the document: a new document starts again from 1."""
+
+_PRESS = """(e) => {
+  e.scrollIntoView({block: 'center', inline: 'center'});
+  const r = e.getBoundingClientRect();
+  const top = e.ownerDocument.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  const over = top && top !== e && !e.contains(top) && !top.contains(e)
+    ? `<${top.tagName.toLowerCase()}> ` +
+      (top.innerText || top.getAttribute('aria-label') || '').trim().slice(0, 60)
+    : '';
+  if (e.disabled || e.getAttribute('aria-disabled') === 'true') return {disabled: true, over};
+  e.click();
+  return {disabled: false, over};
+}"""
+"""A click no pointer could make (covered, off screen, moving): the element itself is pressed,
+and what stood in the way is told."""
 
 
 _SIGNATURE = """() => {
@@ -164,6 +262,12 @@ _SIGN_IN = """(mark) => {
 lone e-mail or login field on a first step) and its password field. With `mark`, both are
 tagged for the owner's values to be typed into them (D142)."""
 
+COMPUTER = {"width": 1280, "height": 900}
+CLICK_MS = 3_000
+"""How long a real click may wait for its element: pressing it says why, sooner than a long wait."""
+COOKIES_EVERY_SECONDS = 20.0
+"""How often session cookies are written during use: a restart must not sign him out."""
+FILE_WAIT_SECONDS = 20.0
 TYPED_AT_MOST = 200
 KEY_DELAY_MS = 45
 CLEARING_SECONDS = 15.0
@@ -209,6 +313,8 @@ class Snapshot:
     a person can get past it."""
     through: str = ""
     """The owner's machine the browser goes out through (`orion.hands.exit`), if any."""
+    omitted: int = 0
+    """Elements past the cap, not numbered: `browser` read with find reaches them."""
 
     def render(self) -> str:
         return (
@@ -279,9 +385,19 @@ class Session:
         self._version = ""
         self._open_requests: dict[PwRequest, float] = {}
         self._last_traffic = 0.0
-        self._numbered: list[tuple[int, int, Frame]] = []
-        """The last snapshot's elements, by frame: (first, last, frame). A sign-in form is
-        often in a frame of its own (a school's, a payment's)."""
+        self.keep_downloads = False
+        """Files a page gives are taken (`take_files`), not refused: Orion's own browser (D245)."""
+        self.notes: list[str] = []
+        """What happened beside the page (a dialog, a click pressed anyway), for Orion to read."""
+        self._files: list[tuple[str, bytes]] = []
+        self._fetching: set[asyncio.Future[None]] = set()
+        self._popups: dict[Page, Page] = {}
+        """A page → the tab it just opened: the conversation follows it (D245)."""
+        self._opener: dict[Page, Page] = {}
+        self._watched: set[Page] = set()
+        self._computer: dict[Page, tuple[_Send, str]] = {}
+        """Tabs shown as a computer's (`view`, D245) → the CDP session and script doing it."""
+        self._cookies_at = 0.0
         self._pw: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -328,7 +444,7 @@ class Session:
             self._context = await self._pw.chromium.launch_persistent_context(
                 str(self.profile),
                 **self._launch(),
-                accept_downloads=False,
+                accept_downloads=self.keep_downloads,
                 locale="fr-FR",
                 timezone_id="Europe/Paris",
                 viewport={"width": phone["width"], "height": phone["height"]} if phone else None,
@@ -347,7 +463,7 @@ class Session:
                 self._context.pages[0] if self._context.pages else await self._context.new_page()
             )
             await self._disguise(self.page)
-            self.page.set_default_timeout(15_000)
+            self._watch(self.page)
             return self
         self._browser = await self._pw.chromium.launch(**self._launch())
         state = dict(self.storage_state) if self.storage_state is not None else None
@@ -372,7 +488,7 @@ class Session:
             await self._dress(self._context, bool(phone))
         self.page = await self._context.new_page()
         await self._disguise(self.page)
-        self.page.set_default_timeout(15_000)
+        self._watch(self.page)
         return self
 
     def _launch(self) -> dict[str, Any]:
@@ -437,10 +553,137 @@ class Session:
                 self._lost = True
                 log.warning("computer.browser_lost")
 
+        context.on("page", self._watch)
         context.on("request", started)
         context.on("requestfinished", ended)
         context.on("requestfailed", ended)
         context.on("close", closed)
+
+    def _watch(self, page: Page) -> None:
+        """A tab that speaks (a dialog), gives a file or opens another tab: nothing lost."""
+        if page in self._watched:
+            return
+        self._watched.add(page)
+        page.set_default_timeout(15_000)
+
+        def closed(_: Page) -> None:
+            self._watched.discard(page)
+            self._computer.pop(page, None)
+            self._popups.pop(page, None)
+
+        def popup(opened: Page) -> None:
+            self._popups[page] = opened
+            self._opener[opened] = page
+            if page in self._computer:
+                self._chore(self._show(opened, True))
+
+        page.on("close", closed)
+        page.on("popup", popup)
+        page.on("dialog", lambda dialog: self._chore(self._answer(dialog)))
+        page.on("download", lambda download: self._chore(self._fetch(download)))
+
+    def _chore(self, work: Coroutine[Any, Any, None]) -> None:
+        pending = asyncio.ensure_future(work)
+        self._fetching.add(pending)
+        pending.add_done_callback(self._fetching.discard)
+
+    async def _answer(self, dialog: Dialog) -> None:
+        """Left alone, Playwright dismisses a dialog, and a « Supprimer ? » silently does nothing.
+        He who clicked meant it: the dialog is accepted, and told."""
+        self.notes.append(f"[La page a demandé : « {dialog.message[:200]} » ; accepté.]")
+        try:
+            await dialog.accept()
+        except Error as exc:
+            log.info("computer.dialog_gone", error=exc.message.splitlines()[0])
+
+    async def _fetch(self, download: Download) -> None:
+        name = download.suggested_filename
+        if not self.keep_downloads:
+            await download.cancel()
+            self.notes.append(f"[Fichier {name} refusé : ce navigateur n'en garde pas.]")
+            return
+        try:
+            path = await download.path()
+            data = await asyncio.to_thread(Path(path).read_bytes)
+            await download.delete()
+        except Error as exc:
+            log.warning("computer.download_failed", name=name, error=exc.message.splitlines()[0])
+            self.notes.append(f"[Le téléchargement de {name} a échoué.]")
+            return
+        self._files.append((name, data))
+
+    async def files_landed(self) -> None:
+        """Let a download under way finish, for a while."""
+        if self._fetching:
+            await asyncio.wait(set(self._fetching), timeout=FILE_WAIT_SECONDS)
+
+    def take_files(self) -> list[tuple[str, bytes]]:
+        files, self._files = self._files, []
+        return files
+
+    def take_notes(self) -> list[str]:
+        notes, self.notes = self.notes, []
+        return notes
+
+    def current(self) -> Page:
+        """The tab being worked on, after any tab it opened or closed."""
+        return self._page()
+
+    async def keep_cookies_soon(self) -> None:
+        """Every so often during use, not only on closing: Chromium may die with its session
+        cookies at any restart, and with them his sign-ins."""
+        if time.monotonic() - self._cookies_at >= COOKIES_EVERY_SECONDS:
+            self._cookies_at = time.monotonic()
+            await self.keep_cookies()
+
+    async def size(self) -> dict[str, int]:
+        """The tab's size as he sees it, to map his taps onto it."""
+        page = self._page()
+        if page in self._computer:
+            return {"width": COMPUTER["width"], "height": COMPUTER["height"]}
+        size = page.viewport_size
+        return {"width": size["width"], "height": size["height"]} if size else {}
+
+    async def _show(self, page: Page, computer: bool) -> None:
+        """This tab as a computer's or a phone's (D245): some sites have only half of themselves
+        on a phone. The rest of the browser, and the cookies, stay as they are."""
+        try:
+            cdp = await page.context.new_cdp_session(page)
+            send = cast(_Send, cdp.send)  # pyright: ignore[reportUnknownMemberType]
+            if not self._version:
+                product = str((await send("Browser.getVersion", None))["product"])
+                self._version = product.split("/")[-1]
+            await send("Emulation.setUserAgentOverride", user_agent(self._version, not computer))
+            if computer:
+                await send(
+                    "Emulation.setDeviceMetricsOverride",
+                    {**COMPUTER, "deviceScaleFactor": 1, "mobile": False},
+                )
+                await send("Emulation.setTouchEmulationEnabled", {"enabled": False})
+                added = await send(
+                    "Page.addScriptToEvaluateOnNewDocument", {"source": COMPUTER_INIT}
+                )
+                self._computer[page] = (send, str(added["identifier"]))
+                return
+            phone = self.phone or {"width": 412, "height": 860}
+            await send(
+                "Emulation.setDeviceMetricsOverride",
+                {**phone, "deviceScaleFactor": 2, "mobile": bool(self.phone)},
+            )
+            await send("Emulation.setTouchEmulationEnabled", {"enabled": bool(self.phone)})
+            shown = self._computer.pop(page, None)
+            if shown is not None:  # a script belongs to the session that added it
+                await shown[0]("Page.removeScriptToEvaluateOnNewDocument", {"identifier": shown[1]})
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+
+    async def view(self, computer: bool) -> None:
+        page = self._page()
+        await self._show(page, computer)
+        await self._do(lambda: page.reload(wait_until="domcontentloaded"))
+
+    def _touching(self) -> bool:
+        return self.phone is not None and self._page() not in self._computer
 
     def _busy(self) -> bool:
         """A request under way (not a long poll), or traffic a moment ago."""
@@ -480,7 +723,7 @@ class Session:
             raise BrowserError("the browser is not open")
         page = await self._context.new_page()
         await self._disguise(page)
-        page.set_default_timeout(15_000)
+        self._watch(page)
         return page
 
     async def forget(self, site: str = "") -> None:
@@ -510,7 +753,9 @@ class Session:
 
     async def tap(self, x: float, y: float) -> None:
         page = self._page()
-        await self._do(lambda: page.touchscreen.tap(x, y) if self.phone else page.mouse.click(x, y))
+        await self._do(
+            lambda: page.touchscreen.tap(x, y) if self._touching() else page.mouse.click(x, y)
+        )
 
     async def keys(self, text: str = "", key: str = "") -> None:
         """Type into whatever has the focus, or press one key."""
@@ -590,6 +835,48 @@ class Session:
         await self.settle()
         return {"host": str(form["host"]), "url": str(form["url"])}
 
+    async def sign_in_lent(self, username: str, password: str, sites: list[str]) -> dict[str, bool]:
+        """A lent login typed into the page's sign-in form and sent, key by key, on the login's
+        own sites only: a first step that asks only the username, then the next one. What it
+        could send (`username`, `password`)."""
+        sent = {"username": False, "password": False}
+        for _ in range(2):
+            found = await self._sign_in_frame(True)
+            if found is None:
+                break
+            frame, form = found
+            if not host_in(str(form["host"]), sites):
+                raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
+            todo = [
+                (name, value)
+                for name, value in (("username", username), ("password", password))
+                if form[name] and value and not sent[name]
+            ]
+            if not todo:
+                break
+            last: Locator | None = None
+            try:
+                for name, value in todo:
+                    last = frame.locator(f'[data-orion-sign-in="{name}"]').first
+                    await self._key_in(last, value)
+                    sent[name] = True
+            except Error as exc:
+                raise BrowserError(exc.message.splitlines()[0]) from exc
+            if last is None:  # pragma: no cover - `todo` is not empty
+                break
+            await self._do(partial(last.press, "Enter", timeout=8_000))
+            await self.settle()
+            await self._steady()
+        return sent
+
+    async def _key_in(self, element: Locator, value: str) -> None:
+        """Key by key, as a person types: a site's script often sees nothing of a value set at
+        once, and an anti-bot sees that nothing was pressed."""
+        await element.fill("", timeout=8_000)
+        for character in value:
+            await element.press_sequentially(character, timeout=8_000)
+            await asyncio.sleep(random.uniform(0.6, 1.8) * KEY_DELAY_MS / 1000)
+
     async def wheel(self, dy: int) -> None:
         await self._do(lambda: self._page().mouse.wheel(0, dy))
 
@@ -655,16 +942,27 @@ class Session:
     def _page(self) -> Page:
         if self.page is None:  # pragma: no cover - used only inside `async with`
             raise BrowserError("the browser is not open")
-        return self.page
+        page = self.page
+        while page in self._popups:
+            page = self._popups.pop(page)
+        while page.is_closed() and page in self._opener:  # a pop-up that finished (a sign-in)
+            page = self._opener[page]
+        self.page = page
+        return page
 
     async def screenshot(self, full: bool) -> bytes:
         """The page as the owner would see it: the visible part as PNG, or the whole page as
         JPEG (smaller, for a long page)."""
-        if full:
-            return await self._page().screenshot(full_page=True, type="jpeg", quality=80)
-        return await self._page().screenshot(type="png")
+        try:
+            if full:
+                return await self._page().screenshot(full_page=True, type="jpeg", quality=80)
+            return await self._page().screenshot(type="png", timeout=8_000)
+        except Error as exc:  # a page too busy to paint: no picture this time, nothing more
+            raise BrowserError(exc.message.splitlines()[0]) from exc
 
-    async def snapshot(self, text_chars: int = TEXT_CHARS) -> Snapshot:
+    async def snapshot(
+        self, text_chars: int = TEXT_CHARS, max_elements: int = MAX_ELEMENTS
+    ) -> Snapshot:
         """The page as it is once it stops changing, its frames included: an app that builds
         itself after loading (Hyperplanning, PRONOTE) first shows « veuillez patienter », or
         nothing at all."""
@@ -674,7 +972,7 @@ class Session:
         for attempt in range(3):
             try:
                 await page.wait_for_load_state("domcontentloaded")
-                return await self._read(text_chars, steady)
+                return await self._read(text_chars, steady, max_elements)
             except Error as exc:
                 # A page still navigating (a redirect, a blocked submit) replaces the document
                 # under the script: read the new one.
@@ -683,33 +981,43 @@ class Session:
                 await page.wait_for_timeout(300)
         raise BrowserError("the page cannot be read")  # pragma: no cover - returns or raises
 
-    async def _read(self, text_chars: int, steady: bool) -> Snapshot:
+    async def _read(self, text_chars: int, steady: bool, max_elements: int) -> Snapshot:
         page = self._page()
+        start = cast(int, await page.evaluate(_NEXT))
         data = cast(
-            dict[str, Any], await page.evaluate(_SNAPSHOT, {"textChars": text_chars, "start": 0})
+            dict[str, Any],
+            await page.evaluate(
+                _SNAPSHOT, {"textChars": text_chars, "start": start, "maxElements": max_elements}
+            ),
         )
         elements = [str(e) for e in data["elements"]]
         text = " ".join(str(data["text"]).split(" "))
-        numbered = [(1, len(elements), page.main_frame)]
+        following = int(data["next"])
+        omitted = int(data["omitted"])
         for frame in await self._frames():
             try:
                 inner = cast(
                     dict[str, Any],
                     await frame.evaluate(
-                        _SNAPSHOT, {"textChars": text_chars, "start": len(elements)}
+                        _SNAPSHOT,
+                        {"textChars": text_chars, "start": following, "maxElements": max_elements},
                     ),
                 )
             except Error as exc:  # a frame gone meanwhile: the rest of the page still reads
                 log.info("computer.frame_unreadable", url=frame.url, error=exc.message[:120])
                 continue
             found = [str(e) for e in inner["elements"]]
+            following = int(inner["next"])
+            omitted += int(inner["omitted"])
             if not found and not str(inner["text"]).strip():
                 continue
             where = urlsplit(frame.url).hostname or frame.url
-            numbered.append((len(elements) + 1, len(elements) + len(found), frame))
             text += f"\n\n[Dans un cadre de {where}]\n" + " ".join(str(inner["text"]).split(" "))
             elements += [f"— dans le cadre de {where} —", *found] if found else []
-        self._numbered = numbered
+        await page.evaluate(_SET_NEXT, following)
+        blocked = await self._blocked()
+        if blocked:
+            log.info("computer.turned_away", url=page.url, by=blocked.get("by"))
         return Snapshot(
             str(data["url"]),
             str(data["title"]),
@@ -717,8 +1025,9 @@ class Session:
             elements,
             [(str(i["url"]), str(i["text"])) for i in data.get("images", [])],
             steady,
-            await self._blocked(),
+            blocked,
             self.through(),
+            omitted,
         )
 
     async def _blocked(self) -> dict[str, Any] | None:
@@ -726,8 +1035,6 @@ class Session:
             found = await self._page().evaluate(BLOCKED)
         except Error:
             return None
-        if found:
-            log.info("computer.turned_away", url=self._page().url, by=found.get("by"))
         return cast(dict[str, Any], found) if found else None
 
     async def _let_clear(self) -> None:
@@ -744,6 +1051,11 @@ class Session:
                 await page.wait_for_load_state("domcontentloaded", timeout=5_000)
             except Error:
                 continue
+
+    async def ready(self) -> None:
+        """The page built, and past a check that clears by itself."""
+        await self._steady()
+        await self._let_clear()
 
     async def _frames(self) -> list[Frame]:
         """The page's frames that show something (not hidden, not blank)."""
@@ -789,41 +1101,108 @@ class Session:
             await action()
         except Error as exc:
             raise BrowserError(exc.message.splitlines()[0]) from exc
+        await self._landed()
+
+    async def _landed(self) -> None:
+        # A tab it opened arrives just after the click that opened it.
+        await self._page().wait_for_timeout(120)
         page = self._page()
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=10_000)
         except Error:
             log.info("computer.slow_page", url=page.url)
 
-    def _frame_of(self, number: int) -> Frame:
-        return next(
-            (f for first, last, f in self._numbered if first <= number <= last),
-            self._page().main_frame,
-        )
-
-    def _element(self, number: int) -> Locator:
-        return self._frame_of(number).locator(f'[data-orion-id="{number}"]').first
+    async def _located(self, number: int) -> tuple[Frame, Locator]:
+        """The element numbered on a page read, in whichever frame, if it is still there: an app
+        redraws itself, and the numbers go with the old drawing."""
+        page = self._page()
+        for frame in [page.main_frame, *[f for f in page.frames if f is not page.main_frame]]:
+            element = frame.locator(f'[data-orion-id="{number}"]').first
+            try:
+                if await element.count():
+                    return frame, element
+            except Error as exc:  # a frame gone meanwhile
+                log.info("computer.frame_unreadable", url=frame.url, error=exc.message[:120])
+        raise BrowserError(GONE.format(n=number))
 
     async def _present(self, number: int) -> Locator:
-        """The element numbered on the last page read, if it is still there: an app redraws
-        itself, and the numbers go with the old drawing."""
-        element = self._element(number)
-        try:
-            count = await element.count()
-        except Error as exc:
-            raise BrowserError(exc.message.splitlines()[0]) from exc
-        if count == 0:
-            raise BrowserError(GONE.format(n=number))
-        return element
+        return (await self._located(number))[1]
 
     async def goto(self, url: str) -> None:
         if urlsplit(url).scheme not in ("http", "https"):
             raise BrowserError(f"not a web address: {url}")
-        await self._do(lambda: self._page().goto(url))
+        page = self._page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        except Error as exc:
+            # A file rather than a page: it lands in `take_files`, the tab stays where it was.
+            if "Download is starting" not in exc.message and "ERR_ABORTED" not in exc.message:
+                raise BrowserError(exc.message.splitlines()[0]) from exc
+            await page.wait_for_timeout(300)
+            if not self.keep_downloads or not (self._fetching or self._files):
+                raise BrowserError(exc.message.splitlines()[0]) from exc
+        await self._landed()
 
     async def click(self, number: int) -> None:
         element = await self._present(number)
-        await self._do(lambda: element.click(timeout=8_000))
+        touch = self._touching()  # as his own finger does: some sites listen only to that
+        try:
+            if touch:
+                await element.tap(timeout=CLICK_MS)
+            else:
+                await element.click(timeout=CLICK_MS)
+        except PlaywrightTimeout:
+            await self._press_anyway(element, number)
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        await self._landed()
+
+    async def _press_anyway(self, element: Locator, number: int) -> None:
+        try:
+            done = cast(dict[str, Any], await element.evaluate(_PRESS, timeout=CLICK_MS))
+        except Error as exc:
+            raise BrowserError(exc.message.splitlines()[0]) from exc
+        over = str(done["over"])
+        if done["disabled"]:
+            raise BrowserError(
+                f"L'élément [{number}] est désactivé pour l'instant : la page attend sans doute "
+                "autre chose d'abord (un champ à remplir, une case à cocher)."
+            )
+        self.notes.append(
+            f"[Un vrai clic ne passait pas sur [{number}]"
+            + (f" ({over} était dessus)" if over else "")
+            + " : je l'ai pressé directement. Vérifie que ça a pris.]"
+        )
+
+    async def press(self, key: str, number: int | None) -> None:
+        """A key (Escape, the arrows of a list…), on an element or on what has the focus."""
+        page = self._page()
+        if number is None:
+            await self._do(lambda: page.keyboard.press(key))
+            return
+        element = await self._present(number)
+        await self._do(lambda: element.press(key, timeout=8_000))
+
+    async def hover(self, number: int) -> None:
+        """The pointer over an element: a menu that opens only then."""
+        element = await self._present(number)
+        await self._do(lambda: element.hover(timeout=CLICK_MS))
+
+    async def upload(self, number: int, name: str, data: bytes, kind: str) -> None:
+        """A file into a form: its file field, or the button that opens the file picker."""
+        element = await self._present(number)
+        payload: FilePayload = {"name": name, "mimeType": kind, "buffer": data}
+
+        async def sending() -> None:
+            tag = await element.evaluate("e => e.tagName + ':' + (e.type || '')")
+            if str(tag).upper() == "INPUT:FILE":
+                await element.set_input_files([payload], timeout=8_000)
+                return
+            async with self._page().expect_file_chooser(timeout=5_000) as chooser:
+                await element.click(timeout=CLICK_MS)
+            await (await chooser.value).set_files([payload])
+
+        await self._do(sending)
 
     async def type(self, number: int, text: str, enter: bool) -> None:
         element = await self._present(number)
@@ -831,23 +1210,32 @@ class Session:
         async def typing() -> None:
             # Key by key, as a person types: a field filled at once, with no key pressed, is
             # what anti-bot scripts look for. A long text is pasted.
-            if len(text) > TYPED_AT_MOST:
-                await element.fill(text, timeout=8_000)
-            else:
-                await element.fill("", timeout=8_000)
-                await element.press_sequentially(text, delay=KEY_DELAY_MS, timeout=30_000)
-            if enter:
-                await element.press("Enter")
+            try:
+                if len(text) > TYPED_AT_MOST:
+                    await element.fill(text, timeout=8_000)
+                else:
+                    await self._key_in(element, text)
+                if enter:
+                    await element.press("Enter")
+            except Error as exc:
+                if "is not an <input>" not in exc.message:
+                    raise
+                # A field drawn by a script (a calendar, a list that filters as you type).
+                keyboard = self._page().keyboard
+                await element.click(timeout=CLICK_MS)
+                await keyboard.type(text, delay=KEY_DELAY_MS)
+                if enter:
+                    await keyboard.press("Enter")
 
         await self._do(typing)
 
     async def fill_secret(self, number: int, value: str, sites: list[str], kind: str) -> None:
         """Type a lent login's username, password or 2FA code (`kind`) into a field, only on
         a page of the login's sites, and the password only into a password field (D111)."""
-        host = urlsplit(self._frame_of(number).url).hostname or ""  # the field's own frame
+        frame, element = await self._located(number)
+        host = urlsplit(frame.url).hostname or ""  # the field's own frame
         if not host_in(host, sites):
             raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
-        element = await self._present(number)
         try:
             tag, field_type = cast(
                 list[str],
@@ -866,7 +1254,7 @@ class Session:
             )
         if field_type not in ("", "text", "email", "tel", "number", "password"):
             raise BrowserError(f"not a field to type into ({field_type})")
-        await self._do(lambda: element.fill(value, timeout=8_000))
+        await self._do(lambda: self._key_in(element, value))
 
     async def select(self, number: int, value: str) -> None:
         element = await self._present(number)
@@ -876,4 +1264,17 @@ class Session:
         await self._do(lambda: self._page().mouse.wheel(0, 900 if down else -900))
 
     async def back(self) -> None:
-        await self._do(lambda: self._page().go_back())
+        """The previous page; from a tab with nothing before it, the tab that opened it."""
+        page = self._page()
+        if page in self._opener and await page.evaluate("history.length") <= 1:
+            await page.close()
+            self._page()
+            return
+
+        async def going() -> None:
+            await page.go_back()
+            if page.url == "about:blank":
+                await page.go_forward()
+                self.notes.append("[Il n'y a pas de page avant celle-ci.]")
+
+        await self._do(going)
