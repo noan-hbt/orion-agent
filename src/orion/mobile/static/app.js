@@ -253,12 +253,11 @@ const state = {
   live: false,
   attached: [], // files picked for the next message
   draft: "",
-  tab: "now",
+  tab: "talk",
 };
 
 try {
   state.draft = localStorage.getItem("orion.draft") || "";
-  state.tab = localStorage.getItem("orion.tab") || "now";
 } catch {
   // private mode: no draft kept
 }
@@ -516,7 +515,7 @@ async function conversation() {
       h("span", { class: "who-name glass" }, h("h1", {}, "Orion")),
       view.status,
     ),
-    h("span"),
+    (view.soon = h("button", { class: "soon-chip glass", type: "button", hidden: true, onclick: soonSheet })),
   );
 
   view.talk = h(
@@ -2310,15 +2309,44 @@ function show(key) {
     }, still() ? 0 : 320);
   }
   state.tab = key;
-  try {
-    localStorage.setItem("orion.tab", key);
-  } catch {
-    // private mode: the app opens on the home screen next time
-  }
   for (const [k, el] of Object.entries(view.tabs)) if (el !== leaving) el.hidden = k !== key;
   paintTopbar(key);
-  if (key === "talk") bottom(true);
-  else view.tabs[key].refresh();
+  if (key === "talk") {
+    bottom(true);
+    loadSoon();
+  } else view.tabs[key].refresh();
+}
+
+// The chat is the trunk (D241): what Orion will bring up by himself waits at its edge, one touch away.
+async function loadSoon() {
+  try {
+    state.overview = await api("api/control");
+    paintSoon();
+  } catch (error) {
+    if (!(error instanceof ApiError && error.status === 404)) console.warn("upcoming", error); // 404: controls off
+  }
+}
+
+function paintSoon() {
+  const next = state.overview?.next || [];
+  view.soon.hidden = !next.length;
+  if (!next.length) return;
+  const at = new Date(next[0].at);
+  const today = at.toDateString() === new Date().toDateString();
+  view.soon.setAttribute("aria-label", `Bientôt, de moi-même : ${next.length} à venir`);
+  view.soon.replaceChildren(icon("clock", 16), (today ? TIME : SHORT).format(at));
+}
+
+function soonSheet() {
+  const next = state.overview?.next || [];
+  sheet(
+    h("h2", {}, "Bientôt, de moi-même"),
+    h(
+      "div",
+      { class: "list items soon" },
+      next.map((p) => h("div", { class: "item" }, h("span", { class: "when" }, SHORT.format(new Date(p.at))), h("span", {}, h("span", { class: "text" }, p.what)))),
+    ),
+  );
 }
 
 // A tab of its own: a large title that scrolls away, as on iOS, and what fills it.
@@ -2431,7 +2459,6 @@ function paintNowWork() {
   const work = state.work;
   const waiting = state.approvals.size + (state.questions || 0);
   const carrying = state.carrying || [];
-  const next = o?.next?.length ? `ensuite : ${o.next[0].what}, ${SHORT.format(new Date(o.next[0].at))}` : "";
   let title;
   let line;
   let acts = [];
@@ -2448,13 +2475,13 @@ function paintNowWork() {
     acts = [h("button", { class: "pill small primary", type: "button", onclick: () => api("api/control/pause", { minutes: null }).then(nowChanged, (e) => toast(said(e))) }, "Reprendre")];
   } else if (waiting) {
     title = waiting > 1 ? `J'ai besoin de toi pour ${waiting} choses.` : "J'ai besoin de toi pour une chose.";
-    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : next;
+    line = o?.quiet_now ? "heures calmes : je ne t'écris pas d'ici là" : "";
   } else if (carrying.length) {
     title = carrying.length > 1 ? `Je porte ${carrying.length} choses pour toi.` : "Je porte une chose pour toi.";
-    line = o?.quiet_now ? "heures calmes : je veille sans t'écrire" : next || "en fond, sans te déranger";
+    line = o?.quiet_now ? "heures calmes : je veille sans t'écrire" : "en fond, sans te déranger";
   } else {
     title = o?.quiet_now ? "Heures calmes. Je veille sans t'écrire." : "Au calme. Je garde un œil sur tout.";
-    line = next || "écris-moi quand tu veux";
+    line = "écris-moi quand tu veux";
   }
   view.nowWork.classList.toggle("busy", !!work);
   view.nowWork.classList.toggle("still", !work && !!o?.paused_until);
@@ -2467,6 +2494,7 @@ function paintNowWork() {
     state.glance?.length ? h("div", { class: "glance" }, state.glance) : null,
   ].filter(Boolean));
   paintStatus();
+  paintSoon();
 }
 
 // The day at a glance, under the state: each count leads to its section.
@@ -2581,17 +2609,6 @@ async function nowFill(refresh) {
     const head = h("h2", { class: "section" }, "De mon côté", h("small", {}, String(mine.length)));
     glance.push(glanceChip(mine.length, "en cours", "gray", head));
     sections.push(head, h("div", { class: "list items" }, mine));
-  }
-  const next = state.overview?.next || [];
-  if (next.length) {
-    sections.push(
-      h("h2", { class: "section" }, "Bientôt, de moi-même"),
-      h(
-        "div",
-        { class: "list items soon" },
-        next.map((p) => h("div", { class: "item" }, h("span", { class: "when" }, SHORT.format(new Date(p.at))), h("span", {}, h("span", { class: "text" }, p.what)))),
-      ),
-    );
   }
   // What he carries in the background orbits the planet: one satellite each.
   state.carrying = [

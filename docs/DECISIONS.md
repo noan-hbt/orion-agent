@@ -5514,3 +5514,21 @@ Retours du propriétaire, et l'autodiagnostic d'Orion.
   constitution lui demande de vérifier avant de dire « je ne peux pas » ou « pas parti », et
   de ne citer aucune limite qu'un résultat ne lui a pas donnée. `mail.md` nomme `box`. Il clôt
   les engagements réglés dès qu'il le voit, et fait lui-même quelques recherches avant une tâche.
+
+## D241 — Le chat est le tronc : l'app s'ouvre dessus, en deux bulles
+
+*04/11/2026 · acceptée · révise D239*
+
+Le grand texte sans bulles de D239 se lisait mal : les messages se distinguaient peu, et les
+rappels à venir prenaient le centre alors que l'essentiel est de discuter. Exploration sur un
+canevas ; variante « Deux bulles » retenue.
+
+- **Deux bulles.** L'owner à droite en bleu plein, Orion à gauche sur verre blanc, même taille de
+  texte. Un message riche d'Orion prend toute la largeur. Pas de flou par bulle : la transparence
+  suffit sur ce fond, et soixante flous coûteraient cher au défilement sur iPhone.
+- **L'app s'ouvre sur la conversation**, toujours. L'accueil reste à une touche, par le bouton
+  retour, pour ce qu'Orion attend de l'owner, le Carnet et les Réglages.
+- **Les rappels passent au bord.** Une pastille avec l'heure du prochain, en haut à droite du
+  chat, ouvre « Bientôt, de moi-même ». L'accueil ne les montre plus.
+- **Le rond voix ne change pas** (touché, mode voix ; maintenu, vocal). La goutte qui regrouperait
+  les actions reste à décider, car elle prendrait ce geste.
