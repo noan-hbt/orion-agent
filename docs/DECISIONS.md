@@ -5567,3 +5567,23 @@ textes de deux écrans qui se superposent.
 - **L'accueil est prêt d'avance**, dès le lancement, pour que la planète puisse y voyager dès la
   première fois. Cela ajoute quelques requêtes au démarrage.
 
+## D244 — Trois grands moments : ce qui revient à la planète, la comète, le ciel
+
+*04/11/2026 · acceptée · complète D242 et D243*
+
+Le lancement a plu : un seul élément qui voyage. L'owner en veut d'autres, de grandes. Le mode voix
+est écarté pour l'instant. Une animation longue use vite sur un geste répété : les longues sont
+réservées aux moments rares, et aucune ne prend jamais le doigt ni ne bloque la saisie.
+
+- **Ce qui revient à la planète.** Quand Orion ne porte plus une tâche, une mission ou une attente,
+  le satellite revient en spirale, la planète s'illumine et une onde traverse l'écran, trois
+  secondes environ. L'app ne sait pas si cela s'est bien passé : une mission se ferme avec une
+  raison en texte libre. Le moment dit donc « c'est fini », pas « c'est réussi », et il joue aussi
+  quand l'owner écarte quelque chose lui-même.
+- **La comète, sans redondance.** Elle ne part de la bulle vers la planète que lorsqu'une
+  conversation reprend, après cinq minutes de silence, et sa courbe change à chaque fois. Au milieu
+  d'un échange, la montée de la bulle suffit.
+- **Le ciel de l'accueil suit l'heure** : aube, jour lavande, crépuscule, nuit indigo avec étoiles
+  et parfois une étoile filante. Heures fixes, sans demander où est l'owner. C'est le seul endroit
+  sombre de l'app, et seulement sur l'accueil la nuit : ce n'est pas un mode sombre.
+

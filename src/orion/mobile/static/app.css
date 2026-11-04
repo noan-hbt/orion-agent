@@ -7,7 +7,7 @@
   --spring:cubic-bezier(.32,.72,0,1); --bounce:cubic-bezier(.34,1.56,.64,1);
   --glass:rgba(255,255,255,.7); --glass-shadow:0 0 0 .5px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.08);
   --card-shadow:0 2px 12px rgba(0,0,0,.08);
-  --accent:#5B6CFF; --wash:#EEEAF9; --ink:#1A1433; --ink-2:rgba(26,20,51,.5);
+  --sky-top:#EEEAF9; --sky-bottom:#EEEAF9; --accent:#5B6CFF; --wash:#EEEAF9; --ink:#1A1433; --ink-2:rgba(26,20,51,.5);
   --top:env(safe-area-inset-top,0px); --bottom:env(safe-area-inset-bottom,0px); --app-h:100dvh;
   color-scheme:light;
 }
@@ -402,11 +402,11 @@ h2.section small { font-size:13px; font-weight:400; }
 .topbar > * { pointer-events:auto; }
 .topbar .grow { flex:1; pointer-events:none; }
 .topbar .round { color:var(--ink); }
-body:has(.home:not([hidden])) .topbar::before { content:""; position:absolute; z-index:-1; inset:0 0 -22px; pointer-events:none; background:linear-gradient(var(--wash) 50%,rgba(238,234,249,0)); }
+body:has(.home:not([hidden])) .topbar::before { content:""; position:absolute; z-index:-1; inset:0 0 -22px; pointer-events:none; background:linear-gradient(var(--sky-top) 50%,transparent); }
 .dock { position:absolute; inset:auto 0 0; z-index:4; display:flex; align-items:center; gap:10px; padding:0 14px calc(var(--bottom) + 10px); pointer-events:none; }
 .dock > * { pointer-events:auto; }
 .dock::before { content:""; position:absolute; z-index:-1; inset:-22px 0 0; pointer-events:none; background:linear-gradient(rgba(242,242,247,0),rgba(242,242,247,.85) 45%,var(--grouped)); }
-body:has(.home:not([hidden])) .dock::before { background:linear-gradient(rgba(238,234,249,0),rgba(238,234,249,.85) 45%,var(--wash)); }
+body:has(.home:not([hidden])) .dock::before { background:linear-gradient(transparent,var(--sky-bottom) 70%); }
 .ask-field { display:flex; flex:1; min-width:0; align-items:center; gap:8px; min-height:52px; padding:0 8px 0 20px; border-radius:999px; }
 .ask-open { flex:1; min-width:0; min-height:52px; text-align:left; color:var(--ink-2); font-size:17px; line-height:22px; }
 .ask-field.recording { padding-left:18px; }
@@ -418,7 +418,7 @@ body.keyboard .dock { opacity:0; visibility:hidden; transform:translateY(24px); 
 body:not(.keyboard) .dock { transition-delay:0s; }
 
 /* The home screen: the day, the planet and what it carries, then what waits on him. */
-.page.home { background:var(--wash); }
+.page.home { background:linear-gradient(var(--sky-top),var(--sky-bottom)); }
 .page.home .page-head,.page.home .page-inline-title { display:none; }
 .page.home .page-body { padding-top:calc(var(--top) + 58px); }
 .home-hero { display:flex; flex-direction:column; align-items:center; gap:6px; padding:0 8px 6px; text-align:center; color:var(--ink); }
@@ -672,8 +672,30 @@ p.quote.report { margin:0 4px; color:var(--label-2); font-size:13px; line-height
 }
 /* A page enters once: what a refresh brings afterwards does not make it enter again. */
 .page.filled .page-body > * { animation:live-fade .35s ease; }
+/* D244: the moments. A light that travels, a wave when something ends, the sky of the hour. */
+.spark { position:fixed; left:0; top:0; z-index:8; border-radius:50%; pointer-events:none; box-shadow:0 0 10px currentColor; }
+.planet-flash { position:fixed; z-index:8; border-radius:50%; pointer-events:none; background:radial-gradient(closest-side,currentColor,transparent); }
+.planet-wave { position:fixed; z-index:8; border-radius:50%; pointer-events:none; background:radial-gradient(closest-side,transparent 70%,color-mix(in srgb,currentColor 55%,transparent) 88%,transparent); }
+body[data-sky="dawn"] { --sky-top:#E9E1FA; --sky-bottom:#FFE3D3; }
+body[data-sky="dusk"] { --sky-top:#B9AEEF; --sky-bottom:#FFC9BE; }
+body[data-sky="night"] { --sky-top:#1E1C5C; --sky-bottom:#4A47A8; }
+.sky { position:fixed; z-index:-1; inset:-25% -60%; pointer-events:none; opacity:0; transition:opacity 1.5s ease; animation:sky-turn 600s linear infinite; }
+.sky svg { display:block; width:100%; height:100%; }
+.sky .twinkle { animation:twinkle 5s ease-in-out infinite; }
+@keyframes sky-turn { to { transform:rotate(360deg); } }
+@keyframes twinkle { 50% { opacity:.15; } }
+body[data-sky="night"]:has(.home:not([hidden])) #app { background:var(--sky-bottom); }
+body[data-sky="night"] .sky { opacity:1; }
+body[data-sky="dusk"] .sky { opacity:.3; }
+body[data-sky="night"] .page.home::before { opacity:.3; }
+body[data-sky="night"] .home-hero { --ink:#F2F1FA; --ink-2:rgba(242,241,250,.65); }
+body[data-sky="night"] .home-hero .planet path { stroke:rgba(242,241,250,.3); }
+body[data-sky="night"] .home-hero .chip { background:rgba(255,255,255,.14); color:#F2F1FA; }
+body[data-sky="night"] .page.home .section { color:#F2F1FA; }
+body[data-sky="night"] .page.home .section small,body[data-sky="night"] .page.home .hint,body[data-sky="night"] .page.home .empty { color:rgba(242,241,250,.65); }
 /* D242: the home and the conversation breathe, the planet travels, Orion's words unfold. */
 .talk-tab,.page.home { isolation:isolate; }
+.page.home::before { position:fixed !important; }
 .talk-tab::before,.page.home::before { content:""; position:absolute; z-index:-1; inset:-30%; pointer-events:none; background:radial-gradient(38% 30% at 28% 62%,rgba(140,153,255,.24),transparent 70%),radial-gradient(34% 28% at 74% 36%,rgba(214,180,255,.22),transparent 70%); animation:aurora 26s ease-in-out infinite alternate; transition:opacity .25s ease; }
 body.keyboard .talk-tab::before,body.keyboard .page.home::before { opacity:0; }
 @keyframes aurora { to { transform:translate(6%,-5%) rotate(10deg) scale(1.08); } }

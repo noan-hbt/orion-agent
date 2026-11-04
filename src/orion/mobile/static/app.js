@@ -608,6 +608,7 @@ async function conversation() {
   offerNotifications();
   show(state.tab);
   view.tabs.now.refresh(); // ready before the first visit, so the planet can cross to it
+  checkCarried();
   grow();
   if (location.hash.length > 1) goTo(location.hash.slice(1));
 }
@@ -898,6 +899,127 @@ function vanish(el) {
     [{ height: `${el.offsetHeight}px`, opacity: 1, transform: "scale(1)" }, { height: "0px", marginTop: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0, opacity: 0, transform: "scale(.96)" }],
     { duration: 300, easing: "cubic-bezier(.32,.72,0,1)" },
   ).onfinish = () => el.remove();
+}
+
+// A light that travels along a path, with its tail: the comet, the landing satellite, the
+// shooting star (D244). Nothing here ever takes a touch.
+function fly(points, { color, size = 10, duration, tail = 5, onend }) {
+  if (still()) return onend?.();
+  for (let i = 0; i <= tail; i++) {
+    const dot = h("i", { class: "spark" });
+    const shrink = 1 - i / (tail + 2);
+    Object.assign(dot.style, { width: `${size}px`, height: `${size}px`, color, background: color, opacity: String(shrink) });
+    document.body.append(dot);
+    const frames = points.map(([x, y, scale = 1]) => ({ transform: `translate(${x - size / 2}px,${y - size / 2}px) scale(${scale * shrink})` }));
+    dot.animate(frames, { duration, delay: i * 26, fill: "both" }).onfinish = () => {
+      dot.remove();
+      if (i === 0) onend?.();
+    };
+  }
+}
+
+// The comet is for a conversation that starts again, not for every message: in the middle of an
+// exchange the bubble's own rise says enough, and a long effect would wear out in a day.
+const COMET_AFTER = 5 * 60 * 1000;
+let lastComet = 0;
+function cometIfResuming() {
+  const last = state.messages[state.messages.length - 1];
+  const quiet = Math.min(last ? Date.now() - new Date(last.at) : Infinity, Date.now() - lastComet);
+  if (quiet < COMET_AFTER) return;
+  lastComet = Date.now();
+  setTimeout(() => {
+    const planetBox = view.avatar?.getBoundingClientRect();
+    // Looked up now: the server's answer may already have replaced the bubble being sent.
+    const mine = view.list.querySelectorAll(".msg.owner");
+    const last = mine[mine.length - 1];
+    const from = (last?.querySelector(".bubble") || last)?.getBoundingClientRect();
+    if (!planetBox?.width || !from?.width) return;
+    const start = [from.left + 18, from.top + 6];
+    const end = [planetBox.left + planetBox.width / 2, planetBox.top + planetBox.height / 2];
+    // The bend changes side and depth, so two comets never look the same.
+    const bend = (Math.random() < 0.5 ? -1 : 1) * (50 + Math.random() * 70);
+    const middle = [(start[0] + end[0]) / 2 + bend, (start[1] + end[1]) / 2];
+    const points = [];
+    for (let n = 0; n <= 32; n++) {
+      const t = n / 32;
+      const along = (a, b, c) => (1 - t) ** 2 * a + 2 * (1 - t) * t * b + t ** 2 * c;
+      points.push([along(start[0], middle[0], end[0]), along(start[1], middle[1], end[1]), 1 - t * 0.5]);
+    }
+    fly(points, { color: "#5B6CFF", size: 13, duration: 850, tail: 8, onend: ping });
+  }, 140);
+}
+
+// What Orion carried and no longer carries comes back to the planet (D244): the satellite spirals
+// in, the planet lights up and a wave crosses the screen. The app does not know whether it went
+// well, only that it is over: the moment says that and nothing more.
+let carried = null;
+let checkingCarried = false;
+async function checkCarried() {
+  if (checkingCarried) return;
+  checkingCarried = true;
+  try {
+    const off = (error) => {
+      if (error instanceof ApiError && error.status === 404) return null;
+      throw error;
+    };
+    const [found, list] = await Promise.all([api("api/for-you").catch(off), api("api/missions").catch(off)]);
+    const missions = (list?.missions || []).filter((m) => !m.closed);
+    const now = new Map([
+      ...(found?.tasks || []).map((t) => [`task:${t.id}`, "task"]),
+      ...(found?.waiting_on || []).map((w) => [`wait:${w.id}`, "wait"]),
+      ...missions.map((m) => [`mission:${m.id}`, "mission"]),
+    ]);
+    const landed = carried ? [...carried].filter(([id]) => !now.has(id)).map(([, kind]) => kind) : [];
+    carried = now;
+    state.carrying = [...now.values()].map((kind) => ({ kind }));
+    paintStatus();
+    landed.forEach((kind, i) => setTimeout(() => landSatellite(kind), i * 500));
+  } catch (error) {
+    console.warn("carried", error);
+  } finally {
+    checkingCarried = false;
+  }
+}
+
+function landSatellite(kind) {
+  const spot = state.tab === "talk" ? view.avatar?.querySelector(".planet") : state.tab === "now" ? document.querySelector(".home-planet .planet") : null;
+  if (!spot || document.hidden || still()) return;
+  const box = spot.getBoundingClientRect();
+  const center = [box.left + box.width / 2, box.top + box.height / 2];
+  const reach = Math.max(box.width * 0.62, 150);
+  const color = SATELLITE[kind] || SATELLITE.mission;
+  const tilt = (-14 * Math.PI) / 180;
+  const points = [];
+  for (let n = 0; n <= 90; n++) {
+    const t = n / 90;
+    const radius = reach * (1 - t) ** 1.25;
+    const angle = 2.4 + 3 * Math.PI * 2 * t ** 1.7;
+    const x = radius * Math.cos(angle);
+    const y = radius * 0.36 * Math.sin(angle);
+    points.push([center[0] + x * Math.cos(tilt) - y * Math.sin(tilt), center[1] + x * Math.sin(tilt) + y * Math.cos(tilt), 1.3 - 0.8 * t]);
+  }
+  fly(points, { color, size: 12, duration: 2000, tail: 7, onend: () => shockwave(spot, center, color) });
+}
+
+function shockwave(spot, center, color) {
+  const place = (el, size) => {
+    Object.assign(el.style, { left: `${center[0] - size / 2}px`, top: `${center[1] - size / 2}px`, width: `${size}px`, height: `${size}px` });
+    document.body.append(el);
+    return el;
+  };
+  spot.animate([{ transform: "scale(1)" }, { transform: "scale(1.16)", offset: 0.35 }, { transform: "scale(1)" }], { duration: 750, easing: "cubic-bezier(.34,1.56,.64,1)" });
+  const glow = place(h("i", { class: "planet-flash" }), Math.max(240, spot.getBoundingClientRect().width * 2.2));
+  glow.style.color = color;
+  glow.animate([{ opacity: 0.9, transform: "scale(.35)" }, { opacity: 0, transform: "scale(1.5)" }], { duration: 800, easing: "ease-out" }).onfinish = () => glow.remove();
+  const cover = (Math.hypot(innerWidth, innerHeight) * 2.2) / 40;
+  for (const [delay, strength] of [[0, 0.65], [170, 0.32]]) {
+    const wave = place(h("i", { class: "planet-wave" }), 40);
+    wave.style.color = color;
+    wave.animate(
+      [{ opacity: strength, transform: "scale(.4)" }, { opacity: 0, transform: `scale(${cover})` }],
+      { duration: 1500, delay, easing: "cubic-bezier(.16,.84,.3,1)", fill: "both" },
+    ).onfinish = () => wave.remove();
+  }
 }
 
 function prepend(messages) {
@@ -1343,6 +1465,7 @@ async function send(text, files) {
   el.append(meta);
   view.list.querySelector(".first")?.remove();
   view.list.append(el);
+  cometIfResuming();
   retail();
   view.field.classList.remove("pulse");
   requestAnimationFrame(() => view.field.classList.add("pulse"));
@@ -1615,6 +1738,7 @@ function listen() {
       loadApprovals().then(() => near && bottom(true));
       countQuestions();
       nowChanged();
+      checkCarried();
     } else if (data.type === "message") {
       // The dots step aside before the message lands where they were.
       if (data.message.who === "orion") setTyping(false, true);
@@ -1675,6 +1799,7 @@ function repaintChanged() {
   document.body.classList.add("live-refresh");
   setTimeout(() => document.body.classList.remove("live-refresh"), 700);
   if (TAB_PARTS[state.tab] && hit(TAB_PARTS[state.tab])) view.tabs?.[state.tab]?.refresh();
+  if (hit(["tasks", "missions", "waits"])) checkCarried();
   for (const live of livePanels) if (hit(live.parts)) live.refresh();
 }
 
@@ -2380,7 +2505,52 @@ function shell() {
   );
   view.dock = h("div", { class: "dock" }, view.homeSlot, talkButton(() => view.homeSlot));
   app.replaceChildren(...Object.values(view.tabs), view.topbar, view.dock);
+  view.tabs.now.prepend(starfield());
+  paintSky();
 }
+
+// The home screen's sky follows the hour (D244). Fixed hours rather than the real sunrise: Orion
+// does not ask where the owner is for this.
+function skyNow() {
+  const hour = new Date().getHours() + new Date().getMinutes() / 60;
+  if (hour < 5.5 || hour >= 21.5) return "night";
+  if (hour < 8.5) return "dawn";
+  if (hour < 17.5) return "day";
+  return "dusk";
+}
+
+function paintSky() {
+  document.body.dataset.sky = skyNow();
+}
+
+function starfield() {
+  let seed = 7;
+  const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const stars = [];
+  for (let i = 0; i < 90; i++) {
+    const twinkles = i % 6 === 0;
+    stars.push(`<circle cx="${(next() * 200).toFixed(1)}" cy="${(next() * 200).toFixed(1)}" r="${(0.12 + next() * 0.26).toFixed(2)}" fill="#fff" fill-opacity="${(0.4 + next() * 0.6).toFixed(2)}"${twinkles ? ` class="twinkle" style="animation-delay:-${(next() * 6).toFixed(1)}s"` : ""}/>`);
+  }
+  const el = h("div", { class: "sky", "aria-hidden": "true" });
+  el.innerHTML = `<svg viewBox="0 0 200 200" preserveAspectRatio="xMidYMid slice">${stars.join("")}</svg>`;
+  return el;
+}
+
+// Once in a while at night, a shooting star crosses the sky of the home screen.
+function shootingStars() {
+  setTimeout(() => {
+    if (skyNow() === "night" && state.tab === "now" && !document.hidden) {
+      const y = 50 + Math.random() * 190;
+      const x = Math.random() * innerWidth * 0.6;
+      const points = [];
+      for (let n = 0; n <= 16; n++) points.push([x + n * 11, y + n * 4, 1 - n / 24]);
+      fly(points, { color: "#FFFFFF", size: 3, duration: 800, tail: 9 });
+    }
+    paintSky();
+    shootingStars();
+  }, 18000 + Math.random() * 30000);
+}
+shootingStars();
 
 // The field of the dock becomes the field of the conversation: it glides to its place and the
 // chat fades in around it, no sideways slide. The focus stays in the tap, or iOS keeps its keyboard.
