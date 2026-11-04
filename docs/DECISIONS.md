@@ -5630,3 +5630,6 @@ réveillé ni dérangé. Quand Orion attend ses mains, « Prendre la main » s'a
 conversation, plus seulement dans Maintenant.
 
 Rejeté : une passation qui survit au redémarrage. Le jeton reste en mémoire ; à voir si ça gêne encore.
+
+La limite d'une section de module passe de 2 500 à 3 000 caractères (D84) : `computer.md` en fait 2 675,
+et le core refusait de démarrer sur le serveur.

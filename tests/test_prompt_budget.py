@@ -78,7 +78,7 @@ def test_a_module_with_a_long_section_does_not_load(tmp_path: Path) -> None:
             return "x" * (MAX_SECTION_CHARS + 1)
 
     config = OrionConfig.model_validate({"data_dir": tmp_path})
-    with pytest.raises(ModuleError, match="'talkative': its instructions are 2501 characters"):
+    with pytest.raises(ModuleError, match="'talkative': its instructions are"):
         constitution([Talkative(config)])
 
 
