@@ -116,13 +116,26 @@ async def test_a_message_sent_after_a_pause_shows_its_time_once() -> None:
     assert result == 2
 
 
-async def _in_the_app(act: str) -> tuple[list[str], Any]:
+TASK = {
+    "id": "t1",
+    "goal": "Trier",
+    "passes": 0,
+    "spent": 0,
+    "budget": 1,
+    "minutes": 1,
+    "started_at": "2026-11-04T14:00:00Z",
+    "waiting": False,
+    "last": "",
+}
+
+
+async def _in_the_app(act: str, *, fast_send: bool = False) -> tuple[list[str], Any]:
     """What enters the screen while the real app, on a fake server, does `act`, and its result."""
     message = {"who": "owner", "files": [], "text": "Salut", "at": "2026-11-04T14:00:00Z"}
     answers: dict[str, Any] = {
         "me": {"device": "d", "push_key": ""},
         "api/messages": {"more": False, "messages": [{**message, "ref": "a", "seq": 1}]},
-        "api/for-you": {"questions": [], "waiting_on": [], "tasks": []},
+        "api/for-you": {"questions": [], "waiting_on": [], "tasks": [TASK]},
         "approvals": {"approvals": []},
         "api/agenda": {"events": []},
         "api/nights": {"notes": [], "nights": []},
@@ -136,10 +149,17 @@ async def _in_the_app(act: str) -> tuple[list[str], Any]:
         path = route.request.url.split("/app/")[-1].split("?")[0]
         if (APP_DIR / (path or "index.html")).is_file():
             await route.fulfill(path=str(APP_DIR / (path or "index.html")))
+        elif path == "finish-the-task":  # the task ends and the server says so on the stream
+            answers["api/for-you"] = {"questions": [], "waiting_on": [], "tasks": []}
+            answers["stream"] = 'data: {"type": "changed", "what": ["tasks"]}\n\n'
+            await route.fulfill(json={})
         elif path == "api/stream":
-            await route.abort()
+            if "stream" in answers:
+                await route.fulfill(body=answers["stream"], content_type="text/event-stream")
+            else:
+                await route.abort()
         elif path == "api/send":
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.01 if fast_send else 0.2)
             await route.fulfill(json=answers[path])
         else:
             await route.fulfill(json=answers.get(path, {}))
@@ -228,6 +248,46 @@ async def test_the_dock_field_leads_to_the_chat_with_the_keyboard_up() -> None:
     )
     assert end == [True, "TEXTAREA"]
     assert "fade-in" in seen and "tab-right" not in seen and "tab-left" not in seen
+
+
+async def test_the_comet_flies_when_a_conversation_resumes_not_on_every_message() -> None:
+    """A long effect on every message wears out in a day: the owner asked for it not to."""
+    _, comets = await _in_the_app(
+        """async () => {
+          const send = async () => {
+            document.querySelector(".composer textarea:not(.twin)").value = "Test";
+            document.querySelector(".composer").requestSubmit();
+            await new Promise((r) => setTimeout(r, 300));
+            const flying = document.querySelectorAll(".spark").length;
+            await new Promise((r) => setTimeout(r, 1200));
+            return flying;
+          };
+          return [await send(), await send()];
+        }""",
+        fast_send=True,  # seen when filming: an answer quicker than the comet's start lost it
+    )
+    assert comets[0] > 0
+    assert comets[1] == 0
+
+
+async def test_what_orion_finished_carrying_comes_back_to_the_planet() -> None:
+    """The moment plays once, when a task the owner saw in orbit ends, and leaves nothing behind."""
+    _, end = await _in_the_app(
+        """async () => {
+          const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+          await pause(300);
+          const before = document.querySelectorAll(".spark").length;
+          await fetch("/app/finish-the-task");
+          let flew = false;
+          for (let i = 0; i < 100 && !flew; i++) {
+            flew = document.querySelectorAll(".spark").length > 0;
+            await pause(100);
+          }
+          while (document.querySelector(".spark, .planet-wave, .planet-flash")) await pause(100);
+          return [before, flew];
+        }"""
+    )
+    assert end == [0, True]
 
 
 async def test_no_white_band_behind_the_ios_bar_above_the_keyboard() -> None:
