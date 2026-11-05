@@ -171,6 +171,18 @@ class Report:
     """Orion may find it pointless by now (done, already said): SILENCE then means nothing goes."""
 
 
+def together_notice(parts: Sequence[str]) -> str:
+    """Several things due at once, as Orion reads them. Seen for real: a morning point carrying
+    a warning came out as one unrelated question, and all of it counted as said."""
+    return (
+        "Plusieurs choses l'attendaient. Un seul message, court, de la plus importante à la "
+        "moins importante. Chacune y est en quelques mots, quitte à dépasser ta longueur "
+        "habituelle : tout ce qui suit comptera comme dit. Laisse seulement ce qui est déjà "
+        "réglé ou ne vaut pas sa lecture ; une alerte ne se laisse pas, et rien d'autre ne prend "
+        "sa place :\n" + "\n".join(f"- {part}" for part in parts)
+    )
+
+
 def reminder_notice(moment: str, text: str) -> str:
     """A reminder he asked for, at its time. Orion can read the conversation, so it knows what
     the clock does not: the thing may be done already (D246)."""
@@ -950,9 +962,7 @@ class InitiativeEngine:
         asked = [c for c in parts if c.explicit]
         joined = Candidate(
             key=parts[0].key,
-            notice="Plusieurs choses l'attendaient. Un seul message, court, de la plus "
-            "importante à la moins importante :\n"
-            + "\n".join(f"- {c.notice} (pourquoi : {c.why})" for c in parts),
+            notice=together_notice(tuple(f"{c.notice} (pourquoi : {c.why})" for c in parts)),
             why="plusieurs choses t'attendaient",
             # What he asked for goes out even if Orion's wording fails; the rest does not.
             fallback="\n".join(c.fallback for c in (asked or parts)),

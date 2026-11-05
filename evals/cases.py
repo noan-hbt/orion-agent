@@ -39,7 +39,7 @@ from evals.harness import (
     works_at_night,
 )
 from orion.core.events import Trust
-from orion.initiative.engine import reminder_notice
+from orion.initiative.engine import reminder_notice, together_notice
 from orion.mail.service import mail_notice
 from orion.places.module import arrival_notice
 
@@ -80,6 +80,34 @@ WEEKDAY_OR_DATE = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|\b\d{1,2
 
 
 CASES: tuple[Case, ...] = (
+    Case(
+        name="point_groupe_dit_tout",
+        origin="05/11 à 08:54 : le point du matin portait l'alerte de la veille sur un lien Ameli "
+        "inhabituel ; il est sorti en « tu as bien déposé la Mercedes ? », et tout a compté "
+        "comme dit.",
+        at=paris(2026, 11, 5, 8, 54),
+        facts=OWNER,
+        steps=(
+            Notice(
+                together_notice(
+                    (
+                        "C'est ton point de 08:30. Un seul message, du plus utile au moins utile, "
+                        "une ou deux lignes par sujet ; laisse tomber ce qui ne vaut pas sa "
+                        "lecture. Points à signaler : engagement en retard du 04/11, déposer la "
+                        "Mercedes à la carrosserie à 9 h ; Mail : Revolut, récapitulatif de "
+                        "transactions d'octobre. (pourquoi : c'est le point de 08:30)",
+                        "Pendant ta veille, tu as conclu qu'il fallait lui dire : le nouveau mail "
+                        "Ameli renvoie vers un lien inhabituel, qu'il passe plutôt par l'appli ou "
+                        "le site officiel pour lire le message. Dis-le-lui avec tes mots. "
+                        "(pourquoi : ta veille)",
+                    )
+                ),
+                "plusieurs choses t'attendaient",
+                at=paris(2026, 11, 5, 8, 54),
+            ),
+        ),
+        checks=(says(r"(?i)ameli|assurance maladie", "it dropped the watch's warning"),),
+    ),
     Case(
         name="rappel_fait_annule",
         origin="26/10 et 03/11 : il dit « c bon », ce qui devait le lui rappeler doit tomber, "
