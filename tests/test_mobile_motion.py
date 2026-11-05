@@ -131,7 +131,12 @@ TASK = {
 
 async def _in_the_app(act: str, *, fast_send: bool = False) -> tuple[list[str], Any]:
     """What enters the screen while the real app, on a fake server, does `act`, and its result."""
-    message = {"who": "owner", "files": [], "text": "Salut", "at": "2026-11-04T14:00:00Z"}
+    message: dict[str, Any] = {
+        "who": "owner",
+        "files": [],
+        "text": "Salut",
+        "at": "2026-11-04T14:00:00Z",
+    }
     answers: dict[str, Any] = {
         "me": {"device": "d", "push_key": ""},
         "api/messages": {"more": False, "messages": [{**message, "ref": "a", "seq": 1}]},
