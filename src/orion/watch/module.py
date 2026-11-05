@@ -20,8 +20,9 @@ judged worth telling him, a meeting added, moved or cancelled in the next 48 hou
 invitation. Not more than `stirred_per_day` a day, never less than `stirred_gap_minutes` after
 the last one, and not when a fixed watch comes within the hour: that one will see it.
 
-Like the night, nothing acts on the world or reaches the owner from this thread (the guardian
-refuses it): what needs his yes goes in the conclusion. Only trusted turns are read.
+Like the night, nothing reaches the owner from this thread; in `libre` it acts on the world
+without asking (D247), elsewhere the guardian refuses it and what needs his yes goes in the
+conclusion. Only trusted turns are read.
 
     watch.done  watch.noted
 """
@@ -95,8 +96,9 @@ demande-toi ce qu'un ami attentif verrait :
 Puis fais ce qui se fait d'ici, vraiment : cherche et lis (le web, ta mémoire, ses papiers),
 prépare, mets à jour ses situations (`situation`), pose un rappel, lance une tâche de fond pour
 ce qui est long, avance une mission. Commence par voir ce qui tourne déjà (`planned`) : ce qui
-est prévu ne se refait pas. Rien ne part d'ici : ni message, ni envoi, ni demande d'accord ; ce
-qui demande son oui, propose-le dans ta conclusion.
+est prévu ne se refait pas. Tu as la main sur tes outils, ceux qui agissent dehors compris, sans
+demander : fais ce qui l'aide vraiment. Rien ne lui arrive à lui d'ici, ce que tu as à lui dire va
+dans ta conclusion ; ce qui engage gros ou ne se rattrape pas, propose-le-lui là aussi.
 
 Ta réponse finale est ta conclusion, l'une des trois :
 - `SILENCE` : rien qui vaille un message (le plus souvent : ne parle que si ça l'aide) ;

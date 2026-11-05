@@ -5662,3 +5662,26 @@ Rejeté : relier une réponse à un rappel par son identifiant ou par des mots, 
 La conversation suffit à Orion ; on y reviendra si les évals disent le contraire. Risque accepté :
 un SILENCE à tort fait perdre un rappel. `initiative.suppressed` le journalise, et
 `rappel_dit_la_chose` surveille ce cas.
+
+
+## D247 — En `libre`, la nuit et la veille sont libres
+
+*05/11/2026 · acceptée · corrige D232, complète D117, D150, D201*
+
+D232 devait garder la nuit et la veille comme avant. En passant le défaut de `equilibre` à `libre`,
+il les a en fait durcies : leurs écritures internes après un contenu extérieur (`missed`,
+`situation`, `playbook`, `commitments`) étaient toutes refusées. En production, plus aucune note
+les nuits des 3 et 4/11 : les fils de réflexion lisent toujours un mail ou une page avant d'écrire.
+Le 05/11, le propriétaire : elles font le tri dans ses données, elles doivent avoir accès librement
+aux outils, « même à ceux qui agissent sur le monde ».
+
+- **En `libre`, le contenu extérieur ne restreint plus la nuit ni la veille** (`Guardian.unrestricted`) :
+  l'interne passe, `forget_fact` et les gardes de la mémoire compris.
+- **Elles agissent sur le monde sans demander**, sans autonomie accordée : il n'y a personne à qui
+  demander. Le risque est connu et accepté : un mail ou une page lus dans ces fils peut orienter
+  une action réelle, sans regard humain avant.
+- **Ce qui ne change pas** : rien ne lui parvient directement (`NIGHT_NEVER`, ses réglages compris) ;
+  `NEVER_ALONE` reste décidé avec lui (du code dans Orion, ce qu'Orion peut faire seul) ; les
+  contacts et les tâches de fond restent gardés ; ce qui part passe par l'Outbox et reste journalisé.
+- **Les consignes suivent** : ce qui engage gros ou ne se rattrape pas, il le propose plutôt.
+  `equilibre` et `prudent` gardent l'ancien comportement.

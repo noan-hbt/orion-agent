@@ -158,6 +158,36 @@ async def test_in_libre_outside_content_restricts_nothing_in_his_conversation() 
     assert not contact.allowed
 
 
+async def test_in_libre_the_night_and_the_watch_are_free_even_after_reading_outside() -> None:
+    """Two nights in production lost every note to D232's default, and he wants them free: they
+    sort his data and act on the world without asking (D247). A contact's conversation stays
+    guarded, code in Orion and his own settings stay his."""
+    note = Tool(
+        name="missed", description="n", input_model=_Args, handler=_noop, effect=Effect.INTERNAL
+    )
+    forget = Tool(
+        name="forget_fact",
+        description="f",
+        input_model=_Args,
+        handler=_noop,
+        effect=Effect.INTERNAL,
+    )
+    install = Tool(name="module_install", description="i", input_model=_Args, handler=_noop)
+    no = _Approver(answer=False)
+    free = Guardian(no, approvals="libre")
+    args = _Args(to="x")
+    for thread in ("night", "veille"):
+        for tool in (note, forget, SEND):
+            assert (
+                await free.decide(ActionProposal(tool, args, Trust.THIRD_PARTY, thread))
+            ).allowed
+        assert not (await free.decide(ActionProposal(install, args, Trust.OWNER, thread))).allowed
+    assert no.asked == []  # nobody to ask at night
+    assert not (await free.decide(ActionProposal(note, args, Trust.WEB, "contact:paul"))).allowed
+    other = Guardian(no, approvals="equilibre")
+    assert not (await other.decide(ActionProposal(SEND, args, Trust.OWNER, "night"))).allowed
+
+
 async def test_autonomy_from_a_tainted_conversation_is_asked_never_taken() -> None:
     """D111: « discute avec lui sans me consulter », just after Victor's messages were relayed
     to him, was refused for two hours. It is put to him with the exact grant and why; it is

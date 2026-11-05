@@ -90,6 +90,8 @@ SOURCES_FOR_OWNER = {
 
 ALONE = "the owner lets Orion do this alone"
 """The reason given when an autonomy the owner granted covers the call."""
+FREE_THREAD = "the owner leaves the night and the watch free (libre)"
+"""The reason given when the night or the watch acts on the world in `libre` (D247)."""
 APPROVED_DESPITE = "approved by owner despite untrusted context"
 """The reason given when he said yes to this very call in a context holding outside content:
 what it writes is his word, not the context's (D231)."""
@@ -150,7 +152,8 @@ WATCH_REFUSAL = (
     "in your conclusion, he gets it from there"
 )
 REFLECTIVE_THREADS = {NIGHT_THREAD: NIGHT_REFUSAL, WATCH_THREAD: WATCH_REFUSAL}
-"""Orion's own threads, where he thinks alone: nothing acts on the world or reaches the owner."""
+"""Orion's own threads, where he thinks alone: nothing reaches the owner from here, and in
+`libre` he acts on the world without asking (D247)."""
 
 
 def untrusted_reason(trust: Trust) -> str:
@@ -219,9 +222,12 @@ class Guardian:
         )
 
     def unrestricted(self, thread_id: str) -> bool:
-        """Whether outside content restricts nothing in this conversation: his own, when he
-        chose `libre` (D232). What it writes still carries its true trust."""
-        return self._approvals == "libre" and thread_id == OWNER_THREAD
+        """Whether outside content restricts nothing in this conversation: his own (D232) and
+        Orion's own night and watch (D247), when he chose `libre`. What it writes still carries
+        its true trust."""
+        return self._approvals == "libre" and (
+            thread_id == OWNER_THREAD or thread_id in REFLECTIVE_THREADS
+        )
 
     async def _alone(self, tool: Tool, proposal: ActionProposal) -> bool:
         """The owner let Orion do this alone, with these parameters."""
@@ -254,6 +260,10 @@ class Guardian:
             ):
                 return Decision(Verdict.DENY, refusal.format(tool=tool.name))
             if effect is Effect.EXTERNAL:
+                # `libre`: the night and the watch act on the world without asking (D247); code
+                # in Orion and what Orion may do alone are still decided with him.
+                if self.unrestricted(proposal.thread_id) and tool.name not in NEVER_ALONE:
+                    return Decision(Verdict.ALLOW, FREE_THREAD)
                 # What he let Orion do alone is done at night too (D201): the night prepares
                 # rather than only proposes. The rest waits for the morning, never asked now.
                 if proposal.thread_id == NIGHT_THREAD and await self._alone(tool, proposal):
