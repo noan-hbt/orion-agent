@@ -11,9 +11,11 @@ addresses (the guardian, the local network) are never reached (`browser.Session`
 password or 2FA code is masked on every page Orion reads.
 
 Every page shown is journaled with `Trust.WEB` and a `web:<address>` source, so what it led to
-can be traced and contained (`memory.provenance`).
+can be traced and contained (`memory.provenance`). Where a login went through is kept too:
+the next sign-in, from any conversation, starts there rather than on the site's front page.
 
     browser.page
+    browser.signed_in
 """
 
 from __future__ import annotations
@@ -52,6 +54,7 @@ from orion.web.service import WebState
 log = structlog.get_logger(__name__)
 
 PAGE = "browser.page"
+SIGNED_IN = "browser.signed_in"
 IDLE_SECONDS = 600.0
 SHOWN_CHARS = 4000
 """Page text shown after each action; `browser` read gives the rest, part by part."""
@@ -72,11 +75,14 @@ class BrowsingState(WebState):
     """Conversation → the last page it showed: a tab closed or lost is not a thread lost."""
     visited: set[str] = field(default_factory=set[str])
     """The sites Orion's browser went to: the rest of its cookies are their trackers."""
+    signed_in: dict[str, str] = field(default_factory=dict[str, str])
+    """Login → the address of the form it last went through: where its site signs in."""
 
     async def reset(self) -> None:
         await super().reset()
         self.last.clear()
         self.visited.clear()
+        self.signed_in.clear()
 
     async def apply(self, event: Event) -> None:
         await super().apply(event)
@@ -90,6 +96,8 @@ class BrowsingState(WebState):
             site = site_of(str(payload["url"]))
             if site:
                 self.visited.add(site)
+        elif event.kind == SIGNED_IN:
+            self.signed_in[str(event.payload["login"])] = str(event.payload["url"])
 
 
 class Refused(ValueError):
@@ -459,8 +467,14 @@ class BrowserDesk:
         except (GuardianUnavailableError, VaultError) as exc:
             raise Refused(f"The vault did not lend it: {exc}") from exc
         sites = list(lent["sites"])
+        await self._runner.catch_up()
         start = normalize(str(args.url)) if args.url else ""
-        start = start or str(lent.get("url") or "") or (f"https://{sites[0]}/" if sites else "")
+        start = (
+            start
+            or self.state.signed_in.get(name, "")
+            or str(lent.get("url") or "")
+            or (f"https://{sites[0]}/" if sites else "")
+        )
         async with self._lock:
             live = await self._tab(ctx.thread_id)
             loan = str(lent["loan"])
@@ -473,21 +487,26 @@ class BrowserDesk:
             here = urlsplit(live.page.url).hostname or ""
             go = start if args.url or not host_in(here, sites) else ""
         sent: dict[str, bool] = {}
+        where = ""
         still = [False]
 
         async def signing_in(session: Session) -> None:
-            nonlocal sent
+            nonlocal sent, where
             if go:
                 await session.goto(go)
                 await session.ready()
-            sent = await session.sign_in_lent(str(lent["username"]), str(lent["password"]), sites)
+            sent, where = await session.sign_in_lent(
+                str(lent["username"]), str(lent["password"]), sites
+            )
             still[0] = bool(sent.get("password")) and await session.shows_password_field()
 
         said = await self._act(ctx, signing_in, whole=True)
         if not sent.get("username") and not sent.get("password"):
             head = (
-                "Je ne vois pas de formulaire de connexion ici : clique ce qui y mène, puis "
-                "`browser` login à nouveau (ou fill sur un champ précis)."
+                f"Aucun formulaire de connexion de {', '.join(sites)} sur cette page : rien n'a "
+                "été tapé, et rien ne dit que le mot de passe soit faux. Sa page de connexion "
+                "est ailleurs (lien « Connexion », « Espace client », un sous-domaine) : "
+                "va dessus, puis `browser` login à nouveau."
             )
         elif still[0]:
             head = (
@@ -499,7 +518,23 @@ class BrowserDesk:
                 "Identifiant tapé et envoyé (tu ne le vois jamais). Un code demandé ensuite : fill "
                 "avec field=code, s'il y a sa clé, sinon demande-le-lui."
             )
+            if sent.get("password") and where and where != self.state.signed_in.get(name):
+                await self._signed_in(name, where, ctx)
         return f"{head}\n\n{said}"
+
+    async def _signed_in(self, name: str, url: str, ctx: ToolContext) -> None:
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=SIGNED_IN,
+                    payload={"login": name, "url": url},
+                    provenance=Provenance(source=f"web:{url}", actor="orion:browser"),
+                    trust=Trust.WEB,
+                    correlation_id=ctx.correlation_id,
+                )
+            ]
+        )
+        await self._runner.catch_up()
 
     async def fill(self, element: int, what: str, ctx: ToolContext) -> str:
         await self._need_tab(ctx.thread_id)

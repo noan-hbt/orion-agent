@@ -242,6 +242,66 @@ async def test_orion_signs_in_himself_without_seeing_the_password(
     assert "482913" not in str([e.payload for e in await journal.read()])
 
 
+class FrontPage(Account):
+    """A site whose front page signs in nowhere, but carries a widget's form from elsewhere;
+    its accounts sign in at /espace."""
+
+    async def handle(self, route: Route) -> None:
+        url = route.request.url
+        if route.request.method == "GET" and url == "https://compte.test/":
+            body = (
+                "<html><title>Logiciel de paie</title><body>Nos offres."
+                '<iframe src="https://ailleurs.test/widget"></iframe></body></html>'
+            )
+            await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=body)
+            return
+        await super().handle(route)
+
+
+class FrontLender(Lender):
+    async def lend_login(
+        self, name: str, params: dict[str, Any], grant: str | None
+    ) -> dict[str, Any]:
+        return {**await super().lend_login(name, params, grant), "url": ""}
+
+
+async def test_a_login_finds_its_own_form_and_remembers_where_it_went_through(
+    journal: SqliteJournal,
+) -> None:
+    """Nov 2026: on the front page, Orion was told « not on nibelis.com », believed the vault's
+    password wrong, and went back there later. A widget's form from elsewhere is not the
+    account's, and a login starts where it last went through, from any conversation."""
+    from orion.computer.direct import BrowserDesk, browser_tools
+    from orion.tools.base import ToolContext
+
+    account = FrontPage()
+    lender = cast(FrontLender, FrontLender.over_socket(Path("/nonexistent.sock")))
+    lender.grants = []
+
+    async def use(desk: BrowserDesk, thread: str, name: str, **args: object) -> str:
+        tool = {t.name: t for t in browser_tools(desk)}[name]
+        ctx = ToolContext(thread, "t1", grant="g1")
+        result = await tool.handler(tool.parse(json.dumps(args)), ctx)
+        return ("ERROR " if result.is_error else "") + result.content
+
+    first = BrowserDesk(journal, lambda: browser(account), guardian=lender)
+    try:
+        front = await use(first, "owner", "browser_login", login="compte")
+        assert account.posted == [] and "Bienvenue" not in front
+        assert "mot de passe soit faux" in front
+        await use(first, "owner", "browser_open", url="https://compte.test/espace")
+        assert "Bienvenue" in await use(first, "owner", "browser_login", login="compte")
+    finally:
+        await first.aclose()
+    account.posted.clear()
+    later = BrowserDesk(journal, lambda: browser(account), guardian=lender)
+    try:
+        assert "Bienvenue" in await use(later, "veille", "browser_login", login="compte")
+        assert len(account.posted) == 1
+    finally:
+        await later.aclose()
+
+
 async def test_the_owner_gives_a_login_from_telegram_and_the_core_never_sees_it(
     tmp_path: Path,
 ) -> None:
