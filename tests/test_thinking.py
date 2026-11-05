@@ -15,7 +15,7 @@ from orion.adaptation.misses import as_case, misses
 from orion.adaptation.signals import reaction_event
 from orion.config import STRONG_MODEL, AgentConfig, OrionConfig
 from orion.context.compiler import ContextCompiler
-from orion.core.events import Provenance, Trust
+from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import (
     NIGHT_THREAD,
@@ -31,7 +31,11 @@ from orion.memory.store import MemoryStore
 from orion.modules.base import Module, Planned
 from orion.runtime import OWNER_THREAD, Orion, Photo
 from orion.thinking.module import (
+    NIGHT as NIGHT_DONE,
+)
+from orion.thinking.module import (
     NOTE,
+    ListInput,
     Thinking,
     ThinkingSettings,
     thinking_tools,
@@ -145,6 +149,7 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
         "follow_up_cancel",
         "follow_ups",
         "missed",
+        "my_night",
         "think_later",
     ]
     (miss,) = misses(await journal.read(0, 100_000), PARIS)  # « Mes ratés », as the night saw it
@@ -161,6 +166,44 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
     assert alert.trust == Trust.SYSTEM
     later = [a.key for a in await thinking.alerts(morning + timedelta(days=3))]
     assert not any(k.startswith("thought:") for k in later)  # a note goes stale
+
+
+async def test_asked_about_his_night_orion_reads_what_it_really_did(
+    journal: SqliteJournal,
+) -> None:
+    """05/11: asked « tu as fait quoi cette nuit ? », he searched that day's conversations and
+    answered nothing had moved, when the evening before he had run a whole night."""
+    thinking = thinking_for(journal, NIGHT)
+    tool = {t.name: t for t in thinking_tools(thinking)}["my_night"]
+    source = Provenance(source="test", actor="test")
+
+    def event(kind: str, trust: Trust = Trust.SYSTEM, **payload: Any) -> NewEvent:
+        return NewEvent(kind=kind, payload=payload, provenance=source, trust=trust)
+
+    def used(name: str, arguments: str, decision: str, trust: Trust = Trust.SYSTEM) -> NewEvent:
+        return event(
+            "tool.executed",
+            trust,
+            thread_id="night",
+            tool=name,
+            arguments=arguments,
+            decision=decision,
+        )
+
+    await journal.append(
+        [
+            used("task", '{"goal":"les ETF"}', "internal effect only"),
+            used("web_read", "{}", "side-effect free", Trust.WEB),
+            event("task.reported", text="trois ETF comparés"),
+            event(NIGHT_DONE, day="2026-10-20", at=NIGHT.isoformat(), upto=0, read=3, phases={}),
+            used("plus_tard", "{}", "internal effect only"),
+        ]
+    )
+    await thinking.sync()
+    result = await tool.handler(ListInput(), ToolContext("owner", "t1"))
+    assert "les ETF" in result.content and "trois ETF comparés" in result.content
+    assert "web_read" in result.content and "plus_tard" not in result.content
+    assert result.trust == Trust.WEB
 
 
 async def test_a_quiet_night_sends_nothing_and_the_next_reads_only_what_is_new(

@@ -81,6 +81,15 @@ WEEKDAY_OR_DATE = r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|\b\d{1,2
 
 CASES: tuple[Case, ...] = (
     Case(
+        name="raconte_sa_nuit",
+        origin="05/11 à 08:24, « Tu as fait quoi cette nuit ? » : il a cherché dans les "
+        "conversations du jour et répondu qu'aucun dossier n'avait avancé.",
+        at=paris(2026, 11, 5, 8, 24),
+        facts=OWNER,
+        steps=(Say("Tu as fait quoi cette nuit ?"),),
+        checks=(uses("my_night"),),
+    ),
+    Case(
         name="point_groupe_dit_tout",
         origin="05/11 à 08:54 : le point du matin portait l'alerte de la veille sur un lien Ameli "
         "inhabituel ; il est sorti en « tu as bien déposé la Mercedes ? », et tout a compté "
