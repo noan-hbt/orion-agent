@@ -788,6 +788,59 @@ class Thinking:
             )
         return "\n\n".join(parts)
 
+    async def account(self) -> tuple[str, Trust]:
+        """What the last night really did, from the journal: the night runs the evening before
+        and its note leaves the conversation, so searching there answered « rien » (05/11)."""
+        if not self.state.nights:
+            return "Tu n'as pas encore eu de nuit.", Trust.SYSTEM
+        night = self.state.nights[-1]
+        note = ""
+        did: list[str] = []
+        refused: list[str] = []
+        reported: list[str] = []
+        read: dict[str, int] = {}
+        trust = Trust.SYSTEM
+        after = int(night.get("upto") or 0)
+        started = False
+        over = False
+        while not over and (page := await self._journal.read(after, 1000)):
+            after = page[-1].seq
+            for event in page:
+                payload = event.payload
+                if event.kind == NIGHT and payload.get("at") == night.get("at"):
+                    over = True
+                    break
+                if event.kind == "tool.executed" and payload.get("thread_id") == NIGHT_THREAD:
+                    started = True
+                    name = str(payload.get("tool"))
+                    what = f"- {name} {str(payload.get('arguments'))[:160]}"
+                    if payload.get("is_error"):
+                        refused.append(what)
+                    elif payload.get("decision") == "side-effect free":
+                        read[name] = read.get(name, 0) + 1
+                    else:
+                        did.append(what)
+                elif event.kind == NOTE:
+                    note = str(payload.get("note") or note)
+                elif event.kind == "task.reported" and started:
+                    reported.append(f"- {str(payload.get('text'))[:600]}")
+                else:
+                    continue
+                trust = min(trust, event.trust)
+        parts = [f"Ta dernière nuit : celle du {night.get('day')}, commencée à {night.get('at')}."]
+        for title, lines in (
+            ("Fait", did),
+            ("Tes tâches de fond ont rapporté", reported),
+            ("Refusé ou raté", refused),
+        ):
+            if lines:
+                parts.append(f"{title} :\n" + "\n".join(lines[:40]))
+        if read:
+            parts.append("Consulté : " + ", ".join(f"{k} x{v}" for k, v in sorted(read.items())))
+        if note:
+            parts.append(f"Ta note pour lui : {note}")
+        return "\n\n".join(parts), trust
+
     async def _dislikes(self, now: datetime) -> list[str]:
         """His 👎 since the last night, each with the message it was on."""
         events: list[Event] = []
@@ -922,6 +975,10 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
         )
 
+    async def my_night(args: Any, ctx: ToolContext) -> ToolResult:
+        text, trust = await thinking.account()
+        return ToolResult(text, trust=trust)
+
     async def promise(args: Any, ctx: ToolContext) -> ToolResult:
         await thinking.promise(
             args.question, args.context, provenance(ctx), ctx.context_trust, ctx.correlation_id
@@ -994,6 +1051,18 @@ def thinking_tools(thinking: Thinking) -> list[Tool]:
             informs=False,
         ),
         Tool(
+            name="my_night",
+            description="What you really did during your last night, from the journal. It runs "
+            "the evening before, so call this rather than searching the conversations when he "
+            "asks about your night.",
+            input_model=ListInput,
+            handler=my_night,
+            effect=Effect.NONE,
+            reversibility=Reversibility.REVERSIBLE,
+            concurrency_safe=True,
+            accepts_untrusted_context=True,
+        ),
+        Tool(
             name="missed",
             description="Note an exchange you got wrong (he corrected you, had to repeat, was "
             "annoyed, or put 👎), once each: what he will see in « Mes ratés », and what your "
@@ -1062,7 +1131,7 @@ class ThinkingModule(Module):
         )
         await self.thinking.sync()
         tools = thinking_tools(self.thinking)
-        alone = [t for t in tools if t.name in ("think_later", "missed")]
+        alone = [t for t in tools if t.name in ("think_later", "missed", "my_night")]
         return [
             *alone,
             grouped(

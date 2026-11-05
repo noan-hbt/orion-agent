@@ -5685,3 +5685,15 @@ aux outils, « même à ceux qui agissent sur le monde ».
   contacts et les tâches de fond restent gardés ; ce qui part passe par l'Outbox et reste journalisé.
 - **Les consignes suivent** : ce qui engage gros ou ne se rattrape pas, il le propose plutôt.
   `equilibre` et `prudent` gardent l'ancien comportement.
+
+
+## D248 — « Tu as fait quoi cette nuit ? » se lit dans le journal
+
+*05/11/2026 · acceptée · complète D117, D194*
+
+Le 05/11 à 08:24, Orion a cherché dans les conversations du jour et répondu qu'aucun dossier n'avait
+avancé, alors que sa nuit avait tourné la veille au soir (recherche sur les ETF, Nibelis). Sa nuit
+ne vit pas dans la conversation, et la note du matin en sort au premier rebase.
+
+- **`my_night`** : ce que la dernière nuit a fait, lu dans le journal : actions, rapports de tâches,
+  refus, ce qu'elle a consulté, sa note. Lecture seule, à la confiance de ce qu'elle rapporte.
