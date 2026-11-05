@@ -795,14 +795,18 @@ class Session:
                 continue
         return False
 
-    async def _sign_in_frame(self, mark: bool) -> tuple[Frame, dict[str, Any]] | None:
+    async def _sign_in_frame(
+        self, mark: bool, sites: list[str] | None = None
+    ) -> tuple[Frame, dict[str, Any]] | None:
+        """The page's sign-in form, in whichever frame; with `sites`, only one on those sites:
+        a chat or newsletter widget from elsewhere is not the account's form."""
         page = self._page()
         for frame in [page.main_frame, *[f for f in page.frames if f is not page.main_frame]]:
             try:
                 found = await frame.evaluate(_SIGN_IN, mark)
             except Error:
                 continue
-            if found:
+            if found and (sites is None or host_in(str(found["host"]), sites)):
                 return frame, cast(dict[str, Any], found)
         return None
 
@@ -835,18 +839,20 @@ class Session:
         await self.settle()
         return {"host": str(form["host"]), "url": str(form["url"])}
 
-    async def sign_in_lent(self, username: str, password: str, sites: list[str]) -> dict[str, bool]:
+    async def sign_in_lent(
+        self, username: str, password: str, sites: list[str]
+    ) -> tuple[dict[str, bool], str]:
         """A lent login typed into the page's sign-in form and sent, key by key, on the login's
         own sites only: a first step that asks only the username, then the next one. What it
-        could send (`username`, `password`)."""
+        could send (`username`, `password`), and the address of the form it went into."""
         sent = {"username": False, "password": False}
+        where = ""
         for _ in range(2):
-            found = await self._sign_in_frame(True)
+            found = await self._sign_in_frame(True, sites)
             if found is None:
                 break
             frame, form = found
-            if not host_in(str(form["host"]), sites):
-                raise BrowserError(f"this page is not on {', '.join(sites)}: nothing typed")
+            where = where or str(form["url"])
             todo = [
                 (name, value)
                 for name, value in (("username", username), ("password", password))
@@ -867,7 +873,7 @@ class Session:
             await self._do(partial(last.press, "Enter", timeout=8_000))
             await self.settle()
             await self._steady()
-        return sent
+        return sent, where
 
     async def _key_in(self, element: Locator, value: str) -> None:
         """Key by key, as a person types: a site's script often sees nothing of a value set at
