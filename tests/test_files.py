@@ -105,8 +105,8 @@ async def test_a_picture_and_a_pdf_are_made_kept_and_sent(
 async def test_a_screenshot_of_the_page_shown(journal: SqliteJournal, tmp_path: Path) -> None:
     store = FileStore(journal, tmp_path / "files")
 
-    async def keep(name: str, data: bytes, kind: str, ctx: ToolContext) -> str:
-        return (await store.save(name, data, kind, "screenshot", ctx, Trust.WEB)).id
+    async def keep(name: str, data: bytes, kind: str, ctx: ToolContext, how: str) -> str:
+        return (await store.save(name, data, kind, how, ctx, Trust.WEB)).id
 
     site = Site()
     desk = BrowserDesk(journal, lambda: session(site))
