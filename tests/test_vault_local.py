@@ -111,12 +111,8 @@ async def test_orion_signs_in_from_his_own_vault_without_seeing_the_password(
     try:
         assert "« compte » : compte.test" in await use("browser_accounts")
         page = await use("browser_login", login="compte")
-        assert "Identifiant prêt" in page and PASSWORD not in page
-        await use("browser_fill", element=1, field="username")
-        await use("browser_fill", element=2, field="password")
-        welcome = await use("browser_click", element=4)
-        assert "Bienvenue" in welcome and "Tr0ub4dor%263" in account.posted[0]
-        assert PASSWORD not in welcome and "Tr0ub4dor%263" not in welcome  # masked
+        assert "Bienvenue" in page and "Tr0ub4dor%263" in account.posted[0]
+        assert PASSWORD not in page and "Tr0ub4dor%263" not in page  # masked
     finally:
         await desk.aclose()
     assert PASSWORD not in str([e.payload for e in await journal.read()])
