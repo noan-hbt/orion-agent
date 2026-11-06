@@ -78,6 +78,22 @@ async def test_core_memory_opens_the_window_and_relevant_facts_follow(
     assert_prefix_stable(provider)
 
 
+async def test_a_follow_up_that_names_nothing_still_recalls_the_subject(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """« et je lui offre quoi ? » names no one: the facts come from what was just said (ORION-4)."""
+    await memory.remember("Marc adore le jazz.", OWNER, about=["Marc"], category=Category.PERSON)
+    provider = ScriptedProvider(reply("Marc, pour son anniversaire."), reply("ok"))
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+
+    await orion.handle_owner_message("t1", "qui dois-je appeler demain ?", "terminal", now=at(1))
+    await orion.handle_owner_message("t1", "et je lui offre quoi ?", "terminal", now=at(2))
+
+    assert "jazz" in provider.requests[-1].messages[-1]["content"]
+    assert_prefix_stable(provider)
+
+
 async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:

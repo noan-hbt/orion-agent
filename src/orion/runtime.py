@@ -42,6 +42,7 @@ from orion.cognition.loop import (
 from orion.config import AgentConfig, Effort
 from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
+from orion.context.recent import clean
 from orion.context.summary import SUMMARY_CHARS, previous, sides, summarize, summary_block
 from orion.context.threads import (
     MESSAGE_KIND,
@@ -194,6 +195,27 @@ def _from_him(message: Message) -> bool:
         and not line.startswith("[Orion")
         and "· initiative" not in line
     )
+
+
+FOLLOW_UP_MESSAGES = 4
+"""Last exchanges searched for memories along with the new message (ORION-4)."""
+
+FOLLOW_UP_CHARS = 400
+"""Each of them, at most: the subject sits in the first lines, not in a pasted page."""
+
+
+def _follow_up_query(window: list[Message]) -> str | None:
+    """The words of the last exchanges, memory blocks and context lines removed, so a
+    follow-up that names nothing still finds the facts about what was being discussed."""
+    said: list[str] = []
+    for message in reversed(window):  # tool calls and results say nothing: skipped
+        line = clean(message)
+        if line:
+            said.insert(0, line[:FOLLOW_UP_CHARS])
+            if len(said) == FOLLOW_UP_MESSAGES:
+                break
+    text = "\n".join(said)
+    return text or None
 
 
 SITUATION_DAYS = 3
@@ -1119,6 +1141,17 @@ class Orion:
         relevant = [
             f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
         ]
+        # A follow-up (« et pour lui ? ») names nothing: the subject lives in the last
+        # exchanges, so they are searched too, for a few more slots (ORION-4).
+        context = _follow_up_query(window)
+        if context:
+            taken = {f.id for f in relevant}
+            extra = [
+                f
+                for f in await self._memory.search(context, self._recall_limit)
+                if f.id not in shown and f.id not in taken
+            ]
+            relevant += extra[: max(1, self._recall_limit // 2)]
         recalled = recall_block(relevant)
         if recalled:
             blocks.append(recalled)
