@@ -5737,3 +5737,29 @@ deux semaines de l'audit, et chacun ferme le navigateur, une prise en main en co
 - **Le script attend** (`deploy/orion-update`) : pas pendant ce délai, au plus une mise à jour par
   heure ; ce qui arrive entre-temps part ensemble. Jamais plus de 3 heures d'attente.
 - **`[urgent]`** dans un message de commit fait passer la mise à jour tout de suite.
+
+## D252 — Ce qu'il affirme repose sur ce qu'un outil a montré
+
+*06/11/2026 · acceptée · complète D118, D144*
+
+Trois fois en une semaine, une réponse a affirmé un état sans l'avoir vu : « oui, c'est cette
+rubrique, vérifiée » (INPI, 05/11, le chemin du mail jamais suivi), « connexion Nibelis rejetée
+par le coffre » (05/11, faux), « pas moi » sur un accès à Cyclades sans lire ses traces (31/10).
+Le vérificateur ne relisait que les initiatives ; `finish.py` ne cherche que des offres et des
+promesses.
+
+- **Le code repère l'affirmation** (`orion.cognition.grounding.claims_a_state`) : fait, envoyé,
+  vérifié, refusé, rien trouvé, pas moi, ça a marché… ; une question ne compte pas. Sur les 7
+  jours de prod au 06/11 : 84 réponses finales sur 895 (9 %).
+- **Un autre modèle compare** (`Verifier`, celui des initiatives) **chaque** réponse finale aux
+  résultats d'outils de la conversation et à ses messages à lui, sans tri préalable par motif :
+  une affirmation se dit de cent façons, et celle qu'une liste rate partirait sans contrôle. Ce
+  que rien n'y montre renvoie Orion une fois au travail : vérifier avec l'outil qui le montre,
+  ou dire franchement qu'il ne l'a pas vérifié. Après `finish_check`, une seule fois par tour,
+  dans sa conversation seulement.
+- **Sans vérificateur** (`verifier_model` vide, ou en panne) : un secours en code, aussi bon que
+  ses motifs, pas plus — une affirmation repérée dans un tour où aucun outil n'a tourné est
+  renvoyée une fois.
+- **Coût** : un appel du vérificateur par réponse finale (~130 par jour), 1 à 3 s avant qu'elle
+  parte, une étape de plus quand il rejette.
+  La note est journalisée comme les autres : le cache tient (`tests/test_runtime_cache.py`).

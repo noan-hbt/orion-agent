@@ -61,7 +61,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
 
 ## P1 — les changements de structure (2 à 3 semaines)
 
-9. [ ] **La preuve avant la parole.** Aucune réponse au propriétaire n'est vérifiée
+9. [x] **La preuve avant la parole.** (D252 ; en prod, renseigner `verifier_model`, sinon seule la règle « aucun outil ce tour » s'applique) Aucune réponse au propriétaire n'est vérifiée
    (`cognition/verifier.py` ne sert qu'aux initiatives, `initiative/engine.py:271,309` ;
    `finish.py` = regex sur 280 caractères). Cas réels : « oui, c'est cette rubrique vérifiée »
    (INPI, 05/11 9 h 14, chemin du mail jamais suivi), « connexion Nibelis rejetée par le
