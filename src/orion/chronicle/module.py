@@ -483,7 +483,9 @@ class Chronicle:
                 notice += (
                     "\n\nAprès la page, dis-lui en quelques lignes la semaine qui vient : ce qui "
                     "compte dans son agenda, ce qui arrive à échéance, où il en est de ses "
-                    "intentions. Seulement ce que montrent ces lignes, rien d'autre :\n"
+                    "intentions ; pour chaque objectif, ce qui a avancé, ce qui coince et la "
+                    "prochaine action, avec pourquoi celle-là. Seulement ce que montrent ces "
+                    "lignes, rien d'autre :\n"
                     "<semaine-qui-vient>\n" + "\n".join(lines) + "\n</semaine-qui-vient>"
                 )
             found.append(

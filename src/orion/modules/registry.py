@@ -37,6 +37,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.feeds.module import FeedsModule
     from orion.files.module import FilesModule
     from orion.focus.module import FocusModule
+    from orion.goals.module import GoalsModule
     from orion.hands.module import HandsModule
     from orion.hooks.module import HooksModule
     from orion.intentions.module import IntentionsModule
@@ -99,6 +100,7 @@ def builtin_modules() -> list[type[Module]]:
         AwaitingModule,
         ChronicleModule,
         IntentionsModule,
+        GoalsModule,
         RelationsModule,
         ContactsModule,
         DepartureModule,
