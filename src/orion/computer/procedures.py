@@ -8,6 +8,12 @@ show there; and the verifier, another model (D252), reads the site's pages and a
 model saying so is not enough. Without a verifier nothing is kept (fail closed). What the
 browser did is kept with it; the traps, which nothing checks, are given back as unverified.
 
+What is kept is the path followed, not a success: the outcome counts as confirmed only when the
+proof is a signal of it, words no page of the site showed before the last action that acts
+(click, typing, choice, key, upload) and that a page showed from then on. A proof already there
+before, like « Bienvenue » or « Mon compte », proves nothing: the path is given back as followed,
+its outcome unconfirmed.
+
 The next time Orion's browser shows that site, in any conversation, the first page comes with the
 procedure: it follows the path instead of exploring again.
 
@@ -41,6 +47,8 @@ PATH_STEPS = 15
 """Actions of the observed path kept with a procedure, the last ones."""
 _ADDRESS = re.compile(r"https?://[^\s»\"”)]+")
 _LABEL = re.compile(r"«([^»]+)»|“([^”]+)”|\"([^\"]+)\"")
+_ACTS = ("click", "type", "select", "press", "upload")
+"""Actions that change something on the site: what an outcome follows."""
 
 
 @dataclass(frozen=True)
@@ -80,6 +88,8 @@ class Procedure:
     """What the browser actually did on the site that turn (action → address)."""
     login: str
     traps: str
+    confirmed: bool
+    """Whether the proof appeared only after the last action (D255), not just the path."""
     when: str
     """The clock of the event that kept it: when it last worked."""
     trust: Trust
@@ -117,6 +127,7 @@ class Procedures:
             path=tuple(str(step) for step in payload.get("path", [])),
             login=str(payload.get("login", "")),
             traps=str(payload.get("traps", "")),
+            confirmed=bool(payload.get("confirmed", False)),
             when=event.hlc,
             trust=event.trust,
             source=event.provenance.source,
@@ -129,11 +140,17 @@ class Procedures:
         if not known:
             return ""
         lines = [
-            f"[Démarches qui ont déjà marché sur {site} : suis ce chemin plutôt que d'explorer."
+            f"[Démarches déjà faites sur {site}, parcours suivi la dernière fois : suis-le "
+            "plutôt que d'explorer, et vérifie l'issue sur la page."
         ]
         for p in known.values():
             day = datetime.fromtimestamp(Timestamp.decode(p.when).wall_ms / 1000, UTC)
-            line = f"- {p.task} (réussie le {day:%d/%m/%Y}) : {p.steps}"
+            outcome = (
+                "issue confirmée par la page"
+                if p.confirmed
+                else "issue non confirmée : la page n'a pas montré qu'elle avait abouti"
+            )
+            line = f"- {p.task} (parcours suivi le {day:%d/%m/%Y}, {outcome}) : {p.steps}"
             if p.login:
                 line += f" (login du coffre : {p.login})"
             if p.path:
@@ -152,6 +169,16 @@ def _page(url: str) -> str:
     """An address without its query: what a path step names, whatever the session token."""
     parts = urlsplit(url)
     return f"{(parts.hostname or '').lower()}{parts.path.rstrip('/')}"
+
+
+def _confirmed(proof: str, pages: list[Seen]) -> bool:
+    """Whether the proof signals the outcome: absent from every page of the site before its last
+    action that acts, shown on a page from then on. Generic words already there prove nothing."""
+    last = max((i for i, p in enumerate(pages) if p.action.startswith(_ACTS)), default=None)
+    if last is None:
+        return False
+    before = any(proof in _flat(p.text) for p in pages[:last])
+    return not before and any(proof in _flat(p.text) for p in pages[last:])
 
 
 def _contradicted(steps: str, site: str, pages: list[Seen]) -> list[str]:
@@ -207,6 +234,7 @@ async def keep_procedure(
             f"Procédure non gardée : le coffre n'a jamais connecté « {args.login} » sur {site}."
         )
     path = [f"{p.action} → {p.url}" for p in pages][-PATH_STEPS:]
+    confirmed = _confirmed(proof, pages)
     evidence = "\n---\n".join(f"{p.action} → {p.url}\n{p.text}" for p in pages)
     draft = (
         f"Sur {site}, la démarche « {args.task} » a abouti, par ce chemin : {args.steps}. "
@@ -231,6 +259,7 @@ async def keep_procedure(
                     "login": args.login,
                     "traps": args.traps,
                     "proof": args.proof,
+                    "confirmed": confirmed,
                     "thread_id": ctx.thread_id,
                 },
                 # What it rests on is what the web showed: it is worth no more than that.
@@ -241,4 +270,13 @@ async def keep_procedure(
             )
         ]
     )
-    return True, f"Procédure gardée pour {site} : la prochaine visite la reçoit."
+    if confirmed:
+        return (
+            True,
+            f"Procédure gardée pour {site}, issue confirmée : la prochaine visite la reçoit.",
+        )
+    return True, (
+        f"Parcours gardé pour {site}, issue non confirmée : « {args.proof} » était déjà sur une "
+        "page avant ta dernière action, il ne montre pas que la démarche a abouti. La prochaine "
+        "visite reçoit le parcours, sans le dire réussi."
+    )

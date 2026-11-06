@@ -140,7 +140,7 @@ async def test_a_verified_demarche_is_followed_at_the_next_visit(journal: Sqlite
         # A path the browser never took is not kept.
         wrong = {**how, "steps": "Accueil → « Mes annonces » → https://annonces.test/compte"}
         assert (await use(tools, "browser_save_procedure", **wrong)).startswith("ERROR")
-        assert not (await use(tools, "browser_save_procedure", **how)).startswith("ERROR")
+        assert "issue confirmée" in await use(tools, "browser_save_procedure", **how)
     finally:
         await desk.aclose()
 
@@ -172,6 +172,32 @@ async def test_a_demarche_is_not_proven_by_another_site(journal: SqliteJournal) 
     )
     kept, _ = await keep_procedure(journal, verifier, args, ToolContext("owner", "t1"), seen, {})
     assert not kept
+
+
+async def test_a_generic_proof_does_not_confirm_the_demarche(journal: SqliteJournal) -> None:
+    """D255: words the site showed before the last action prove the path, not the outcome."""
+    from orion.cognition.verifier import Verifier
+    from orion.computer.procedures import ProcedureInput, Procedures, Seen, keep_procedure
+    from tests.fakes import ScriptedProvider, reply
+
+    verifier = Verifier(ScriptedProvider(reply('{"ok": true}')), "verifier")
+    url = "https://client.nibelis.com/"
+    seen = [
+        Seen(f"open {url}", url, "Bienvenue — Mon compte — Envoyer la demande"),
+        Seen("click [3] Envoyer la demande", f"{url}demande", "Bienvenue — Mon compte"),
+    ]
+    args = ProcedureInput(
+        site="client.nibelis.com", task="demander un congé", steps="Envoyer", proof="Bienvenue"
+    )
+    kept, _ = await keep_procedure(journal, verifier, args, ToolContext("owner", "t1"), seen, {})
+    assert kept
+    procedures = Procedures()
+    for event in await journal.read():
+        await procedures.apply(event)
+    (procedure,) = procedures.by_site["nibelis.com"].values()
+    assert not procedure.confirmed
+    hint = procedures.hint(url)
+    assert "non confirmée" in hint and "réussi" not in hint
 
 
 async def test_reading_the_rest_of_a_long_page(
