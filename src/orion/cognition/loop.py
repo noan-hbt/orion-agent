@@ -17,7 +17,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Literal, cast
 
@@ -81,7 +81,7 @@ Halted = Callable[[], Awaitable[bool]]
 FinishCheck = Callable[[str, Sequence[str]], str | None]
 """(final reply, tools called this turn) → a note that sends the model back, or None."""
 GroundCheck = Callable[[str, Sequence[str], Sequence[Message]], Awaitable[str | None]]
-"""(final reply, tools called this turn, the conversation) → a note when the reply states what
+"""(final reply, tools called this turn, what this turn added) → a note when the reply states what
 no tool showed, or None (`orion.cognition.grounding`)."""
 
 
@@ -503,7 +503,7 @@ async def run_agent(
                 and usage.cost_usd < max_cost
             ):
                 grounded = True
-                unproven = await settings.ground_check(text, called, messages)
+                unproven = await settings.ground_check(text, called, messages[turn_start:])
                 if unproven is not None:
                     log.info("loop.unproven", thread=settings.thread_id)
                     check: Message = {"role": "user", "content": unproven}
@@ -579,7 +579,7 @@ async def run_agent(
                 model = switch
                 max_cost = max(max_cost, float(result.data.get(SWITCH_COST, max_cost)))
             context_trust = min(context_trust, result.trust)
-            content = result.content
+            content = result.shown()
             if result.is_error and result.content != SKIPPED and reason != REPEAT_REFUSED:
                 # The same failure twice, whatever the arguments: say once that it will not pass.
                 failure = (call.name, result.content[:200])
@@ -849,7 +849,7 @@ def _clip(result: ToolResult, tool: Tool) -> ToolResult:
     cut = len(content) - head - tail
     note = f"\n[… {cut} characters cut here, of {len(content)} …]\n"
     kept = content[:head] + note + (content[-tail:] if tail else "")
-    return ToolResult(kept, result.is_error, result.data, result.trust)
+    return replace(result, content=kept)
 
 
 def _signature(call: ToolCall) -> tuple[str, str]:

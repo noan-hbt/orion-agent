@@ -22,6 +22,7 @@ from typing import Any, cast
 
 from orion.core.events import Event, Trust
 from orion.providers.base import Message
+from orion.tools.outcome import OUTCOME_LINE
 
 MESSAGE_KIND = "conversation.message"
 REBASED_KIND = "thread.rebased"
@@ -36,13 +37,15 @@ NO_RESULT = (
 
 def pruned(message: Message) -> Message:
     content = str(message.get("content") or "")
-    cut = len(content) - PRUNED_KEEP
+    # An action's outcome line (D258) is kept whole, whatever its length: the proof stays.
+    head = content.partition("\n")[0] if content.startswith(OUTCOME_LINE) else ""
+    keep = max(PRUNED_KEEP, len(head))
+    cut = len(content) - keep
     call = message.get("tool_call_id")
     again = f", relis tout avec reread({call})" if call else ""
     return {
         **message,
-        "content": f"{content[:PRUNED_KEEP]}\n[ancien résultat allégé : {cut} caractères "
-        f"retirés{again}]",
+        "content": f"{content[:keep]}\n[ancien résultat allégé : {cut} caractères retirés{again}]",
     }
 
 

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from orion.modules.base import Module, ModuleSettings, Plate
 from orion.providers.base import ProviderError, Speaker
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.outcome import Outcome
 from orion.vocal.audio import AudioError, pcm_to_m4a, seconds_of_pcm
 
 if TYPE_CHECKING:
@@ -62,10 +63,14 @@ def vocal_tools(
             log.warning("vocal.unspoken", error=str(exc))
             return ToolResult(f"No voice this time ({exc}): answer in writing.", is_error=True)
         made = await files.store.save("vocal.m4a", audio, "audio/mp4", "speech", ctx)
+        # Returns once the channel's outbox settled it delivered; a failure raises (D258).
         await files.deliver(made.path, "", ctx.correlation_id)
         return ToolResult(
             f"Vocal envoyé ({seconds_of_pcm(pcm):.0f} s). Il a ta réponse : ne la répète pas "
-            "par écrit ; réponds SILENCE, sauf s'il faut un lien ou un chiffre à garder."
+            "par écrit ; réponds SILENCE, sauf s'il faut un lien ou un chiffre à garder.",
+            outcome=Outcome.CONFIRMED,
+            action_id=f"vocal:{made.id}",
+            proof="outbox delivered",
         )
 
     return [

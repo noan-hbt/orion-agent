@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from orion.core.events import Trust
 from orion.providers.base import ToolCall, ToolSpec
+from orion.tools.outcome import Outcome, marker
 
 
 class Effect(StrEnum):
@@ -59,6 +60,25 @@ class ToolResult:
     data: dict[str, Any] = field(default_factory=dict[str, Any])
     trust: Trust = Trust.SYSTEM
     """Trust of the returned content. Tools that return outside content (web, mail) lower it."""
+    outcome: Outcome | None = None
+    """For a tool that acts: what the action led to, as far as it can show it (D258)."""
+    action_id: str = ""
+    """The action the outcome is about, stable across the calls that touch it (`mail:<id>`)."""
+    proof: str = ""
+    """A short reference to what shows the outcome (a Message-ID, an outbox id, page words)."""
+
+    def shown(self) -> str:
+        """The content as the model reads it: the outcome first, where clipping and pruning
+        keep it."""
+        if self.outcome is None:
+            return self.content
+        return f"{marker(self.outcome, self.action_id, self.proof)}\n{self.content}"
+
+    def outcome_payload(self) -> dict[str, str]:
+        """What `tool.executed` journals of the outcome: nothing for a tool that does not act."""
+        if self.outcome is None:
+            return {}
+        return {"outcome": self.outcome.value, "action_id": self.action_id, "proof": self.proof}
 
 
 ToolHandler = Callable[[Any, ToolContext], Awaitable[ToolResult]]

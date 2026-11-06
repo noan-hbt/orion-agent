@@ -676,3 +676,25 @@ async def test_a_task_report_is_not_sent_raw_when_orion_fails_to_word_it_once(
     world.provider.extend(reply("J'ai trois vols pour toi."))
     assert await engine.tick() == ["task:t1:1"]
     assert world.inbox.messages == ["J'ai trois vols pour toi."]
+
+
+async def test_a_silence_not_borne_out_is_said_instead(world: World) -> None:
+    """ORION-26: an alert may refuse the SILENCE; what it returns goes out."""
+    told: list[tuple[str | None, str]] = []
+
+    async def settle(spoken: str | None, read: str) -> str | None:
+        told.append((spoken, read))
+        return "Je n'ai pas pu le vérifier." if spoken is None else None
+
+    class Doubt:
+        async def alerts(self, now: datetime) -> list[Alert]:
+            return [Alert("grounding:1", "relis", "je relis", "", spoken_to=True, settle=settle)]
+
+    engine = InitiativeEngine(
+        world.orion, world.journal, world.timers, world.inbox, SETTINGS,
+        memory=world.memory.store, clock=world.clock, alerts=[Doubt()],
+    )  # fmt: skip
+    world.provider.extend(reply("SILENCE"))
+    assert await engine.tick() == ["grounding:1"]
+    assert world.inbox.messages == ["Je n'ai pas pu le vérifier."]
+    assert told and told[0][0] is None
