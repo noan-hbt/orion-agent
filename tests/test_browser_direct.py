@@ -6,15 +6,20 @@ import json
 from collections.abc import AsyncIterator
 
 import pytest
+from playwright.async_api import Route
 
 from orion.computer.browser import CONFIG_HOME, Session
 from orion.computer.direct import PAGE, BrowserDesk, browser_tools
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
+from orion.guardian.autonomy import Autonomy
+from orion.guardian.limits import Limits
+from orion.guardian.policy import ActionProposal, Approval, Guardian
 from orion.memory.provenance import trace
+from orion.tools.actions import grouped
 from orion.tools.base import Tool, ToolContext
 from orion.web.fetch import FetchError
-from tests.test_computer import Site, session
+from tests.test_computer import Site, only_the_test_site, session
 
 
 async def owner_says(journal: SqliteJournal, text: str, turn: str) -> None:
@@ -219,8 +224,6 @@ async def test_confirming_one_demarche_leaves_another_on_the_same_site_unsettled
     that lands on another site (a payment) stays the step of the site it acted on."""
     from urllib.parse import urlsplit
 
-    from playwright.async_api import Route
-
     from orion.cognition.verifier import Verifier
     from orion.tools.outcome import Outcome, outcomes
     from tests.fakes import ScriptedProvider, reply
@@ -313,3 +316,66 @@ async def test_a_browser_that_cannot_start_says_so(journal: SqliteJournal) -> No
     said = await use(tools, "browser_open", url="https://annonces.test/")
     assert said.startswith("ERROR the browser did not start")
     await desk.aclose()
+
+
+CHECKOUT = """<html><head><title>Paiement</title></head><body><h1>Total à payer : 49,90 €</h1>
+<a href="/aide">Aide au paiement</a>
+<form method="post" action="/pay"><input name="card" placeholder="Numéro de carte">
+<button type="submit">Payer 49,90 €</button></form></body></html>"""
+
+
+class Owner:
+    def __init__(self) -> None:
+        self.asked: list[ActionProposal] = []
+
+    async def approve(self, proposal: ActionProposal) -> Approval:
+        self.asked.append(proposal)
+        return Approval(True, "g-1")
+
+
+async def test_the_click_that_pays_is_put_to_him(journal: SqliteJournal) -> None:
+    """ORION-13, D265: on a payment page the click that pays waits for his yes, unless he let
+    Orion pay on this site alone; the rest of the page is browsed as before (D115)."""
+    sent: list[str] = []
+
+    async def shop(route: Route) -> None:
+        sent.append(f"{route.request.method} {route.request.url}")
+        body = CHECKOUT if "checkout" in route.request.url else "<html><body>Merci</body></html>"
+        await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=body)
+
+    desk = BrowserDesk(journal, lambda: Session(False, only_the_test_site, {"annonces.test": shop}))
+    tools = browser_tools(desk)
+    browser = grouped(
+        "browser", "", tools, {t.name: t.name.removeprefix("browser_") for t in tools}
+    )
+    owner = Owner()
+    autonomy = Autonomy(journal, ["browser"])
+    await autonomy.start()
+    guardian = Guardian(owner, autonomy.allows, approvals="libre")
+
+    async def act(**args: object) -> str:
+        call = browser.parse(json.dumps(args))
+        decision = await guardian.decide(ActionProposal(browser, call, Trust.WEB, "owner"))
+        if not decision.allowed:
+            return "DENIED " + decision.reason
+        result = await browser.handler(call, ToolContext("owner", "t1"))
+        return ("ERROR " if result.is_error else "") + result.content
+
+    address = "https://annonces.test/checkout"
+    try:
+        page = await act(action="open", url=address)
+        assert "Merci" in await act(action="click", element=number(page, "Aide au paiement"))
+        page = await act(action="back")
+        pay = number(page, "Payer")
+        assert (await act(action="click", element=pay)).startswith("ERROR")
+        assert not any(s.startswith("POST") for s in sent) and owner.asked == []
+
+        await act(action="pay", element=pay, page=address, what="Commande, 49,90 €")
+        assert len(owner.asked) == 1 and "POST https://annonces.test/pay" in sent
+
+        await autonomy.grant("browser", "g-2", None, Limits(domains=["annonces.test"]))
+        await act(action="open", url=address)
+        await act(action="pay", element=pay, page=address, what="Commande, 49,90 €")
+        assert len(owner.asked) == 1 and sent.count("POST https://annonces.test/pay") == 2
+    finally:
+        await desk.aclose()

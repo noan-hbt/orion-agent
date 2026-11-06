@@ -89,6 +89,44 @@ FOUND_ELEMENTS = 1000
 HANDS = "hands"
 """His own tab, when he opens the browser himself (D245): Orion's stays as it is."""
 _HREF = re.compile(r" -> (https?://\S+)$")
+_ELEMENT = re.compile(r"^\[\d+\] (\S+) ?(.*?)(?: -> \S+)?$")
+PAYS = re.compile(
+    r"\b(?:payer|pay|paypal|acheter maintenant|buy now|passer (?:la |ma |votre )?commande"
+    r"|place (?:your |my )?order|submit order|complete (?:your )?(?:order|purchase)"
+    r"|confirm(?:er)? (?:et payer|and pay|(?:la |ma |votre |your )?(?:commande|order)|l'achat"
+    r"|le paiement|purchase|payment)|valider (?:et payer|(?:la |ma |votre )?commande"
+    r"|le paiement|l'achat)|commande avec obligation de paiement)\b",
+    re.IGNORECASE,
+)
+"""A button that pays, whatever the page (ORION-13, D265): a link does not, off a payment page."""
+CHECKOUT_URL = re.compile(r"checkout|payment|paiement|/pay\b|billing|/buy/|/commande|/order", re.I)
+CHECKOUT_TEXT = re.compile(
+    r"num[ée]ro de (?:la )?carte|card number|\bcvv\b|\bcvc\b|cryptogramme|date d'expiration"
+    r"|expir(?:y|ation) date|total à payer|montant à payer|order total|total de la commande",
+    re.IGNORECASE,
+)
+"""A payment or purchase-confirmation page: by its address, or its card fields and total."""
+SENDS = re.compile(
+    r"^(?:button|submit|input\((?:submit|image|button)\))$"
+    r"|\b(?:confirm|valid|command|order|achet|buy|purchase|submit|soumettre|finalis|terminer)",
+    re.IGNORECASE,
+)
+"""On a payment page, what may send it: any button, or words that confirm (fail closed)."""
+
+
+def pays(element: str | None, url: str, text: str) -> bool:
+    """Whether acting on this element may pay or confirm a purchase (ORION-13, D265).
+    `element`: its line as shown (« [n] tag label -> href »); None when it was not shown: on a
+    payment page, the doubt is his."""
+    checkout = bool(CHECKOUT_URL.search(urlsplit(url).path) or CHECKOUT_TEXT.search(text))
+    if element is None:
+        return checkout
+    found = _ELEMENT.match(element)
+    tag, label = (found.group(1), found.group(2)) if found else ("", element)
+    link = " -> " in element
+    if PAYS.search(label) and (checkout or not link):
+        return True
+    return checkout and bool(SENDS.search(tag) or SENDS.search(label))
 
 
 @dataclass
@@ -160,6 +198,7 @@ BROWSING = frozenset(
     {
         "browser_open",
         "browser_click",
+        "browser_pay",
         "browser_type",
         "browser_select",
         "browser_scroll",
@@ -400,19 +439,54 @@ class BrowserDesk:
         return await self._act(ctx, lambda s: s.goto(address), what=f"open {address}")
 
     async def _on_page(
-        self, ctx: ToolContext, action: Callable[[Session], Any], what: str, element: int = -1
+        self,
+        ctx: ToolContext,
+        action: Callable[[Session], Any],
+        what: str,
+        element: int = -1,
+        sends: bool = False,
+        form: bool = False,
     ) -> str:
+        """`sends`: the action may send what the element belongs to (a click, a key): what pays
+        is `pay`'s, which he approves (ORION-13, D265). `form`: Enter in a field, which sends
+        its whole form: the page decides."""
         await self._need_tab(ctx.thread_id)
         live = self._live.get(ctx.thread_id)
         shown = live.shown.elements if live is not None and live.shown is not None else []
-        label = next((e for e in shown if e.startswith(f"[{element}]")), "")
-        return await self._act(ctx, action, what=f"{what} {label}".strip())
+        line = next((e for e in shown if e.startswith(f"[{element}] ")), None)
+        if (
+            (sends or form)
+            and live is not None
+            and pays(None if form else line, live.page.url, live.text)
+        ):
+            raise Refused(
+                f"This may pay or confirm a purchase ({line or 'on a payment page'}): never by "
+                f"a plain {what}. Use `pay` with element={element if element > 0 else 'N'}, "
+                f"page={live.page.url} and what (what is bought, for how much): he approves "
+                "it, unless he let you pay on this site alone."
+            )
+        return await self._act(ctx, action, what=f"{what} {line or ''}".strip())
 
     async def click(self, element: int, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.click(element), "click", element)
+        return await self._on_page(ctx, lambda s: s.click(element), "click", element, sends=True)
+
+    async def pay(self, element: int, page: str, ctx: ToolContext) -> str:
+        """The click that pays, once he approved it or let Orion pay on this site (D265): on the
+        page the approval named, never another."""
+        await self._need_tab(ctx.thread_id)
+        live = self._live[ctx.thread_id]
+        here, named = urlsplit(live.page.url), urlsplit(page)
+        if (here.hostname, here.path) != (named.hostname, named.path):
+            raise Refused(
+                f"The page is now {live.page.url}, not {page}: nothing was paid. Look at it "
+                "again and pay on the page it is."
+            )
+        return await self._on_page(ctx, lambda s: s.click(element), "pay", element)
 
     async def type(self, element: int, text: str, enter: bool, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.type(element, text, enter), "type", element)
+        return await self._on_page(
+            ctx, lambda s: s.type(element, text, enter), "type", element, form=enter
+        )
 
     async def select(self, element: int, option: str, ctx: ToolContext) -> str:
         what = f"select « {option} »"
@@ -427,7 +501,11 @@ class BrowserDesk:
     async def press(self, key: str, element: int | None, ctx: ToolContext) -> str:
         what = f"press {key}"
         return await self._on_page(
-            ctx, lambda s: s.press(key, element), what, -1 if element is None else element
+            ctx,
+            lambda s: s.press(key, element),
+            what,
+            -1 if element is None else element,
+            sends=key in ("Enter", "Space"),
         )
 
     async def hover(self, element: int, ctx: ToolContext) -> str:
@@ -1248,6 +1326,14 @@ class ElementInput(BaseModel):
     element: int = Field(ge=1, description="The element's number on the last page shown")
 
 
+class PayInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    element: int = Field(ge=1, description="The button that pays, on the page shown")
+    page: str = Field(max_length=2000, description="The address of the page shown")
+    what: str = Field(max_length=300, description="What is bought, from whom, for how much")
+
+
 class TypeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1481,6 +1567,14 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "Click an element of the page shown (link, button, tab). Then see the new page.",
             ElementInput,
             run(lambda a, c: desk.click(a.element, c), acts=True),
+        ),
+        tool(
+            "browser_pay",
+            "The click that pays or confirms a purchase, which click refuses: he approves it, "
+            "unless he let you pay on this site alone.",
+            PayInput,
+            run(lambda a, c: desk.pay(a.element, a.page, c), acts=True),
+            Effect.EXTERNAL,
         ),
         tool(
             "browser_type",

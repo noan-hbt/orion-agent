@@ -130,6 +130,9 @@ WORKER_TOOLS = frozenset(
 who acts and talks to the owner. Any read-only call (`Effect.NONE`: his mail, past
 conversations, agenda) is open to it too (D195). Never an approval to the owner, a message to
 him, or an act on the world from a task: it asks Orion instead."""
+NEVER_FREE = frozenset({"browser:pay"})
+"""Never done freely from Orion's own threads in `libre` (D247): paying needs his yes, or that
+he let Orion pay on this site (ORION-13, D265)."""
 NIGHT_THREAD = "night"
 """Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
 tasks and notes what he will say in the morning. Nothing put to the owner: what he let Orion
@@ -262,7 +265,11 @@ class Guardian:
             if effect is Effect.EXTERNAL:
                 # `libre`: the night and the watch act on the world without asking (D247); code
                 # in Orion and what Orion may do alone are still decided with him.
-                if self.unrestricted(proposal.thread_id) and tool.name not in NEVER_ALONE:
+                if (
+                    self.unrestricted(proposal.thread_id)
+                    and tool.name not in NEVER_ALONE
+                    and f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" not in NEVER_FREE
+                ):
                     return Decision(Verdict.ALLOW, FREE_THREAD)
                 # What he let Orion do alone is done at night too (D201): the night prepares
                 # rather than only proposes. The rest waits for the morning, never asked now.

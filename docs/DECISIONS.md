@@ -6018,3 +6018,28 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D265 — Le clic qui paie passe par le gardien
+
+*07/11/2026 · acceptée · ORION-13 · exception ciblée à D115*
+
+D115 a rendu les clics libres, et rien n'empêchait un clic « Payer ». L'exception est étroite :
+seul ce qui paie ou confirme un achat est retenu, le reste de la navigation ne change pas.
+
+- **Ce qui est retenu** : un clic, Entrée ou Espace sur un bouton qui paie, quelle que soit la
+  page (« Payer », « Acheter maintenant », « Passer la commande », « Confirmer la commande »,
+  Apple Pay, PayPal…) ; un lien ne l'est que sur une page de paiement. Sur une page de paiement
+  (son adresse : checkout, paiement, commande… ; ou ses champs de carte, son total à payer),
+  aussi tout bouton et tout mot qui confirme, Entrée dans un champ, et un élément qu'Orion n'a
+  pas vu : dans le doute, on demande.
+- **`browser` pay** : le clic retenu est refusé et renvoie à `pay`, à effet externe, avec la
+  page et ce qui est acheté. Le propriétaire voit « Avant que je paie sur <site> : … ». `pay`
+  ne clique que sur la page nommée dans la demande ; si elle a changé, rien n'est payé.
+- **Autonomie par site** : `autonomy_grant` accepte `domains`. Une autonomie `browser` limitée
+  à un site y laisse payer sans demander ; ailleurs, on demande toujours.
+- **Ni la nuit ni la veille** ne paient librement en `libre` (D247) : il faut son oui ou cette
+  autonomie (`NEVER_FREE`). En `prudent`, la page lue rend la conversation non fiable : `pay`
+  y est refusé comme tout effet externe (D26), sauf autonomie du site (D168).
+- **Limite** : la détection lit des mots et des adresses. Un bouton de paiement sans mot connu,
+  sur une page qui ne ressemble pas à un paiement, passe encore. Un lien « Payer » hors page de
+  paiement reste un lien libre.
