@@ -129,6 +129,7 @@ orion doctor                 # configuration, stockage, état de chaque module
 orion simulate --days 7      # ce qu'il enverrait cette semaine, sans rien envoyer
 orion week                   # tours interrompus, erreurs d'outils, corrections, coût
 orion misses                 # ses ratés : tes 👎 et tes corrections
+orion evals export           # les ratés de la semaine en brouillons de cas (evals/cases.py)
 ```
 
 ## Développer
@@ -139,7 +140,12 @@ uv run pytest -q tests/test_x.py                   # seulement les fichiers touc
 uv run ruff format . && uv run ruff check .
 uv run pyright --pythonplatform Linux              # strict, 0 erreur
 uv run python -m evals                             # évaluations sur le vrai modèle
+uv run python -m evals --model chatgpt:gpt-6.1-terra   # sur le modèle de prod (--config du serveur)
 ```
+
+Pas d'éval sur le compte ChatGPT du cœur tant qu'ORION-22 n'est pas réglé : les deux processus
+renouvelleraient ses jetons sans verrou. Passer par un autre fournisseur (clé d'API) ou une
+connexion ChatGPT séparée.
 
 Les règles du dépôt (journal append-only, fail closed, `SecretRef`, contrat du cache de prompt,
 tests sur le comportement) sont dans [`CLAUDE.md`](CLAUDE.md).

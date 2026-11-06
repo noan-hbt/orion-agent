@@ -3,11 +3,13 @@ from the journal, beside the week before."""
 
 from __future__ import annotations
 
+import ast
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from orion.adaptation.misses import MISSED, misses
+from orion.adaptation.misses import MISSED, Miss, drafts, misses
 from orion.adaptation.week import report, week, weeks
+from orion.core.events import NewEvent
 from orion.core.journal import SqliteJournal
 from orion.runtime import OWNER_THREAD
 from tests.conftest import make_event
@@ -75,3 +77,41 @@ async def test_an_exchange_noted_by_two_nights_is_one_miss(journal: SqliteJourna
     )
     (miss,) = misses(await journal.read(0, 100), PARIS)
     assert "encore" in miss.why
+
+
+async def test_the_weeks_misses_come_out_as_cases_to_accept(journal: SqliteJournal) -> None:
+    """ORION-8: 89 misses in 14 days, none became a case. Each one of the week is a draft."""
+    now = datetime(2026, 11, 6, 9, 0, tzinfo=PARIS)
+
+    def missed(days_ago: int, asked: str) -> NewEvent:
+        when = (now - timedelta(days=days_ago)).isoformat()
+        return make_event(
+            MISSED, at=when, asked=asked, answered="Voilà !\nC'est fait.", said="non", why="Rien."
+        )
+
+    await journal.append([missed(10, "le vieux"), missed(2, "le récent"), missed(1, "l'autre")])
+    found = misses(await journal.read(0, 100), PARIS)
+    text = drafts(found, now - timedelta(days=7), now)
+    assert "le récent" in text and "l'autre" in text and "le vieux" not in text
+    cases = ast.parse(f"CASES = (\n{text}\n)").body[0]  # pastes into CASES as it is
+    assert isinstance(cases, ast.Assign) and isinstance(cases.value, ast.Tuple)
+    assert len(cases.value.elts) == 2
+
+
+def test_two_misses_in_the_same_minute_get_two_case_names() -> None:
+    now = datetime(2026, 11, 6, 9, 0, 10, tzinfo=PARIS)
+    found = [
+        Miss(now, "un", "Réponse A", "non", "?"),
+        Miss(now + timedelta(seconds=30), "deux", "Réponse B", "non", "?"),
+    ]
+    text = drafts(found, now - timedelta(days=1), now + timedelta(days=1))
+    cases = ast.parse(f"CASES = (\n{text}\n)").body[0]
+    assert isinstance(cases, ast.Assign) and isinstance(cases.value, ast.Tuple)
+    names = [
+        k.value.value
+        for case in cases.value.elts
+        if isinstance(case, ast.Call)
+        for k in case.keywords
+        if k.arg == "name" and isinstance(k.value, ast.Constant)
+    ]
+    assert len(names) == 2 and len(set(names)) == 2

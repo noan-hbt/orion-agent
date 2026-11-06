@@ -357,6 +357,26 @@ async def _misses(config: OrionConfig, case: int | None) -> int:
     return 0
 
 
+async def _evals_export(config: OrionConfig, days: int) -> int:
+    """The week's misses as draft evaluation cases, for him to accept in `evals/` (ORION-8)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from orion.adaptation.misses import MISSED, drafts, misses
+    from orion.core.events import Event
+
+    zone = ZoneInfo(config.agent.timezone)
+    events: list[Event] = []  # only the misses: the journal is read a page at a time
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        after = 0
+        while page := await journal.read(after, 1000):
+            events += [e for e in page if e.kind == MISSED]
+            after = page[-1].seq
+    now = datetime.now(zone)
+    print(drafts(misses(events, zone), now - timedelta(days=days), now))
+    return 0
+
+
 async def _contacts_import(config: OrionConfig, vcf: str) -> int:
     """His address book, from the `.vcf` his phone exports (D159)."""
     from orion.contacts.module import Contacts
@@ -1071,6 +1091,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("memory", help="Show what Orion remembers (also writes profile.md)")
     missed = sub.add_parser("misses", help="What went wrong for real, as the evening pass noted it")
     missed.add_argument("--case", type=int, help="Write miss N as an evaluation case")
+    evals = sub.add_parser("evals", help="Evaluation cases from what went wrong for real")
+    evals_sub = evals.add_subparsers(dest="evals_command", required=True)
+    export = evals_sub.add_parser("export", help="The week's misses as draft evaluation cases")
+    export.add_argument("--days", type=int, default=7, help="How many days back (default: 7)")
     sub.add_parser("week", help="The week: turns stopped short, tool errors, corrections, cost")
     sub.add_parser("models", help="Which model does what, and how long it thinks (D233)")
     contacts = sub.add_parser("contacts", help="His address book")
@@ -1219,6 +1243,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_memory(config))
     if args.command == "misses":
         return asyncio.run(_misses(config, args.case))
+    if args.command == "evals":
+        return asyncio.run(_evals_export(config, args.days))
     if args.command == "week":
         return asyncio.run(_week(config))
     if args.command == "models":
