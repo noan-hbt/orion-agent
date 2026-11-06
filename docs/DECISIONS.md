@@ -5869,3 +5869,41 @@ nouveau module ni nouveau message : on prolonge ceux qui existent.
   message, le secours envoie la page puis ces lignes telles quelles.
 - **Rien d'inventé** : seulement ce que montrent ces sources. Une nuit sans note et une journée
   sans rien : pas de message du matin. Une semaine sans rien n'en dit rien.
+
+## D257 — Un travail en plusieurs étapes survit à un redémarrage, sans rien refaire à l'aveugle
+
+*06/11/2026 · acceptée · ORION-19*
+
+Un job délégué coupé par un redémarrage était marqué échoué, et rien ne gardait où en était un
+travail en plusieurs étapes. Le moteur `orion.workflows` les journalise étape par étape.
+
+- **Une étape journalisée avant et après** : `workflow.started`, puis pour chaque étape
+  `workflow.step_began` → `step_done` (son résultat, le checkpoint), `step_failed` ou
+  `step_uncertain`, et `workflow.waiting` / `workflow.finished`. Les étapes s'enchaînent dans
+  l'ordre : chacune dépend des précédentes et lit leurs résultats. Après un redémarrage, on
+  repart de la première étape sans checkpoint, et une étape finie n'est jamais refaite.
+- **Effet interne ou externe** : une étape coupée qui n'agit que dans Orion est refaite. Si elle
+  agit hors d'Orion (un message, une commande sur le serveur), on ne sait pas si elle a eu lieu :
+  le travail passe `UNCERTAIN`. Sa vérification (`check`) regarde avant tout nouvel essai. Si
+  l'effet a eu lieu, l'étape est faite. S'il n'a pas eu lieu, elle est refaite. Si on ne peut pas
+  savoir, ou s'il n'y a pas de vérification, le travail attend et le propriétaire est prévenu
+  une fois. Jamais de rejeu à l'aveugle. Une étape qui sait qu'elle n'a rien fait lève
+  `StepFailed`.
+- **Retries différenciés** : une étape interne en échec est réessayée avec une attente qui
+  double (1 min, puis jusqu'à 1 h), dans la limite de ses `attempts`. Un modèle sans quota ou
+  injoignable (`ProviderError` réessayable ou `used_up`) met le travail en `WAITING` 15 min sans
+  consommer d'essai. Un redémarrage n'impose pas d'attente.
+- **États** : `QUEUED`, `RUNNING`, `WAITING`, `UNCERTAIN`, `SUCCEEDED`, `FAILED`, `CANCELLED`.
+  Pas de `PAUSED` distinct : `WAITING` porte sa raison et l'heure de reprise. Une pause à la main
+  reviendra avec un premier besoin réel.
+- **Premier cas réel, la délégation** : un job est un travail `work` (l'agent) puis `finish`
+  (`job.finished`). Sans shell, il reprend après un redémarrage. Avec un shell, il passe
+  `UNCERTAIN`. S'il avait une session (les `options`, jamais journalisées), il échoue avec cette
+  raison. Les jobs d'avant ce changement, sans travail associé, sont toujours marqués échoués.
+- **Qui le fait tourner** : au démarrage, `recover` ne fait que journaliser ce qui a été coupé
+  (aussi pour `orion doctor`). C'est le service du démon (`engine.run`) qui reprend les travaux.
+- **Ce qu'Orion voit** : le module `workflows` lit le journal. Il donne l'outil
+  `workflows_status` (état, blocage, prochaine étape, résultat), les travaux incertains en
+  compte rendu au propriétaire, et les travaux en attente ou incertains à la revue du soir.
+- **Compatibilité** : rien à migrer. Les événements sont nouveaux, et `job.started` /
+  `job.finished` restent ceux qu'on avait.

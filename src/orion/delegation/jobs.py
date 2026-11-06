@@ -3,14 +3,19 @@
     job.started → job.finished
 
 Orion answers right away ("je lance, je te dis quand c'est fini"); the job runs off the
-conversation; the initiative engine reports the result in the owner's thread when it lands. A
-job interrupted by a restart is marked failed on startup, never silently forgotten.
+conversation; the initiative engine reports the result in the owner's thread when it lands.
+
+A job is a workflow run (D257): `work` (the agent) then `finish` (job.finished). After a restart,
+a job whose agent only writes in its workspace is run again; one with a shell may have done
+things on the server, so it turns UNCERTAIN and the owner is told, never replayed. A job that
+needed a session (`options`, never journaled) cannot resume and is marked failed.
 """
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -24,6 +29,15 @@ from orion.core.projections import ProjectionRunner
 from orion.delegation.claude_code import AgentOutcome
 from orion.initiative.engine import Report
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.workflows.engine import (
+    Run,
+    State,
+    Step,
+    StepContext,
+    StepFailed,
+    Workflow,
+    WorkflowEngine,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -115,6 +129,7 @@ class JobService:
         agent: DelegatedAgent,
         workspaces: Path,
         result_trust: Trust = Trust.SYSTEM,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._journal = journal
         self._agent = agent
@@ -123,8 +138,24 @@ class JobService:
         """What a result is worth: a browsing agent's report is web content."""
         self.projection = JobProjection(agent.name)
         self._runner = ProjectionRunner(journal, [self.projection])
-        self._tasks: set[asyncio.Task[None]] = set()
         self._options: dict[str, dict[str, Any]] = {}
+        self.workflow = f"delegation:{agent.name}"
+        shell = Effect.EXTERNAL if agent.allow_bash else Effect.INTERNAL
+        self.engine = WorkflowEngine(
+            journal,
+            [
+                Workflow(
+                    self.workflow,
+                    (
+                        Step("work", self._work, effect=shell, attempts=2),
+                        Step("finish", self._done),
+                    ),
+                    ended=self._ended,
+                )
+            ],
+            f"agent:{agent.name}",
+            clock,
+        )
 
     @property
     def agent(self) -> DelegatedAgent:
@@ -134,11 +165,18 @@ class JobService:
         await self._runner.catch_up()
 
     async def recover(self) -> None:
-        """Jobs started before a restart did not survive it: say so in the journal."""
+        """Startup: journal what a restart cut short. Jobs from before workflows (no run) and
+        runs that failed without settling their job are marked failed; the rest resumes when
+        the daemon serves (`engine.run`)."""
         await self.sync()
+        await self.engine.recover()
+        runs = {r.inputs.get("job_id"): r for r in self.engine.mine()}
         for job in self.projection.running():
-            log.warning("job.interrupted", job_id=job.id)
-            await self._finish(job, AgentOutcome(False, "", error="interrupted by a restart"), None)
+            run = runs.get(job.id)
+            if run is None or run.state in (State.FAILED, State.CANCELLED):
+                error = "interrupted by a restart" if run is None else run.blocked
+                log.warning("job.interrupted", job_id=job.id, error=error)
+                await self._finish(job, AgentOutcome(False, "", error=error), None)
 
     async def start(
         self,
@@ -165,10 +203,13 @@ class JobService:
             provenance,
             correlation_id,
         )
-        job = self.projection.jobs[job_id]
-        task_handle = asyncio.create_task(self._run(job, correlation_id), name=f"job:{job_id}")
-        self._tasks.add(task_handle)
-        task_handle.add_done_callback(self._tasks.discard)
+        await self.engine.start(
+            self.workflow,
+            title,
+            {"job_id": job_id, "needs_session": bool(options)},
+            provenance,
+            correlation_id,
+        )
         return job_id
 
     async def reports(self) -> list[Report]:
@@ -177,18 +218,43 @@ class JobService:
 
     async def wait(self) -> None:
         """For tests and shutdown: wait for running jobs."""
-        if self._tasks:
-            await asyncio.gather(*self._tasks)
+        await self.engine.wait()
 
-    async def _run(self, job: Job, correlation_id: str | None) -> None:
-        try:
-            outcome = await self._agent.run(
-                job.task, Path(job.workdir), self._options.pop(job.id, None)
+    async def _work(self, ctx: StepContext) -> dict[str, Any]:
+        job = self.projection.jobs[str(ctx.inputs["job_id"])]
+        options = self._options.pop(job.id, None)
+        if ctx.inputs.get("needs_session") and options is None:
+            raise StepFailed("its session did not survive a restart", retryable=False)
+        outcome = await self._agent.run(job.task, Path(job.workdir), options)
+        return {
+            "ok": outcome.ok,
+            "result": outcome.result[:MAX_RESULT_CHARS],
+            "files": outcome.files[:50],
+            "error": outcome.error,
+            "cost_usd": outcome.cost_usd,
+        }
+
+    async def _ended(self, run: Run) -> None:
+        """A run that failed or was cancelled settles its job, so the owner hears of it."""
+        await self.sync()
+        job = self.projection.jobs.get(str(run.inputs.get("job_id")))
+        if job is not None and not job.finished:
+            await self._finish(job, AgentOutcome(False, "", error=run.blocked), run.correlation_id)
+
+    async def _done(self, ctx: StepContext) -> dict[str, Any]:
+        await self.sync()
+        job = self.projection.jobs[str(ctx.inputs["job_id"])]
+        if not job.finished:  # idempotent: a restart between the two events finishes once
+            w = ctx.results["work"]
+            outcome = AgentOutcome(
+                bool(w["ok"]),
+                str(w["result"]),
+                cost_usd=float(w["cost_usd"]),
+                files=[str(f) for f in w["files"]],
+                error=w["error"],
             )
-        except Exception as exc:
-            log.exception("job.crashed", job_id=job.id)
-            outcome = AgentOutcome(False, "", error=f"crashed: {exc!r}")
-        await self._finish(job, outcome, correlation_id)
+            await self._finish(job, outcome, ctx.correlation_id)
+        return {"ok": ctx.results["work"]["ok"]}
 
     async def _finish(self, job: Job, outcome: AgentOutcome, correlation_id: str | None) -> None:
         log.info("job.finished", job_id=job.id, ok=outcome.ok, error=outcome.error)
@@ -278,7 +344,15 @@ def delegation_tools(jobs: JobService) -> list[Tool]:
 
     async def jobs_status(args: Any, ctx: ToolContext) -> ToolResult:
         await jobs.sync()
-        lines = [f"- ({j.id}) {j.title} : en cours" for j in jobs.projection.running()]
+        await jobs.engine.sync()
+        uncertain = {
+            r.inputs.get("job_id") for r in jobs.engine.mine() if r.state is State.UNCERTAIN
+        }
+        lines = [
+            f"- ({j.id}) {j.title} : "
+            + ("interrompue, issue incertaine" if j.id in uncertain else "en cours")
+            for j in jobs.projection.running()
+        ]
         lines += [
             f"- ({j.id}) {j.title} : {'terminée' if j.ok else 'échec : ' + (j.error or '?')}"
             for j in jobs.projection.finished()[-10:]

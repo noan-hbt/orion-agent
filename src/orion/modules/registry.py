@@ -64,6 +64,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.voice.module import VoiceModule
     from orion.watch.module import WatchModule
     from orion.web.module import WebModule
+    from orion.workflows.module import WorkflowsModule
 
     return [
         MobileModule,
@@ -88,6 +89,7 @@ def builtin_modules() -> list[type[Module]]:
         ExpertModule,
         MissionsModule,
         TasksModule,
+        WorkflowsModule,
         LibraryModule,
         PhotosModule,
         PapersModule,
