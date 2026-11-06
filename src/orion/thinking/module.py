@@ -49,6 +49,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.adaptation.misses import MISSED, dislikes
+from orion.chronicle.module import Ahead, read_ahead
 from orion.cognition.loop import StopReason
 from orion.config import STRONG_MODEL, Effort
 from orion.context.recent import day_since, elsewhere
@@ -57,7 +58,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import NIGHT_THREAD
-from orion.initiative.engine import Alert
+from orion.initiative.engine import Alert, InitiativeSettings, effective_settings
 from orion.initiative.planned import everything_planned
 from orion.memory.render import format_rule
 from orion.memory.service import MemoryService
@@ -87,6 +88,11 @@ RETRY_FOR = timedelta(hours=8)
 again where it stopped, every hour until morning; past that, the next evening rereads it all."""
 
 THOUGHT_EXPIRES = timedelta(days=2)
+MORNING_KEY = "morning:"
+MORNING_FOR = timedelta(hours=6)
+"""How long after his waking the morning message may still go (D256); past that, it is not."""
+MORNING_AHEAD = timedelta(days=2)
+"""What the morning reads: today and tomorrow, what falls due by then."""
 FOLLOWUP_EXPIRES = timedelta(hours=36)
 MAX_TRANSCRIPT = 400_000
 """A safety ceiling, not a budget (D200): about 100 000 tokens, far beyond a real day of
@@ -204,13 +210,9 @@ trancher, en {points} choses au plus, seulement ce qui apporte du neuf (une redi
 courage » ou le détail de ton tri n'en sont pas). En plus, chaque question que tu lui avais
 promis de reprendre (`<promis>`) : ta réponse, même « je maintiens », et pourquoi ; elle ne
 se reprendra pas ailleurs. Ce que tes tâches de fond trouveront te parviendra à part : dis
-seulement que tu les as lancées.
-Puis sa journée, en une ligne (D256) : ce qui compte aujourd'hui (un rendez-vous, un trajet à
-prévoir, une perturbation que tu as vue), ce qui coince dans les 48 heures, et au plus une
-décision à prendre. Seulement ce que montrent son agenda, ses engagements, ce qui est prévu, ce
-qui l'attend (`<calendar>`, `<engagements>`, `<prevu>`, `<a-venir>`) et ce que tu as lu cette
-nuit ; une journée sans rien, n'en dis rien. Si rien ne mérite de le réveiller avec, réponds
-SILENCE.""",
+seulement que tu les as lancées. Ce que tu as lu cette nuit qui touche sa journée (une
+perturbation, un trajet à prévoir) se note ; son agenda et ses échéances, eux, seront relus
+au réveil (D256). Si rien ne mérite de le réveiller avec, réponds SILENCE.""",
 }
 """The night's times, in order (D186): one focus each, over the whole material laid out once."""
 MAX_FACTS = 400
@@ -409,6 +411,10 @@ def _marked(trust: Trust) -> str:
     return f" [{origin}]" if origin else ""
 
 
+async def _eight() -> time:
+    return time(8, 0)
+
+
 def _block(name: str, lines: list[str]) -> str:
     return f"<{name}>\n" + "\n".join(lines) + f"\n</{name}>"
 
@@ -432,6 +438,10 @@ class Thinking:
         """Whose holdings the evening review lays out (`Module.review`, D176)."""
         self.planned: Callable[[datetime, datetime], Awaitable[list[Planned]]] | None = None
         """Everything planned (D78), for the evening review; None: his own follow-ups only."""
+        self.ahead: list[Ahead] = []
+        """What his next two days hold (his agenda), read when the morning message goes."""
+        self.waking: Callable[[], Awaitable[time]] = _eight
+        """When he wakes: the end of his quiet hours, as he set them; `serve` reads them."""
         self.settings = settings
         self.model = settings.model or STRONG_MODEL
         self.effort: Effort | None = effort
@@ -871,22 +881,48 @@ class Thinking:
 
     # -- what reaches the owner ---------------------------------------------------------------
 
-    def _night_alert(self, note: Thought) -> Alert:
+    async def _morning(self, notes: list[Thought], wake: datetime, now: datetime) -> Alert | None:
+        """One message when he wakes (D256): his day, read now (a meeting moved after the night
+        shows as it is), with the night's note when there is one. Nothing to say of either:
+        nothing goes."""
+        lines, trust = await read_ahead(self.ahead, self._memory, now, MORNING_AHEAD)
+        if not notes and not lines:
+            return None
+        text = "\n".join(n.text for n in notes)
+        day = (
+            "Sa journée, lue à l'instant :\n"
+            + _block("sa-journee", lines)
+            + "\nDis-la en une ligne, tout de suite : ce qui compte aujourd'hui, ce qui coince "
+            "dans les 48 heures, au plus une décision à prendre. Seulement ce que montrent ces "
+            "lignes ; elle ne se raconte pas, elle se dit."
+            if lines
+            else ""
+        )
+        if notes:
+            notice = (
+                "Cette nuit, pendant qu'il dormait, tu as travaillé de ton côté. Ce que tu t'étais "
+                f"noté pour lui au réveil :\n{text}\nNe le lui déroule pas : propose-lui, en une "
+                "phrase courte, de lui raconter ta nuit, en disant juste sur quoi elle a porté "
+                "(D194). S'il veut, raconte-lui alors, avec tes mots. Seule une chose qui ne peut "
+                "pas attendre sa réponse (un rendez-vous dans l'heure) se dit tout de suite."
+                + (f"\n{day}" if day else "")
+                + "\nUn seul message. Ce qui a été réglé depuis, laisse-le ; si plus rien ne vaut, "
+                "réponds SILENCE."
+            )
+        else:
+            notice = (
+                f"Il se réveille. {day}\nSi rien là-dedans ne vaut d'être dit ce matin, "
+                "réponds SILENCE."
+            )
+        plain = "Aujourd'hui :\n" + "\n".join(lines) if lines else ""
         return Alert(
-            key=f"thought:{note.id}",
-            notice="Cette nuit, pendant qu'il dormait, tu as travaillé de ton côté. Ce que tu "
-            f"t'étais noté pour lui au réveil :\n{note.text}\nNe le lui déroule pas : propose-lui, "
-            "en une phrase courte, de lui raconter ta nuit, en disant juste sur quoi elle a porté "
-            "(D194). S'il veut, raconte-lui alors, avec tes mots. Sa journée (ce qui compte "
-            "aujourd'hui, la décision s'il y en a une) tient en une seconde phrase, tout de suite "
-            "(D256) : elle ne se raconte pas, elle se dit. Seule une chose qui ne peut pas "
-            "attendre sa réponse (un rendez-vous dans l'heure) se dit aussi tout de suite. "
-            "Ce qui a été réglé depuis, laisse-le ; si plus rien ne vaut, réponds SILENCE.",
-            why="ta nuit",
-            fallback=note.text,
-            trust=note.trust,
-            expires_at=note.at + THOUGHT_EXPIRES,
-            importance=0.55 if note.promised else 0.5,
+            key=f"{MORNING_KEY}{wake.date().isoformat()}",
+            notice=notice,
+            why="ta nuit" if notes else "ta journée",
+            fallback="\n\n".join(part for part in (text, plain) if part),
+            trust=min([trust, *(n.trust for n in notes)]),
+            expires_at=wake + MORNING_FOR,
+            importance=0.55 if any(n.promised for n in notes) else 0.5,
         )
 
     def _old(self, thought: Thought) -> Alert:
@@ -910,10 +946,19 @@ class Thinking:
     async def alerts(self, now: datetime) -> list[Alert]:
         await self.sync()
         found: list[Alert] = []
+        wake = datetime.combine(now.date(), await self.waking(), self.zone)
+        notes: list[Thought] = []
         for thought in self.state.thoughts:
             if now - thought.at > THOUGHT_EXPIRES:
                 continue
-            found.append(self._night_alert(thought) if not thought.question else self._old(thought))
+            if thought.question:
+                found.append(self._old(thought))
+            elif wake - timedelta(days=1) <= thought.at < wake:
+                notes.append(thought)  # the night's note goes with the morning it was for
+        if wake <= now < wake + MORNING_FOR:
+            morning = await self._morning(notes, wake, now)
+            if morning is not None:
+                found.append(morning)
         for follow_up in self.state.follow_ups.values():
             if not follow_up.at <= now < follow_up.at + FOLLOWUP_EXPIRES:
                 continue
@@ -1134,6 +1179,18 @@ class ThinkingModule(Module):
             effort=self.config.effort("thinking"),
         )
         self.thinking.modules = plate.modules
+        initiative = self.config.initiative
+        quiet = InitiativeSettings(
+            timezone=self.config.agent.timezone,
+            quiet_start=initiative.quiet_start,
+            quiet_end=initiative.quiet_end,
+        )
+        memory = plate.memory
+
+        async def waking() -> time:
+            return effective_settings(quiet, await memory.store.settings()).quiet_end
+
+        self.thinking.waking = waking
         self.thinking.planned = lambda now, until: everything_planned(
             plate.modules, plate.timers, now, until
         )
@@ -1154,7 +1211,16 @@ class ThinkingModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.thinking is None:  # pragma: no cover - assemble always runs first
             return
+        from orion.calendar.module import CalendarModule
+
         self.thinking.orion = daemon.orion
+        calendar = daemon.plate.module(CalendarModule)
+        if calendar is not None and calendar.calendar is not None:
+            agenda = calendar.calendar
+            # An invitation he has not answered is someone else's word.
+            self.thinking.ahead.append(
+                (Trust.THIRD_PARTY, lambda now: agenda.ahead(now, MORNING_AHEAD.days))
+            )
         daemon.alerts.append(self.thinking)
         daemon.add_service("thinking.night", self.thinking.run)
 

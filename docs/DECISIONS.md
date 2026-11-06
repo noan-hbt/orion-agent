@@ -5810,14 +5810,22 @@ fusionné, l'attente le bloque, jusqu'à 3 h.
 Il manquait un point d'ouverture de journée et un regard sur la semaine à venir (ORION-7). Ni
 nouveau module ni nouveau message : on prolonge ceux qui existent.
 
-- **Le matin** : la note du réveil (D117) dit aussi sa journée, en une ligne : ce qui compte
-  aujourd'hui (rendez-vous, trajet, perturbation), ce qui coince dans les 48 heures, au plus une
-  décision. Cette ligne se dit tout de suite, après la phrase qui propose de raconter la nuit
-  (D194) : elle ne se raconte pas.
+- **Le matin** : chaque jour, à son réveil (la fin de ses heures calmes, telles qu'il les a
+  réglées), un message dit sa journée en une ligne : ce qui compte aujourd'hui, ce qui coince
+  dans les 48 heures, au plus une décision. Il part même quand la nuit n'a rien noté. C'est une
+  alerte de `Thinking`, une par jour (`morning:<date>`), valable six heures après le réveil.
+- **Lu au moment d'envoyer** : la ligne ne vient pas de ce que la nuit a écrit. Elle est tirée
+  de son agenda (aujourd'hui et demain) et des engagements qui arrivent à échéance d'ici là,
+  relus quand le message part (`read_ahead`, la même lecture que le dimanche) : un rendez-vous
+  déplacé après la nuit apparaît comme il est. Sa confiance est la plus basse de ses sources.
+- **Un seul message** : la note de la nuit (D117) part avec ce message, pas à part. La phrase
+  qui propose de raconter la nuit (D194) vient d'abord, la journée ensuite, tout de suite : elle
+  ne se raconte pas. Une note écrite après le réveil va avec le réveil suivant.
 - **Le dimanche** : après la page de la semaine (D52), Orion dit la semaine qui vient. Elle est
   tirée de ce qu'il lit à ce moment-là : son agenda sur sept jours, les engagements qui arrivent
   à échéance, les intentions qu'il suit (D53). Elle n'est pas journalisée avec la page : le
   journal intime reste la semaine passée. Sa confiance est la plus basse de ses sources (une
-  invitation non répondue vaut la parole d'un tiers).
-- **Rien d'inventé** : seulement ce que montrent ces sources. Une journée ou une semaine sans
-  rien n'en dit rien.
+  invitation non répondue vaut la parole d'un tiers). Si Orion n'arrive pas à formuler le
+  message, le secours envoie la page puis ces lignes telles quelles.
+- **Rien d'inventé** : seulement ce que montrent ces sources. Une nuit sans note et une journée
+  sans rien : pas de message du matin. Une semaine sans rien n'en dit rien.

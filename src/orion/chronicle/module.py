@@ -215,6 +215,33 @@ def _day(due: str | None) -> date | None:
         return None
 
 
+async def read_ahead(
+    sources: list[Ahead], memory: MemoryService | None, now: datetime, span: timedelta
+) -> tuple[list[str], Trust]:
+    """What is coming over `span`, as read now (D256): what each source shows, then the open
+    commitments falling due by then, and how far it is all trusted (the least of its sources).
+    The Sunday message reads the week with it, the morning his next two days."""
+    lines: list[str] = []
+    trust = Trust.SYSTEM
+    for source_trust, read in sources:
+        try:
+            found = await read(now)
+        except Exception:
+            log.exception("chronicle.ahead_failed")
+            continue
+        if found:
+            lines += found
+            trust = min(trust, source_trust)
+    if memory is not None:
+        until = (now + span).date()
+        for c in await memory.store.commitments():
+            due = _day(c.due)
+            if due is not None and now.date() <= due < until:
+                lines.append(f"- échéance le {due:%d/%m} : {c.debtor} → {c.creditor} : {c.what}")
+                trust = min(trust, c.trust)
+    return lines, trust
+
+
 def monday_of(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
@@ -434,27 +461,7 @@ class Chronicle:
     async def coming(self, now: datetime) -> tuple[list[str], Trust]:
         """The week to come, as read now, and how far it is trusted (the least of its
         sources): his agenda, what he owes or is owed by then, his intentions."""
-        lines: list[str] = []
-        trust = Trust.SYSTEM
-        for source_trust, read in self.ahead:
-            try:
-                found = await read(now)
-            except Exception:
-                log.exception("chronicle.ahead_failed")
-                continue
-            if found:
-                lines += found
-                trust = min(trust, source_trust)
-        if self._memory is not None:
-            until = (now + AHEAD).date()
-            for c in await self._memory.store.commitments():
-                due = _day(c.due)
-                if due is not None and now.date() <= due <= until:
-                    lines.append(
-                        f"- échéance le {due:%d/%m} : {c.debtor} → {c.creditor} : {c.what}"
-                    )
-                    trust = min(trust, c.trust)
-        return lines, trust
+        return await read_ahead(self.ahead, self._memory, now, AHEAD)
 
     async def alerts(self, now: datetime) -> list[Alert]:
         await self.sync()
@@ -470,7 +477,9 @@ class Chronicle:
                 "précédée d'une courte phrase à toi :\n\n" + page.text
             )
             lines, trust = await self.coming(now)
+            fallback = page.text
             if lines:
+                fallback += "\n\nLa semaine qui vient :\n" + "\n".join(lines)
                 notice += (
                     "\n\nAprès la page, dis-lui en quelques lignes la semaine qui vient : ce qui "
                     "compte dans son agenda, ce qui arrive à échéance, où il en est de ses "
@@ -482,7 +491,7 @@ class Chronicle:
                     key=f"chronicle:{page.week.isoformat()}",
                     notice=notice,
                     why="la chronique de la semaine",
-                    fallback=page.text,
+                    fallback=fallback,
                     trust=min(page.trust, trust),
                     expires_at=written + EXPIRES,
                     importance=0.3,
