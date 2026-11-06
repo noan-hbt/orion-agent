@@ -186,3 +186,47 @@ async def test_an_action_is_reported_no_further_than_its_outcome(
     result = next(m for m in provider.requests[1].messages if m["role"] == "tool")
     long = {**result, "content": str(result["content"]) + "x" * 500}
     assert str(calls[0][1]["action"]) in str(pruned(long)["content"])
+
+
+async def test_a_silence_settles_each_doubt_and_what_stays_open_is_said_once(
+    journal: SqliteJournal,
+) -> None:
+    """ORION-26: on 06/11, eight alerts ended in eight silences, some with no check at all."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "inbox: 2 mails from Jira, none from the pharmacy"})),
+        reply("Deux mails Jira, la pharmacie a confirmé, et Paul a payé."),
+    )
+    doubts = ["« deux mails Jira »", "« la pharmacie a confirmé »", "« Paul a payé »"]
+    checks = ScriptedProvider(
+        reply('{"ok": false, "issues": ' + str(doubts).replace("'", '"') + "}"),
+        reply('{"settled": [true, false, false]}'),
+        reply('{"settled": [true, false, false]}'),
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    now = [at(0)]
+    review = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: now[0])
+    await review.tick()
+    await orion.handle_owner_message(OWNER_THREAD, "Quoi de neuf ?", "t", now=at(1))
+    await review.tick()
+    now[0] = at(9)
+    assert await review.tick()
+    [alert] = await review.alerts(at(9))
+    assert alert.settle is not None
+
+    said = await alert.settle(None, "")  # he answered SILENCE
+    assert said is not None
+    assert "pharmacie" in said and "Paul" in said and "Jira" not in said
+    [settled] = [e.payload for e in await journal.read(0, 10_000) if e.kind == "grounding.settled"]
+    assert [p["status"] for p in settled["points"]] == [  # type: ignore[index]
+        "resolved_with_evidence",
+        "unresolved",
+        "unresolved",
+    ]
+
+    # The same doubts again, after a restart: already told, not repeated.
+    again = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: at(9))
+    await again.tick()
+    [same] = await again.alerts(at(9))
+    assert same.settle is not None
+    assert await same.settle(None, "") is None

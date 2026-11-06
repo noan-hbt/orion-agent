@@ -12,6 +12,11 @@ first (SILENCE if the check bears his reply out).
 Where the reading stands is in the journal: each one leaves `grounding.reviewed` (up to which
 message, what was wrong, when), so after a restart it goes on after the last one and still
 passes on what it found.
+
+A SILENCE is not the end of it (ORION-26: on 06/11, eight alerts, eight silences, some with no
+check at all). Each doubt is settled on its own and left in `grounding.settled`: borne out by
+what the tools showed (before, or while he looked again), corrected (he said so), or still
+open. What is still open goes to him in one plain line rather than nowhere, once per doubt.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import structlog
 
@@ -33,6 +39,11 @@ from orion.runtime import OWNER_THREAD, Orion
 log = structlog.get_logger(__name__)
 
 REVIEWED = "grounding.reviewed"
+SETTLED = "grounding.settled"
+RESOLVED = "resolved_with_evidence"
+CORRECTED = "corrected"
+UNRESOLVED = "unresolved"
+SAID_CHARS = 4_000
 QUIET = timedelta(seconds=30)
 """No new message in his conversation for this long: the exchange has settled, read it."""
 EVERY = 5
@@ -46,6 +57,10 @@ NOTICE = (
     "montrait : {issues}. Reviens-y : vérifie avec l'outil qui le montre (le journal, le mail, "
     "la page, le coffre, l'agenda…). Si tu t'es avancé, dis-lui franchement ce qu'il en est "
     "vraiment, en une ou deux phrases. Si la vérification te donne raison, réponds SILENCE."
+)
+UNSETTLED = (
+    "Je reviens sur ce que je t'ai dit plus tôt : je n'ai pas pu le vérifier, prends-le comme "
+    "non confirmé. {issues}"
 )
 
 _ACTOR = Provenance(source="orion:grounding", actor="orion:verifier")
@@ -96,8 +111,10 @@ class GroundingReview:
         self._clock = clock
         self._through: int | None = None
         """Journal position of the last reply read; None until loaded from the journal."""
-        self._found: list[tuple[str, list[str], datetime]] = []
-        """(key, issues, when) of readings that found something."""
+        self._found: list[tuple[str, list[str], datetime, str]] = []
+        """(key, issues, when, what was said) of readings that found something."""
+        self._told: set[str] = set()
+        """Doubts already passed on to him as unresolved: never twice."""
         self._seen = 0
         self._seen_at = clock()
 
@@ -144,6 +161,7 @@ class GroundingReview:
                         "through": seqs[last],
                         "replies": len(due),
                         "issues": issues,
+                        "said": drafts[:SAID_CHARS] if issues else "",
                         "failed": failed,
                         "at": now.isoformat(),
                     },
@@ -154,8 +172,39 @@ class GroundingReview:
         )
         self._through = seqs[last]
         if issues:
-            self._found.append((f"grounding:{seqs[last]}", issues, now))
+            self._found.append((f"grounding:{seqs[last]}", issues, now, drafts[:SAID_CHARS]))
         return True
+
+    async def _settle(
+        self, key: str, issues: list[str], said: str, spoken: str | None, read: str
+    ) -> str | None:
+        """How the alert `key` ended; on a SILENCE, what to tell him instead, if anything."""
+        if spoken is not None:
+            statuses = [CORRECTED] * len(issues)
+        else:
+            thread = self._orion.threads.get(OWNER_THREAD)
+            facts, _ = evidence(thread.messages[thread.base :])
+            known = "\n---\n".join(part for part in (facts, read) if part)
+            borne = await self._verifier.settled(issues, said, known or "(aucun résultat d'outil)")
+            statuses = [RESOLVED if ok else UNRESOLVED for ok in borne]
+        points = [{"issue": i, "status": s} for i, s in zip(issues, statuses, strict=True)]
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=SETTLED,
+                    payload={"key": key, "points": points, "at": self._clock().isoformat()},
+                    provenance=_ACTOR,
+                    trust=Trust.SYSTEM,
+                )
+            ]
+        )
+        new = [i for i, s in zip(issues, statuses, strict=True) if s == UNRESOLVED]
+        new = [i for i in new if i not in self._told]
+        self._told.update(new)
+        log.info("grounding.settled", key=key, statuses=statuses, told=len(new))
+        if not new:
+            return None
+        return UNSETTLED.format(issues=" ; ".join(new)[:600])
 
     async def _load(self, after: int, last: int) -> None:
         """Where the last reading stopped, and what it found, from the journal (from the
@@ -174,8 +223,15 @@ class GroundingReview:
                                 f"grounding:{through}",
                                 [str(i) for i in event.payload["issues"]],
                                 datetime.fromisoformat(str(event.payload["at"])),
+                                str(event.payload.get("said", "")),
                             )
                         )
+                elif event.kind == SETTLED:
+                    self._told.update(
+                        str(p["issue"])
+                        for p in event.payload.get("points", [])
+                        if p.get("status") == UNRESOLVED
+                    )
             after = events[-1].seq
         self._through = through if through is not None else last
 
@@ -191,6 +247,7 @@ class GroundingReview:
                 importance=0.8,
                 # His own answer set right, not an idea of Orion's: never held by the budget.
                 spoken_to=True,
+                settle=partial(self._settle, key, issues, said),
             )
-            for key, issues, at in self._found
+            for key, issues, at, said in self._found
         ]

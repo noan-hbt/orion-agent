@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Protocol, runtime_checkable
@@ -208,6 +208,9 @@ class ReportSource(Protocol):
         ...
 
 
+Settle = Callable[[str | None, str], Awaitable[str | None]]
+
+
 @dataclass(frozen=True)
 class Alert:
     """Something worth an unrequested message (an event about to start…). Unlike a report, it
@@ -228,6 +231,9 @@ class Alert:
     apply."""
     notify_kind: str = ""
     level: str = ""
+    settle: Settle | None = None
+    """Told how it ended: what was said (None: SILENCE) and what Orion read while writing. On
+    a SILENCE, what it returns goes out instead: the silence was not borne out (ORION-26)."""
 
 
 class AlertSource(Protocol):
@@ -335,6 +341,8 @@ class Candidate:
     """What waited for this point and goes in the same message (D144)."""
     notify_kind: str = ""
     level: str = ""
+    settle: Settle | None = None
+    """See `Alert.settle`."""
 
     @property
     def kind(self) -> str:
@@ -790,6 +798,7 @@ class InitiativeEngine:
                     raw_last=True,
                     notify_kind=a.notify_kind,
                     level=a.level,
+                    settle=a.settle,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -1022,6 +1031,8 @@ class InitiativeEngine:
         await self._record(
             DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
         )
+        if candidate.settle is not None and how != "silence not borne out":
+            await candidate.settle(text, "")
         for item in together:
             await self._record(
                 DELIVERED, item, now, correlation_id=correlation_id, how="together", bundled=True
@@ -1148,6 +1159,13 @@ class InitiativeEngine:
         if is_silence(turn.text):
             if candidate.explicit and not candidate.skippable:
                 return candidate.fallback, "fallback: model chose silence"
+            if candidate.settle is not None:
+                read = _read_while_writing(
+                    self._orion.threads.get(self._settings.thread_id).messages[earlier:]
+                )
+                instead = await candidate.settle(None, read)
+                if instead:
+                    return instead, "silence not borne out"
             return None, "silence"
         draft = turn.text.strip()
         if self._verifier is None or not verifying:
