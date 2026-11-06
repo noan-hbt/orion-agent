@@ -5907,3 +5907,26 @@ travail en plusieurs étapes. Le moteur `orion.workflows` les journalise étape 
   compte rendu au propriétaire, et les travaux en attente ou incertains à la revue du soir.
 - **Compatibilité** : rien à migrer. Les événements sont nouveaux, et `job.started` /
   `job.finished` restent ceux qu'on avait.
+
+## D259 — Un SILENCE après une relecture se justifie, point par point
+
+*06/11/2026 · acceptée · ORION-26*
+
+Le 06/11, huit alertes de relecture (D253) ont fini en huit SILENCE, dont certaines sans aucune
+vérification. Le SILENCE n'était soumis à rien : le doute disparaissait avec lui.
+
+- **Chaque doute a son issue** : `grounding.settled` garde, pour chaque point relevé,
+  `resolved_with_evidence`, `corrected` ou `unresolved`. Il est rejouable depuis le journal.
+- **Un SILENCE est revérifié** : quand Orion répond SILENCE, le vérificateur relit chaque doute
+  contre ce que les outils ont montré, avant et pendant ce tour. Une preuve déjà au journal
+  suffit, sans nouvel appel réseau. En cas de doute, ou si le vérificateur ne répond pas, le
+  point reste ouvert (fail closed).
+- **Ce qui reste ouvert est dit** : une ligne courte au propriétaire (« je n'ai pas pu le
+  vérifier, prends-le comme non confirmé ») à la place du silence. Un même doute n'est dit
+  qu'une fois, y compris après un redémarrage.
+- **Une correction envoyée** marque ses points `corrected`.
+- **Mécanisme générique** : une `Alert` peut porter `settle`. Le moteur d'initiative l'appelle
+  avec ce qui a été dit (ou rien, pour un SILENCE) et ce qu'Orion a lu en écrivant. Sur un
+  SILENCE, ce qu'elle renvoie part à la place. Limite : une alerte regroupée avec d'autres
+  (`_deliver_together`) n'est pas revérifiée.
+- Les faux positifs du vérificateur restent traités par ORION-24.
