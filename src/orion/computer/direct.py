@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.verifier import Verifier
 from orion.computer.browser import KEPT_COOKIES, MAX_ELEMENTS, BrowserError, Session, Snapshot
-from orion.computer.procedures import ProcedureInput, Procedures, keep_procedure
+from orion.computer.procedures import ProcedureInput, Procedures, Seen, keep_procedure
 from orion.computer.vault import LocalVault, LoginKeeper, VaultError
 from orion.core import busy
 from orion.core.events import Event, NewEvent, Provenance, Trust
@@ -62,6 +62,12 @@ IDLE_SECONDS = 600.0
 SHOWN_CHARS = 4000
 """Page text shown after each action; `browser` read gives the rest, part by part."""
 READ_CHARS = 60_000
+SEEN_TURNS = 8
+"""Recent turns whose pages are held as the evidence a procedure rests on (D255)."""
+SEEN_PAGES = 40
+"""Pages held per turn, the last ones."""
+SEEN_CHARS = 20_000
+"""What is held of each of them."""
 FOUND_ELEMENTS = 1000
 """How far `browser` read looks for an element by its words, past what a page shows."""
 HANDS = "hands"
@@ -217,6 +223,8 @@ class BrowserDesk:
         self._runner = ProjectionRunner(journal, [self.state, self.procedures])
         self.verifier: Verifier | None = None
         """Checks a démarche went through before its procedure is kept (ORION-5, D252)."""
+        self._seen: dict[str, list[Seen]] = {}
+        """Turn → the pages its browser showed, the evidence of a procedure (D255)."""
         self._live: dict[str, _Live] = {}
         """Conversation → its tab. One browser, one profile on disk (D116): its cookies, so its
         sign-ins, are the same in every tab and stay after a restart."""
@@ -365,32 +373,41 @@ class BrowserDesk:
         address = normalize(url)
         if not address:
             raise Refused(f"{url} is not a web address (http or https).")
-        return await self._act(ctx, lambda s: s.goto(address))
+        return await self._act(ctx, lambda s: s.goto(address), what=f"open {address}")
 
-    async def _on_page(self, ctx: ToolContext, action: Callable[[Session], Any]) -> str:
+    async def _on_page(
+        self, ctx: ToolContext, action: Callable[[Session], Any], what: str, element: int = -1
+    ) -> str:
         await self._need_tab(ctx.thread_id)
-        return await self._act(ctx, action)
+        live = self._live.get(ctx.thread_id)
+        shown = live.shown.elements if live is not None and live.shown is not None else []
+        label = next((e for e in shown if e.startswith(f"[{element}]")), "")
+        return await self._act(ctx, action, what=f"{what} {label}".strip())
 
     async def click(self, element: int, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.click(element))
+        return await self._on_page(ctx, lambda s: s.click(element), "click", element)
 
     async def type(self, element: int, text: str, enter: bool, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.type(element, text, enter))
+        return await self._on_page(ctx, lambda s: s.type(element, text, enter), "type", element)
 
     async def select(self, element: int, option: str, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.select(element, option))
+        what = f"select « {option} »"
+        return await self._on_page(ctx, lambda s: s.select(element, option), what, element)
 
     async def scroll(self, down: bool, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.scroll(down))
+        return await self._on_page(ctx, lambda s: s.scroll(down), "scroll")
 
     async def back(self, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.back())
+        return await self._on_page(ctx, lambda s: s.back(), "back")
 
     async def press(self, key: str, element: int | None, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.press(key, element))
+        what = f"press {key}"
+        return await self._on_page(
+            ctx, lambda s: s.press(key, element), what, -1 if element is None else element
+        )
 
     async def hover(self, element: int, ctx: ToolContext) -> str:
-        return await self._on_page(ctx, lambda s: s.hover(element))
+        return await self._on_page(ctx, lambda s: s.hover(element), "hover", element)
 
     async def view(self, screen: str, ctx: ToolContext) -> str:
         await self._need_tab(ctx.thread_id)
@@ -401,7 +418,9 @@ class BrowserDesk:
         if found is None:
             raise Refused(f"No file {file_id}: `file` lists those you have.")
         name, data, kind = found
-        return await self._on_page(ctx, lambda s: s.upload(element, name, data, kind))
+        return await self._on_page(
+            ctx, lambda s: s.upload(element, name, data, kind), "upload", element
+        )
 
     async def _reopen(self, ctx: ToolContext) -> bool:
         """The conversation's tab closed (idle, a restart): its last page opens again. Whether
@@ -961,6 +980,7 @@ class BrowserDesk:
         action: Callable[[Session], Any],
         whole: bool = False,
         elements: int = MAX_ELEMENTS,
+        what: str = "read",
     ) -> str:
         async with self._lock:
             live = await self._tab(ctx.thread_id)
@@ -986,6 +1006,7 @@ class BrowserDesk:
             await session.keep_cookies_soon()
             hint = await self._login_hint(session, live, snapshot.url)
             guide = await self._guide(live, snapshot.url)
+            self._saw(ctx, what, snapshot)
         await self._record(snapshot, ctx)
         notes += [await self._keep_given(name, data, ctx) for name, data in files]
         said = _changes(before, snapshot) if before is not None else None
@@ -1004,8 +1025,21 @@ class BrowserDesk:
             live.guided.add(site)
         return guide
 
+    def _saw(self, ctx: ToolContext, what: str, snapshot: Snapshot) -> None:
+        """What the browser showed in this turn, the evidence a procedure rests on (ORION-5).
+        Held in memory, a few recent turns: after a restart nothing is kept (fail closed)."""
+        turn = self._seen.pop(ctx.correlation_id, [])
+        self._seen[ctx.correlation_id] = turn  # the newest turn last
+        text = "\n".join([snapshot.title, snapshot.text, *snapshot.elements])
+        turn.append(Seen(what, snapshot.url, text[:SEEN_CHARS]))
+        del turn[:-SEEN_PAGES]
+        while len(self._seen) > SEEN_TURNS:
+            del self._seen[next(iter(self._seen))]
+
     async def save_procedure(self, args: ProcedureInput, ctx: ToolContext) -> tuple[bool, str]:
-        kept, said = await keep_procedure(self._journal, self.verifier, args, ctx)
+        seen = list(self._seen.get(ctx.correlation_id, []))
+        logins = dict(self.state.signed_in)
+        kept, said = await keep_procedure(self._journal, self.verifier, args, ctx, seen, logins)
         if kept:
             await self._runner.catch_up()
         return kept, said

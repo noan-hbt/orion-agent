@@ -5811,11 +5811,24 @@ Orion réexplorait Nibelis, l'INPI ou Hyperplanning à chaque visite. Il garde m
 une démarche est passée : le chemin, le login du coffre et les pièges (`browser_save_procedure`,
 événement `browser.procedure`, projection `computer.procedures.Procedures`).
 
-- **Vérifiée, pas affirmée** : la procédure est gardée seulement si le navigateur de ce tour a
-  montré le site, et si le vérificateur (un autre modèle, D252) trouve dans les résultats
-  d'outils de ce tour que la démarche a abouti. Si le modèle dit seulement « c'est fait », rien
-  n'est gardé. Sans `verifier_model`, rien n'est gardé (fail closed). C'est le propriétaire qui
-  a choisi le vérificateur, plutôt qu'une validation à la main ou que le seul `browser.signed_in`.
+- **Vérifiée, pas affirmée** : si le modèle dit seulement « c'est fait », rien n'est gardé. Sans
+  `verifier_model`, rien n'est gardé (fail closed). C'est le propriétaire qui a choisi le
+  vérificateur, plutôt qu'une validation à la main ou que le seul `browser.signed_in`.
+- **La preuve vient du site** (revue de la PR #191) : le vérificateur D252 détecte des
+  affirmations fausses, ce n'est pas un oracle de réussite. Il ne suffit donc pas seul. La
+  preuve doit être des mots recopiés d'une page de ce site, montrée par le navigateur pendant ce
+  tour. Une confirmation venue d'un autre site, ou d'un autre outil (même journalisée dans le
+  tour), est refusée. Le vérificateur ne lit plus que les pages de ce site, avec l'action qui y
+  a mené.
+- **Le chemin est rapproché de la trace** : le navigateur garde en mémoire, par tour, ce qu'il a
+  montré et l'action qui y a mené (quelques tours récents ; après un redémarrage, rien, donc
+  refus). Une adresse citée dans le chemin et jamais ouverte sur le site, ou un libellé cité
+  (« … » ou "…") qu'aucune page du site n'a montré : refus. Un login du coffre qui ne s'est
+  jamais connecté sur ce site : refus. Le parcours réellement observé (action → adresse) est
+  gardé avec la procédure et rendu avec elle. Les pièges, que rien ne vérifie, sont rendus
+  comme « non vérifiés ».
+- **Version minimale** : ce n'est pas encore un statut CONFIRMED / UNCERTAIN par action. Il
+  relève d'ORION-20.
 - **Rendue quand le site revient** : la première page du site, dans un onglet et dans n'importe
   quelle conversation, arrive avec ses démarches connues. Elle passe dans un résultat d'outil,
   jamais dans le message système, donc le cache n'est pas touché.
