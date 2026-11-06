@@ -24,7 +24,7 @@ import re
 import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from zoneinfo import ZoneInfo
@@ -34,6 +34,7 @@ import structlog
 from orion import __version__
 from orion.awaiting.module import Awaiting
 from orion.console.activity import read_activity
+from orion.core import busy
 from orion.core.events import Provenance, Trust
 from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
@@ -607,6 +608,10 @@ class Control:
         shown["release"] = await asyncio.to_thread(release, self.code) if self.code else None
         return shown
 
+    async def update_now(self) -> None:
+        """What waits goes now, not when he is done (D254): he asked, he knows it restarts."""
+        await asyncio.to_thread(busy.update_now)
+
     # -- his missions -------------------------------------------------------------------------
 
     async def _missions(self) -> Missions:
@@ -875,10 +880,18 @@ def release(code: Path) -> dict[str, Any] | None:
         log.warning("control.update_bad_unreadable", error=str(exc))
         set_aside = None
     merged = re.search(r"\(#(\d+)\)$", subject)
+    waiting = code.parent / "update.waiting"  # what the script holds back (D251), since when
+    try:
+        since = int(waiting.read_text("utf-8").strip()) if waiting.is_file() else None
+    except (OSError, ValueError) as exc:
+        log.warning("control.update_waiting_unreadable", error=str(exc))
+        since = None
     return {
         "commit": commit,
         "pr": int(merged.group(1)) if merged else None,
         "at": at,
         "subject": subject,
         "set_aside": set_aside,
+        "waiting_since": datetime.fromtimestamp(since, UTC).isoformat() if since else None,
+        "asked": busy.update_asked(),
     }

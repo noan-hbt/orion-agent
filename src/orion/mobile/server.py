@@ -764,6 +764,10 @@ def core_routes(
     async def server(_request: Request, c: Control) -> object:
         return await c.server()
 
+    async def update_now(_request: Request, c: Control) -> object:
+        await c.update_now()
+        return {}
+
     async def usage(request: Request, c: Control) -> object:
         days = request.query_params.get("days", "30")
         if not days.isdecimal():
@@ -987,6 +991,7 @@ def core_routes(
         api("tasks/{id}/stop", controls(stop_task), post=True),
         api("waits/{id}/drop", controls(drop_wait), post=True),
         api("server", controls(server)),
+        api("server/update", controls(update_now), post=True),
         api("missions", controls(missions)),
         api("missions/{id}/now", controls(mission_now), post=True),
         api("missions/{id}/pace", controls(mission_pace), post=True),

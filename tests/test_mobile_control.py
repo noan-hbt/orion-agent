@@ -14,6 +14,7 @@ import pytest
 from orion.awaiting.module import Awaiting, AwaitingSettings
 from orion.channels.inbox import OwnerInbox
 from orion.config import load_config
+from orion.core import busy
 from orion.core.events import Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.autonomy import Autonomy
@@ -374,3 +375,23 @@ def test_the_running_commit_and_a_set_aside_update_are_read(tmp_path: Path) -> N
     (tmp_path / "update.bad").write_text("0123456789abcdef\n", "utf-8")
     found = release(code)
     assert found is not None and found["set_aside"] == "0123456789ab"
+
+
+def test_a_held_update_shows_and_can_be_sent_now(tmp_path: Path) -> None:
+    code = tmp_path / "app"
+    code.mkdir()
+    git = ["git", "-C", str(code), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    (tmp_path / "update.waiting").write_text("1793954739\n", "utf-8")
+    data = tmp_path / "data"
+    data.mkdir()
+    busy.configure(data)
+    try:
+        found = release(code)
+        assert found is not None and found["waiting_since"] and not found["asked"]
+        busy.update_now()
+        assert (data / busy.NOW).exists()  # what deploy/orion-update looks for
+        assert (release(code) or {})["asked"]
+    finally:
+        busy._path = None  # pyright: ignore[reportPrivateUsage]
