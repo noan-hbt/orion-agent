@@ -3,7 +3,9 @@
 #   PR opened / ready            -> En revue   + a comment with the PR link
 #   PR merged                    -> Terminé(e) + a comment with the merge commit
 # The ticket key is read from the PR title, else the branch name. No key: nothing happens.
-# Secrets: JIRA_EMAIL, JIRA_API_TOKEN (an Atlassian API token of the owner).
+# Secrets: JIRA_EMAIL, JIRA_API_TOKEN (an Atlassian API token of the owner). A classic token
+# works on the site URL; a scoped one (read:jira-work, write:jira-work) only through the API
+# gateway: the first that accepts the credentials is used.
 name: Jira
 
 on:
@@ -17,7 +19,8 @@ concurrency:
   group: jira-${{ github.event.pull_request.number || github.ref }}
 
 env:
-  JIRA_URL: https://nerb-solutions.atlassian.net
+  JIRA_SITE: https://nerb-solutions.atlassian.net
+  JIRA_GATEWAY: https://api.atlassian.com/ex/jira/c72251bd-3128-4f30-b749-98fc18ae2206
 
 jobs:
   sync:
@@ -44,6 +47,17 @@ jobs:
           if [ -z "${JIRA_API_TOKEN:-}" ]; then
             echo "::error::JIRA_EMAIL / JIRA_API_TOKEN secrets are missing"; exit 1
           fi
+          JIRA_URL=""
+          for base in "$JIRA_SITE" "$JIRA_GATEWAY"; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -u "$JIRA_EMAIL:$JIRA_API_TOKEN"               "$base/rest/api/3/myself" || true)
+            echo "Credentials on $base: HTTP $code"
+            if [ "$code" = 200 ]; then JIRA_URL=$base; break; fi
+          done
+          if [ -z "$JIRA_URL" ]; then
+            echo "::error::Jira rejects the credentials: JIRA_EMAIL must be the token owner's"              "address, and a scoped token needs read:jira-work and write:jira-work."
+            exit 1
+          fi
+
           key=$(printf '%s\n%s\n%s\n' "${PR_TITLE:-}" "${PR_BRANCH:-}" "${REF:-}" \
             | grep -oE '\bORION-[0-9]+\b' | head -n1 || true)
           if [ -z "$key" ]; then echo "No ORION key, nothing to do."; exit 0; fi
