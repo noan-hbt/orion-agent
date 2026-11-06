@@ -49,7 +49,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    boucle relance « ta réponse est vide… » (`loop.empty_reply`, `cognition/loop.py:449`) :
    un appel pour rien, deux fois le 05/11. Ne pas relancer quand le seul résultat non lu est un
    accusé d'envoi.
-6. [ ] **Limites de `task` qui font perdre des étapes.** `budget_usd` > 3 refusé, `summary` >
+6. [x] **Limites de `task` qui font perdre des étapes.** (plafonnées, plus refusées) `budget_usd` > 3 refusé, `summary` >
    2000 caractères refusé deux fois de suite (05/11, 18 h 05 et 18 h 07). Plafonner/tronquer au
    lieu de refuser, ou dire la limite dans la description de l'outil.
 7. [ ] **Onglet fermé entre deux messages.** « Envoie une capture » → « No page is open » puis
