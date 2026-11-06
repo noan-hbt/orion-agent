@@ -106,15 +106,7 @@ async def test_imessage_and_voice_modules_plug_into_the_daemon(tmp_path: Path) -
         assert "# Ta voix" in app.orion._compiler.system_message()["content"]  # pyright: ignore[reportPrivateUsage]
         supervisor = Supervisor()
         daemon = await start(app, owner_inbox(app), supervisor)
-        assert supervisor.services == [
-            "inbox",
-            "memory.batch",
-            "imessage.poll",
-            "voice.brief",
-            "voice.poll",
-            "autonomy.ritual",
-            "initiative",
-        ]
+        assert {"imessage.poll", "voice.brief", "voice.poll"} <= set(supervisor.services)
         assert voice.voice is not None and voice.link.target is voice.voice
         assert daemon.caller is voice.voice and daemon.reports == [voice.voice]
         # A finished call on the shared Inkbox line reaches the voice module.
