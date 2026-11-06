@@ -37,6 +37,7 @@ from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.guardian.logins import site_of
 from orion.tools.base import ToolContext
+from orion.tools.outcome import Outcome
 
 log = structlog.get_logger(__name__)
 
@@ -59,6 +60,10 @@ class Seen:
     url: str
     text: str
     """Its text and its elements, as Orion read them (secrets masked)."""
+    action_id: str = ""
+    """The outcome id of the call that acted to get here (D258); empty for a mere read."""
+    acted_on: str = ""
+    """The site the call acted on, when it landed on another one (a payment, a sign-in)."""
 
 
 class ProcedureInput(BaseModel):
@@ -76,6 +81,13 @@ class ProcedureInput(BaseModel):
         min_length=3,
         max_length=300,
         description="Words copied exactly from the page that shows it went through",
+    )
+    actions: list[str] = Field(
+        default_factory=list[str],
+        max_length=30,
+        description="The action ids (« action » in the [issue …] lines) of this démarche's "
+        "steps, typing and clicks; its last step, after which the proof appeared, is always "
+        "counted. Only these are confirmed, never the rest of the site",
     )
 
 
@@ -171,14 +183,33 @@ def _page(url: str) -> str:
     return f"{(parts.hostname or '').lower()}{parts.path.rstrip('/')}"
 
 
-def _confirmed(proof: str, pages: list[Seen]) -> bool:
-    """Whether the proof signals the outcome: absent from every page of the site before its last
-    action that acts, shown on a page from then on. Generic words already there prove nothing."""
+def _confirming(proof: str, pages: list[Seen]) -> Seen | None:
+    """The step whose outcome the proof shows: the last action on the site that acts, when the
+    proof is absent from every page before it and shown on a page from then on. Generic words
+    already there prove nothing."""
     last = max((i for i, p in enumerate(pages) if p.action.startswith(_ACTS)), default=None)
     if last is None:
-        return False
+        return None
     before = any(proof in _flat(p.text) for p in pages[:last])
-    return not before and any(proof in _flat(p.text) for p in pages[last:])
+    shown = any(proof in _flat(p.text) for p in pages[last:])
+    return pages[last] if shown and not before else None
+
+
+def settled_steps(args: ProcedureInput, seen: list[Seen]) -> list[str]:
+    """The actions a confirmed démarche settles (D258): its last step, the one the proof
+    follows, and the steps it names that this turn's browser took on its site (or on the site
+    that step acted on) up to it. Never the rest of the site: another démarche there keeps its
+    own outcome."""
+    site = site_of(args.site)
+    step = _confirming(_flat(args.proof), [p for p in seen if site_of(p.url) == site])
+    if step is None or not step.action_id:
+        return []
+    upto = next(i for i, p in enumerate(seen) if p is step)
+    sites = {site, step.acted_on or site}
+    taken = {
+        p.action_id for p in seen[:upto] if p.action_id and {site_of(p.url), p.acted_on} & sites
+    }
+    return [step.action_id, *(a for a in dict.fromkeys(args.actions) if a in taken)]
 
 
 def _contradicted(steps: str, site: str, pages: list[Seen]) -> list[str]:
@@ -204,37 +235,38 @@ async def keep_procedure(
     ctx: ToolContext,
     seen: list[Seen],
     logins: dict[str, str],
-) -> tuple[bool, str]:
-    """(kept, what to tell the model). Kept only when this turn's browser, on this very site,
+) -> tuple[Outcome | None, str]:
+    """(its outcome, what to tell the model): None when not kept, else CONFIRMED or, the
+    outcome not shown, ATTEMPTED (D258). Kept only when this turn's browser, on this very site,
     shows it went through and does not contradict the path. `seen`: what the browser showed
     this turn; `logins`: login → where the vault last signed it in."""
     site = site_of(args.site)
     if not site:
-        return False, f"{args.site} n'est pas une adresse de site."
+        return None, f"{args.site} n'est pas une adresse de site."
     if verifier is None:
-        return False, "Pas de vérificateur configuré : procédure non gardée (rien de vérifié)."
+        return None, "Pas de vérificateur configuré : procédure non gardée (rien de vérifié)."
     pages = [p for p in seen if site_of(p.url) == site]
     if not pages:
-        return False, f"Ton navigateur n'a pas montré {site} pendant ce tour : rien à garder."
+        return None, f"Ton navigateur n'a pas montré {site} pendant ce tour : rien à garder."
     # The proof comes from the site itself: another site, or another tool, proves nothing here.
     proof = _flat(args.proof)
     if not any(proof in _flat(p.text) for p in pages):
-        return False, (
+        return None, (
             f"Procédure non gardée : « {args.proof} » n'est sur aucune page de {site} montrée "
             "par ton navigateur pendant ce tour. Une fois la démarche vraiment faite, recopie les "
             "mots exacts de la page qui le montre."
         )
     if wrong := _contradicted(args.steps, site, pages):
-        return False, (
+        return None, (
             f"Procédure non gardée : ton navigateur n'a pas montré sur {site}, pendant ce tour, "
             f"ce que ton chemin cite : {', '.join(wrong)}. Décris le chemin réellement suivi."
         )
     if args.login and site_of(logins.get(args.login, "")) != site:
-        return False, (
+        return None, (
             f"Procédure non gardée : le coffre n'a jamais connecté « {args.login} » sur {site}."
         )
     path = [f"{p.action} → {p.url}" for p in pages][-PATH_STEPS:]
-    confirmed = _confirmed(proof, pages)
+    confirmed = _confirming(proof, pages) is not None
     evidence = "\n---\n".join(f"{p.action} → {p.url}\n{p.text}" for p in pages)
     draft = (
         f"Sur {site}, la démarche « {args.task} » a abouti, par ce chemin : {args.steps}. "
@@ -243,7 +275,7 @@ async def keep_procedure(
     verdict = await verifier.check(draft, "", evidence[-EVIDENCE_CHARS:])
     if not verdict.ok:
         log.info("procedure.unverified", site=site, task=args.task, issues=verdict.issues)
-        return False, (
+        return None, (
             "Procédure non gardée : ce que les pages ont montré ne confirme pas que la démarche "
             f"a abouti ({'; '.join(verdict.issues) or 'non vérifié'})."
         )
@@ -272,10 +304,10 @@ async def keep_procedure(
     )
     if confirmed:
         return (
-            True,
+            Outcome.CONFIRMED,
             f"Procédure gardée pour {site}, issue confirmée : la prochaine visite la reçoit.",
         )
-    return True, (
+    return Outcome.ATTEMPTED, (
         f"Parcours gardé pour {site}, issue non confirmée : « {args.proof} » était déjà sur une "
         "page avant ta dernière action, il ne montre pas que la démarche a abouti. La prochaine "
         "visite reçoit le parcours, sans le dire réussi."

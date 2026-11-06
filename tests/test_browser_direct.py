@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 
 import pytest
@@ -12,6 +13,7 @@ from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.memory.provenance import trace
 from orion.tools.base import Tool, ToolContext
+from orion.web.fetch import FetchError
 from tests.test_computer import Site, session
 
 
@@ -198,6 +200,83 @@ async def test_a_generic_proof_does_not_confirm_the_demarche(journal: SqliteJour
     assert not procedure.confirmed
     hint = procedures.hint(url)
     assert "non confirmée" in hint and "réussi" not in hint
+
+
+CLIENT = {
+    "/": "<html><title>Espace client</title><body><a href='/adresse'>Changer d'adresse</a> "
+    "<a href='/declaration'>Envoyer la déclaration</a> "
+    "<a href='https://paiement.test/ok'>Payer</a></body></html>",
+    "/adresse": "<html><title>Adresse</title><body>Nouvelle adresse ?</body></html>",
+    "/declaration": "<html><title>Déclaration</title><body>Déclaration enregistrée</body></html>",
+    "/ok": "<html><title>Paiement</title><body>Paiement accepté</body></html>",
+}
+
+
+async def test_confirming_one_demarche_leaves_another_on_the_same_site_unsettled(
+    journal: SqliteJournal,
+) -> None:
+    """D258: a démarche's proof settles its own steps, not every action on the site; a step
+    that lands on another site (a payment) stays the step of the site it acted on."""
+    from urllib.parse import urlsplit
+
+    from playwright.async_api import Route
+
+    from orion.cognition.verifier import Verifier
+    from orion.tools.outcome import Outcome, outcomes
+    from tests.fakes import ScriptedProvider, reply
+
+    async def serve(route: Route) -> None:
+        body = CLIENT.get(urlsplit(route.request.url).path, CLIENT["/"])
+        await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=body)
+
+    async def allowed(host: str, _port: int) -> None:
+        if host not in ("client.exemple.fr", "paiement.test"):
+            raise FetchError(f"{host} is not a public address")
+
+    def opened() -> Session:
+        return Session(True, allowed, {"client.exemple.fr": serve, "paiement.test": serve})
+
+    desk = BrowserDesk(journal, opened)
+    desk.verifier = Verifier(ScriptedProvider(reply('{"ok": true}'), reply('{"ok": true}')), "v")
+    tools = {t.name: t for t in browser_tools(desk)}
+    said: list[str] = []
+
+    async def call(name: str, **args: object) -> str:
+        tool = tools[name]
+        result = await tool.handler(tool.parse(json.dumps(args)), ToolContext("owner", "t1"))
+        said.append(result.shown())
+        return result.content
+
+    try:
+        home = await call("browser_open", url="https://client.exemple.fr/")
+        await call("browser_click", element=number(home, "Changer d'adresse"))
+        (address,) = outcomes(said[-1:])
+        await call("browser_back")
+        await call("browser_click", element=number(home, "Envoyer la déclaration"))
+        (declared,) = outcomes(said[-1:])
+        await call(
+            "browser_save_procedure",
+            site="client.exemple.fr",
+            task="envoyer la déclaration",
+            steps="« Envoyer la déclaration »",
+            proof="Déclaration enregistrée",
+        )
+        await call("browser_back")
+        await call("browser_click", element=number(home, "Payer"))
+        (paid,) = outcomes(said[-1:])
+        await call(
+            "browser_save_procedure",
+            site="paiement.test",
+            task="payer",
+            steps="« Payer »",
+            proof="Paiement accepté",
+        )
+    finally:
+        await desk.aclose()
+    seen = outcomes(said)
+    assert seen[declared][0] is Outcome.CONFIRMED
+    assert seen[paid][0] is Outcome.CONFIRMED and paid.startswith("browser:exemple.fr")
+    assert seen[address][0] is Outcome.ATTEMPTED
 
 
 async def test_reading_the_rest_of_a_long_page(
