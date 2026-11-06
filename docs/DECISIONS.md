@@ -5998,3 +5998,23 @@ Le 06/11, un `browser open` sur une page OVH n'a jamais répondu : le tour a ten
 - **Limite** : l'annulation suppose que l'outil rend la main à la boucle asyncio (c'est le cas
   de Playwright async). Du code synchrone bloquant n'est pas interrompu. Aucun outil n'en
   contient à ce jour.
+
+## D261 — Stop coupe l'outil en cours, et ne se dit fait qu'une fois fait
+
+*06/11/2026 · acceptée · ORION-32*
+
+Le 06/11, le propriétaire a appuyé sur Stop à 08:28 pendant un `browser open` bloqué. Le Stop
+n'était lu qu'entre deux étapes du modèle : l'appel a tourné jusqu'au redémarrage de 08:42, et
+son message suivant a attendu.
+
+- **L'appel en cours est coupé** : pendant qu'un outil tourne, la boucle regarde toutes les
+  0,5 s si un Stop a été demandé (`halted`). Si oui, elle annule l'appel et lui laisse 10 s pour
+  rendre ce qu'il tient. S'il ne rend pas la main, `tool.stop_failed` est loggé et le tour
+  continue sans lui. Le verrou du navigateur est rendu à la sortie, et la session est marquée à
+  relancer (D260).
+- **Rien d'autre ne part** : un appel qui n'a pas encore commencé n'est pas lancé. Le tour finit
+  `HALTED` sans nouvel appel au modèle, et le canal dit « D'accord, j'arrête là. ».
+- **Incertain, pas rejoué** : un outil à effet externe coupé rend `UNCERTAIN`. L'action a
+  peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
+- **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
+  vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».

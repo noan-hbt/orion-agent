@@ -51,6 +51,8 @@ from orion.mobile.push import PushError, Subscription, allowed_endpoint
 log = structlog.get_logger(__name__)
 
 CHANNEL = "app"
+STOP_REQUESTED = "turn.stop_requested"
+STOP_COMPLETED = "turn.stop_completed"
 INBOUND = "mobile.inbound"
 OUTBOUND = "mobile.outbound"
 SUBSCRIBED = "mobile.subscribed"
@@ -512,6 +514,10 @@ class MobileChannel:
         try:
             yield
         finally:
+            if self._stop:
+                # The turn is over: only now has the stop happened (ORION-32).
+                await self._stop_event(STOP_COMPLETED)
+                log.info("mobile.stop_completed")
             self.typing = False
             self.work = None
             self._stop = False
@@ -520,15 +526,30 @@ class MobileChannel:
     async def stopped(self) -> bool:
         return self._stop
 
-    def stop(self) -> bool:
-        """He asks to stop the work on his message: it stops between two steps."""
+    async def stop(self) -> bool:
+        """He asks to stop the work on his message: a tool running is cut, and nothing more
+        runs (ORION-32). The work shows « stopping » until the turn is really over."""
         if self.work is None:
             return False
+        if not self._stop:
+            await self._stop_event(STOP_REQUESTED)
         self._stop = True
         self.work = {**self.work, "stopping": True}
         self.hub.publish({"type": "work", "work": self.work})
         log.info("mobile.stop_asked")
         return True
+
+    async def _stop_event(self, kind: str) -> None:
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=kind,
+                    payload={"channel": CHANNEL, "since": (self.work or {}).get("since")},
+                    provenance=Provenance(source="app", actor="owner"),
+                    trust=Trust.OWNER,
+                )
+            ]
+        )
 
     # -- approvals ----------------------------------------------------------------------------
 

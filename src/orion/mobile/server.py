@@ -650,7 +650,7 @@ def core_routes(
         )
 
     async def stop(_request: Request, _device: str) -> Response:
-        return _ok({"stopping": channel.stop()})
+        return _ok({"stopping": await channel.stop()})
 
     async def react(request: Request, device: str) -> Response:
         sent = await body(request)
