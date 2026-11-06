@@ -5786,3 +5786,19 @@ messages, « bonne nuit » compris. Trop souvent, pour trop peu.
   qu'elle avait trouvé ; le moteur ne le redit pas deux fois (clé `grounding:<seq>`).
 - **Le prix** : une affirmation fausse peut partir, puis être corrigée dans la minute. Contre
   un appel par échange au lieu d'un par message, et aucune attente.
+
+## D254 — Une mise à jour retenue part quand il le demande
+
+*06/11/2026 · acceptée · complète D251*
+
+Les mises à jour attendent qu'il ait fini (D251). Mais quand il veut tester ce qui vient d'être
+fusionné, l'attente le bloque, jusqu'à 3 h.
+
+- **L'app montre ce qui attend** : `update.waiting` (écrit par `deploy/orion-update`) apparaît
+  dans Réglages → Version, avec depuis quand.
+- **« Appliquer maintenant »** : le cœur écrit `data/update-now` (`busy.update_now`). Le script,
+  qui tourne en root, ne lit que l'existence du fichier. À son prochain passage (2 min au plus),
+  il saute le regroupement comme pour un commit `[urgent]`, puis efface le fichier. Il l'efface
+  aussi quand rien n'est à appliquer, pour qu'une demande ancienne ne vaille pas pour la suite.
+- **Ce que le bouton ne contourne pas** : le commit écarté (`update.bad`), la vérification au
+  démarrage et le retour en arrière.

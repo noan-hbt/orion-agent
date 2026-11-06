@@ -10,7 +10,8 @@
 #
 # Each restart closes the browser (a hand-over, open tabs). So updates are grouped (D251): not
 # while the owner is in the middle of something (the core writes until when, `busy-until`), at
-# most once an hour, and never held more than 3 hours; a commit saying [urgent] goes at once.
+# most once an hour, and never held more than 3 hours; a commit saying [urgent] goes at once, and
+# so does what waits when he asks from the app (`data/update-now`, D254).
 {
 set -euo pipefail
 ROOT=/srv/orion
@@ -33,14 +34,15 @@ branch="$(git rev-parse --abbrev-ref HEAD)"
 git fetch -q origin "$branch"
 old="$(git rev-parse HEAD)"
 new="$(git rev-parse "origin/$branch")"
-[ "$old" = "$new" ] && exit 0
+NOW="$ROOT/data/update-now"  # he asked from the app: what waits goes at once (D254)
+[ "$old" = "$new" ] && { rm -f "$NOW"; exit 0; }
 [ -f "$BAD" ] && [ "$(cat "$BAD")" = "$new" ] && exit 0
 
 HELD="$ROOT/data/busy-until"
 LAST="$ROOT/update.last"
 WAITING="$ROOT/update.waiting"
 now="$(date +%s)"
-if ! git log --format=%B "$old..$new" | grep -i '\[urgent\]' >/dev/null; then
+if [ ! -f "$NOW" ] && ! git log --format=%B "$old..$new" | grep -i '\[urgent\]' >/dev/null; then
     [ -f "$WAITING" ] || echo "$now" > "$WAITING"
     if [ $((now - $(cat "$WAITING"))) -lt "${ORION_UPDATE_MAX_WAIT:-10800}" ]; then
         [ "$(cat "$HELD" 2>/dev/null || echo 0)" -gt "$now" ] && exit 0
@@ -48,7 +50,7 @@ if ! git log --format=%B "$old..$new" | grep -i '\[urgent\]' >/dev/null; then
     fi
 fi
 echo "$now" > "$LAST"
-rm -f "$WAITING"
+rm -f "$WAITING" "$NOW"
 
 notify() { "$ADMIN" notify "$1" >/dev/null 2>&1 || echo "$1"; }
 

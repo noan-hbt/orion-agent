@@ -3309,7 +3309,7 @@ async function settingsFill(refresh) {
         { class: "list items" },
         row("toml", "orion.toml", plural(server.settings.length, "réglage", "réglages"), () => configPanel(server)),
         row("blocks", "Modules", `${on} allumés · ${server.catalog.filter((c) => !c.installed).length} à installer`, () => modulesPanel(server)),
-        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : running(server), () => versionPanel(server), server.release?.set_aside ? "wait" : ""),
+        row("server", "Version", server.release?.set_aside ? "une mise à jour écartée" : server.release?.waiting_since ? "une mise à jour attend" : running(server), () => versionPanel(server), server.release?.set_aside || server.release?.waiting_since ? "wait" : ""),
         kept?.vault ? row("key", "Secrets", kept.asked.length ? plural(kept.asked.length, "demandé", "demandés") : plural(kept.secrets.length, "clé", "clés"), () => secretsPanel(refresh), kept.asked.length ? "wait" : "", "tes clés d'accès, jamais montrées") : null,
         row("spark", "ChatGPT", "", chatgptPanel, "", "ton forfait pour mes modèles"),
         row("where", "Raccourcis du téléphone", "", phoneTokenPanel, "", "lieux, sommeil, concentration"),
@@ -3836,8 +3836,39 @@ function versionPanel(server) {
     r && r.set_aside
       ? h("div", { class: "card report warn" }, h("p", {}, `J'ai écarté une mise à jour (${r.set_aside}) : elle ne démarrait pas, je suis revenu à la version d'avant. Je retenterai au prochain changement.`))
       : null,
+    r && r.waiting_since ? updateWaiting(r) : null,
     h("p", { class: "hint" }, "Je me mets à jour seul : toutes les deux minutes, je regarde si le code a avancé. J'installe, je vérifie que je démarre, et je reviens en arrière si ça casse. Je te préviens dans les deux cas."),
   ]);
+}
+
+// An update held back so a restart does not cut him off (D251); he may send it now (D254).
+function updateWaiting(r) {
+  const asked = "C'est demandé : je l'applique dans les deux minutes, puis je redémarre.";
+  const button = h(
+    "button",
+    {
+      class: "pill primary wide",
+      type: "button",
+      disabled: r.asked,
+      onclick: async () => {
+        try {
+          await api("api/server/update", {});
+          button.disabled = true;
+          note.textContent = asked;
+        } catch (error) {
+          toast(said(error));
+        }
+      },
+    },
+    icon("server", 20),
+    "Appliquer maintenant",
+  );
+  const note = h(
+    "p",
+    {},
+    r.asked ? asked : `Une mise à jour attend depuis ${SHORT.format(new Date(r.waiting_since))} : je les regroupe pour ne pas redémarrer pendant que tu t'en sers.`,
+  );
+  return h("div", { class: "card report" }, note, button);
 }
 
 // -- usage: tokens, messages, what the plans have left ---------------------------------------------
