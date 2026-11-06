@@ -20,7 +20,8 @@ Every call is journaled, a plan's too (it costs nothing per token), with its tok
 screen counts them. What a plan's windows have used, as the provider said with the answer, is
 journaled when it changes (`plan.quota`). A plan that says nothing of its windows (ChatGPT)
 still says when it is used up: that is journaled once, until it answers again
-(`plan.exhausted`).
+(`plan.exhausted`). A plan still used up after `DOWN_FOR` is told to the owner once: every call
+it took is now answered by a fallback, a lesser model (D249).
 
     spend.recorded
     plan.quota
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -59,6 +60,8 @@ log = structlog.get_logger(__name__)
 SPENT = "spend.recorded"
 QUOTA = "plan.quota"
 EXHAUSTED = "plan.exhausted"
+DOWN_FOR = timedelta(minutes=30)
+"""How long a plan stays used up before the owner hears of it: a short spell is not news."""
 
 
 @dataclass
@@ -69,6 +72,8 @@ class Tally:
     months: dict[str, float] = field(default_factory=dict[str, float])
     """local month (YYYY-MM) → total"""
     zone: str = "Europe/Paris"
+    down: dict[str, str] = field(default_factory=dict[str, str])
+    """plan → when it was found used up, until it answers again"""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -77,13 +82,19 @@ class Tally:
     async def reset(self) -> None:
         self.days.clear()
         self.months.clear()
+        self.down.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
         self._seq = event.seq
-        if event.redacted or event.kind != SPENT:
+        if event.redacted:
             return
         payload: dict[str, Any] = event.payload
+        if event.kind == EXHAUSTED:
+            self.down.setdefault(str(payload["provider"]), str(payload["at"]))
+        if event.kind != SPENT:
+            return
+        self.down.pop(str(payload.get("provider") or ""), None)
         at = datetime.fromisoformat(str(payload["at"])).astimezone(ZoneInfo(self.zone))
         cost = float(payload["cost_usd"])
         day = self.days.setdefault(at.date().isoformat(), [0.0, 0.0])
@@ -269,6 +280,23 @@ class Spending:
                     why="le plafond de dépense du jour est atteint",
                     fallback=f"Plafond du jour atteint ({daily:.2f} $) : ce que je fais seul "
                     "reprend demain.",
+                )
+            )
+        for plan, at in self.tally.down.items():
+            since = datetime.fromisoformat(at).astimezone(self.zone)
+            if now - since < DOWN_FOR:
+                continue
+            found.append(
+                Alert(
+                    key=f"plan:down:{plan}:{at}",
+                    notice=f"Ton forfait {plan} est épuisé depuis {since:%H:%M} : tes appels "
+                    "passent par le modèle de secours, moins bon, jusqu'à ce qu'il revienne. "
+                    "Dis-le-lui en une phrase, pour qu'il sache pourquoi tu peux sembler moins "
+                    "fin, et qu'il peut changer de modèle dans `[models]` sur le serveur.",
+                    why=f"le forfait {plan} est épuisé et le modèle de secours répond",
+                    importance=0.6,
+                    fallback=f"Mon forfait {plan} est épuisé depuis {since:%H:%M} : je tourne "
+                    "sur le modèle de secours jusqu'à ce qu'il revienne.",
                 )
             )
         return found

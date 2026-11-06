@@ -26,7 +26,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
 
 ## P0 — petits correctifs à gros effet
 
-1. [ ] **Prévenir quand le cerveau baisse.** Quand `router.served_by_fallback` dure (quota
+1. [x] **Prévenir quand le cerveau baisse.** (D249) Quand `router.served_by_fallback` dure (quota
    épuisé, comme le 05/11 à 19 h 06 : `subscription_sharing_usage_unavailable`), le dire au
    propriétaire une fois (au prochain point) et l'afficher dans l'app/`orion`.
    `src/orion/providers/router.py:64`.
