@@ -6,8 +6,9 @@ owner put on his messages, and notes each exchange he got wrong (`missed`): what
 what he answered, how the owner showed it, and what went wrong. No pattern on his words
 decides it: a « non » that starts an ordinary answer is not a correction, and a correction
 put otherwise still is. `orion misses` lists them, and `--case N` writes one as the start of
-an evaluation case, to finish by hand and add to `evals/cases.py`. Nothing is sent anywhere:
-it is read on his server, by him.
+an evaluation case, to finish by hand and add to `evals/cases.py`; `orion evals export` writes
+the week's, one draft each, for him to go over once a week. Nothing is sent anywhere: it is
+read on his server, by him.
 
     adaptation.missed
 """
@@ -91,3 +92,31 @@ def as_case(miss: Miss, name: str) -> str:
             "    ),",
         ]
     )
+
+
+def drafts(found: Sequence[Miss], since: datetime, until: datetime) -> str:
+    """The misses between `since` and `until`, each as a draft case for `evals/cases.py`: the
+    exchange in comments, then the case, its check to write. Drafts nobody accepts cost
+    nothing: he keeps the ones worth it."""
+    chosen = [m for m in found if since <= m.at <= until]
+    span = f"du {since:%d/%m} au {until:%d/%m}"
+    if not chosen:
+        return f"# Aucun raté relevé {span}."
+    lines = [
+        f"# Ratés {span} : {len(chosen)} brouillon(s) de cas d'évaluation.",
+        "# Pour chacun : le garder s'il vaut un cas, remplir les TODO, le coller dans CASES",
+        "# (evals/cases.py), puis vérifier avec `uv run python -m evals --case <nom>`.",
+    ]
+    for index, miss in enumerate(chosen, 1):
+        lines += ["", f"# {index}. {miss.at:%d/%m %H:%M} · {_line(miss.why) or '?'}"]
+        if miss.asked:
+            lines.append(f"#    lui : {_line(miss.asked)}")
+        lines.append(f"#    Orion : {_line(miss.answered)}")
+        if miss.said:
+            lines.append(f"#    puis lui : {_line(miss.said)}")
+        lines.append(as_case(miss, f"rate_du_{miss.at:%d_%m_%H%M}"))
+    return "\n".join(lines)
+
+
+def _line(text: str) -> str:
+    return " ".join(text.split())

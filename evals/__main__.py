@@ -1,4 +1,7 @@
-"""`uv run python -m evals [--model M] [--case NAME] [--repeat N] [--offline]`."""
+"""`uv run python -m evals [--config C] [--model M] [--case NAME] [--repeat N] [--offline]`.
+
+On the server, `--config /srv/orion/config/orion.toml --model <the production model>` (e.g.
+`chatgpt:gpt-6.1-terra`) evaluates what he really talks to, with the core's secrets."""
 
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from evals.cases import CASES
 from evals.harness import Outcome, evaluate, model_judge, run_case
 from orion.cli import _provider  # pyright: ignore[reportPrivateUsage]
 from orion.config import load_config
+from orion.setup import load_core_vault, load_env_files
 
 REPORTS = Path(__file__).parent / "reports"
 
@@ -28,7 +32,15 @@ async def main(args: argparse.Namespace) -> int:
     if provider is None:
         return 3
     model = args.model or config.agent.model
-    judge = model_judge(provider, args.judge or config.agent.verifier_model)
+    judge_model = args.judge or config.agent.verifier_model
+    try:
+        for spec in (model, judge_model):
+            provider.check(spec)
+    except ValueError as exc:  # e.g. `chatgpt:…` with the ChatGPT plan off in this config
+        print(f"Impossible d'évaluer : {exc}")
+        await provider.aclose()
+        return 3
+    judge = model_judge(provider, judge_model)
     cases = [
         c
         for c in CASES
@@ -94,4 +106,8 @@ if __name__ == "__main__":
     parser.add_argument("--case", help="only cases whose name contains this")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--offline", action="store_true", help="skip cases reading the web")
-    sys.exit(asyncio.run(main(parser.parse_args())))
+    arguments = parser.parse_args()
+    folder = Path(arguments.config).resolve().parent
+    load_env_files(folder, "chat")  # the secrets beside it, as the core reads them
+    load_core_vault(folder)
+    sys.exit(asyncio.run(main(arguments)))

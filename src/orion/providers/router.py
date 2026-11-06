@@ -107,6 +107,10 @@ class Router:
                 found.append(credits)
         return found
 
+    def check(self, spec: str) -> None:
+        """Raises ValueError when no provider here serves `spec` (a plan not turned on)."""
+        self._resolve(spec)
+
     def _resolve(self, spec: str) -> tuple[ModelProvider, str]:
         name, model = parse_spec(spec, self._default)
         provider = self._providers.get(name)
