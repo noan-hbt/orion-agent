@@ -48,18 +48,19 @@ jobs:
             echo "::error::JIRA_EMAIL / JIRA_API_TOKEN secrets are missing"; exit 1
           fi
           # A token pasted on Windows may carry a CR or spaces.
-          JIRA_EMAIL=$(printf %s "$JIRA_EMAIL" | tr -d '
- '); export JIRA_EMAIL
-          JIRA_API_TOKEN=$(printf %s "$JIRA_API_TOKEN" | tr -d '
- '); export JIRA_API_TOKEN
+          JIRA_EMAIL=$(printf %s "$JIRA_EMAIL" | tr -d '\r\n '); export JIRA_EMAIL
+          JIRA_API_TOKEN=$(printf %s "$JIRA_API_TOKEN" | tr -d '\r\n '); export JIRA_API_TOKEN
+          echo "Email: ${#JIRA_EMAIL} chars, ending ${JIRA_EMAIL: -10}; token: ${#JIRA_API_TOKEN} chars"
           JIRA_URL=""
           for base in "$JIRA_SITE" "$JIRA_GATEWAY"; do
-            code=$(curl -sS -o /dev/null -w '%{http_code}' -u "$JIRA_EMAIL:$JIRA_API_TOKEN"               "$base/rest/api/3/project/ORION" || true)
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              "$base/rest/api/3/project/ORION" || true)
             echo "Credentials on $base: HTTP $code"
             if [ "$code" = 200 ]; then JIRA_URL=$base; break; fi
           done
           if [ -z "$JIRA_URL" ]; then
-            echo "::error::Jira rejects the credentials: JIRA_EMAIL must be the token owner's"              "address, and a scoped token needs read:jira-work and write:jira-work."
+            echo "::error::Jira rejects the credentials: JIRA_EMAIL must be the token owner's" \
+              "address, and a scoped token needs read:jira-work and write:jira-work."
             exit 1
           fi
 
