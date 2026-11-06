@@ -1,4 +1,4 @@
-"""Orion runtime: wires the journal, projections, context, agent loop and guardian together.
+﻿"""Orion runtime: wires the journal, projections, context, agent loop and guardian together.
 
 One owner message becomes a chain of journal events sharing a correlation id:
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
@@ -197,16 +198,35 @@ def _from_him(message: Message) -> bool:
     )
 
 
-FOLLOW_UP_MESSAGES = 4
-"""Last exchanges searched for memories along with the new message (ORION-4)."""
+FOLLOW_UP_MESSAGES = 2
+"""Messages searched for memories along with a follow-up: the last exchange, his message
+and the reply. Further back is an older subject, and « elle » after Julie means Julie, not
+Marc two exchanges earlier (ORION-4)."""
 
 FOLLOW_UP_CHARS = 400
 """Each of them, at most: the subject sits in the first lines, not in a pasted page."""
 
+_SENTENCE_END = re.compile(r"[.!?…]\s+")
+_WORD = re.compile(r"\w[\w'\u2019-]*")
 
-def _follow_up_query(window: list[Message]) -> str | None:
-    """The words of the last exchanges, memory blocks and context lines removed, so a
-    follow-up that names nothing still finds the facts about what was being discussed."""
+
+def _names_someone(text: str) -> bool:
+    """Whether the message names its subject itself: a capitalised word not opening a
+    sentence (Marc, Atlas). Such a message brings its own facts, the last exchange is not
+    searched for it."""
+    for sentence in _SENTENCE_END.split(text):
+        words = _WORD.findall(sentence)
+        if any(w[0].isupper() for w in words[1:]):
+            return True
+    return False
+
+
+def _follow_up_query(text: str, window: list[Message]) -> str | None:
+    """For a follow-up that names nothing (« et je lui offre quoi ? »), the words of the
+    last exchange, memory blocks and context lines removed, so it still finds the facts
+    about what was being discussed. None when the message names its own subject."""
+    if _names_someone(text):
+        return None
     said: list[str] = []
     for message in reversed(window):  # tool calls and results say nothing: skipped
         line = clean(message)
@@ -1142,8 +1162,8 @@ class Orion:
             f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
         ]
         # A follow-up (« et pour lui ? ») names nothing: the subject lives in the last
-        # exchanges, so they are searched too, for a few more slots (ORION-4).
-        context = _follow_up_query(window)
+        # exchange, so it is searched too, for a few more slots (ORION-4).
+        context = _follow_up_query(text, window)
         if context:
             taken = {f.id for f in relevant}
             extra = [
