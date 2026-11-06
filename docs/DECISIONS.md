@@ -5697,3 +5697,17 @@ ne vit pas dans la conversation, et la note du matin en sort au premier rebase.
 
 - **`my_night`** : ce que la dernière nuit a fait, lu dans le journal : actions, rapports de tâches,
   refus, ce qu'elle a consulté, sa note. Lecture seule, à la confiance de ce qu'elle rapporte.
+
+## D249 — Un forfait épuisé qui dure, le propriétaire le sait
+
+*06/11/2026 · acceptée · complète D228*
+
+Le 05/11 à 19 h 06, le forfait ChatGPT a répondu `subscription_sharing_usage_unavailable` : tout
+est passé par le modèle de secours, moins bon, sans que le propriétaire le sache. `plan.exhausted`
+était journalisé et visible dans l'écran Utilisation, mais personne ne le lui disait.
+
+- **Une alerte, une fois** : un forfait encore épuisé 30 minutes après (`DOWN_FOR`) devient une
+  alerte du moteur d'initiative (heures calmes et arbitre compris), une par épisode. Revenu avant,
+  rien n'est dit.
+- **Rebâti du journal** : l'état « épuisé depuis » est une projection (`Tally.down`) de
+  `plan.exhausted` et du premier `spend.recorded` du même forfait ; un redémarrage ne le perd pas.

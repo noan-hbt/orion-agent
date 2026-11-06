@@ -166,10 +166,14 @@ async def test_a_plan_that_never_tells_its_quota_still_shows_when_it_ran_out(
     now = [NOON]
     spending = with_spending(router, journal, BudgetConfig(), "Europe/Paris", clock=lambda: now[0])
     asked = REQUEST.model_copy(update={"model": "chatgpt:gpt"})
+    told: list[str] = []
     for hour in range(4):
         now[0] = NOON + timedelta(hours=hour)
         assert (await spending.complete(asked)).text in ("ok", "a", "b")  # the fallback answers
+        told += [a.key for a in await spending.alerts(now[0] + timedelta(minutes=1))]
     assert len([e for e in await journal.read() if e.kind == EXHAUSTED]) == 1  # said once
+    # The owner hears it once it lasts, not on the first miss, and not once it is back.
+    assert len(told) == 1
 
     stats = UsageStats()
     await ProjectionRunner(journal, [stats]).catch_up()
