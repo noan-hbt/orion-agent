@@ -56,7 +56,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    réouverture (05/11, 13 h 35 et 15 h 13) ; une fois il a répondu « aucune page ouverte » au
    lieu de rouvrir. `screenshot` sans onglet devrait rouvrir la dernière page
    (`BrowsingState.last`) comme le fait déjà `read` (`_need_tab`).
-8. [ ] **`fontTools` manquant** : avertissement à la lecture de certains PDF (05/11, 18 h 06).
+8. [x] **`fontTools` manquant** (ajouté : pypdf en a besoin pour décoder les polices CFF Type1) : avertissement à la lecture de certains PDF (05/11, 18 h 06).
    L'ajouter aux dépendances si la lecture en pâtit.
 
 ## P1 — les changements de structure (2 à 3 semaines)
