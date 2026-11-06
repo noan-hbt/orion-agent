@@ -39,6 +39,7 @@ class DelegationModule(Module):
     async def serve(self, daemon: Daemon) -> None:
         if self.jobs is not None:
             daemon.reports.append(self.jobs)
+            daemon.add_service("delegation.workflows", self.jobs.engine.run)
 
     def doctor(self) -> list[str]:
         binary = self.config.delegation.binary
