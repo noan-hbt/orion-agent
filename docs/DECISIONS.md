@@ -5802,3 +5802,22 @@ fusionné, l'attente le bloque, jusqu'à 3 h.
   aussi quand rien n'est à appliquer, pour qu'une demande ancienne ne vaille pas pour la suite.
 - **Ce que le bouton ne contourne pas** : le commit écarté (`update.bad`), la vérification au
   démarrage et le retour en arrière.
+
+## D255 — Une démarche réussie est gardée, et seulement si une page l'a montrée
+
+*06/11/2026 · acceptée · complète D252 · ORION-5*
+
+Orion réexplorait Nibelis, l'INPI ou Hyperplanning à chaque visite. Il garde maintenant comment
+une démarche est passée : le chemin, le login du coffre et les pièges (`browser_save_procedure`,
+événement `browser.procedure`, projection `computer.procedures.Procedures`).
+
+- **Vérifiée, pas affirmée** : la procédure est gardée seulement si le navigateur de ce tour a
+  montré le site, et si le vérificateur (un autre modèle, D252) trouve dans les résultats
+  d'outils de ce tour que la démarche a abouti. Si le modèle dit seulement « c'est fait », rien
+  n'est gardé. Sans `verifier_model`, rien n'est gardé (fail closed). C'est le propriétaire qui
+  a choisi le vérificateur, plutôt qu'une validation à la main ou que le seul `browser.signed_in`.
+- **Rendue quand le site revient** : la première page du site, dans un onglet et dans n'importe
+  quelle conversation, arrive avec ses démarches connues. Elle passe dans un résultat d'outil,
+  jamais dans le message système, donc le cache n'est pas touché.
+- **Ce qu'elle vaut** : `Trust.WEB`, source `web:<site>`. Elle repose sur ce que le web a montré.
+  Pour une même démarche, la plus récente remplace l'ancienne.

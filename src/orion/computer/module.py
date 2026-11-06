@@ -88,6 +88,12 @@ class ComputerModule(Module):
         vault = LocalVault(self.config) if plate.guardian is None else None
         self.desk = BrowserDesk(plate.journal, sessions, guardian=plate.guardian, vault=vault)
         self.desk.profile = profile
+        if self.config.agent.verifier_model:
+            from orion.cognition.verifier import Verifier
+
+            self.desk.verifier = Verifier(
+                plate.provider, self.config.agent.verifier_model, self.config.effort("verifier")
+            )
         from orion.files.module import FilesModule
 
         files = plate.module(FilesModule)
@@ -136,6 +142,7 @@ class ComputerModule(Module):
                     "browser_hand_over": "hand_over",
                     "browser_forget": "forget",
                     "browser_save_password": "save_password",
+                    "browser_save_procedure": "save_procedure",
                     **(
                         {"browser_screenshot": "screenshot", "browser_upload": "upload"}
                         if keep is not None

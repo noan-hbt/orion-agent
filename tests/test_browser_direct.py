@@ -103,6 +103,42 @@ async def test_pages_seen_are_traceable(
     assert trace(await journal.read(), "web:https://annonces.test/").origins == pages
 
 
+async def test_a_verified_demarche_is_followed_at_the_next_visit(journal: SqliteJournal) -> None:
+    """ORION-5: kept only once the verifier finds it went through; given back on the site."""
+    from orion.cognition.verifier import Verifier
+    from tests.fakes import ScriptedProvider, reply
+
+    site = Site()
+    desk = BrowserDesk(journal, lambda: session(site))
+    desk.verifier = Verifier(
+        ScriptedProvider(
+            reply('{"ok": false, "issues": ["rien ne le montre"]}'), reply('{"ok": true}')
+        ),
+        "verifier",
+    )
+    tools = {t.name: t for t in browser_tools(desk)}
+    how = {
+        "site": "annonces.test",
+        "task": "voir le T2",
+        "steps": "Accueil → « T2 Lyon 7e »",
+        "proof": "650 € CC affiché",
+    }
+    try:
+        await use(tools, "browser_open", url="https://annonces.test/")
+        assert (await use(tools, "browser_save_procedure", **how)).startswith("ERROR")
+        assert not (await use(tools, "browser_save_procedure", **how)).startswith("ERROR")
+    finally:
+        await desk.aclose()
+
+    later = BrowserDesk(journal, lambda: session(site))  # another day: rebuilt from the journal
+    try:
+        tools = {t.name: t for t in browser_tools(later)}
+        page = await use(tools, "browser_open", turn="t2", url="https://annonces.test/")
+        assert "T2 Lyon 7e »" in page and "voir le T2" in page
+    finally:
+        await later.aclose()
+
+
 async def test_reading_the_rest_of_a_long_page(
     journal: SqliteJournal, browser: tuple[dict[str, Tool], Site]
 ) -> None:
