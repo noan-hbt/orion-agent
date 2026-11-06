@@ -7,7 +7,7 @@ import ast
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from orion.adaptation.misses import MISSED, drafts, misses
+from orion.adaptation.misses import MISSED, Miss, drafts, misses
 from orion.adaptation.week import report, week, weeks
 from orion.core.events import NewEvent
 from orion.core.journal import SqliteJournal
@@ -96,3 +96,22 @@ async def test_the_weeks_misses_come_out_as_cases_to_accept(journal: SqliteJourn
     cases = ast.parse(f"CASES = (\n{text}\n)").body[0]  # pastes into CASES as it is
     assert isinstance(cases, ast.Assign) and isinstance(cases.value, ast.Tuple)
     assert len(cases.value.elts) == 2
+
+
+def test_two_misses_in_the_same_minute_get_two_case_names() -> None:
+    now = datetime(2026, 11, 6, 9, 0, 10, tzinfo=PARIS)
+    found = [
+        Miss(now, "un", "Réponse A", "non", "?"),
+        Miss(now + timedelta(seconds=30), "deux", "Réponse B", "non", "?"),
+    ]
+    text = drafts(found, now - timedelta(days=1), now + timedelta(days=1))
+    cases = ast.parse(f"CASES = (\n{text}\n)").body[0]
+    assert isinstance(cases, ast.Assign) and isinstance(cases.value, ast.Tuple)
+    names = [
+        k.value.value
+        for case in cases.value.elts
+        if isinstance(case, ast.Call)
+        for k in case.keywords
+        if k.arg == "name" and isinstance(k.value, ast.Constant)
+    ]
+    assert len(names) == 2 and len(set(names)) == 2

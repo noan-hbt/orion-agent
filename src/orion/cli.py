@@ -362,11 +362,16 @@ async def _evals_export(config: OrionConfig, days: int) -> int:
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
-    from orion.adaptation.misses import drafts, misses
+    from orion.adaptation.misses import MISSED, drafts, misses
+    from orion.core.events import Event
 
     zone = ZoneInfo(config.agent.timezone)
+    events: list[Event] = []  # only the misses: the journal is read a page at a time
     async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
-        events = await journal.read(0, 10_000_000)
+        after = 0
+        while page := await journal.read(after, 1000):
+            events += [e for e in page if e.kind == MISSED]
+            after = page[-1].seq
     now = datetime.now(zone)
     print(drafts(misses(events, zone), now - timedelta(days=days), now))
     return 0

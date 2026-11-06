@@ -107,14 +107,21 @@ def drafts(found: Sequence[Miss], since: datetime, until: datetime) -> str:
         "# Pour chacun : le garder s'il vaut un cas, remplir les TODO, le coller dans CASES",
         "# (evals/cases.py), puis vérifier avec `uv run python -m evals --case <nom>`.",
     ]
+    taken: set[str] = set()
     for index, miss in enumerate(chosen, 1):
+        name = base = f"rate_du_{miss.at:%d_%m_%H%M}"
+        repeat = 1
+        while name in taken:  # two misses in the same minute: CASES names must stay unique
+            repeat += 1
+            name = f"{base}_{repeat}"
+        taken.add(name)
         lines += ["", f"# {index}. {miss.at:%d/%m %H:%M} · {_line(miss.why) or '?'}"]
         if miss.asked:
             lines.append(f"#    lui : {_line(miss.asked)}")
         lines.append(f"#    Orion : {_line(miss.answered)}")
         if miss.said:
             lines.append(f"#    puis lui : {_line(miss.said)}")
-        lines.append(as_case(miss, f"rate_du_{miss.at:%d_%m_%H%M}"))
+        lines.append(as_case(miss, name))
     return "\n".join(lines)
 
 

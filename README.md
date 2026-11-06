@@ -143,6 +143,10 @@ uv run python -m evals                             # évaluations sur le vrai mo
 uv run python -m evals --model chatgpt:gpt-6.1-terra   # sur le modèle de prod (--config du serveur)
 ```
 
+Pas d'éval sur le compte ChatGPT du cœur tant qu'ORION-22 n'est pas réglé : les deux processus
+renouvelleraient ses jetons sans verrou. Passer par un autre fournisseur (clé d'API) ou une
+connexion ChatGPT séparée.
+
 Les règles du dépôt (journal append-only, fail closed, `SecretRef`, contrat du cache de prompt,
 tests sur le comportement) sont dans [`CLAUDE.md`](CLAUDE.md).
 

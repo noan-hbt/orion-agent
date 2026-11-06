@@ -1,7 +1,14 @@
 """`uv run python -m evals [--config C] [--model M] [--case NAME] [--repeat N] [--offline]`.
 
 On the server, `--config /srv/orion/config/orion.toml --model <the production model>` (e.g.
-`chatgpt:gpt-6.1-terra`) evaluates what he really talks to, with the core's secrets."""
+`chatgpt:gpt-6.1-terra`) evaluates what he really talks to, with the core's secrets.
+
+Not on the core's ChatGPT account for now: the evals and the core would both renew its tokens,
+with no lock between the two processes (ORION-22). Until that is settled, evaluate through
+another provider (an API key) or a separate ChatGPT sign-in, never the one the core uses.
+
+The model and the judge are checked before the first case: one that no provider serves, or an
+empty one (`verifier_model = ""`), stops here (code 3) instead of failing halfway."""
 
 from __future__ import annotations
 
@@ -99,7 +106,11 @@ async def main(args: argparse.Namespace) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(prog="python -m evals")
+    parser = argparse.ArgumentParser(
+        prog="python -m evals",
+        epilog="Pas sur le compte ChatGPT du cœur tant qu'ORION-22 n'est pas réglé : passer par "
+        "un autre fournisseur (clé d'API) ou une connexion ChatGPT séparée.",
+    )
     parser.add_argument("--config", default="orion.toml")
     parser.add_argument("--model", help="the model to evaluate (default: agent.model)")
     parser.add_argument("--judge", help="the judge model (default: agent.verifier_model)")
