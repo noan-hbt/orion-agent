@@ -5740,7 +5740,7 @@ deux semaines de l'audit, et chacun ferme le navigateur, une prise en main en co
 
 ## D252 — Ce qu'il affirme repose sur ce qu'un outil a montré
 
-*06/11/2026 · acceptée · complète D118, D144*
+*06/11/2026 · acceptée · complète D118, D144 · relecture après coup : D253*
 
 Trois fois en une semaine, une réponse a affirmé un état sans l'avoir vu : « oui, c'est cette
 rubrique, vérifiée » (INPI, 05/11, le chemin du mail jamais suivi), « connexion Nibelis rejetée
@@ -5763,3 +5763,26 @@ promesses.
 - **Coût** : un appel du vérificateur par réponse finale (~130 par jour), 1 à 3 s avant qu'elle
   parte, une étape de plus quand il rejette.
   La note est journalisée comme les autres : le cache tient (`tests/test_runtime_cache.py`).
+
+## D253 — La relecture se fait après coup, quand l'échange se pose
+
+*06/11/2026 · acceptée · modifie D252*
+
+Relire chaque réponse avant qu'elle parte coûtait un appel et 1 à 3 s sur chacun de ses
+messages, « bonne nuit » compris. Trop souvent, pour trop peu.
+
+- **Dans le tour, seul reste le contrôle en code**, gratuit : une affirmation d'état dans un
+  tour où aucun outil n'a tourné est renvoyée une fois (`grounding.ground_check`).
+- **Le vérificateur relit en tâche de fond** (`orion.cognition.review.GroundingReview`) : quand
+  sa conversation est calme depuis 30 s, ou dès 5 réponses non relues. Un seul appel pour toutes
+  les réponses depuis la dernière relecture, jamais pendant qu'un tour tourne. Les initiatives
+  restent relues avant de partir (D144).
+- **Ce que rien ne montre devient une alerte** du moteur d'initiative : Orion y revient, vérifie
+  avec l'outil, et se corrige lui-même s'il s'est avancé (SILENCE si la vérification lui donne
+  raison). Elle passe par l'outbox, hors budget du jour (c'est sa réponse qu'il rectifie), et
+  expire après 2 h.
+- **L'état est dans le journal** : chaque relecture laisse `grounding.reviewed` (jusqu'où, ce qui
+  clochait, quand). Après un redémarrage, la relecture reprend après la dernière et repasse ce
+  qu'elle avait trouvé ; le moteur ne le redit pas deux fois (clé `grounding:<seq>`).
+- **Le prix** : une affirmation fausse peut partir, puis être corrigée dans la minute. Contre
+  un appel par échange au lieu d'un par message, et aucune attente.

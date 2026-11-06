@@ -6,13 +6,11 @@ coffre » (05/11, it was not), « pas moi » about an access to Cyclades without
 (31/10). The model reports a state (done, sent, checked, refused, nothing there) from what it
 expects, not from what a tool showed.
 
-So before his reply goes, a different model compares it with what the tools of this
-conversation returned (`Verifier`): every final reply, not only those a pattern would pick, since
-a claim is worded a hundred ways and the one a list misses is the one that goes out unchecked. A
-statement nothing there supports sends Orion back once: check with the tool that shows it, or
-say plainly it was not checked. Without a verifier (none set, or it failed), the fallback is in
-code, and only as good as its patterns (`claims_a_state`): a state claimed in a turn where no
-tool ran is sent back once.
+Before his reply goes, a check in code, free and only as good as its patterns
+(`claims_a_state`): a state claimed in a turn where no tool ran is sent back once. A different
+model then reads every reply against what the tools returned, not only those a pattern would
+pick, but in the background, once the conversation settles (`orion.cognition.review`, D253):
+before each reply it cost a call and seconds on every message.
 """
 
 from __future__ import annotations
@@ -20,12 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-import structlog
-
-from orion.cognition.verifier import Verifier
 from orion.providers.base import Message
-
-log = structlog.get_logger(__name__)
 
 _PARTICIPLE = (
     r"(?:envoy|vérifi|confirm|rejet|refus|valid|annul|réserv|supprim|transf[ée]r|pay|command|"
@@ -66,13 +59,6 @@ EVIDENCE_CHARS = 16_000
 WORDS_CHARS = 4_000
 """What it reads of the owner's own words, newest kept: what the claim answers."""
 
-GROUND_NOTE = (
-    "[Orion · Ta réponse n'est pas encore partie. Elle affirme ce qu'aucun résultat d'outil de "
-    "cette conversation ne montre : {issues}. Vérifie avec l'outil qui le montre (le journal, "
-    "le mail, la page, le coffre, l'agenda…) et réponds avec ce que tu y as vu ; si tu ne peux "
-    "pas vérifier, dis-lui franchement que tu ne l'as pas vérifié au lieu de l'affirmer. Puis "
-    "écris ta réponse finale, entière.]"
-)
 UNCHECKED_NOTE = (
     "[Orion · Ta réponse n'est pas encore partie. Elle affirme un état (fait, envoyé, vérifié, "
     "refusé, rien trouvé…) alors qu'aucun outil n'a tourné pendant ce tour. Si un résultat plus "
@@ -120,17 +106,7 @@ async def ground_check(
     text: str,
     called: Sequence[str],
     messages: Sequence[Message],
-    verifier: Verifier | None = None,
 ) -> str | None:
     """The note that sends Orion back to check, or None when the reply may go. `called`: the
-    tools called this turn; `messages`: the conversation as the model saw it."""
-    if verifier is not None:
-        facts, words = evidence(messages)
-        verdict = await verifier.check(text, facts or "(aucun résultat d'outil)", words)
-        if verdict.ok:
-            return None
-        if verdict.issues and not verdict.issues[0].startswith("verifier "):
-            log.info("grounding.unproven", issues=verdict.issues)
-            return GROUND_NOTE.format(issues=" ; ".join(verdict.issues))
-        log.warning("grounding.verifier_failed", issues=verdict.issues)
+    tools called this turn."""
     return UNCHECKED_NOTE if not called and claims_a_state(text) else None

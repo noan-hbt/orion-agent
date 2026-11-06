@@ -16,6 +16,7 @@ import structlog
 
 from orion.app import App
 from orion.channels.inbox import OwnerInbox
+from orion.cognition.review import GroundingReview
 from orion.cognition.verifier import Verifier
 from orion.core import busy
 from orion.core.supervisor import Supervisor
@@ -85,7 +86,10 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         app.provider, app.config.agent.verifier_model, app.config.effort("verifier")
     )
     if app.config.agent.verifier_model:
-        app.orion.verifier = verifier  # his replies' claims are checked too (grounding)
+        # His replies' claims are read again in the background, once the exchange settles (D253).
+        review = GroundingReview(app.orion, verifier, app.journal)
+        supervisor.add("grounding.review", review.run)
+        daemon.alerts.append(review)
     initiative = app.config.initiative
     autonomy = app.plate.autonomy
     grant_tool = app.orion.registry.get("autonomy_grant")

@@ -16,7 +16,6 @@ import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
-from functools import partial
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -40,7 +39,6 @@ from orion.cognition.loop import (
     execute_call,
     run_agent,
 )
-from orion.cognition.verifier import Verifier
 from orion.config import AgentConfig, Effort
 from orion.context.compiler import ContextCompiler, estimate_tokens, render_user_message
 from orion.context.meanwhile import READ_AT_MOST, meanwhile
@@ -249,9 +247,6 @@ class Orion:
         turn in his conversation then gives way to him."""
         self.situation: list[SituationSource] = []
         """What modules know of where his life stands (his agenda, the missions), D146."""
-        self.verifier: Verifier | None = None
-        """Checks that his replies' claims rest on what the tools returned (set by `serve`,
-        `orion.cognition.grounding`); None: only a claim made with no tool run is sent back."""
 
     @property
     def registry(self) -> ToolRegistry:
@@ -724,7 +719,7 @@ class Orion:
             finish_check=finish_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
-            ground_check=partial(ground_check, verifier=self.verifier)
+            ground_check=ground_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
             budget=Budget(
