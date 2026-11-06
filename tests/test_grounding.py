@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from orion.cognition.grounding import GROUND_NOTE, UNCHECKED_NOTE, claims_a_state
+from orion.cognition.grounding import UNCHECKED_NOTE, claims_a_state
+from orion.cognition.review import GroundingReview
 from orion.cognition.verifier import Verifier
 from orion.core.journal import SqliteJournal
 from orion.runtime import OWNER_THREAD
@@ -47,35 +48,36 @@ async def test_a_state_claimed_with_no_tool_run_is_sent_back_once(
     assert_prefix_stable(provider)
 
 
-async def test_the_verifier_sends_back_what_no_result_shows(journal: SqliteJournal) -> None:
+async def test_an_unproven_reply_is_read_again_once_the_exchange_settles(
+    journal: SqliteJournal,
+) -> None:
     provider = ScriptedProvider(
         call_tools(("echo", {"text": "login page: form filled, waiting for the code"})),
         # No pattern would pick this one: the verifier reads every reply, not a list's choice.
         reply("Le coffre a dit non pour Nibelis, il faudra retenter demain."),
-        reply("Je n'ai pas vu de refus : la page attend un code."),
+        reply("Bonne soirée !"),
     )
     checks = ScriptedProvider(
         reply('{"ok": false, "issues": ["« le coffre a dit non » : rien ne le montre"]}')
     )
     orion = make_orion(journal, provider)
-    orion.verifier = Verifier(checks, "verifier")
     await orion.start()
+    now = [at(0)]
+    review = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: now[0])
+    await review.tick()
     turn = await orion.handle_owner_message(OWNER_THREAD, "Nibelis ?", "t", now=at(1))
-    assert turn.text == "Je n'ai pas vu de refus : la page attend un code."
-    note = provider.requests[2].messages[-1]["content"]
-    assert note.startswith(GROUND_NOTE.split("{")[0]) and "rien ne le montre" in note
+    assert turn.text.startswith("Le coffre a dit non")  # it went at once, unread
+    await orion.handle_owner_message(OWNER_THREAD, "Merci", "t", now=at(2))
+    assert not await review.tick()  # still talking
+    now[0] = at(3)
+    assert await review.tick()
+    assert len(checks.requests) == 1  # both replies, one call
     assert "waiting for the code" in checks.requests[0].messages[-1]["content"]
-    assert_prefix_stable(provider)
+    [alert] = await review.alerts(at(3))
+    assert "rien ne le montre" in alert.notice
+    assert not await review.tick()  # read once
 
-
-async def test_a_claim_the_results_support_goes(journal: SqliteJournal) -> None:
-    provider = ScriptedProvider(
-        call_tools(("echo", {"text": "mail sent, id 42"})),
-        reply("C'est envoyé."),
-    )
-    orion = make_orion(journal, provider)
-    orion.verifier = Verifier(ScriptedProvider(reply('{"ok": true, "issues": []}')), "verifier")
-    await orion.start()
-    turn = await orion.handle_owner_message(OWNER_THREAD, "Envoie-le", "t", now=at(1))
-    assert turn.text == "C'est envoyé."
-    assert len(provider.requests) == 2
+    # After a restart, it goes on after the last reading and still has what it found.
+    again = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: at(9))
+    assert not await again.tick()
+    assert [a.key for a in await again.alerts(at(9))] == [alert.key]
