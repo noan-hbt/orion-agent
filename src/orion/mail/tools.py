@@ -20,6 +20,7 @@ from orion.mail.service import Mailbox, MailCard
 from orion.mail.smtp import ADDRESS, MailFile, Outgoing, Postman, SendError
 from orion.mail.tidy import Draft, Mark, Tidied, Tidy
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.outcome import Outcome
 
 
 class MailInput(BaseModel):
@@ -322,12 +323,19 @@ def mail_tools(
             to=args.to, cc=args.cc, subject=args.subject, body=args.body, attachments=attached
         )
         try:
-            account, _ = await postman.send(
+            account, message_id = await postman.send(
                 mail, card, ctx.grant, ctx.correlation_id, closes=args.closes
             )
         except (SendError, GuardianUnavailableError) as exc:
             return ToolResult(f"Not sent: {exc}", is_error=True)
-        return ToolResult(f"Envoyé depuis « {account} » à {', '.join(args.to)}.")
+        # The SMTP server took it: whether it reaches the inbox, nothing here can show (D258).
+        return ToolResult(
+            f"Accepté par le serveur d'envoi de « {account} » pour {', '.join(args.to)}. "
+            "La remise n'est pas prouvée : dis « envoyé », jamais « reçu » ni « arrivé ».",
+            outcome=Outcome.PENDING,
+            action_id=f"mail:{message_id}",
+            proof=f"smtp {account}",
+        )
 
     async def mail_tidy(args: Any, ctx: ToolContext) -> ToolResult:
         if tidy is None:  # pragma: no cover - the tool exists only with tidy

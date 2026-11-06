@@ -12,6 +12,7 @@ from orion.federation.meetings import MeetingDesk
 from orion.guardian.client import GuardianUnavailableError
 from orion.initiative.tools import describe_moment, parse_moment
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.outcome import Outcome
 
 
 class PeersInput(BaseModel):
@@ -83,17 +84,21 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
         except GuardianUnavailableError as exc:
             return ToolResult(f"Not sent, the guardian refused: {exc}", is_error=True)
         offered = ", ".join(describe_moment(s, ctx.timezone) for s in slots)
-        if args.also:
-            return ToolResult(
-                f"Sondage envoyé ({meeting_id}) à {len(args.also) + 1} Orion avec "
-                f"{len(slots)} créneau(x) libre(s) : {offered}. Le premier qui va à tout le "
-                "monde leur sera proposé ; la réponse arrivera d'elle-même.",
-                data={"meeting_id": meeting_id},
-            )
+        # The guardian answers only once the other Orion took it (D258): taken, not agreed to.
+        said = (
+            f"Sondage envoyé ({meeting_id}) à {len(args.also) + 1} Orion avec "
+            f"{len(slots)} créneau(x) libre(s) : {offered}. Le premier qui va à tout le "
+            "monde leur sera proposé ; la réponse arrivera d'elle-même."
+            if args.also
+            else f"Proposition envoyée ({meeting_id}) avec {len(slots)} créneau(x) libre(s) : "
+            f"{offered}. La réponse arrivera d'elle-même."
+        )
         return ToolResult(
-            f"Proposition envoyée ({meeting_id}) avec {len(slots)} créneau(x) libre(s) : "
-            f"{offered}. La réponse arrivera d'elle-même.",
+            said,
             data={"meeting_id": meeting_id},
+            outcome=Outcome.CONFIRMED,
+            action_id=f"meeting:{meeting_id}",
+            proof="pris par l'autre Orion",
         )
 
     async def peer_message(args: Any, ctx: ToolContext) -> ToolResult:
@@ -105,7 +110,10 @@ def federation_tools(desk: MeetingDesk) -> list[Tool]:
             return ToolResult(f"Not sent, the guardian refused: {exc}", is_error=True)
         return ToolResult(
             f"Envoyé à l'Orion de {label}. Sa réponse arrivera d'elle-même : tu lui répondras "
-            "dans votre conversation à vous, et il en entendra parler."
+            "dans votre conversation à vous, et il en entendra parler.",
+            outcome=Outcome.CONFIRMED,
+            action_id=f"peer:{label}:{ctx.correlation_id}",
+            proof="pris par l'autre Orion",
         )
 
     async def meetings(args: Any, ctx: ToolContext) -> ToolResult:

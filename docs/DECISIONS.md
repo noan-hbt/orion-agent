@@ -5907,3 +5907,48 @@ travail en plusieurs étapes. Le moteur `orion.workflows` les journalise étape 
   compte rendu au propriétaire, et les travaux en attente ou incertains à la revue du soir.
 - **Compatibilité** : rien à migrer. Les événements sont nouveaux, et `job.started` /
   `job.finished` restent ceux qu'on avait.
+
+## D258 — Une action est dite aussi loin que sa preuve, pas plus
+
+*06/11/2026 · acceptée · complète D252, D253, D255, D257 · ORION-20*
+
+Un outil qui a rendu la main n'a pas prouvé qu'il a réussi. Un mail accepté par le serveur SMTP
+peut ne jamais arriver ; un clic sur « Envoyer » peut finir sur une page d'erreur. Les outils
+disaient « Envoyé » dès la remise.
+
+- **Un contrat commun** (`orion.tools.outcome`) : un outil qui agit rend, avec son résultat, une
+  issue, un `action_id` stable (`mail:<Message-ID>`, `browser:<site>#<n>`, `workflow:<id>`…) et une
+  courte référence de preuve. Cinq issues : `ATTEMPTED` (la commande a tourné, rien ne dit ce
+  qu'elle a fait), `PENDING` (remis à un tiers qui n'a pas réglé), `CONFIRMED` (une lecture de
+  l'état réel le montre), `FAILED`, `UNCERTAIN` (peut-être fait, peut-être non : D257).
+- **Par famille** : mail → `PENDING` (le serveur l'a pris, la remise n'est pas prouvable : dire
+  « envoyé », jamais « reçu »). Fichier ou vocal au propriétaire → `CONFIRMED` (l'outbox du
+  canal l'a réglé `delivered`, sinon l'appel échoue). Message ou proposition à un autre Orion →
+  `CONFIRMED` (le gardien ne répond qu'une fois l'autre Orion l'a pris : pris, pas accepté).
+  Clic, saisie, choix, touche, envoi de fichier dans le navigateur → `ATTEMPTED`, un
+  `action_id` par appel (`browser:<site où il agit>#<n>`, même s'il atterrit sur un autre site :
+  un paiement). `browser_save_procedure` confirme par la règle D255 l'étape après laquelle la
+  preuve est apparue, plus celles que le modèle nomme (`actions`) et que le navigateur a faites
+  ce tour-ci sur ce site avant elle ; jamais tout le domaine : une autre démarche sur le même
+  site garde son issue. Un appel qui règle plusieurs actions les joint par « , ».
+  `workflows_status` avec un travail incertain → `UNCERTAIN`.
+- **Survit au compactage** : l'issue est la première ligne du résultat (`[issue … · action … ·
+  preuve …]`), là où la coupe et l'allègement gardent le début ; l'allègement garde cette ligne
+  entière. `tool.executed` journalise `call_id`, `outcome`, `action_id` et `proof`.
+- **Dans le tour, le même contrôle en code** (`grounding.ground_check`, sans appel de modèle) :
+  la dernière issue de chaque action compte, et la preuve d'une autre action ne vaut rien pour
+  celle-ci. Une réponse qui dit fait une action restée `ATTEMPTED` ou `UNCERTAIN`, ou qui dit
+  arrivée une action `PENDING`, est renvoyée une fois : vérifier avec l'outil qui lit l'état
+  réel, ou dire exactement où ça en est. Le contrôle lit la réponse proposition par
+  proposition et rattache chacune aux actions qu'elle nomme (le mail, le site, le travail) ;
+  une proposition qui n'en nomme aucune vaut pour toutes si elle affirme, pour l'affirmation
+  d'avant si elle est prudente (« …, pas de confirmation vue »). « Le mail est en attente » ne
+  couvre donc pas « j'ai soumis la déclaration » : jamais de passe-droit global par un seul
+  qualificatif.
+- **Après coup** : la relecture D253 lit les résultats d'outils, ligne d'issue comprise.
+- **Portée MVP, ce qui manque** : le contrôle ne vit que dans le tour (et la relecture D253).
+  Le moteur d'initiative ne consomme pas encore les issues : une action restée `ATTEMPTED` ou
+  `PENDING` ne déclenche ni relance ni vérification plus tard. Seuls le mail, le navigateur,
+  les fichiers et vocaux au propriétaire, la fédération et `workflows_status` en émettent ; les
+  autres outils externes (agenda, contacts, commandes) n'en rendent pas et gardent leur message
+  d'avant. Pas de lecture de confirmation pour le mail (dossier Envoyés, accusé de remise).
