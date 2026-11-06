@@ -5802,3 +5802,22 @@ fusionné, l'attente le bloque, jusqu'à 3 h.
   aussi quand rien n'est à appliquer, pour qu'une demande ancienne ne vaille pas pour la suite.
 - **Ce que le bouton ne contourne pas** : le commit écarté (`update.bad`), la vérification au
   démarrage et le retour en arrière.
+
+## D256 — Le matin, sa journée ; le dimanche, la semaine qui vient
+
+*06/11/2026 · acceptée · complète D52 et D194*
+
+Il manquait un point d'ouverture de journée et un regard sur la semaine à venir (ORION-7). Ni
+nouveau module ni nouveau message : on prolonge ceux qui existent.
+
+- **Le matin** : la note du réveil (D117) dit aussi sa journée, en une ligne : ce qui compte
+  aujourd'hui (rendez-vous, trajet, perturbation), ce qui coince dans les 48 heures, au plus une
+  décision. Cette ligne se dit tout de suite, après la phrase qui propose de raconter la nuit
+  (D194) : elle ne se raconte pas.
+- **Le dimanche** : après la page de la semaine (D52), Orion dit la semaine qui vient. Elle est
+  tirée de ce qu'il lit à ce moment-là : son agenda sur sept jours, les engagements qui arrivent
+  à échéance, les intentions qu'il suit (D53). Elle n'est pas journalisée avec la page : le
+  journal intime reste la semaine passée. Sa confiance est la plus basse de ses sources (une
+  invitation non répondue vaut la parole d'un tiers).
+- **Rien d'inventé** : seulement ce que montrent ces sources. Une journée ou une semaine sans
+  rien n'en dit rien.

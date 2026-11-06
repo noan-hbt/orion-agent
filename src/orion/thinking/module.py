@@ -204,7 +204,13 @@ trancher, en {points} choses au plus, seulement ce qui apporte du neuf (une redi
 courage » ou le détail de ton tri n'en sont pas). En plus, chaque question que tu lui avais
 promis de reprendre (`<promis>`) : ta réponse, même « je maintiens », et pourquoi ; elle ne
 se reprendra pas ailleurs. Ce que tes tâches de fond trouveront te parviendra à part : dis
-seulement que tu les as lancées. Si rien ne mérite de le réveiller avec, réponds SILENCE.""",
+seulement que tu les as lancées.
+Puis sa journée, en une ligne (D256) : ce qui compte aujourd'hui (un rendez-vous, un trajet à
+prévoir, une perturbation que tu as vue), ce qui coince dans les 48 heures, et au plus une
+décision à prendre. Seulement ce que montrent son agenda, ses engagements, ce qui est prévu, ce
+qui l'attend (`<calendar>`, `<engagements>`, `<prevu>`, `<a-venir>`) et ce que tu as lu cette
+nuit ; une journée sans rien, n'en dis rien. Si rien ne mérite de le réveiller avec, réponds
+SILENCE.""",
 }
 """The night's times, in order (D186): one focus each, over the whole material laid out once."""
 MAX_FACTS = 400
@@ -871,8 +877,10 @@ class Thinking:
             notice="Cette nuit, pendant qu'il dormait, tu as travaillé de ton côté. Ce que tu "
             f"t'étais noté pour lui au réveil :\n{note.text}\nNe le lui déroule pas : propose-lui, "
             "en une phrase courte, de lui raconter ta nuit, en disant juste sur quoi elle a porté "
-            "(D194). S'il veut, raconte-lui alors, avec tes mots. Seule une chose qui ne peut pas "
-            "attendre sa réponse (un rendez-vous dans l'heure) se dit tout de suite, en une ligne. "
+            "(D194). S'il veut, raconte-lui alors, avec tes mots. Sa journée (ce qui compte "
+            "aujourd'hui, la décision s'il y en a une) tient en une seconde phrase, tout de suite "
+            "(D256) : elle ne se raconte pas, elle se dit. Seule une chose qui ne peut pas "
+            "attendre sa réponse (un rendez-vous dans l'heure) se dit aussi tout de suite. "
             "Ce qui a été réglé depuis, laisse-le ; si plus rien ne vaut, réponds SILENCE.",
             why="ta nuit",
             fallback=note.text,
