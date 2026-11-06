@@ -1024,10 +1024,12 @@ class Orion:
         if self._memory is not None:
             current = [s for s in self._memory.situations.current() if s.trust >= TRUSTED_FLOOR]
             lines += [f"- en cours{s.line()[1:]}" for s in current[:SITUATIONS_SHOWN]]
-            soon = when.date() + timedelta(days=SITUATION_DAYS)
+            today = when.date().isoformat()
+            soon = (when.date() + timedelta(days=SITUATION_DAYS)).isoformat()
             for c in await self._memory.store.commitments():
                 due = (c.due or "")[:10]
-                if c.debtor in ("owner", "orion") and due and due <= soon.isoformat():
+                # Past due, it is asked about once in a digest, not shown every turn (D250).
+                if c.debtor in ("owner", "orion") and due and today <= due <= soon:
                     who = "à faire" if c.debtor == "owner" else "à toi de faire"
                     lines.append(f"- {who} pour le {due} : {c.what}")
         for source in self.situation:

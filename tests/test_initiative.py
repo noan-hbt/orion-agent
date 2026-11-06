@@ -415,6 +415,9 @@ def test_digest_lines_rules() -> None:
         items, today, last_slot=True, last_mention={"late": today, "today": today, "owed": today}
     )
     assert [cid for cid, _ in evening] == ["tomorrow"]
+    # Past due, it is asked about once, then left to his answer (D250).
+    asked = {"late": date(2026, 10, 19)}
+    assert "late" not in [c for c, _ in digest_lines(items, today, False, asked)]
     chased_recently = {"owed": today - timedelta(days=2)}
     assert "owed" not in [c for c, _ in digest_lines(items, today, False, chased_recently)]
     chased_long_ago = {"owed": today - timedelta(days=3)}

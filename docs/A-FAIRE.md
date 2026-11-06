@@ -30,7 +30,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    épuisé, comme le 05/11 à 19 h 06 : `subscription_sharing_usage_unavailable`), le dire au
    propriétaire une fois (au prochain point) et l'afficher dans l'app/`orion`.
    `src/orion/providers/router.py:64`.
-2. [ ] **Engagements en retard.** `runtime.py:1030` (`due <= soon` sans borne basse) les
+2. [x] **Engagements en retard.** (D250) `runtime.py:1030` (`due <= soon` sans borne basse) les
    montre dans chaque `<maintenant>` pour toujours (« à faire pour le 2026-11-03 » encore le
    05/11). Passé l'échéance : sortis de `<maintenant>`, une seule question (« fait ? reporté ?
    abandonné ? »), puis clos ou reprogrammés. Test : un engagement échu n'apparaît plus dans le

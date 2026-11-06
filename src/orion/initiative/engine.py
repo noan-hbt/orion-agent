@@ -472,9 +472,10 @@ def digest_lines(
 ) -> list[tuple[str, str]]:
     """Commitment lines worth mentioning now, with their ids. Pure: easy to test and explain.
 
-    Owner-side items (overdue, due today, or due tomorrow in the last digest of the day) are
-    mentioned at most once a day. Things others owe the owner are chased once their date has
-    passed, at most every few days.
+    Owner-side items due today, or due tomorrow in the last digest of the day, are mentioned
+    at most once a day. Past due, they are asked about once (done, put off, dropped?) and then
+    left to his answer: on 05/11 « à faire pour le 2026-11-03 » was still repeated (D250).
+    Things others owe the owner are chased once their date has passed, at most every few days.
     """
     lines: list[tuple[str, str]] = []
     for c in commitments:
@@ -486,7 +487,12 @@ def digest_lines(
             if seen == today:
                 continue
             if due < today:
-                when = f"en retard (c'était pour le {due.isoformat()})"
+                if seen is not None and seen > due:
+                    continue  # already asked since it fell due
+                when = (
+                    f"en retard (c'était pour le {due.isoformat()}) : demande-lui une fois si "
+                    "c'est fait, reporté (nouvelle date) ou abandonné"
+                )
             elif due == today:
                 when = "pour aujourd'hui" + _at(c)
             elif due == today + timedelta(days=1) and last_slot:

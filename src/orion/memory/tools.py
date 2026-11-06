@@ -282,7 +282,8 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         ),
         Tool(
             name="commitment_close",
-            description="Mark a commitment as done or cancelled.",
+            description="Mark a commitment as done or cancelled. Put off to a new date: "
+            "cancel it and `commitment_add` it again with that date.",
             input_model=CommitmentCloseInput,
             handler=commitment_close,
             **write,
