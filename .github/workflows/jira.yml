@@ -1,0 +1,83 @@
+# Keeps the Jira project ORION in step with git (see CLAUDE.md, "Work tracking").
+#   branch ORION-<n>-... pushed  -> En cours   (only from Backlog / Selected for Development)
+#   PR opened / ready            -> En revue   + a comment with the PR link
+#   PR merged                    -> Terminé(e) + a comment with the merge commit
+# The ticket key is read from the PR title, else the branch name. No key: nothing happens.
+# Secrets: JIRA_EMAIL, JIRA_API_TOKEN (an Atlassian API token of the owner).
+name: Jira
+
+on:
+  create:
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+
+permissions: {}
+
+concurrency:
+  group: jira-${{ github.event.pull_request.number || github.ref }}
+
+env:
+  JIRA_URL: https://nerb-solutions.atlassian.net
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    if: >-
+      (github.event_name == 'create' && github.event.ref_type == 'branch'
+        && startsWith(github.event.ref, 'ORION-'))
+      || (github.event_name == 'pull_request' && !github.event.pull_request.draft
+        && (github.event.action != 'closed' || github.event.pull_request.merged))
+    steps:
+      - name: Move the ticket
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REF: ${{ github.event.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JIRA_API_TOKEN:-}" ]; then
+            echo "::error::JIRA_EMAIL / JIRA_API_TOKEN secrets are missing"; exit 1
+          fi
+          key=$(printf '%s\n%s\n%s\n' "${PR_TITLE:-}" "${PR_BRANCH:-}" "${REF:-}" \
+            | grep -oE '\bORION-[0-9]+\b' | head -n1 || true)
+          if [ -z "$key" ]; then echo "No ORION key, nothing to do."; exit 0; fi
+
+          api() { curl -sS --fail-with-body -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            -H 'Content-Type: application/json' "$@"; }
+          comment() {
+            jq -n --arg t "$1" '{body:{type:"doc",version:1,content:[{type:"paragraph",
+              content:[{type:"text",text:$t}]}]}}' \
+              | api -X POST -d @- "$JIRA_URL/rest/api/3/issue/$key/comment" > /dev/null
+          }
+
+          # Target status by id (stable whatever the display language), "En revue" by name.
+          case "$EVENT/$ACTION" in
+            create/*)        target_id=3;     target_name=""; only_from="10083 10081" ;;
+            pull_request/closed) target_id=10082; target_name=""; only_from="" ;;
+            pull_request/*)  target_id="";    target_name="En revue"; only_from="" ;;
+          esac
+
+          current=$(api "$JIRA_URL/rest/api/3/issue/$key?fields=status" | jq -r .fields.status.id)
+          if [ -n "$only_from" ] && ! grep -qw "$current" <<< "$only_from"; then
+            echo "$key is in status $current, left as is."; exit 0
+          fi
+          transition=$(api "$JIRA_URL/rest/api/3/issue/$key/transitions" | jq -r \
+            --arg id "$target_id" --arg name "$target_name" \
+            '[.transitions[] | select(.to.id == $id or .to.name == $name)][0].id // empty')
+          if [ -z "$transition" ]; then
+            echo "::error::$key: no transition to ${target_name:-status $target_id}"; exit 1
+          fi
+          jq -n --arg t "$transition" '{transition:{id:$t}}' \
+            | api -X POST -d @- "$JIRA_URL/rest/api/3/issue/$key/transitions"
+          echo "$key moved (transition $transition)."
+
+          case "$EVENT/$ACTION" in
+            pull_request/closed) comment "Mergée : $PR_URL (commit ${MERGE_SHA:0:7})." ;;
+            pull_request/*)      comment "PR ouverte : $PR_URL" ;;
+          esac

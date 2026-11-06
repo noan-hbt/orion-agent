@@ -55,9 +55,17 @@ Statuses, and who moves a ticket into each:
 - `Backlog` — proposed (audits, agents). Not to be worked on.
 - `Selected for Development` — accepted by the owner, ready. Pick from here only, highest
   priority first, then lowest key.
-- `En cours` — an agent is on it (assigned).
-- `En revue` — PR open, waiting for the owner.
-- `Terminé(e)` — the owner, after merge. Never an agent.
+- `En cours` — someone is on it (assigned). Automatic when a branch `ORION-<n>-...` is pushed.
+- `En revue` — PR open, waiting for the owner. Automatic when the PR opens.
+- `Terminé(e)` — automatic when the owner merges. Never moved by hand by an agent.
+
+Git drives the status: `.github/workflows/jira.yml` reads the key in the PR title or branch
+name and moves the ticket (no key, nothing happens). If the action fails, move it by hand.
+
+Views (JQL): next for an agent — `project = ORION AND status = "Selected for Development" AND
+labels = pret-agent AND labels != a-decider ORDER BY priority DESC, key ASC`; waiting for the
+owner — `project = ORION AND (status = "En revue" OR labels = a-decider) AND statusCategory !=
+Done`.
 
 Labels: `pret-agent` (self-contained, an agent can take it), `a-decider` (needs an owner
 decision first: never code it), `proprietaire` (the owner does it by hand), `recurrent` (never
@@ -68,7 +76,7 @@ closed, comment each run), plus an area (`memoire`, `veille`, `initiative`, `nav
 - A ticket without a clear "Fait quand", or that contradicts a decision (Dxxx): comment the
   question on the ticket, add `a-decider`, move it back to `Backlog`, and stop. Do not guess.
 - One ticket = one branch `ORION-<n>-<topic>` = one PR whose title starts with `ORION-<n>`.
-- PR open: comment on the ticket with the link, what was done, what was not, and what was
-  verified (tests run, pyright). Move it to `En revue`.
+- PR open (template `.github/pull_request_template.md`): comment on the ticket what was done,
+  what was not, and what was verified (tests run, pyright). The link and the status follow.
 - Work found along the way goes into a new `Backlog` ticket linked to the current one, not into
   the current PR. Tickets you create: Contexte / À faire / Fait quand / Références, in French.
