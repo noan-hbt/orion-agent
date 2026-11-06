@@ -71,7 +71,9 @@ Halted = Callable[[], Awaitable[bool]]
 
 FinishCheck = Callable[[str, Sequence[str]], str | None]
 """(final reply, tools called this turn) → a note that sends the model back, or None."""
-"""The final reply → a note for the model when it should not stop there yet, else None."""
+GroundCheck = Callable[[str, Sequence[str], Sequence[Message]], Awaitable[str | None]]
+"""(final reply, tools called this turn, the conversation) → a note when the reply states what
+no tool showed, or None (`orion.cognition.grounding`)."""
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,9 @@ class LoopSettings:
     finish_check: FinishCheck | None = None
     """Asked once per run about the final reply before it goes: a note sends the model back
     to work for one more step (`orion.cognition.finish`)."""
+    ground_check: GroundCheck | None = None
+    """Asked once per run, after `finish_check`, whether the final reply's claims rest on what
+    the tools returned: a note sends the model back to check (`orion.cognition.grounding`)."""
 
 
 WRAP_UP = (
@@ -280,6 +285,7 @@ async def run_agent(
     model = settings.model
     max_cost = budget.max_cost_usd
     checked = False
+    grounded = False  # the reply's claims were checked against the tools' results
     pressed = False  # sent back once for an empty reply with nothing said (`SAY_SOMETHING`)
     failures: Counter[tuple[str, str]] = Counter()
     parts: list[str] = []  # a reply cut by the length limit, so far: continued, then joined
@@ -479,6 +485,21 @@ async def run_agent(
                 messages.append(nudge)
                 yield MessageEmitted(nudge, Trust.SYSTEM)
                 continue
+            if (
+                settings.ground_check is not None
+                and not grounded
+                and reason is StopReason.COMPLETED
+                and room
+                and usage.cost_usd < max_cost
+            ):
+                grounded = True
+                unproven = await settings.ground_check(text, called, messages)
+                if unproven is not None:
+                    log.info("loop.unproven", thread=settings.thread_id)
+                    check: Message = {"role": "user", "content": unproven}
+                    messages.append(check)
+                    yield MessageEmitted(check, Trust.SYSTEM)
+                    continue
             yield finished(reason, text)
             return
 

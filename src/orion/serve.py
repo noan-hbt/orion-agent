@@ -81,6 +81,11 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
     if isinstance(app.provider, Spending):
         daemon.alerts.append(app.provider)
 
+    verifier = Verifier(
+        app.provider, app.config.agent.verifier_model, app.config.effort("verifier")
+    )
+    if app.config.agent.verifier_model:
+        app.orion.verifier = verifier  # his replies' claims are checked too (grounding)
     initiative = app.config.initiative
     autonomy = app.plate.autonomy
     grant_tool = app.orion.registry.get("autonomy_grant")
@@ -105,9 +110,7 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
                 verifier=initiative.verifier,
             ),
             memory=app.memory.store,
-            verifier=Verifier(
-                app.provider, app.config.agent.verifier_model, app.config.effort("verifier")
-            ),
+            verifier=verifier,
             reports=daemon.reports,
             caller=daemon.caller,
             alerts=daemon.alerts,

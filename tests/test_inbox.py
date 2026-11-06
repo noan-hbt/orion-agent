@@ -147,7 +147,7 @@ async def test_call_transcripts_may_need_no_answer(
 ) -> None:
     imessage = Outlet("imessage")
     inbox.register(imessage)
-    provider.extend(reply("SILENCE"), reply("J'ai réservé pour jeudi, comme dit au tel."))
+    provider.extend(reply("SILENCE"), reply("Jeudi alors, comme dit au tel."))
     inbox.submit(
         Inbound("appel", ("call-1",), "transcription…", reply_via="imessage", allow_silence=True)
     )
@@ -155,7 +155,7 @@ async def test_call_transcripts_may_need_no_answer(
         Inbound("appel", ("call-2",), "transcription…", reply_via="imessage", allow_silence=True)
     )
     await until(lambda: bool(imessage.sent))
-    assert imessage.sent == ["J'ai réservé pour jeudi, comme dit au tel."]
+    assert imessage.sent == ["Jeudi alors, comme dit au tel."]
     assert len(provider.requests) == 2  # transcripts are never merged together
 
 
