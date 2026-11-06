@@ -5724,3 +5724,16 @@ le redisait chaque jour : la liste n'avait pas de borne basse.
 - **Une question** : passé l'échéance, le point demande une fois « fait, reporté ou abandonné ? »,
   puis n'en reparle plus. Sa réponse clôt l'engagement (`commitment_close`) ou le reporte
   (annulé, puis recréé à la nouvelle date).
+
+## D251 — Les mises à jour attendent qu'il ait fini, et se regroupent
+
+*06/11/2026 · acceptée · complète D94*
+
+Chaque fusion redémarrait Orion dans les deux minutes : environ 8 redémarrages par jour sur les
+deux semaines de l'audit, et chacun ferme le navigateur, une prise en main en cours, les onglets.
+
+- **Le cœur dit jusqu'à quand** (`orion.core.busy`, fichier `data/busy-until`) : dix minutes
+  après chacun de ses messages, la durée d'une prise en main.
+- **Le script attend** (`deploy/orion-update`) : pas pendant ce délai, au plus une mise à jour par
+  heure ; ce qui arrive entre-temps part ensemble. Jamais plus de 3 heures d'attente.
+- **`[urgent]`** dans un message de commit fait passer la mise à jour tout de suite.

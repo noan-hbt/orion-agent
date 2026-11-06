@@ -17,6 +17,7 @@ import structlog
 from orion.app import App
 from orion.channels.inbox import OwnerInbox
 from orion.cognition.verifier import Verifier
+from orion.core import busy
 from orion.core.supervisor import Supervisor
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
@@ -133,6 +134,7 @@ async def heartbeat(guardian: GuardianClient, every: float) -> None:
 
 
 async def serve(app: App) -> None:
+    busy.configure(app.config.data_dir)
     inbox = owner_inbox(app)
 
     async def escalate(service: str, error: BaseException) -> None:

@@ -35,7 +35,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    05/11). Passé l'échéance : sortis de `<maintenant>`, une seule question (« fait ? reporté ?
    abandonné ? »), puis clos ou reprogrammés. Test : un engagement échu n'apparaît plus dans le
    contexte après la question.
-3. [ ] **Déploiements groupés.** ~8 redémarrages/jour (110 initiatives `restart` en 14 j, 97
+3. [x] **Déploiements groupés.** (D251) ~8 redémarrages/jour (110 initiatives `restart` en 14 j, 97
    tues) : chaque redémarrage ferme le navigateur et perd prises en main et onglets. Ne pas
    redémarrer pendant une conversation active (< 10 min) ni une prise en main ; regrouper (au
    plus une fois par heure, ou la nuit), sauf correctif marqué urgent. `deploy/orion-update.*`,

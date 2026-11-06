@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.computer.browser import KEPT_COOKIES, MAX_ELEMENTS, BrowserError, Session, Snapshot
 from orion.computer.vault import LocalVault, LoginKeeper, VaultError
+from orion.core import busy
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -574,6 +575,7 @@ class BrowserDesk:
         now = time.monotonic()
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(ctx.thread_id, why, now + HANDOVER_SECONDS)
+        busy.hold(HANDOVER_SECONDS)  # a restart would take the tab from under him
         self.held.add(ctx.thread_id)
         # One place to take the tab, where he is: the app, unless he is on Telegram.
         telegram = telegram and (not self.in_app or self.on_telegram())
@@ -891,6 +893,7 @@ class BrowserDesk:
         now = time.monotonic()
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(HANDS, why, now + HANDOVER_SECONDS, asked=False)
+        busy.hold(HANDOVER_SECONDS)
         return {"token": token, "why": why}
 
     async def sites(self) -> list[str]:
