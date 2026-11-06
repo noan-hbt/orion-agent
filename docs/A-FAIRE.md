@@ -1,5 +1,10 @@
 # À faire — feuille de route vers le Jarvis (05/11/2026)
 
+> **Archivé le 06/11/2026.** La liste de travail vit désormais dans Jira, projet `ORION`
+> (https://nerb-solutions.atlassian.net/browse/ORION) : P1 = ORION-1, P2 = ORION-2,
+> exploitation = ORION-3, indicateurs = ORION-18. Ce fichier n'est plus mis à jour ; il garde le
+> détail des points faits (P0, P1.9, P1.10, P1.15).
+
 La liste de travail issue de l'audit du 05/11 (`architecture/06-audit-jarvis.md`, le pourquoi,
 les chiffres et les causes) et de la relecture des logs de prod du même jour. Elle est faite pour
 être reprise par une nouvelle session : chaque point dit quoi faire, où, et comment savoir que
