@@ -266,6 +266,11 @@ class Told:
 
 REPEAT_REFUSED = "repeat refused"
 TIMED_OUT = "timed out"
+STOPPED_CALL = "stopped by the owner"
+STOP_POLL_SECONDS = 0.5
+"""How often a running call looks whether he asked to stop (ORION-32)."""
+STOP_GRACE_SECONDS = 10.0
+"""How long a cut call gets to let go of what it holds before the turn goes on without it."""
 
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
 
@@ -570,6 +575,7 @@ async def run_agent(
             return
         tool_seconds += time.monotonic() - started
         worked = True
+        stopped_now = any(reason == STOPPED_CALL for _, _, reason in executions)
         for call, result, reason in executions:
             if call.name == "plan" and not result.is_error:
                 open_steps = _open_steps(call)
@@ -595,6 +601,11 @@ async def run_agent(
             messages.append(tool_message)
             yield ToolExecuted(call, result, reason)
             yield MessageEmitted(tool_message, result.trust)
+
+        if stopped_now:
+            # He asked to stop and the call was cut: nothing more runs, and nothing is said.
+            yield finished(StopReason.HALTED, "")
+            return
 
         if stalled:
             async for event in wrap_up(StopReason.STALLED, "repeated identical calls"):
@@ -708,6 +719,8 @@ async def _execute_calls(
         return call, ToolResult(SKIPPED, is_error=True), "skipped: the owner wrote"
 
     async def run_one(call: ToolCall) -> tuple[ToolCall, ToolResult, str]:
+        if settings.halted is not None and await settings.halted():
+            return call, ToolResult(CALLED_OFF, is_error=True), STOPPED_CALL
         result, reason = await _execute_one(
             call, registry, guardian, settings, context_trust, call_counts, budget
         )
@@ -802,7 +815,9 @@ async def _execute_one(
     limit = asyncio.timeout(tool.deadline)
     try:
         async with limit:
-            result = await tool.handler(arguments, ctx)
+            result = await _run(tool, arguments, ctx, settings)
+    except _Stopped:
+        return _cut(tool, arguments, settings, time.monotonic() - started), STOPPED_CALL
     except TimeoutError as exc:
         if not limit.expired():
             log.exception("tool.failed", tool=tool.name)
@@ -812,6 +827,51 @@ async def _execute_one(
         log.exception("tool.failed", tool=tool.name)
         return ToolResult(f"Tool error: {type(exc).__name__}: {exc}", is_error=True), "tool error"
     return _clip(result, tool), decision.reason
+
+
+class _Stopped(Exception):
+    """He asked to stop while the call ran: it was cut."""
+
+
+async def _run(
+    tool: Tool, arguments: BaseModel, ctx: ToolContext, settings: LoopSettings
+) -> ToolResult:
+    """The handler, cut as soon as he asks to stop (ORION-32: on 06/11 his Stop at 08:28 left a
+    `browser open` running until the restart at 08:42; it was only read between steps)."""
+    halted = settings.halted
+    if halted is None:
+        return await tool.handler(arguments, ctx)
+    task = asyncio.ensure_future(tool.handler(arguments, ctx))
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=STOP_POLL_SECONDS)
+            if done:
+                return task.result()
+            if await halted():
+                task.cancel()
+                done, _ = await asyncio.wait({task}, timeout=STOP_GRACE_SECONDS)
+                if not done:
+                    log.error("tool.stop_failed", tool=tool.name, thread=settings.thread_id)
+                raise _Stopped
+    finally:
+        if not task.done():
+            task.cancel()
+
+
+def _cut(tool: Tool, arguments: BaseModel, settings: LoopSettings, seconds: float) -> ToolResult:
+    external = tool.effect_for(arguments) is Effect.EXTERNAL
+    log.info(
+        "tool.stopped",
+        tool=tool.name,
+        thread=settings.thread_id,
+        correlation_id=settings.correlation_id,
+        seconds=round(seconds, 1),
+        external=external,
+    )
+    said = f"Stopped: he asked to stop, the call was cut after {seconds:.0f} s."
+    if external:
+        said += " UNCERTAIN: what it was doing may or may not have happened; never redo it unasked."
+    return ToolResult(said, is_error=True)
 
 
 def _timed_out(

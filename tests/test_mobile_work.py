@@ -13,25 +13,26 @@ from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import Guardian
-from orion.mobile.channel import MobileChannel
+from orion.mobile.channel import STOP_COMPLETED, STOP_REQUESTED, MobileChannel
 from orion.mobile.devices import Devices, session_key
 from orion.mobile.server import mobile_app
 from orion.runtime import Orion
 from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
 from tests.fake_passkey import FakePasskey
-from tests.fakes import ScriptedProvider, call_tools
+from tests.fakes import ScriptedProvider, call_tools, reply
 from tests.test_imessage import until
 from tests.test_mobile_channel import URL, FakePusher, World, pair
 from tests.test_telegram import Empty
 
 
 async def test_he_stops_the_work_on_his_message(journal: SqliteJournal, tmp_path: Path) -> None:
-    release = asyncio.Event()
+    """ORION-32: on 06/11 his Stop left a `browser open` running 14 more minutes, until a
+    restart; his next message waited. A call that never answers is cut at once."""
     ran: list[str] = []
 
     async def search(_args: Any, _ctx: ToolContext) -> ToolResult:
         ran.append("search")
-        await release.wait()
+        await asyncio.Event().wait()  # hangs, like the browser that day
         return ToolResult("3 trains")
 
     tool = Tool(
@@ -41,9 +42,7 @@ async def test_he_stops_the_work_on_his_message(journal: SqliteJournal, tmp_path
         handler=search,
         effect=Effect.NONE,
     )
-    provider = ScriptedProvider(
-        call_tools(("trains", {}), cost=0.002), call_tools(("trains", {}), cost=0.002)
-    )
+    provider = ScriptedProvider(call_tools(("trains", {}), cost=0.002), reply("Oui, je suis là."))
     orion = Orion(
         journal=journal,
         provider=provider,
@@ -73,10 +72,14 @@ async def test_he_stops_the_work_on_his_message(journal: SqliteJournal, tmp_path
                 assert channel.work is not None and set(channel.work) == {"since", "stopping"}
                 assert (await http.post("/app/api/stop")).json() == {"stopping": True}
                 assert channel.work is not None and channel.work["stopping"]
-                release.set()
                 await until(lambda: any(s.who == "orion" for s in channel.state.said))
             assert channel.state.said[-1].text == STOPPED
-            assert ran == ["search"]  # the second call never ran
+            assert ran == ["search"]
             assert channel.work is None and not await channel.stopped()
+            kinds = [e.kind for e in await journal.read(0, 10_000)]
+            assert kinds.index(STOP_REQUESTED) < kinds.index(STOP_COMPLETED)
+
+            await http.post("/app/api/send", json={"text": "tu es là ?"})
+            await until(lambda: channel.state.said[-1].text == "Oui, je suis là.")
     finally:
         worker.cancel()
