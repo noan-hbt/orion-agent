@@ -155,6 +155,17 @@ UNSURE = _a(Outcome.UNCERTAIN, "workflow:w1")
             "Le mail est en attente. La déclaration est soumise, pas de confirmation vue.",
             None,
         ),
+        # A state his own click produced is not found « déjà » so (ORION-27, 06/11).
+        (
+            [_a(Outcome.CONFIRMED, "browser:amazon.fr#1", "Invitation demandée")],
+            "Amazon indique déjà invitation demandée.",
+            "browser:amazon.fr#1",
+        ),
+        (
+            [_a(Outcome.CONFIRMED, "browser:amazon.fr#1", "Invitation demandée")],
+            "J'ai demandé l'invitation sur Amazon, la page le confirme.",
+            None,
+        ),
         # Another action's proof proves nothing about this one.
         (
             [QUEUED, _a(Outcome.CONFIRMED, "mail:m2", "outbox delivered")],
