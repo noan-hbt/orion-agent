@@ -1,4 +1,4 @@
-﻿"""Orion runtime: wires the journal, projections, context, agent loop and guardian together.
+"""Orion runtime: wires the journal, projections, context, agent loop and guardian together.
 
 One owner message becomes a chain of journal events sharing a correlation id:
 
@@ -206,26 +206,107 @@ Marc two exchanges earlier (ORION-4)."""
 FOLLOW_UP_CHARS = 400
 """Each of them, at most: the subject sits in the first lines, not in a pasted page."""
 
-_SENTENCE_END = re.compile(r"[.!?…]\s+")
-_WORD = re.compile(r"\w[\w'\u2019-]*")
+_WORD = re.compile(r"\w+(?:-l[àa]|-ci)?")
+
+_RECALL_PRONOUNS = frozenset(
+    [
+        "lui",
+        "elle",
+        "elles",
+        "eux",
+        "ça",
+        "cela",
+        "celui-là",
+        "celle-là",
+        "ceux-là",
+        "celles-là",
+        "celui-ci",
+        "celle-ci",
+    ]
+)
+"""Words pointing back to what was just discussed (« et elle ? », « je lui offre quoi ? »)."""
+
+_SHORT_FOLLOW_UP = 4
+"""Words, at most, of a follow-up known by its opening alone (« et pour Lyon ? », « du coup ? »)."""
+
+_FILLER = frozenset(
+    [
+        "et",
+        "ou",
+        "mais",
+        "donc",
+        "alors",
+        "sinon",
+        "du",
+        "coup",
+        "pour",
+        "avec",
+        "sans",
+        "de",
+        "des",
+        "le",
+        "la",
+        "les",
+        "un",
+        "une",
+        "à",
+        "au",
+        "aux",
+        "en",
+        "je",
+        "tu",
+        "il",
+        "on",
+        "nous",
+        "vous",
+        "ils",
+        "me",
+        "te",
+        "se",
+        "y",
+        "qui",
+        "que",
+        "quoi",
+        "quel",
+        "quelle",
+        "quels",
+        "quelles",
+        "comment",
+        "combien",
+        "pourquoi",
+        "où",
+        "quand",
+        "est",
+        "c",
+        "ok",
+        "oui",
+        "non",
+        "bon",
+        "ah",
+    ]
+)
+"""Words that carry no subject: a message made only of them (« et donc ? ») is a follow-up."""
 
 
-def _names_someone(text: str) -> bool:
-    """Whether the message names its subject itself: a capitalised word not opening a
-    sentence (Marc, Atlas). Such a message brings its own facts, the last exchange is not
-    searched for it."""
-    for sentence in _SENTENCE_END.split(text):
-        words = _WORD.findall(sentence)
-        if any(w[0].isupper() for w in words[1:]):
-            return True
-    return False
+def _is_follow_up(text: str) -> bool:
+    """Whether the message picks up the last exchange instead of opening a subject: it points
+    back with a pronoun, opens short with « et » or « du coup », or says nothing of its own.
+    Anything else (« où en est le projet atlas ? », « quel temps demain ? ») brings its own
+    subject, and the last exchange is not searched for it (ORION-4)."""
+    words = _WORD.findall(text.lower())
+    if any(w in _RECALL_PRONOUNS for w in words):
+        return True
+    opens = words[:1] == ["et"] or words[:2] == ["du", "coup"]
+    if opens and len(words) <= _SHORT_FOLLOW_UP:
+        return True
+    return all(w in _FILLER for w in words)
 
 
 def _follow_up_query(text: str, window: list[Message]) -> str | None:
     """For a follow-up that names nothing (« et je lui offre quoi ? »), the words of the
     last exchange, memory blocks and context lines removed, so it still finds the facts
-    about what was being discussed. None when the message names its own subject."""
-    if _names_someone(text):
+    about what was being discussed. None when the message brings its own subject."""
+    if not _is_follow_up(text):
         return None
     said: list[str] = []
     for message in reversed(window):  # tool calls and results say nothing: skipped
