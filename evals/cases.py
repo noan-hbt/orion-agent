@@ -1277,6 +1277,21 @@ CASES: tuple[Case, ...] = (
         ),
     ),
     Case(
+        name="le_supp_demande_lequel",
+        origin="06/11 12:19 : « tu peux le supp » après un projet Jira et des mails Jira et "
+        "Atlassian ; Orion l'a pris pour un mail, sans demander lequel (ORION-30, D266).",
+        at=paris(2026, 11, 6, 12, 19),
+        facts=OWNER,
+        steps=(
+            Say(
+                "J'ai reçu deux mails, un de Jira et un d'Atlassian, à propos du projet de test "
+                "que j'ai créé hier. Il me sert plus à rien ce projet"
+            ),
+            Say("tu peux le supp"),
+        ),
+        checks=(asks(), avoids("mail_tidy", "browser", "shell")),
+    ),
+    Case(
         name="un_message_vague_reste_dans_le_fil",
         origin="02/11 22:52 : « T'as pas des réveils automatiques ? » « oui, 8h30 et 19h » puis "
         "« Tu veux en ajouter ? » ; un souvenir sur Angèle dans le message, et Orion répond "
