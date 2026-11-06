@@ -80,6 +80,15 @@ async def test_router_raises_the_last_error_and_rejects_unknown_providers() -> N
         Router({"a": ScriptedProvider()}, "a", {"m": ["nope:x"]})
 
 
+def test_an_empty_or_unserved_judge_is_refused_up_front() -> None:
+    """ORION-8: `verifier_model = ""` passed the evals' check and reached the judge later."""
+    router = Router({"a": ScriptedProvider()}, "a")
+    router.check("a:model")
+    for spec in ("", "  ", "a:", "nope:x"):
+        with pytest.raises(ValueError):
+            router.check(spec)
+
+
 def test_verifier_must_be_another_model() -> None:
     with pytest.raises(ValueError, match="verifier_model"):
         AgentConfig(model="x/y", verifier_model="x/y")

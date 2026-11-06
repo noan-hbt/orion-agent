@@ -121,6 +121,31 @@ def test_fts_query_is_always_safe(text: str) -> None:
     assert query is None or all(part.startswith('"') for part in query.split(" OR "))
 
 
+def test_a_memoire_too_long_says_what_it_leaves_out() -> None:
+    """Cut in silence, the model believes it knows everything (ORION-4)."""
+    from orion.memory.store import Fact
+
+    facts = [
+        Fact(
+            f"f{i}",
+            f"Préférence numéro {i}.",
+            [],
+            Category.PREFERENCE.value,
+            None,
+            None,
+            i,
+            None,
+            None,
+            Trust.OWNER,
+            "terminal:t1",
+        )
+        for i in range(50)
+    ]
+    block = snapshot_block(facts, [], 300)
+    assert block is not None and "(f49)" not in block
+    assert "recall" in block
+
+
 def test_snapshot_and_profile_rendering() -> None:
     assert snapshot_block([], [], 1000) is None
     assert profile_markdown([], []).startswith("# Ce qu'Orion sait")

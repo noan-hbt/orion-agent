@@ -103,6 +103,103 @@ async def test_pages_seen_are_traceable(
     assert trace(await journal.read(), "web:https://annonces.test/").origins == pages
 
 
+async def test_a_verified_demarche_is_followed_at_the_next_visit(journal: SqliteJournal) -> None:
+    """ORION-5, D255: kept only once this turn's browser shows it done on the site, by the path
+    it names; given back on the site."""
+    from orion.cognition.verifier import Verifier
+    from orion.context.threads import MESSAGE_KIND
+    from tests.fakes import ScriptedProvider, reply
+
+    site = Site()
+    desk = BrowserDesk(journal, lambda: session(site))
+    desk.verifier = Verifier(ScriptedProvider(reply('{"ok": true}')), "verifier")
+    tools = {t.name: t for t in browser_tools(desk)}
+    how = {
+        "site": "annonces.test",
+        "task": "voir le T2",
+        "steps": "Accueil → « T2 Lyon 7e »",
+        "proof": "650 € CC",
+    }
+    try:
+        home = await use(tools, "browser_open", url="https://annonces.test/")
+        # The site was visited, the démarche not done: its proof is on no page of the site,
+        # even though another tool said it this turn.
+        await journal.append(
+            [
+                NewEvent(
+                    kind=MESSAGE_KIND,
+                    payload={"message": {"role": "tool", "content": "T2 : 650 € CC"}},
+                    provenance=Provenance(source="web:https://ailleurs.test/", actor="orion"),
+                    trust=Trust.WEB,
+                    correlation_id="t1",
+                )
+            ]
+        )
+        assert (await use(tools, "browser_save_procedure", **how)).startswith("ERROR")
+        await use(tools, "browser_click", element=number(home, "T2 Lyon 7e"))
+        # A path the browser never took is not kept.
+        wrong = {**how, "steps": "Accueil → « Mes annonces » → https://annonces.test/compte"}
+        assert (await use(tools, "browser_save_procedure", **wrong)).startswith("ERROR")
+        assert "issue confirmée" in await use(tools, "browser_save_procedure", **how)
+    finally:
+        await desk.aclose()
+
+    later = BrowserDesk(journal, lambda: session(site))  # another day: rebuilt from the journal
+    try:
+        tools = {t.name: t for t in browser_tools(later)}
+        page = await use(tools, "browser_open", turn="t2", url="https://annonces.test/")
+        assert "T2 Lyon 7e »" in page and "voir le T2" in page
+    finally:
+        await later.aclose()
+
+
+async def test_a_demarche_is_not_proven_by_another_site(journal: SqliteJournal) -> None:
+    """D255: the confirmation must come from the site itself, not another one seen that turn."""
+    from orion.cognition.verifier import Verifier
+    from orion.computer.procedures import ProcedureInput, Seen, keep_procedure
+    from tests.fakes import ScriptedProvider, reply
+
+    verifier = Verifier(ScriptedProvider(reply('{"ok": true}')), "verifier")
+    seen = [
+        Seen("open https://www.impots.gouv.fr/", "https://www.impots.gouv.fr/", "Accueil"),
+        Seen("open https://mail.test/", "https://mail.test/", "Votre déclaration est envoyée"),
+    ]
+    args = ProcedureInput(
+        site="impots.gouv.fr",
+        task="déclarer les revenus",
+        steps="Accueil",
+        proof="Votre déclaration est envoyée",
+    )
+    kept, _ = await keep_procedure(journal, verifier, args, ToolContext("owner", "t1"), seen, {})
+    assert not kept
+
+
+async def test_a_generic_proof_does_not_confirm_the_demarche(journal: SqliteJournal) -> None:
+    """D255: words the site showed before the last action prove the path, not the outcome."""
+    from orion.cognition.verifier import Verifier
+    from orion.computer.procedures import ProcedureInput, Procedures, Seen, keep_procedure
+    from tests.fakes import ScriptedProvider, reply
+
+    verifier = Verifier(ScriptedProvider(reply('{"ok": true}')), "verifier")
+    url = "https://client.nibelis.com/"
+    seen = [
+        Seen(f"open {url}", url, "Bienvenue — Mon compte — Envoyer la demande"),
+        Seen("click [3] Envoyer la demande", f"{url}demande", "Bienvenue — Mon compte"),
+    ]
+    args = ProcedureInput(
+        site="client.nibelis.com", task="demander un congé", steps="Envoyer", proof="Bienvenue"
+    )
+    kept, _ = await keep_procedure(journal, verifier, args, ToolContext("owner", "t1"), seen, {})
+    assert kept
+    procedures = Procedures()
+    for event in await journal.read():
+        await procedures.apply(event)
+    (procedure,) = procedures.by_site["nibelis.com"].values()
+    assert not procedure.confirmed
+    hint = procedures.hint(url)
+    assert "non confirmée" in hint and "réussi" not in hint
+
+
 async def test_reading_the_rest_of_a_long_page(
     journal: SqliteJournal, browser: tuple[dict[str, Tool], Site]
 ) -> None:

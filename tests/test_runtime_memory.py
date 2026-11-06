@@ -78,6 +78,63 @@ async def test_core_memory_opens_the_window_and_relevant_facts_follow(
     assert_prefix_stable(provider)
 
 
+@pytest.mark.parametrize(
+    ("question", "widened"),
+    [("et je lui offre quoi ?", True), ("et pour lui ?", True), ("quel temps demain ?", False)],
+)
+async def test_only_a_follow_up_recalls_the_last_subject(
+    journal: SqliteJournal, memory: MemoryService, question: str, widened: bool
+) -> None:
+    """« et pour lui ? » picks up Marc from what was just said; « quel temps demain ? » opens
+    its own subject and gets nothing about Marc (ORION-4)."""
+    await memory.remember("Marc adore le jazz.", OWNER, about=["Marc"], category=Category.PERSON)
+    provider = ScriptedProvider(reply("Marc, pour son anniversaire."), reply("ok"))
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+
+    await orion.handle_owner_message("t1", "qui dois-je appeler demain ?", "terminal", now=at(1))
+    await orion.handle_owner_message("t1", question, "terminal", now=at(2))
+
+    assert ("jazz" in provider.requests[-1].messages[-1]["content"]) is widened
+    assert_prefix_stable(provider)
+
+
+async def test_a_new_subject_does_not_drag_the_old_one_along(
+    journal: SqliteJournal, memory: MemoryService
+) -> None:
+    """After Marc, a question on another project, even all lowercase, gets that project's
+    facts, not Marc's; and « elle » after Julie means Julie, not Marc two exchanges back
+    (ORION-4)."""
+    await memory.remember("Marc adore le jazz.", OWNER, about=["Marc"], category=Category.PERSON)
+    await memory.remember(
+        "Julie collectionne les orchidées.", OWNER, about=["Julie"], category=Category.PERSON
+    )
+    await memory.remember(
+        "Le projet Atlas est livré en mars.", OWNER, about=["Atlas"], category=Category.PROJECT
+    )
+    provider = ScriptedProvider(
+        reply("Marc, pour son anniversaire."),
+        reply("Livraison en mars."),
+        reply("Julie, pour la crémaillère."),
+        reply("ok"),
+    )
+    orion = make_orion(journal, memory, provider)
+    await orion.start()
+
+    await orion.handle_owner_message("t1", "qui dois-je appeler demain ?", "terminal", now=at(1))
+    await orion.handle_owner_message("t1", "où en est le projet atlas ?", "terminal", now=at(2))
+    atlas = provider.requests[-1].messages[-1]["content"]
+    assert "mars" in atlas
+    assert "jazz" not in atlas
+
+    await orion.handle_owner_message("t1", "et qui vient samedi ?", "terminal", now=at(3))
+    await orion.handle_owner_message("t1", "et elle, je lui offre quoi ?", "terminal", now=at(4))
+    julie = provider.requests[-1].messages[-1]["content"]
+    assert "orchidées" in julie
+    assert "jazz" not in julie
+    assert_prefix_stable(provider)
+
+
 async def test_core_memory_comes_back_when_a_pause_cuts_the_window(
     journal: SqliteJournal, memory: MemoryService
 ) -> None:

@@ -5803,6 +5803,46 @@ fusionné, l'attente le bloque, jusqu'à 3 h.
 - **Ce que le bouton ne contourne pas** : le commit écarté (`update.bad`), la vérification au
   démarrage et le retour en arrière.
 
+## D255 — Le parcours d'une démarche est gardé, et son issue dite confirmée ou non
+
+*06/11/2026 · acceptée · complète D252 · ORION-5*
+
+Orion réexplorait Nibelis, l'INPI ou Hyperplanning à chaque visite. Il garde maintenant comment
+une démarche est passée : le chemin, le login du coffre et les pièges (`browser_save_procedure`,
+événement `browser.procedure`, projection `computer.procedures.Procedures`).
+
+- **Vérifiée, pas affirmée** : si le modèle dit seulement « c'est fait », rien n'est gardé. Sans
+  `verifier_model`, rien n'est gardé (fail closed). C'est le propriétaire qui a choisi le
+  vérificateur, plutôt qu'une validation à la main ou que le seul `browser.signed_in`.
+- **La preuve vient du site** (revue de la PR #191) : le vérificateur D252 détecte des
+  affirmations fausses, ce n'est pas un oracle de réussite. Il ne suffit donc pas seul. La
+  preuve doit être des mots recopiés d'une page de ce site, montrée par le navigateur pendant ce
+  tour. Une confirmation venue d'un autre site, ou d'un autre outil (même journalisée dans le
+  tour), est refusée. Le vérificateur ne lit plus que les pages de ce site, avec l'action qui y
+  a mené.
+- **Le chemin est rapproché de la trace** : le navigateur garde en mémoire, par tour, ce qu'il a
+  montré et l'action qui y a mené (quelques tours récents ; après un redémarrage, rien, donc
+  refus). Une adresse citée dans le chemin et jamais ouverte sur le site, ou un libellé cité
+  (« … » ou "…") qu'aucune page du site n'a montré : refus. Un login du coffre qui ne s'est
+  jamais connecté sur ce site : refus. Le parcours réellement observé (action → adresse) est
+  gardé avec la procédure et rendu avec elle. Les pièges, que rien ne vérifie, sont rendus
+  comme « non vérifiés ».
+- **Parcours observé, issue confirmée ou non** (contre-revue du 06/11) : une preuve présente
+  sur le site ne dit pas que la démarche a abouti (« Bienvenue », « Mon compte »), même si le
+  vérificateur répond `ok`. Règle : l'issue est confirmée seulement si la preuve n'était sur
+  aucune page du site avant la dernière action qui agit (clic, saisie, choix, touche, envoi de
+  fichier) et qu'une page l'a montrée à partir de cette action. Sinon le parcours est gardé
+  quand même, avec « issue non confirmée ». Ce qui est rendu au site suivant parle du
+  « parcours suivi la dernière fois » et dit si l'issue a été confirmée, jamais « réussie ».
+  L'ordre des étapes libres n'est toujours pas rapproché de la trace.
+- **Version minimale** : ce n'est pas encore un statut CONFIRMED / UNCERTAIN par action. Il
+  relève d'ORION-20.
+- **Rendue quand le site revient** : la première page du site, dans un onglet et dans n'importe
+  quelle conversation, arrive avec ses démarches connues. Elle passe dans un résultat d'outil,
+  jamais dans le message système, donc le cache n'est pas touché.
+- **Ce qu'elle vaut** : `Trust.WEB`, source `web:<site>`. Elle repose sur ce que le web a montré.
+  Pour une même démarche, la plus récente remplace l'ancienne.
+
 ## D256 — Le matin, sa journée ; le dimanche, la semaine qui vient
 
 *06/11/2026 · acceptée · complète D52 et D194*

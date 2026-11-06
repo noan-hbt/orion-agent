@@ -60,12 +60,17 @@ def snapshot_block(
     ]
     lines = [*(format_rule(r) for r in rules), *(format_setting(c) for c in settings)]
     known: list[str] = []
-    for line in [
+    candidates = [
         *(format_fact(f) for f in core),
         *(format_commitment(c) for c in commitments),
-    ]:
+    ]
+    for i, line in enumerate(candidates):
         if sum(len(x) + 1 for x in known) + len(line) > max_chars:
-            known.append("- …")
+            # Said, not cut in silence: the model knows there is more and where to look.
+            known.append(
+                f"- … et {len(candidates) - i} autres non montrés ici, faute de place :"
+                " `recall` les retrouve."
+            )
             break
         known.append(line)
     lines += known

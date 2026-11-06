@@ -107,6 +107,13 @@ class Router:
                 found.append(credits)
         return found
 
+    def check(self, spec: str) -> None:
+        """Raises ValueError when no provider here serves `spec` (a plan not turned on), or
+        when it names no model (`""`, `"chatgpt:"`): fail closed before any request."""
+        _provider, model = self._resolve(spec)
+        if not model.strip():
+            raise ValueError(f"no model named in model spec {spec!r}")
+
     def _resolve(self, spec: str) -> tuple[ModelProvider, str]:
         name, model = parse_spec(spec, self._default)
         provider = self._providers.get(name)
