@@ -6054,3 +6054,36 @@ réussir un examen, lancer son site. Le module `goals` (activé par défaut) le 
   leur confiance.
 - **Pas encore** : pas de rappel à part quand la date de réévaluation passe (le matin le dit),
   pas de lecture automatique de l'état des engagements ou tâches liés.
+
+## D268 — La curiosité, chaque jour, au service de ses objectifs
+
+*07/11/2026 · acceptée · complète D76, D160, D267 · ORION-10*
+
+Une fois par semaine, la curiosité (D76) découvrait des sujets, sans faire avancer ce qu'il
+cherche à obtenir. Elle lit désormais ses objectifs (D267).
+
+- **Quand** : la piste du samedi reste (libre ou pour un objectif). Les autres jours, à la même
+  heure, une recherche pour un objectif, seulement s'il en a un d'actif (`daily`, activé par
+  défaut). Un objectif qui passe `blocked`, ou qui bute sur un obstacle noté, lance tout de
+  suite une recherche pour lui seul, une fois par blocage. Trois recherches par jour au plus,
+  toutes causes confondues : la limite de coût et d'attention.
+- **Ce qu'elle lit** : en plus de ce qu'elle lisait, chaque objectif tel que la revue le montre
+  (condition de réussite, prochaine action, contraintes, obstacles, ce qu'il attend) et ce qui
+  lui a déjà été apporté, avec les recherches faites ce mois-ci.
+- **Rattachée** : chaque piste nomme son objectif (`objectif`, un id actif vérifié en code), ou,
+  le samedi seulement, est libre avec sa raison (`pourquoi`). Sinon rien n'est cherché.
+- **Dédoublonnée** : une requête lancée dans les 30 derniers jours n'est pas relancée ; une page
+  déjà apportée n'est pas reprise ; pour un objectif, la page lue passe par un troisième appel
+  qui en tire une seule chose utilisable (comparaison, option, information manquante,
+  démarche, question), en séparant ce que dit la page de ce qu'Orion suppose, et qui dit si
+  c'est nouveau par rapport à ce qui a déjà été apporté. Pas utile ou pas nouveau : rien
+  n'est envoyé.
+- **Gardé** : la source (l'adresse), le jour où elle a été lue, les faits et les hypothèses
+  sont dans `curiosity.found` ; le message les dit séparément. Il passe par l'arbitre comme
+  avant (contenu web, importance 0,35) ; SILENCE s'il ne sert plus.
+- **Mesuré** : `curiosity` (list) donne, pour les 14 derniers jours et les 14 d'avant, les
+  recherches (dont pour un objectif), les trouvailles partagées, ses verdicts, et les objectifs
+  qui ont avancé après une trouvaille (avancée notée ou objectif atteint). La comparaison
+  avant/après se lit là ; elle demande deux semaines d'usage réel.
+- **Pas encore** : un événement qui crée une question (un mail, un rendez-vous) ne déclenche
+  rien ; c'est la veille qui agit (ORION-6). Les interruptions ne sont pas comptées à part.
