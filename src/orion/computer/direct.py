@@ -51,6 +51,7 @@ from orion.guardian.logins import site_of
 from orion.initiative.engine import Alert
 from orion.runtime import OWNER_THREAD
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.outcome import Outcome
 from orion.web.fetch import normalize
 from orion.web.service import WebState
 
@@ -1036,11 +1037,13 @@ class BrowserDesk:
         while len(self._seen) > SEEN_TURNS:
             del self._seen[next(iter(self._seen))]
 
-    async def save_procedure(self, args: ProcedureInput, ctx: ToolContext) -> tuple[bool, str]:
+    async def save_procedure(
+        self, args: ProcedureInput, ctx: ToolContext
+    ) -> tuple[Outcome | None, str]:
         seen = list(self._seen.get(ctx.correlation_id, []))
         logins = dict(self.state.signed_in)
         kept, said = await keep_procedure(self._journal, self.verifier, args, ctx, seen, logins)
-        if kept:
+        if kept is not None:
             await self._runner.catch_up()
         return kept, said
 
@@ -1312,12 +1315,25 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
     """`looks`: `attachment_look` can look at a screenshot (the photos module is on)."""
     desk.keep_file = keep
 
-    def run(act: Callable[[Any, ToolContext], Any]) -> Any:
+    def run(act: Callable[[Any, ToolContext], Any], acts: bool = False) -> Any:
+        """`acts`: the call acts on the page (click, typing, a choice, a key, a file): it is
+        attempted, never confirmed by itself; `browser_save_procedure` confirms it (D255, D258)."""
+
         async def handler(args: Any, ctx: ToolContext) -> ToolResult:
             try:
-                return ToolResult(await act(args, ctx), trust=Trust.WEB)
+                said = await act(args, ctx)
             except (Refused, BrowserError) as exc:
                 return ToolResult(str(exc), is_error=True)
+            if not acts:
+                return ToolResult(said, trust=Trust.WEB)
+            live = desk.tab(ctx.thread_id)
+            url = live.shown.url if live is not None and live.shown is not None else ""
+            return ToolResult(
+                said,
+                trust=Trust.WEB,
+                outcome=Outcome.ATTEMPTED,
+                action_id=f"browser:{site_of(url) or 'page'}",
+            )
 
         return handler
 
@@ -1375,7 +1391,16 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
     async def save_procedure(args: Any, ctx: ToolContext) -> ToolResult:
         kept, said = await desk.save_procedure(args, ctx)
         # The verifier's words may quote the pages: worth what they are worth.
-        return ToolResult(said, is_error=not kept, trust=Trust.WEB)
+        if kept is None:
+            return ToolResult(said, is_error=True, trust=Trust.WEB)
+        # The same action as the clicks on this site: a confirmed outcome settles them (D258).
+        return ToolResult(
+            said,
+            trust=Trust.WEB,
+            outcome=kept,
+            action_id=f"browser:{site_of(args.site)}",
+            proof=args.proof if kept is Outcome.CONFIRMED else "",
+        )
 
     async def hand_over(args: Any, ctx: ToolContext) -> ToolResult:
         try:
@@ -1396,20 +1421,20 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "browser_click",
             "Click an element of the page shown (link, button, tab). Then see the new page.",
             ElementInput,
-            run(lambda a, c: desk.click(a.element, c)),
+            run(lambda a, c: desk.click(a.element, c), acts=True),
         ),
         tool(
             "browser_type",
             "Type into a field of the page shown, then optionally press Enter (to search, or "
             "to send a form).",
             TypeInput,
-            run(lambda a, c: desk.type(a.element, a.text, a.enter, c)),
+            run(lambda a, c: desk.type(a.element, a.text, a.enter, c), acts=True),
         ),
         tool(
             "browser_select",
             "Choose an option in a list of the page shown.",
             SelectInput,
-            run(lambda a, c: desk.select(a.element, a.option, c)),
+            run(lambda a, c: desk.select(a.element, a.option, c), acts=True),
         ),
         tool(
             "browser_scroll",
@@ -1432,7 +1457,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "Press a key, on an element or on what has the focus: Escape closes a menu, the "
             "arrows move in a list.",
             PressInput,
-            run(lambda a, c: desk.press(a.key, a.element, c)),
+            run(lambda a, c: desk.press(a.key, a.element, c), acts=True),
         ),
         tool(
             "browser_hover",
@@ -1462,7 +1487,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "After login: type his username, password or 2FA code into one field (for a code, "
             "or a form login did not find).",
             FillInput,
-            run(lambda a, c: desk.fill(a.element, a.field, c)),
+            run(lambda a, c: desk.fill(a.element, a.field, c), acts=True),
         ),
         tool(
             "browser_accounts",
@@ -1512,7 +1537,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
                     "Put a file you have into a form of the page: a document of his goes out "
                     "to that site, so he approves.",
                     UploadInput,
-                    run(lambda a, c: desk.upload(a.element, a.file, c)),
+                    run(lambda a, c: desk.upload(a.element, a.file, c), acts=True),
                     Effect.EXTERNAL,
                 )
             ]

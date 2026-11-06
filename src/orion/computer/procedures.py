@@ -37,6 +37,7 @@ from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.guardian.logins import site_of
 from orion.tools.base import ToolContext
+from orion.tools.outcome import Outcome
 
 log = structlog.get_logger(__name__)
 
@@ -204,33 +205,34 @@ async def keep_procedure(
     ctx: ToolContext,
     seen: list[Seen],
     logins: dict[str, str],
-) -> tuple[bool, str]:
-    """(kept, what to tell the model). Kept only when this turn's browser, on this very site,
+) -> tuple[Outcome | None, str]:
+    """(its outcome, what to tell the model): None when not kept, else CONFIRMED or, the
+    outcome not shown, ATTEMPTED (D258). Kept only when this turn's browser, on this very site,
     shows it went through and does not contradict the path. `seen`: what the browser showed
     this turn; `logins`: login → where the vault last signed it in."""
     site = site_of(args.site)
     if not site:
-        return False, f"{args.site} n'est pas une adresse de site."
+        return None, f"{args.site} n'est pas une adresse de site."
     if verifier is None:
-        return False, "Pas de vérificateur configuré : procédure non gardée (rien de vérifié)."
+        return None, "Pas de vérificateur configuré : procédure non gardée (rien de vérifié)."
     pages = [p for p in seen if site_of(p.url) == site]
     if not pages:
-        return False, f"Ton navigateur n'a pas montré {site} pendant ce tour : rien à garder."
+        return None, f"Ton navigateur n'a pas montré {site} pendant ce tour : rien à garder."
     # The proof comes from the site itself: another site, or another tool, proves nothing here.
     proof = _flat(args.proof)
     if not any(proof in _flat(p.text) for p in pages):
-        return False, (
+        return None, (
             f"Procédure non gardée : « {args.proof} » n'est sur aucune page de {site} montrée "
             "par ton navigateur pendant ce tour. Une fois la démarche vraiment faite, recopie les "
             "mots exacts de la page qui le montre."
         )
     if wrong := _contradicted(args.steps, site, pages):
-        return False, (
+        return None, (
             f"Procédure non gardée : ton navigateur n'a pas montré sur {site}, pendant ce tour, "
             f"ce que ton chemin cite : {', '.join(wrong)}. Décris le chemin réellement suivi."
         )
     if args.login and site_of(logins.get(args.login, "")) != site:
-        return False, (
+        return None, (
             f"Procédure non gardée : le coffre n'a jamais connecté « {args.login} » sur {site}."
         )
     path = [f"{p.action} → {p.url}" for p in pages][-PATH_STEPS:]
@@ -243,7 +245,7 @@ async def keep_procedure(
     verdict = await verifier.check(draft, "", evidence[-EVIDENCE_CHARS:])
     if not verdict.ok:
         log.info("procedure.unverified", site=site, task=args.task, issues=verdict.issues)
-        return False, (
+        return None, (
             "Procédure non gardée : ce que les pages ont montré ne confirme pas que la démarche "
             f"a abouti ({'; '.join(verdict.issues) or 'non vérifié'})."
         )
@@ -272,10 +274,10 @@ async def keep_procedure(
     )
     if confirmed:
         return (
-            True,
+            Outcome.CONFIRMED,
             f"Procédure gardée pour {site}, issue confirmée : la prochaine visite la reçoit.",
         )
-    return True, (
+    return Outcome.ATTEMPTED, (
         f"Parcours gardé pour {site}, issue non confirmée : « {args.proof} » était déjà sur une "
         "page avant ta dernière action, il ne montre pas que la démarche a abouti. La prochaine "
         "visite reçoit le parcours, sans le dire réussi."

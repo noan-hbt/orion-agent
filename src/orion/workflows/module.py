@@ -15,6 +15,7 @@ from orion.core.projections import ProjectionRunner
 from orion.initiative.engine import Report
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.tools.outcome import Outcome
 from orion.workflows.engine import RunProjection, State, describe
 
 if TYPE_CHECKING:
@@ -89,7 +90,14 @@ def workflows_status_tool(module: WorkflowsModule) -> Tool:
         live = [describe(r) for r in runs if not r.finished]
         done = [describe(r) for r in runs if r.finished][-10:]
         lines = live + done
-        return ToolResult("\n".join(lines) if lines else "Aucun travail en plusieurs étapes.")
+        said = "\n".join(lines) if lines else "Aucun travail en plusieurs étapes."
+        # An uncertain step may or may not have happened: no reply may call it done (D258).
+        uncertain = [r.id for r in runs if r.state is State.UNCERTAIN]
+        if not uncertain:
+            return ToolResult(said)
+        return ToolResult(
+            said, outcome=Outcome.UNCERTAIN, action_id="workflow:" + ",".join(uncertain)
+        )
 
     return Tool(
         name="workflows_status",

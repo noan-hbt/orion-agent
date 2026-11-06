@@ -5907,3 +5907,37 @@ travail en plusieurs étapes. Le moteur `orion.workflows` les journalise étape 
   compte rendu au propriétaire, et les travaux en attente ou incertains à la revue du soir.
 - **Compatibilité** : rien à migrer. Les événements sont nouveaux, et `job.started` /
   `job.finished` restent ceux qu'on avait.
+
+## D258 — Une action est dite aussi loin que sa preuve, pas plus
+
+*06/11/2026 · acceptée · complète D252, D253, D255, D257 · ORION-20*
+
+Un outil qui a rendu la main n'a pas prouvé qu'il a réussi. Un mail accepté par le serveur SMTP
+peut ne jamais arriver ; un clic sur « Envoyer » peut finir sur une page d'erreur. Les outils
+disaient « Envoyé » dès la remise.
+
+- **Un contrat commun** (`orion.tools.outcome`) : un outil qui agit rend, avec son résultat, une
+  issue, un `action_id` stable (`mail:<Message-ID>`, `browser:<site>`, `workflow:<id>`…) et une
+  courte référence de preuve. Cinq issues : `ATTEMPTED` (la commande a tourné, rien ne dit ce
+  qu'elle a fait), `PENDING` (remis à un tiers qui n'a pas réglé), `CONFIRMED` (une lecture de
+  l'état réel le montre), `FAILED`, `UNCERTAIN` (peut-être fait, peut-être non : D257).
+- **Par famille** : mail → `PENDING` (le serveur l'a pris, la remise n'est pas prouvable : dire
+  « envoyé », jamais « reçu »). Fichier ou vocal au propriétaire → `CONFIRMED` (l'outbox du
+  canal l'a réglé `delivered`, sinon l'appel échoue). Message ou proposition à un autre Orion →
+  `CONFIRMED` (le gardien ne répond qu'une fois l'autre Orion l'a pris : pris, pas accepté).
+  Clic, saisie, choix, touche, envoi de fichier dans le navigateur → `ATTEMPTED`, jusqu'à ce que
+  `browser_save_procedure` confirme par la règle D255 (`CONFIRMED`, même `action_id`).
+  `workflows_status` avec un travail incertain → `UNCERTAIN`.
+- **Survit au compactage** : l'issue est la première ligne du résultat (`[issue … · action … ·
+  preuve …]`), là où la coupe et l'allègement gardent le début ; l'allègement garde cette ligne
+  entière. `tool.executed` journalise `call_id`, `outcome`, `action_id` et `proof`.
+- **Dans le tour, le même contrôle en code** (`grounding.ground_check`, sans appel de modèle) :
+  la dernière issue de chaque action compte, et la preuve d'une autre action ne vaut rien pour
+  celle-ci. Une réponse qui dit fait une action restée `ATTEMPTED` ou `UNCERTAIN`, ou qui dit
+  arrivée une action `PENDING`, est renvoyée une fois : vérifier avec l'outil qui lit l'état
+  réel, ou dire exactement où ça en est. Une réponse qui dit déjà « non vérifié », « en
+  attente », « pas de confirmation » passe telle quelle.
+- **Après coup** : la relecture D253 lit les résultats d'outils, ligne d'issue comprise.
+- **Ce qui manque** : pas de lecture de confirmation pour le mail (dossier Envoyés, accusé de
+  remise) ni d'issue pour les autres outils externes (agenda, contacts, commandes) : ils
+  gardent leur message d'avant tant qu'ils ne rendent pas d'issue.
