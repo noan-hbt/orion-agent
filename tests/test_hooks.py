@@ -14,10 +14,12 @@ from orion.core.journal import SqliteJournal
 from orion.guardian.policy import Guardian
 from orion.hooks.catalog import HOOK_THREAD
 from orion.hooks.cron import Cron
-from orion.hooks.service import HookError, Hooks, HookSpec
+from orion.hooks.service import UNFULFILLED, HookError, Hooks, HookSpec
+from orion.initiative.engine import InitiativeEngine, InitiativeSettings
+from orion.initiative.timers import TimerProjection, Timers
 from orion.runtime import Orion
 from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
-from tests.fakes import ScriptedProvider
+from tests.fakes import ScriptedProvider, call_tools, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 BY_HIM = Provenance(source="app", actor="owner:main")
@@ -162,3 +164,62 @@ async def test_a_custom_action_goes_through_the_guardian_and_its_failure_is_said
     assert sent == [] and result.is_error
     [report] = await hooks.reports()
     assert report.key.startswith("hook:failed:") and "Relais" in report.fallback
+
+
+class _Open(BaseModel):
+    url: str
+
+
+class _Inbox:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    async def available(self) -> bool:
+        return True
+
+    async def notify(self, text: str, correlation_id: str) -> None:
+        self.messages.append(text)
+
+
+async def test_a_hook_it_could_not_do_is_said_once_and_stays_on(journal: SqliteJournal) -> None:
+    """ORION-28, 06/11: Hyperplanning refused the connection, « dis-moi ma salle » ended in
+    SILENCE. He hears it could not be checked, once for a site down all morning."""
+
+    async def refused(args: Any, _ctx: ToolContext) -> ToolResult:
+        raise RuntimeError(f"net::ERR_CONNECTION_REFUSED at {args.url}")
+
+    provider = ScriptedProvider()
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry(
+            [Tool("browser", "Open.", _Open, refused, Effect.NONE, accepts_untrusted_context=True)]
+        ),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+    )
+    await orion.start()
+    hooks = Hooks(journal, "Europe/Paris", b"k" * 32, min_gap_seconds=0)
+    await hooks.scan()
+    spec = HookSpec(name="Salle", on="mail", match="arrivée", then="dis-moi ma salle", once=True)
+    hook = await hooks.create(spec, BY_HIM, Trust.OWNER)
+    inbox = _Inbox()
+    engine = InitiativeEngine(
+        orion, journal, Timers(journal, TimerProjection()), inbox, InitiativeSettings(),
+        clock=lambda: datetime.now(PARIS), reports=[hooks],
+    )  # fmt: skip
+    opened: tuple[str, dict[str, object]] = (
+        "browser",
+        {"url": "https://groupeh3.hyperplanning.fr/edt"},
+    )
+    for _ in range(2):  # two arrivals, the site down both times
+        await journal.append([mail("Arrivée à l'école", "Ma Maison")])
+        assert len(await hooks.scan()) == 1
+        provider.extend(call_tools(opened), reply("SILENCE"))
+        await engine.tick()
+        assert hooks.state.live(hooks.state.hooks[hook.id], datetime.now(PARIS).date())
+    [said] = inbox.messages
+    assert "groupeh3.hyperplanning.fr" in said
+    attempts = [e.payload["attempts"] for e in await journal.read() if e.kind == UNFULFILLED]
+    assert attempts == [1, 2]

@@ -6018,3 +6018,30 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D264 — Un hook qu'Orion n'a pas pu faire est dit, une fois, et reste allumé
+
+*07/11/2026 · acceptée · complète D225, D259 · ORION-28*
+
+Le 06/11, Hyperplanning a refusé la connexion (`net::ERR_CONNECTION_REFUSED`) à 06:02, 08:46,
+12:49 et 14:01. À 12:49, le hook « à l'arrivée à l'école, dis-moi ma salle » a fini en SILENCE :
+le propriétaire n'a rien su, alors que rien n'était vérifié.
+
+- **Un SILENCE se justifie** : un rapport peut porter `settle`, comme une alerte (D259). Le
+  moteur l'appelle avant le secours d'un rapport demandé. Le rapport d'un hook regarde, après
+  son déclenchement, les appels de sa conversation qui ont vraiment échoué (`tool.executed`
+  avec `tool error` ou `timed out` ; un refus du gardien n'en est pas un). S'il y en a, la
+  demande n'est pas faite : à la place du silence part « Ton hook « … » : je n'ai pas pu le
+  faire, <site> n'a pas répondu. Rien n'est vérifié. Il reste actif. » Le site vient de l'adresse
+  de l'appel, sinon le nom de l'outil.
+- **Pas de rafale** : un même hook n'est redit qu'au bout de trois heures. Les échecs entre-temps
+  sont journalisés quand même.
+- **Journal** : `hook.unfulfilled` (hook, déclenchement, échecs, `attempts` en suivant, `since` :
+  le premier de la série, `told`). Rejouable : la projection des hooks en tire la série.
+- **Il reste allumé** : un hook « une fois » qui n'a pas pu se faire n'est pas consommé : il
+  repart au déclenchement suivant.
+- **La consigne** du déclenchement dit aussi qu'un échec n'est pas rien, et qu'il se dit.
+- **Pas fait ici** : le diagnostic réseau d'Hyperplanning depuis le VPS (DNS, IPv4/IPv6,
+  TCP/TLS, restriction d'IP), qui demande la prod ; il a son ticket. Pas de distinction plus fine
+  entre « rien de nouveau » et « indisponible » qu'un appel en échec. Une erreur d'une autre
+  conversation entre le déclenchement et le rapport compte aussi (rare : le rapport suit de près).
