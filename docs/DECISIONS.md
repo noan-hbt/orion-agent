@@ -6018,3 +6018,31 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D263 — La veille ne repose pas ce qui est réglé, passé, ou à lui
+
+*07/11/2026 · acceptée · complète D150, D247 · ORION-29*
+
+Le 06/11, la veille a posé un rappel pour 06:00 à 07:34 (refusé, mais elle a insisté), a marqué
+un mail lu sans qu'on le lui demande, et a noté une deuxième fois « restaurer le projet Jira »
+alors qu'il avait déjà dit « tu peux le supp ».
+
+- **Un engagement n'est noté qu'une fois** : `commitment_add` refuse un engagement qui en
+  répète un ouvert (même débiteur, pas d'échéance différente, et au moins 3 mots sur 4 en commun
+  pour la formulation la plus courte, mots de 4 lettres et plus). Il renvoie celui qui existe, à
+  compléter ou à fermer. C'est une comparaison de mots, pas de sens : une reformulation éloignée
+  passe encore.
+- **Ce qui est réglé ne revient pas** : hors de sa conversation (veille, nuit, autres fils),
+  un engagement qui répète un engagement fait ou annulé est refusé : il a été réglé, seul le
+  propriétaire peut le redemander. Dans sa conversation, il peut toujours le reprendre.
+- **Pas d'échéance passée** : hors de sa conversation, un engagement dont l'échéance est
+  passée n'est pas noté. Un rappel dans le passé était déjà refusé ; le refus dit maintenant de
+  ne pas choisir une autre heure d'office : le dire s'il compte encore, sinon laisser.
+- **Sa boîte est à lui** : `mail_mark` (lu, suivi) est refusé à la veille et à la nuit, `libre`
+  compris, sauf autonomie qu'il a donnée pour cet outil (D201). Lire un mail ne change déjà pas
+  son état (`BODY.PEEK`).
+- **La consigne de la veille** le dit aussi : regarder l'heure, ses engagements (avec leur id,
+  pour pouvoir les fermer) et ce qu'il a dit depuis, avant un rappel ou un engagement ; ce qu'il
+  a abandonné se ferme, ne se recrée pas.
+- **Limite** : que « tu peux le supp » ferme l'engagement reste au modèle (la veille voit ses
+  derniers mots et l'id) ; rien en code ne lit sa décision.

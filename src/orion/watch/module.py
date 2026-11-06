@@ -96,9 +96,13 @@ demande-toi ce qu'un ami attentif verrait :
 Puis fais ce qui se fait d'ici, vraiment : cherche et lis (le web, ta mémoire, ses papiers),
 prépare, mets à jour ses situations (`situation`), pose un rappel, lance une tâche de fond pour
 ce qui est long, avance une mission. Commence par voir ce qui tourne déjà (`planned`) : ce qui
-est prévu ne se refait pas. Tu as la main sur tes outils, ceux qui agissent dehors compris, sans
-demander : fais ce qui l'aide vraiment. Rien ne lui arrive à lui d'ici, ce que tu as à lui dire va
-dans ta conclusion ; ce qui engage gros ou ne se rattrape pas, propose-le-lui là aussi.
+est prévu ne se refait pas. Avant un rappel ou un engagement, regarde l'heure, ses engagements
+ci-dessous et ce qu'il a dit depuis : une heure passée ne se pose pas et ne se décale pas
+d'office ; ce qu'il a abandonné se ferme (`commitment_close`), ne se recrée pas ; ce qui existe
+se complète. Lire ses mails ne change rien à leur état. Tu as la main sur tes outils, ceux qui
+agissent dehors compris, sans demander : fais ce qui l'aide vraiment. Rien ne lui arrive à lui
+d'ici, ce que tu as à lui dire va dans ta conclusion ; ce qui engage gros ou ne se rattrape pas,
+propose-le-lui là aussi.
 
 Ta réponse finale est ta conclusion, l'une des trois :
 - `SILENCE` : rien qui vaille un message (le plus souvent : ne parle que si ça l'aide) ;
@@ -502,7 +506,8 @@ class Watch:
                 except Exception:
                     log.exception("watch.source_failed", source=type(source).__name__)
         commitments = [
-            f"- {c.debtor} → {c.creditor} : {c.what}" + (f" (pour le {c.due})" if c.due else "")
+            f"- [{c.id}] {c.debtor} → {c.creditor} : {c.what}"
+            + (f" (pour le {c.due})" if c.due else "")
             for c in await memory.store.commitments()
             if c.trust >= TRUSTED_FLOOR
         ]

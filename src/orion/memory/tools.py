@@ -7,17 +7,41 @@ side-effect free and allowed everywhere.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from datetime import datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Trust
+from orion.guardian.policy import OWNER_THREAD
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryRefused, MemoryService, Origin
 from orion.memory.situations import Ending
+from orion.memory.store import Commitment
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+
+_WORD = re.compile(r"\w{4,}")
+SAME_WORDS = 0.75
+"""Share of the shorter wording's words that makes two commitments one."""
+
+
+def same_commitment(what: str, debtor: str, due: str | None, known: Commitment) -> bool:
+    """Whether a new commitment is this known one again, in other words (06/11: « restaurer le
+    projet Jira » recorded twice, the second after he said « tu peux le supp »). Same debtor,
+    no different due date, and most words in common."""
+    if debtor.casefold() != known.debtor.casefold():
+        return False
+    if due and known.due and due[:10] != known.due[:10]:
+        return False
+    new = {w.casefold() for w in _WORD.findall(what)}
+    old = {w.casefold() for w in _WORD.findall(known.what)}
+    if not new or not old:
+        return False
+    return len(new & old) / min(len(new), len(old)) >= SAME_WORDS
 
 
 def origin_of(ctx: ToolContext) -> Origin:
@@ -178,6 +202,28 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         return ToolResult("\n".join(lines))
 
     async def commitment_add(args: Any, ctx: ToolContext) -> ToolResult:
+        alone = ctx.thread_id != OWNER_THREAD  # his words are not behind it (the watch, D263)
+        if alone and args.due and args.due[:10] < f"{datetime.now(ZoneInfo(ctx.timezone)):%F}":
+            return ToolResult(
+                f"Its due date {args.due} is past: not recorded. Do not move it later on your "
+                "own; if it still matters, say it in your conclusion, otherwise drop it.",
+                is_error=True,
+            )
+        for known in await memory.store.commitments(status=None):
+            if not same_commitment(args.what, args.debtor, args.due, known):
+                continue
+            if known.status is CommitmentStatus.OPEN:
+                return ToolResult(
+                    f"Already recorded, open: {format_commitment(known)}. Complete or close it "
+                    "rather than adding a variant.",
+                    is_error=True,
+                )
+            if alone:
+                return ToolResult(
+                    f"Already {known.status.value}: {format_commitment(known)}. It was settled: "
+                    "never record it again unless he asks for it.",
+                    is_error=True,
+                )
         cid = await memory.add_commitment(
             args.what, origin_of(ctx), debtor=args.debtor, creditor=args.creditor, due=args.due
         )

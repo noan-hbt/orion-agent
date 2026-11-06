@@ -375,6 +375,35 @@ async def test_in_libre_he_can_replace_or_forget_a_fact_after_a_web_page(
     assert await memory.store.facts() == []
 
 
+async def test_the_watch_never_records_a_settled_or_past_commitment_again(
+    memory: MemoryService,
+) -> None:
+    """ORION-29, 06/11: the watch recorded « restaurer le projet Jira » a second time, after he
+    had said « tu peux le supp »."""
+    from orion.guardian.policy import WATCH_THREAD
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    tools = {t.name: t for t in memory_tools(memory)}
+    add, close = tools["commitment_add"], tools["commitment_close"]
+    watch = ToolContext(WATCH_THREAD, "c", context_trust=Trust.SYSTEM)
+
+    def owed(what: str, due: str | None = None) -> object:
+        return add.parse(json.dumps({"what": what, "debtor": "orion", "creditor": "owner",
+                                     "due": due}))  # fmt: skip
+
+    first = await add.handler(owed("Restaurer le projet Jira ORION"), watch)
+    again = await add.handler(owed("Restaurer le projet Jira supprimé"), watch)
+    assert not first.is_error and again.is_error  # two passes, one commitment
+    cid = str(first.data["commitment_id"])
+    cancel = close.parse(json.dumps({"commitment_id": cid, "status": "cancelled"}))
+    await close.handler(cancel, ToolContext("owner", "c"))  # « tu peux le supp »
+    assert (await add.handler(owed("Restaurer le projet Jira ORION"), watch)).is_error
+    assert (await add.handler(owed("Payer la cantine", "2020-01-01"), watch)).is_error  # past
+    assert not (await add.handler(owed("Payer la cantine"), watch)).is_error
+    assert len(await memory.store.commitments()) == 1
+
+
 async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -> None:
     """03/11: sorting his memories ten at a time, Orion never knew he had seen them all (D235)."""
     from orion.memory.tools import memory_tools
