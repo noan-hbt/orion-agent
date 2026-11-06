@@ -181,6 +181,8 @@ class GoalBook:
                 history=[(at, state)],
             )
             return
+        if not event.kind.startswith("goal."):
+            return  # other modules' events may name a goal (curiosity.found): not ours
         goal = self.goals.get(str(payload.get("goal_id", "")))
         if goal is None:
             return
