@@ -96,7 +96,7 @@ def workflows_status_tool(module: WorkflowsModule) -> Tool:
         if not uncertain:
             return ToolResult(said)
         return ToolResult(
-            said, outcome=Outcome.UNCERTAIN, action_id="workflow:" + ",".join(uncertain)
+            said, outcome=Outcome.UNCERTAIN, action_id=",".join(f"workflow:{r}" for r in uncertain)
         )
 
     return Tool(

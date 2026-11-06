@@ -14,7 +14,8 @@ its action, under a stable `action_id`, with a short proof reference:
 
 The outcome goes first in the tool result, as one line (`marker`), so it survives clipping and
 pruning (both keep the start), and is journaled with `tool.executed`. The latest outcome of an
-action wins; an outcome of another action proves nothing about this one.
+action wins; an outcome of another action proves nothing about this one. A call that settles
+several actions (the steps of one démarche) joins their ids with ",".
 """
 
 from __future__ import annotations
@@ -67,5 +68,7 @@ def outcomes(contents: Iterable[str]) -> dict[str, tuple[Outcome, str]]:
         match = _MARKER.match(content)
         if match is None or match["outcome"] not in Outcome.__members__:
             continue
-        found[match["action"]] = (Outcome(match["outcome"]), match["proof"] or "")
+        # One call may settle several actions at once (a démarche's steps): ids joined by ",".
+        for action in filter(None, match["action"].split(",")):
+            found[action] = (Outcome(match["outcome"]), match["proof"] or "")
     return found

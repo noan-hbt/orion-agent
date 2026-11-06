@@ -144,6 +144,17 @@ UNSURE = _a(Outcome.UNCERTAIN, "workflow:w1")
         # Uncertain: reconcile first, or say plainly it is not verified.
         ([UNSURE], "Le déploiement est terminé.", "workflow:w1"),
         ([UNSURE], "Le déploiement : je ne sais pas si c'est passé, non vérifié.", None),
+        # A careful word covers the action it is about, never the whole reply.
+        (
+            [QUEUED, FORM],
+            "Le mail est en attente de remise, j'ai soumis la déclaration.",
+            "browser:impots.gouv.fr",
+        ),
+        (
+            [QUEUED, FORM],
+            "Le mail est en attente. La déclaration est soumise, pas de confirmation vue.",
+            None,
+        ),
         # Another action's proof proves nothing about this one.
         (
             [QUEUED, _a(Outcome.CONFIRMED, "mail:m2", "outbox delivered")],

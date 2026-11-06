@@ -14,7 +14,9 @@ before each reply it cost a call and seconds on every message.
 
 A tool that ran is not a success either (D258): an action of this turn left attempted, pending
 or uncertain (`orion.tools.outcome`) may not be reported done. The same check, in code, sends
-such a reply back once, unless it already says the outcome is not verified.
+such a reply back once. It reads the reply clause by clause and ties each to the actions it
+names (the mail, the site, the work): « le mail est en attente » covers the mail, not « j'ai
+soumis la déclaration » next to it. A careful word never lets the whole reply through.
 """
 
 from __future__ import annotations
@@ -89,11 +91,23 @@ _DELIVERED = re.compile(
 )
 """Said of a send: it reached them. A send only pending may be said sent, not this."""
 _HEDGED = re.compile(
-    r"\b(?:non|pas|sans) (?:encore )?(?:vérifi|confirm|prouv)|\bpas de (?:confirmation|preuve)|"
+    r"\b(?:non|pas|sans) (?:encore )?(?:vérifi|confirm|prouv)|"
+    r"\bpas (?:encore )?de (?:confirmation|preuve)|"
     r"\ben (?:attente|file)\b|\bincertain|\bje ne sais pas (?:si|encore)|\bremise non",
     re.IGNORECASE,
 )
-"""A reply that already says the outcome is not known: it may go as it is."""
+"""A clause that says the outcome is not known: it covers the actions it is about."""
+
+_CLAUSE = re.compile(r"[^,;:]+[,;:]*")
+_FAMILY = {
+    "mail": r"mails?|e-mails?|courriels?|messages?",
+    "browser": r"pages?|sites?|formulaires?|navigateur",
+    "workflow": r"travail|travaux|tâches?|jobs?|étapes?|délégu\w*",
+    "vocal": r"vocal|vocaux|audio",
+    "meeting": r"réunions?|rendez-vous|créneaux?",
+    "peer": r"orion",
+}
+"""Words that name an action's kind, by its id's prefix (`mail:<id>`)."""
 
 
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -138,18 +152,12 @@ async def ground_check(
 ) -> str | None:
     """The note that sends Orion back to check, or None when the reply may go. `called`: the
     tools called this turn; `messages`: what this turn added."""
-    claims = claims_a_state(text)
     if not called:
-        return UNCHECKED_NOTE if claims else None
-    if _HEDGED.search(text.translate(_TYPOGRAPHY)):
+        return UNCHECKED_NOTE if claims_a_state(text) else None
+    open_ = unsettled(messages)
+    if not open_:
         return None
-    delivered = _says(_DELIVERED, text)
-    # Pending (a mail the server took) may be said sent, not received; the rest, nothing done.
-    wrong = {
-        action: (outcome, proof)
-        for action, (outcome, proof) in unsettled(messages).items()
-        if delivered or (claims and outcome is not Outcome.PENDING)
-    }
+    wrong = {action: open_[action] for action in _overclaimed(text, open_)}
     if not wrong:
         return None
     actions = "\n".join(
@@ -159,12 +167,45 @@ async def ground_check(
     return UNSETTLED_NOTE.format(actions=actions)
 
 
-def _says(pattern: re.Pattern[str], text: str) -> bool:
-    return any(
-        pattern.search(sentence) is not None
-        for sentence in _SENTENCE.findall(text.translate(_TYPOGRAPHY))
-        if not sentence.rstrip().endswith("?")
-    )
+def _overclaimed(text: str, open_: dict[str, tuple[Outcome, str]]) -> list[str]:
+    """The unsettled actions some clause reports further than their outcome, and no careful
+    clause covers. A clause is about the actions it names; one that names none is about all of
+    them when it claims, and about the previous claim when it is careful (« …, pas de
+    confirmation vue »)."""
+    cues = {action: _cue(action) for action in open_}
+    claimed: dict[str, None] = {}
+    covered: set[str] = set()
+    previous: set[str] = set()
+    for sentence in _SENTENCE.findall(text.translate(_TYPOGRAPHY)):
+        if sentence.rstrip().endswith("?"):
+            continue
+        for clause in _CLAUSE.findall(sentence):
+            named = {a for a, cue in cues.items() if cue.search(clause)}
+            if _HEDGED.search(clause):
+                covered |= named or previous
+                continue
+            delivered = _DELIVERED.search(clause) is not None
+            if not delivered and _STATE.search(clause) is None:
+                continue
+            # Pending (a mail the server took) may be said sent, not received; the rest, nothing
+            # done.
+            previous = named or set(open_)
+            for action in previous:
+                if delivered or open_[action][0] is not Outcome.PENDING:
+                    claimed[action] = None
+    return [action for action in claimed if action not in covered]
+
+
+def _cue(action: str) -> re.Pattern[str]:
+    """The words that name this action in a reply: its kind, and for a page its site."""
+    kind, _, rest = action.partition(":")
+    words = [_FAMILY[kind]] if kind in _FAMILY else []
+    if kind == "browser":
+        site = rest.partition("#")[0]
+        words += [re.escape(label) for label in site.split(".")[:-1] if len(label) >= 4]
+    if not words:
+        return re.compile(r"(?!)")
+    return re.compile(r"\b(?:" + "|".join(words) + r")\b", re.IGNORECASE)
 
 
 def unsettled(messages: Sequence[Message]) -> dict[str, tuple[Outcome, str]]:

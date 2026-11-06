@@ -27,6 +27,7 @@ import re
 import secrets as tokens
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,7 +40,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.cognition.verifier import Verifier
 from orion.computer.browser import KEPT_COOKIES, MAX_ELEMENTS, BrowserError, Session, Snapshot
-from orion.computer.procedures import ProcedureInput, Procedures, Seen, keep_procedure
+from orion.computer.procedures import (
+    ProcedureInput,
+    Procedures,
+    Seen,
+    keep_procedure,
+    settled_steps,
+)
 from orion.computer.vault import LocalVault, LoginKeeper, VaultError
 from orion.core import busy
 from orion.core.events import Event, NewEvent, Provenance, Trust
@@ -56,6 +63,9 @@ from orion.web.fetch import normalize
 from orion.web.service import WebState
 
 log = structlog.get_logger(__name__)
+
+_ACTING: ContextVar[list[str] | None] = ContextVar("browser_acting", default=None)
+"""Set by a tool call that acts on the page: the outcome ids of the pages it led to (D258)."""
 
 PAGE = "browser.page"
 SIGNED_IN = "browser.signed_in"
@@ -988,6 +998,7 @@ class BrowserDesk:
             session = self.session
             blocked_before = len(session.blocked)
             before = None if whole else live.shown
+            acted_on = site_of(live.shown.url) if live.shown is not None else ""
             live.text = ""
             live.shown = None
             await action(session)
@@ -1007,7 +1018,7 @@ class BrowserDesk:
             await session.keep_cookies_soon()
             hint = await self._login_hint(session, live, snapshot.url)
             guide = await self._guide(live, snapshot.url)
-            self._saw(ctx, what, snapshot)
+            self._saw(ctx, what, snapshot, acted_on)
         await self._record(snapshot, ctx)
         notes += [await self._keep_given(name, data, ctx) for name, data in files]
         said = _changes(before, snapshot) if before is not None else None
@@ -1026,26 +1037,46 @@ class BrowserDesk:
             live.guided.add(site)
         return guide
 
-    def _saw(self, ctx: ToolContext, what: str, snapshot: Snapshot) -> None:
+    def _saw(self, ctx: ToolContext, what: str, snapshot: Snapshot, acted_on: str = "") -> None:
         """What the browser showed in this turn, the evidence a procedure rests on (ORION-5).
         Held in memory, a few recent turns: after a restart nothing is kept (fail closed)."""
         turn = self._seen.pop(ctx.correlation_id, [])
         self._seen[ctx.correlation_id] = turn  # the newest turn last
         text = "\n".join([snapshot.title, snapshot.text, *snapshot.elements])
-        turn.append(Seen(what, snapshot.url, text[:SEEN_CHARS]))
+        action_id = ""
+        if (acting := _ACTING.get()) is not None:
+            # One id per call that acts: confirming a démarche settles its own steps, never
+            # another one on the same site (D258).
+            site = acted_on or site_of(snapshot.url) or "page"
+            action_id = f"browser:{site}#{tokens.token_hex(4)}"
+            acting.append(action_id)
+        landed = site_of(snapshot.url)
+        turn.append(
+            Seen(
+                what,
+                snapshot.url,
+                text[:SEEN_CHARS],
+                action_id,
+                acted_on if acted_on and acted_on != landed else "",
+            )
+        )
         del turn[:-SEEN_PAGES]
         while len(self._seen) > SEEN_TURNS:
             del self._seen[next(iter(self._seen))]
 
     async def save_procedure(
         self, args: ProcedureInput, ctx: ToolContext
-    ) -> tuple[Outcome | None, str]:
+    ) -> tuple[Outcome | None, list[str], str]:
         seen = list(self._seen.get(ctx.correlation_id, []))
         logins = dict(self.state.signed_in)
         kept, said = await keep_procedure(self._journal, self.verifier, args, ctx, seen, logins)
         if kept is not None:
             await self._runner.catch_up()
-        return kept, said
+        settled = settled_steps(args, seen) if kept is Outcome.CONFIRMED else []
+        left = [a for a in args.actions if a not in settled]
+        if left and kept is Outcome.CONFIRMED:
+            said += f" Pas confirmées, hors de cette démarche : {', '.join(left)}."
+        return kept, settled, said
 
     async def _keep_given(self, name: str, data: bytes, ctx: ToolContext) -> str:
         """A file the page gave: kept like a download, worth what the page is worth."""
@@ -1320,19 +1351,22 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         attempted, never confirmed by itself; `browser_save_procedure` confirms it (D255, D258)."""
 
         async def handler(args: Any, ctx: ToolContext) -> ToolResult:
+            acting: list[str] = []
+            token = _ACTING.set(acting if acts else None)
             try:
                 said = await act(args, ctx)
             except (Refused, BrowserError) as exc:
                 return ToolResult(str(exc), is_error=True)
+            finally:
+                _ACTING.reset(token)
             if not acts:
                 return ToolResult(said, trust=Trust.WEB)
-            live = desk.tab(ctx.thread_id)
-            url = live.shown.url if live is not None and live.shown is not None else ""
+            if not acting:  # pragma: no cover - every act shows the page it led to
+                live = desk.tab(ctx.thread_id)
+                url = live.shown.url if live is not None and live.shown is not None else ""
+                acting.append(f"browser:{site_of(url) or 'page'}#{tokens.token_hex(4)}")
             return ToolResult(
-                said,
-                trust=Trust.WEB,
-                outcome=Outcome.ATTEMPTED,
-                action_id=f"browser:{site_of(url) or 'page'}",
+                said, trust=Trust.WEB, outcome=Outcome.ATTEMPTED, action_id=",".join(acting)
             )
 
         return handler
@@ -1389,16 +1423,17 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             return ToolResult(str(exc), is_error=True)
 
     async def save_procedure(args: Any, ctx: ToolContext) -> ToolResult:
-        kept, said = await desk.save_procedure(args, ctx)
+        kept, settled, said = await desk.save_procedure(args, ctx)
         # The verifier's words may quote the pages: worth what they are worth.
         if kept is None:
             return ToolResult(said, is_error=True, trust=Trust.WEB)
-        # The same action as the clicks on this site: a confirmed outcome settles them (D258).
+        # The steps of this démarche only, by their ids: another one on the site keeps its own
+        # outcome (D258).
         return ToolResult(
             said,
             trust=Trust.WEB,
             outcome=kept,
-            action_id=f"browser:{site_of(args.site)}",
+            action_id=",".join(settled) or f"browser:{site_of(args.site)}",
             proof=args.proof if kept is Outcome.CONFIRMED else "",
         )
 
