@@ -89,7 +89,7 @@ Toujours là, hors modules : `remember`, `recall`, `forget_fact`, `commitment_*`
 | `guardian/` | Politique, accords, autonomie, secrets, coffre, outbox, registre, crypto de la fédération |
 | `memory/` | Faits bi-temporels, engagements, personnes, provenance, situations, doute, passe de nuit, portrait |
 | `initiative/` | Le moteur qui parle en premier : règles, rappels, points, arbitre, `later`, simulation |
-| `cognition/` | La boucle d'agent (`loop.py`), aller au bout (`finish.py`), vérificateur |
+| `cognition/` | La boucle d'agent (`loop.py`), aller au bout (`finish.py`), vérificateur, la preuve avant la parole (`grounding.py`) et la relecture après coup (`review.py`, D253) |
 | `context/` | Le compilateur de contexte (stable d'abord, pour le cache), fils, résumés, `<pendant_ce_temps>` |
 | `providers/` | `openrouter`, `chatgpt`, `claude_code`, `router` (secours), `spending` (plafond) |
 | `channels/` | Terminal, iMessage (Inkbox), Telegram, boîte de réception unifiée, balises de message |
