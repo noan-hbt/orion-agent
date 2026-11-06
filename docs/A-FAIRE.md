@@ -45,7 +45,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    passer ensuite » (`computer/browser.py:335`). Comprendre pourquoi (cookie `datadome` non
    gardé ? empreinte différente entre son téléphone et le navigateur du serveur ? IP) ; corriger,
    ou ne plus promettre et proposer la sortie par sa machine (`--exit`).
-5. [ ] **Relance « réponse vide » inutile.** Après `file` send (texte déjà parti avant), la
+5. [x] **Relance « réponse vide » inutile.** (`file` send n'informe plus) Après `file` send (texte déjà parti avant), la
    boucle relance « ta réponse est vide… » (`loop.empty_reply`, `cognition/loop.py:449`) :
    un appel pour rien, deux fois le 05/11. Ne pas relancer quand le seul résultat non lu est un
    accusé d'envoi.

@@ -530,6 +530,7 @@ def file_tool(
                 SendInput,
                 send,
                 accepts_untrusted_context=True,
+                informs=False,  # « Envoyé » is no news: the words beside it were the answer
             ),
             Action("list", "The files made lately.", NO_ARGS, listing, Effect.NONE, True),
         ],

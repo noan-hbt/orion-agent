@@ -379,3 +379,29 @@ async def test_a_picture_orion_downloads_can_be_looked_at(
     )
     assert seen.content.startswith("Un séjour lumineux") and seen.trust is Trust.WEB
     assert "image_url" in str(provider.requests[0].messages)
+
+
+async def test_a_file_sent_beside_its_words_ends_the_turn(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """05/11: after « voici » and the file, the loop asked again for « ta réponse est vide »."""
+    from orion.tools.base import ToolRegistry
+    from orion.tools.builtin import builtin_tools
+    from tests.fakes import call_tools, reply
+    from tests.test_loop import collect, finished
+
+    store = FileStore(journal, tmp_path / "files")
+
+    async def deliver(_path: Path, _caption: str, _cid: str | None) -> None:
+        return None
+
+    tool = file_tool(store, ScriptedProvider(picture), "img/model", lambda: deliver)
+    made = await run(tool, action="image", prompt="un chat")
+    image = made.content.split("(")[1].split(")")[0]
+    provider = ScriptedProvider(
+        call_tools(("file", {"action": "send", "file": image}), text="voici le chat"),
+        reply("un appel pour rien"),
+    )
+    events, _ = await collect(provider, ToolRegistry([*builtin_tools(), tool]))
+    assert finished(events).text == ""
+    assert len(provider.requests) == 1
