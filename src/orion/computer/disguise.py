@@ -137,8 +137,11 @@ BLOCKED = (
   const refused = new RegExp('REFUSED', 'i');
   const checking = new RegExp('CHECKING', 'i');
   const human = new RegExp('HUMAN', 'i');
+  // DataDome's frame says which: `t=fe` a puzzle a person passes, `t=bv` the address banned
+  // (« accès temporairement restreint »): no gesture gets through (Kiabi, 05/11).
   if (/captcha-delivery\\.com/.test(frames) || has(refused))
-    return {by: 'DataDome', puzzle: /captcha-delivery\\.com\\/captcha/.test(frames)};
+    return {by: 'DataDome', puzzle: /captcha-delivery\\.com\\/captcha/.test(frames)
+                                    && !/[?&]t=bv\\b/.test(frames) && !has(refused)};
   if (/challenges\\.cloudflare\\.com/.test(frames) || has(checking) || has(human))
     return {by: 'Cloudflare', puzzle: /challenges\\.cloudflare\\.com/.test(frames),
             passing: has(checking)};

@@ -40,7 +40,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    redémarrer pendant une conversation active (< 10 min) ni une prise en main ; regrouper (au
    plus une fois par heure, ou la nuit), sauf correctif marqué urgent. `deploy/orion-update.*`,
    D94.
-4. [ ] **Anti-robot après prise en main.** Le 05/11, Kiabi (DataDome) bloque encore après que
+4. [x] **Anti-robot après prise en main.** (cause : DataDome `t=bv` = adresse bannie, pris pour un puzzle ; détecté, plus de prise en main proposée, sortie `--exit` proposée à la place) Le 05/11, Kiabi (DataDome) bloque encore après que
    le propriétaire a passé le contrôle, alors que `Snapshot.wall()` promet « le site te laisse
    passer ensuite » (`computer/browser.py:335`). Comprendre pourquoi (cookie `datadome` non
    gardé ? empreinte différente entre son téléphone et le navigateur du serveur ? IP) ; corriger,
