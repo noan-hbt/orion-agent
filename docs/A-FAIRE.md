@@ -15,9 +15,9 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
 
 - [x] **PR #178** mergée le 06/11 (login : son propre formulaire, `browser.signed_in`).
 - [x] **P0 terminé le 06/11** : P0.1 (#180, D249), P0.2 à P0.8 (#181, D250, D251).
-- [ ] **Suite (P1), ordre retenu le 06/11** : 15 → 9 → 10 → 14 → 13 → 11 → 12 → 16, une PR par
+- [ ] **Suite (P1), ordre retenu le 06/11** : ~~15~~ → 9 → ~~10~~ → 14 → 13 → 11 → 12 → 16, une PR par
   point, travail direct sur une branche (pas de codex).
-- [ ] **P1.15 commencé, rien d'écrit** : la faille est dans `MemoryService._may_change`
+- [x] **P1.15 abandonné le 06/11** (décision du propriétaire) : la faille est dans `MemoryService._may_change`
   (`memory/service.py:158`) : `if origin.trust >= Trust.SYSTEM: return` exempte tout écrit
   SYSTEM (50) du contrôle, alors qu'un fait OWNER vaut 60. Appelants qui invalident :
   `memory/extractor.py:351`, `memory/night.py:254,257`, `memory/provenance.py:210`,
@@ -78,7 +78,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    état (fait, envoyé, vérifié, aucun, rejeté, réussi) sans s'appuyer sur un résultat de ce tour
    repasse une fois au modèle ; le vérificateur juge les réponses factuelles. Évals : ces trois
    cas.
-10. [ ] **Budget de contexte par étape.** La fenêtre n'est recalculée qu'au début du tour
+10. [-] **Budget de contexte par étape.** (jugé non pertinent le 06/11 : rejoué sur 14 j de prod, 6 440 appels, alléger les résultats du tour ne gagne que 3,5 % des jetons et fait perdre le cache sur 137 M ; 92 à 96 % de chaque appel est le socle porté d'un tour à l'autre, la nuit à elle seule 24 % du total. Les tours du propriétaire font 2 étapes au p50) La fenêtre n'est recalculée qu'au début du tour
     (`runtime.py:584-612`) ; chaque étape renvoie tout (médiane 70 k, p90 196 k, max 785 k
     jetons par appel, 605 M en 14 j). Au-delà d'un seuil, résumer sur place les résultats
     d'outils du tour courant. Ramener `max_steps` (100 en prod) vers 40. Ne pas casser
@@ -100,7 +100,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
     message (`runtime.py:214,440,1109`). Chercher sur les derniers messages, les situations en
     cours et les noms cités. `<memoire>` tronquée en silence à 10 000 caractères
     (`config.py:312`) : dire ce qui manque, ou prioriser.
-15. [ ] **Protéger ce qu'il a dit.** L'extracteur (SYSTEM) peut invalider un fait OWNER sans
+15. [-] **Protéger ce qu'il a dit.** (abandonné le 06/11) L'extracteur (SYSTEM) peut invalider un fait OWNER sans
     contrôle de code (`memory/service.py`, `_may_change`) ; 142 invalidations pour 275 faits en
     14 j. Un fait du propriétaire ne se remplace que par un autre de ses messages, ou devient une
     question.
