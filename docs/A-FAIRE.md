@@ -13,10 +13,18 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
 
 ## En cours
 
-- [ ] **PR #178** (branche `fix-login-place`, worktree `../orion-login`) : un login ignore les
-  formulaires d'un autre site, dit clairement « aucun formulaire ici, rien ne dit que le mot de
-  passe soit faux », et retient où il est passé (`browser.signed_in`). À relire, merger, puis
-  supprimer le worktree.
+- [x] **PR #178** mergée le 06/11 (login : son propre formulaire, `browser.signed_in`).
+- [x] **P0 terminé le 06/11** : P0.1 (#180, D249), P0.2 à P0.8 (#181, D250, D251).
+- [ ] **Suite (P1), ordre retenu le 06/11** : 15 → 9 → 10 → 14 → 13 → 11 → 12 → 16, une PR par
+  point, travail direct sur une branche (pas de codex).
+- [ ] **P1.15 commencé, rien d'écrit** : la faille est dans `MemoryService._may_change`
+  (`memory/service.py:158`) : `if origin.trust >= Trust.SYSTEM: return` exempte tout écrit
+  SYSTEM (50) du contrôle, alors qu'un fait OWNER vaut 60. Appelants qui invalident :
+  `memory/extractor.py:351`, `memory/night.py:254,257`, `memory/provenance.py:210`,
+  `intentions/module.py:233`, console (`console/app.py:292`, origine owner : légitime). À
+  décider : quels appelants SYSTEM gardent le droit (nuit : « pas durable, et passé » ?) ;
+  l'extracteur, lui, ne remplace un fait OWNER que s'il tire d'un message du propriétaire,
+  sinon il pose la question.
 - [ ] **Modèles** : le propriétaire change lui-même le routage en prod (`/srv/orion/orion.toml`).
   Cible de l'audit : tout ce qui réfléchit (`strong_model`, `[models.watch]`, `reflection`,
   `curiosity`, `portrait`, `memory`/`extractor_model`, `thinking`) sur le meilleur modèle
