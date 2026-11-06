@@ -83,6 +83,11 @@ class ToolResult:
 
 ToolHandler = Callable[[Any, ToolContext], Awaitable[ToolResult]]
 
+DEFAULT_DEADLINE = 900.0
+"""Seconds a tool call may take within a turn before it is cut (ORION-25: a `browser open`
+held his conversation 38 minutes on 06/11). A turn holds his thread: nothing he writes is read
+meanwhile."""
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -95,6 +100,9 @@ class Tool:
     concurrency_safe: bool = False
     accepts_untrusted_context: bool = False
     max_output_chars: int = 20_000
+    deadline: float | None = DEFAULT_DEADLINE
+    """Wall-clock seconds a call may take before it is cut (`DEFAULT_DEADLINE`); a family that
+    should never take that long sets less. None: no limit."""
     informs: bool = True
     """Whether its result tells the model something it needs to go on. Not for a tool that only
     records (`remember`): the words written beside it have left, so the turn ends there (D223)."""

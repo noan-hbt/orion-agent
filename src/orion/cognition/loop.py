@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Literal, cast
 
 import structlog
+from pydantic import BaseModel
 
 from orion.core.events import Trust
 from orion.guardian.policy import ALONE, APPROVED_DESPITE, ActionProposal, Guardian
@@ -35,7 +36,15 @@ from orion.providers.base import (
     Usage,
     spoken,
 )
-from orion.tools.base import DRAWER, Tool, ToolContext, ToolInputError, ToolRegistry, ToolResult
+from orion.tools.base import (
+    DRAWER,
+    Effect,
+    Tool,
+    ToolContext,
+    ToolInputError,
+    ToolRegistry,
+    ToolResult,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -256,6 +265,7 @@ class Told:
 
 
 REPEAT_REFUSED = "repeat refused"
+TIMED_OUT = "timed out"
 
 LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
 
@@ -788,12 +798,43 @@ async def _execute_one(
         approved=decision.reason == APPROVED_DESPITE,
         unrestricted=guardian.unrestricted(settings.thread_id),
     )
+    started = time.monotonic()
+    limit = asyncio.timeout(tool.deadline)
     try:
-        result = await tool.handler(arguments, ctx)
+        async with limit:
+            result = await tool.handler(arguments, ctx)
+    except TimeoutError as exc:
+        if not limit.expired():
+            log.exception("tool.failed", tool=tool.name)
+            return ToolResult(f"Tool error: TimeoutError: {exc}", is_error=True), "tool error"
+        return _timed_out(tool, arguments, settings, time.monotonic() - started), TIMED_OUT
     except Exception as exc:
         log.exception("tool.failed", tool=tool.name)
         return ToolResult(f"Tool error: {type(exc).__name__}: {exc}", is_error=True), "tool error"
     return _clip(result, tool), decision.reason
+
+
+def _timed_out(
+    tool: Tool, arguments: BaseModel, settings: LoopSettings, seconds: float
+) -> ToolResult:
+    """A call cut at its deadline (ORION-25). What it may have changed outside is not known:
+    said so, so that it is checked rather than done twice."""
+    external = tool.effect_for(arguments) is Effect.EXTERNAL
+    log.warning(
+        "tool.timed_out",
+        tool=tool.name,
+        thread=settings.thread_id,
+        correlation_id=settings.correlation_id,
+        seconds=round(seconds, 1),
+        external=external,
+    )
+    said = f"Timed out: no answer after {seconds:.0f} s, the call was cut."
+    if external:
+        said += (
+            " UNCERTAIN: what it was doing may or may not have happened. Check (the page, the"
+            " mail, the journal) before doing it again, and tell him it is not confirmed."
+        )
+    return ToolResult(said, is_error=True)
 
 
 def _clip(result: ToolResult, tool: Tool) -> ToolResult:

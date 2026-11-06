@@ -22,6 +22,7 @@ from orion.cognition.loop import (
     run_agent,
 )
 from orion.core.events import Trust
+from orion.core.journal import SqliteJournal
 from orion.guardian.policy import Guardian
 from orion.providers.base import Message, ModelRequest, ModelResponse
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
@@ -758,3 +759,52 @@ async def test_an_empty_reply_where_silence_is_an_answer_stays_silent() -> None:
     events, _ = await collect(provider, settings=replace(SETTINGS, must_answer=False))
     assert finished(events).text == ""
     assert len(provider.requests) == 1
+
+
+async def test_a_call_that_never_answers_is_cut_and_the_next_message_goes_through(
+    journal: SqliteJournal,
+) -> None:
+    """ORION-25: a `browser open` held his conversation 38 minutes on 06/11."""
+    from orion.config import AgentConfig
+    from orion.context.compiler import ContextCompiler
+    from orion.guardian.policy import ActionProposal, Approval
+    from orion.runtime import OWNER_THREAD, Orion
+    from tests.test_telegram import Empty
+
+    class Yes:
+        async def approve(self, proposal: ActionProposal) -> Approval:
+            return Approval(True)
+
+    async def hangs(_args: Any, _ctx: ToolContext) -> ToolResult:
+        await asyncio.Event().wait()
+        raise AssertionError("never")
+
+    tool = Tool(
+        name="book",
+        description="Books it.",
+        input_model=Empty,
+        handler=hangs,
+        effect=Effect.EXTERNAL,
+        reversibility=Reversibility.REVERSIBLE,
+        deadline=0.2,
+    )
+    provider = ScriptedProvider(
+        call_tools(("book", {})), reply("Pas confirmé."), reply("Oui, je suis là.")
+    )
+    orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([tool]),
+        guardian=Guardian(Yes()),
+        compiler=ContextCompiler("CONSTITUTION"),
+        agent=AgentConfig(),
+    )
+    await orion.start()
+    async with asyncio.timeout(10):
+        turn = await orion.handle_owner_message(OWNER_THREAD, "Réserve.", "t")
+        assert turn.text == "Pas confirmé."
+        answer = provider.requests[1].messages[-1]["content"]
+        assert "Timed out" in str(answer) and "UNCERTAIN" in str(answer)
+        assert not orion.lock(OWNER_THREAD).locked()
+        again = await orion.handle_owner_message(OWNER_THREAD, "Tu es là ?", "t")
+        assert again.text == "Oui, je suis là."

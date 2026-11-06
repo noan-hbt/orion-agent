@@ -21,12 +21,13 @@ the next sign-in, from any conversation, starts there rather than on the site's 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import mimetypes
 import re
 import secrets as tokens
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -70,6 +71,10 @@ _ACTING: ContextVar[list[str] | None] = ContextVar("browser_acting", default=Non
 PAGE = "browser.page"
 SIGNED_IN = "browser.signed_in"
 IDLE_SECONDS = 600.0
+BROWSER_DEADLINE = 120.0
+"""Seconds a browser call may take (ORION-25): Playwright's own timeouts are 3 to 30 s a step, so
+this only cuts a browser that no longer answers, which held a turn 38 minutes on 06/11."""
+DISCARD_SECONDS = 15.0
 SHOWN_CHARS = 4000
 """Page text shown after each action; `browser` read gives the rest, part by part."""
 READ_CHARS = 60_000
@@ -241,6 +246,8 @@ class BrowserDesk:
         sign-ins, are the same in every tab and stay after a restart."""
         self._session: Session | None = None
         self._lock = asyncio.Lock()
+        self._stuck = False
+        """An action was cut midway: the next one starts on a new browser."""
         self.held: set[str] = set()
         """Tabs the owner has in hand (a hand-over): never closed for being idle."""
         self.handovers: dict[str, HandOver] = {}
@@ -274,16 +281,22 @@ class BrowserDesk:
     async def _tab(self, thread: str) -> _Live:
         """The conversation's tab, the browser opened first if need be; the session then acts
         on it. Called under the lock."""
-        if self._session is not None and not self._session.alive:
-            # Chromium died under it: its tabs went with it, a new browser takes over (D171).
-            log.warning("browser.relaunch", tabs=len(self._live))
+        if self._session is not None and (not self._session.alive or self._stuck):
+            # Chromium died under it, or an action was cut at its deadline and the browser may
+            # hang still (ORION-25): its tabs go with it, a new browser takes over (D171).
+            log.warning("browser.relaunch", tabs=len(self._live), stuck=self._stuck)
             for live in self._live.values():
                 if live.closer is not None:
                     live.closer.cancel()
             self._live.clear()
             self.held.clear()
+            self._stuck = False
             session, self._session = self._session, None
-            await session.discard()
+            try:
+                async with asyncio.timeout(DISCARD_SECONDS):
+                    await session.discard()
+            except TimeoutError:
+                log.warning("browser.discard_timed_out", seconds=DISCARD_SECONDS)
         if self._session is None:
             session = self._sessions()
             await session.__aenter__()
@@ -985,6 +998,17 @@ class BrowserDesk:
             await self._tab(ctx.thread_id)
             return await self.session.screenshot(full)
 
+    @contextlib.asynccontextmanager
+    async def _cut_means_stuck(self) -> AsyncGenerator[None]:
+        """An action cut at its deadline (`BROWSER_DEADLINE`) leaves the browser in an unknown
+        state: the lock is released on the way out, and the next action relaunches it."""
+        try:
+            yield
+        except asyncio.CancelledError:
+            self._stuck = True
+            log.warning("browser.action_cut")
+            raise
+
     async def _act(
         self,
         ctx: ToolContext,
@@ -993,7 +1017,7 @@ class BrowserDesk:
         elements: int = MAX_ELEMENTS,
         what: str = "read",
     ) -> str:
-        async with self._lock:
+        async with self._lock, self._cut_means_stuck():
             live = await self._tab(ctx.thread_id)
             session = self.session
             blocked_before = len(session.blocked)
