@@ -49,6 +49,7 @@ from orion.context.threads import (
     Thread,
     ThreadProjection,
 )
+from orion.core import busy
 from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -73,6 +74,8 @@ PRUNE_AT_ONCE = 40_000
 """Characters of old bulky results worth shortening without waiting for a pause: the prefix
 changes once, and every later step of a lively conversation stops carrying them."""
 
+OWNER_BUSY_SECONDS = 10 * 60
+"""After each of his messages, no update restarts Orion for this long (D251)."""
 OWNER_THREAD = "owner"
 CONTACT_THREAD = "contact:"
 """A thread where Orion answers someone the owner lets write to it (D114)."""
@@ -277,6 +280,7 @@ class Orion:
         `halted` lets him call it off between two steps."""
         owner = Provenance(source=f"{channel}:{thread_id}", actor="owner:main")
         self.owner_wrote_at = now or datetime.now(UTC)
+        busy.hold(OWNER_BUSY_SECONDS)
         payload: dict[str, object] = {"thread_id": thread_id, "channel": channel, "text": text}
         if refs:
             payload["refs"] = refs
@@ -1024,10 +1028,12 @@ class Orion:
         if self._memory is not None:
             current = [s for s in self._memory.situations.current() if s.trust >= TRUSTED_FLOOR]
             lines += [f"- en cours{s.line()[1:]}" for s in current[:SITUATIONS_SHOWN]]
-            soon = when.date() + timedelta(days=SITUATION_DAYS)
+            today = when.date().isoformat()
+            soon = (when.date() + timedelta(days=SITUATION_DAYS)).isoformat()
             for c in await self._memory.store.commitments():
                 due = (c.due or "")[:10]
-                if c.debtor in ("owner", "orion") and due and due <= soon.isoformat():
+                # Past due, it is asked about once in a digest, not shown every turn (D250).
+                if c.debtor in ("owner", "orion") and due and today <= due <= soon:
                     who = "à faire" if c.debtor == "owner" else "à toi de faire"
                     lines.append(f"- {who} pour le {due} : {c.what}")
         for source in self.situation:

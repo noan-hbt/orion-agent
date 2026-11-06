@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from orion.computer.browser import KEPT_COOKIES, MAX_ELEMENTS, BrowserError, Session, Snapshot
 from orion.computer.vault import LocalVault, LoginKeeper, VaultError
+from orion.core import busy
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
@@ -395,14 +396,21 @@ class BrowserDesk:
         name, data, kind = found
         return await self._on_page(ctx, lambda s: s.upload(element, name, data, kind))
 
+    async def _reopen(self, ctx: ToolContext) -> bool:
+        """The conversation's tab closed (idle, a restart): its last page opens again. Whether
+        it had to."""
+        if ctx.thread_id in self._live and (self._session is None or self._session.alive):
+            return False
+        await self._runner.catch_up()
+        last = self.state.last.get(ctx.thread_id)
+        if last is None:
+            raise Refused("No page is open: browser open first.")
+        await self._act(ctx, lambda s: s.goto(last), whole=True)
+        return True
+
     async def read(self, part: int, find: str, ctx: ToolContext) -> str:
         reopened = ""
-        if ctx.thread_id not in self._live or (self._session and not self._session.alive):
-            await self._runner.catch_up()
-            last = self.state.last.get(ctx.thread_id)
-            if last is None:
-                raise Refused("No page is open: browser open first.")
-            await self._act(ctx, lambda s: s.goto(last), whole=True)
+        if await self._reopen(ctx):
             reopened = "[Ton onglet s'était fermé : rouvert sur sa dernière page.]\n\n"
         live = self._live[ctx.thread_id]
 
@@ -574,6 +582,7 @@ class BrowserDesk:
         now = time.monotonic()
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(ctx.thread_id, why, now + HANDOVER_SECONDS)
+        busy.hold(HANDOVER_SECONDS)  # a restart would take the tab from under him
         self.held.add(ctx.thread_id)
         # One place to take the tab, where he is: the app, unless he is on Telegram.
         telegram = telegram and (not self.in_app or self.on_telegram())
@@ -891,6 +900,7 @@ class BrowserDesk:
         now = time.monotonic()
         self.handovers = {t: h for t, h in self.handovers.items() if h.until > now}
         self.handovers[token] = HandOver(HANDS, why, now + HANDOVER_SECONDS, asked=False)
+        busy.hold(HANDOVER_SECONDS)
         return {"token": token, "why": why}
 
     async def sites(self) -> list[str]:
@@ -931,9 +941,10 @@ class BrowserDesk:
         return f"Déconnecté de {site}." if site else "Déconnecté de tous les sites."
 
     async def screenshot(self, full: bool, ctx: ToolContext) -> bytes:
+        # « Envoie une capture » a while later: the tab had closed, and he got « no page »
+        # (05/11). Like `read`, it opens the last page again.
+        await self._reopen(ctx)
         async with self._lock:
-            if ctx.thread_id not in self._live:
-                raise Refused("No page is open: browser open first.")
             await self._tab(ctx.thread_id)
             return await self.session.screenshot(full)
 

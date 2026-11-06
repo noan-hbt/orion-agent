@@ -7,6 +7,10 @@
 # back to the commit that ran before, restarts that, remembers the bad commit (it is not tried
 # again until a newer one arrives) and tells the owner on Telegram. It tells him too when an
 # update went well. Stop it: systemctl disable --now orion-update.timer
+#
+# Each restart closes the browser (a hand-over, open tabs). So updates are grouped (D251): not
+# while the owner is in the middle of something (the core writes until when, `busy-until`), at
+# most once an hour, and never held more than 3 hours; a commit saying [urgent] goes at once.
 {
 set -euo pipefail
 ROOT=/srv/orion
@@ -31,6 +35,20 @@ old="$(git rev-parse HEAD)"
 new="$(git rev-parse "origin/$branch")"
 [ "$old" = "$new" ] && exit 0
 [ -f "$BAD" ] && [ "$(cat "$BAD")" = "$new" ] && exit 0
+
+HELD="$ROOT/data/busy-until"
+LAST="$ROOT/update.last"
+WAITING="$ROOT/update.waiting"
+now="$(date +%s)"
+if ! git log --format=%B "$old..$new" | grep -i '\[urgent\]' >/dev/null; then
+    [ -f "$WAITING" ] || echo "$now" > "$WAITING"
+    if [ $((now - $(cat "$WAITING"))) -lt "${ORION_UPDATE_MAX_WAIT:-10800}" ]; then
+        [ "$(cat "$HELD" 2>/dev/null || echo 0)" -gt "$now" ] && exit 0
+        [ $((now - $(cat "$LAST" 2>/dev/null || echo 0))) -lt "${ORION_UPDATE_EVERY:-3600}" ] && exit 0
+    fi
+fi
+echo "$now" > "$LAST"
+rm -f "$WAITING"
 
 notify() { "$ADMIN" notify "$1" >/dev/null 2>&1 || echo "$1"; }
 

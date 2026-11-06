@@ -137,6 +137,9 @@ async def test_a_wall_put_up_by_an_anti_bot_is_named_and_a_way_round_given() -> 
         "</body></html>",
         "/puzzle": "<html><body><iframe src='https://geo.captcha-delivery.com/captcha/?x=1'>"
         "</iframe></body></html>",
+        # Kiabi, 05/11: the same frame, but the address is banned; a hand-over did nothing.
+        "/banned": "<html><body><iframe src='https://geo.captcha-delivery.com/captcha/?t=bv'>"
+        "</iframe></body></html>",
     }
 
     async def wall(route: Route) -> None:
@@ -151,6 +154,8 @@ async def test_a_wall_put_up_by_an_anti_bot_is_named_and_a_way_round_given() -> 
         assert "réessayer n'y changera rien" in refused.render() and "--exit" in refused.render()
         await browser.goto("https://annonces.test/puzzle")
         assert "hand_over" in (await browser.snapshot()).render()
+        await browser.goto("https://annonces.test/banned")
+        assert "hand_over" not in (await browser.snapshot()).render()
 
 
 async def test_orion_reads_the_wall_in_his_browser(journal: SqliteJournal) -> None:

@@ -191,3 +191,15 @@ async def test_tasks_started_at_once_keep_to_the_limit(journal: SqliteJournal) -
     )
     assert len(await world.tasks.running()) == 2
     assert sum(r.is_error for r in started) == 2
+
+
+def test_a_task_over_its_limits_is_capped_not_refused() -> None:
+    """05/11: `budget_usd` 5 and a long report were refused, and the steps were lost."""
+    from orion.tasks.module import DoneInput, StartInput
+
+    start = StartInput.model_validate(
+        {"goal": "trouver un vol", "brief": "Lisbonne, en mai, pas cher.", "budget_usd": 5}
+    )
+    assert start.budget_usd == 3.0
+    report = DoneInput.model_validate({"summary": "étape. " * 2000})
+    assert report.summary.startswith("étape.") and len(report.summary) < 5000

@@ -332,7 +332,8 @@ class Snapshot:
             return (
                 f"[Anti-robot ({by}) devant la page : une personne le passe d'un geste. "
                 "`browser` hand_over, avec pourquoi ; il le fait sur son téléphone, puis tu "
-                "reprends, et le site te laisse passer ensuite.]\n\n"
+                "reprends. Si le mur est encore là après, c'est l'adresse du serveur qu'il "
+                "bloque : ne le lui redemande pas.]\n\n"
             )
         where = (
             f"même en passant par sa connexion ({self.through}), il refuse : dis-le-lui"

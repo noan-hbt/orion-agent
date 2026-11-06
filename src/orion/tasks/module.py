@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from orion.cognition.loop import StopReason
 from orion.core.events import Provenance, Trust
@@ -175,6 +175,9 @@ class TaskWork:
         return found
 
 
+SUMMARY_MAX = 4000
+
+
 class StartInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -182,10 +185,17 @@ class StartInput(BaseModel):
     brief: str = Field(
         min_length=10,
         max_length=3000,
-        description="All it needs; it sees nothing else",
+        description="All it needs; it sees nothing else (3000 characters at most)",
     )
-    budget_usd: float = Field(default=1.0, gt=0, le=3.0)
+    budget_usd: float = Field(default=1.0, gt=0, le=3.0, description="3 at most")
     minutes: int = Field(default=30, ge=5, le=180)
+
+    @field_validator("budget_usd", "minutes", mode="before")
+    @classmethod
+    def _capped(cls, value: object, info: Any) -> object:
+        """Over the cap, the cap: refusing cost the task its turn twice on 05/11."""
+        cap = {"budget_usd": 3.0, "minutes": 180}[info.field_name]
+        return min(value, cap) if isinstance(value, int | float) else value
 
 
 class SayInput(BaseModel):
@@ -205,7 +215,15 @@ class StopInput(BaseModel):
 class DoneInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    summary: str = Field(min_length=3, max_length=2000)
+    summary: str = Field(min_length=3, description=f"{SUMMARY_MAX} characters at most")
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _clipped(cls, value: object) -> object:
+        """A long report is cut, not refused: refused twice on 05/11, the steps were lost."""
+        if isinstance(value, str) and len(value) > SUMMARY_MAX:
+            return value[: SUMMARY_MAX - 1] + "…"
+        return value
 
 
 class NoInput(BaseModel):

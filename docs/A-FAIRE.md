@@ -30,33 +30,33 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
    épuisé, comme le 05/11 à 19 h 06 : `subscription_sharing_usage_unavailable`), le dire au
    propriétaire une fois (au prochain point) et l'afficher dans l'app/`orion`.
    `src/orion/providers/router.py:64`.
-2. [ ] **Engagements en retard.** `runtime.py:1030` (`due <= soon` sans borne basse) les
+2. [x] **Engagements en retard.** (D250) `runtime.py:1030` (`due <= soon` sans borne basse) les
    montre dans chaque `<maintenant>` pour toujours (« à faire pour le 2026-11-03 » encore le
    05/11). Passé l'échéance : sortis de `<maintenant>`, une seule question (« fait ? reporté ?
    abandonné ? »), puis clos ou reprogrammés. Test : un engagement échu n'apparaît plus dans le
    contexte après la question.
-3. [ ] **Déploiements groupés.** ~8 redémarrages/jour (110 initiatives `restart` en 14 j, 97
+3. [x] **Déploiements groupés.** (D251) ~8 redémarrages/jour (110 initiatives `restart` en 14 j, 97
    tues) : chaque redémarrage ferme le navigateur et perd prises en main et onglets. Ne pas
    redémarrer pendant une conversation active (< 10 min) ni une prise en main ; regrouper (au
    plus une fois par heure, ou la nuit), sauf correctif marqué urgent. `deploy/orion-update.*`,
    D94.
-4. [ ] **Anti-robot après prise en main.** Le 05/11, Kiabi (DataDome) bloque encore après que
+4. [x] **Anti-robot après prise en main.** (cause : DataDome `t=bv` = adresse bannie, pris pour un puzzle ; détecté, plus de prise en main proposée, sortie `--exit` proposée à la place) Le 05/11, Kiabi (DataDome) bloque encore après que
    le propriétaire a passé le contrôle, alors que `Snapshot.wall()` promet « le site te laisse
    passer ensuite » (`computer/browser.py:335`). Comprendre pourquoi (cookie `datadome` non
    gardé ? empreinte différente entre son téléphone et le navigateur du serveur ? IP) ; corriger,
    ou ne plus promettre et proposer la sortie par sa machine (`--exit`).
-5. [ ] **Relance « réponse vide » inutile.** Après `file` send (texte déjà parti avant), la
+5. [x] **Relance « réponse vide » inutile.** (`file` send n'informe plus) Après `file` send (texte déjà parti avant), la
    boucle relance « ta réponse est vide… » (`loop.empty_reply`, `cognition/loop.py:449`) :
    un appel pour rien, deux fois le 05/11. Ne pas relancer quand le seul résultat non lu est un
    accusé d'envoi.
-6. [ ] **Limites de `task` qui font perdre des étapes.** `budget_usd` > 3 refusé, `summary` >
+6. [x] **Limites de `task` qui font perdre des étapes.** (plafonnées, plus refusées) `budget_usd` > 3 refusé, `summary` >
    2000 caractères refusé deux fois de suite (05/11, 18 h 05 et 18 h 07). Plafonner/tronquer au
    lieu de refuser, ou dire la limite dans la description de l'outil.
-7. [ ] **Onglet fermé entre deux messages.** « Envoie une capture » → « No page is open » puis
+7. [x] **Onglet fermé entre deux messages.** (`screenshot` rouvre comme `read`) « Envoie une capture » → « No page is open » puis
    réouverture (05/11, 13 h 35 et 15 h 13) ; une fois il a répondu « aucune page ouverte » au
    lieu de rouvrir. `screenshot` sans onglet devrait rouvrir la dernière page
    (`BrowsingState.last`) comme le fait déjà `read` (`_need_tab`).
-8. [ ] **`fontTools` manquant** : avertissement à la lecture de certains PDF (05/11, 18 h 06).
+8. [x] **`fontTools` manquant** (ajouté : pypdf en a besoin pour décoder les polices CFF Type1) : avertissement à la lecture de certains PDF (05/11, 18 h 06).
    L'ajouter aux dépendances si la lecture en pâtit.
 
 ## P1 — les changements de structure (2 à 3 semaines)
