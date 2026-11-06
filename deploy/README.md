@@ -138,6 +138,9 @@ code). Les commandes `orion-admin …` restent là pour dépanner.
   la config, redémarre et surveille les deux processus 75 s. Si quelque chose casse, il revient
   à la version d'avant et écarte ce commit (`/srv/orion/update.bad`). Il te prévient sur
   Telegram, quand il est activé, dans les deux cas ; sinon, tout est dans le journal.
+  Les mises à jour sont groupées (D251) : pas pendant que tu t'en sers (`data/busy-until`), au
+  plus une par heure, jamais retenues plus de 3 h ; un commit `[urgent]` part tout de suite.
+  Pour ne pas attendre : Réglages → Version → **Appliquer maintenant** dans l'app (D254).
   Journal : `journalctl -u orion-update`. Le couper : `sudo systemctl disable --now
   orion-update.timer`. Changer de branche : `sudo git -C /srv/orion/app checkout <branche>`.
 - **Secrets depuis le téléphone** (D94, D154) : « active mon mail » → le secret demandé
