@@ -42,3 +42,33 @@ in French; code, identifiers and comments are in English.
   (uncommitted changes you did not make, a branch you did not create), do not touch it. Work in
   your own git worktree (`git worktree add ../orion-<topic> -b <branch>`) and remove it once
   merged.
+
+## Work tracking (Jira)
+
+The work list lives in Jira: project `ORION` on `nerb-solutions.atlassian.net` (cloudId
+`c72251bd-3128-4f30-b749-98fc18ae2206`), through the Atlassian MCP connector. It replaces
+`docs/A-FAIRE.md`. Audits (ChatGPT or others) file their findings there as tickets; a ticket is
+the unit of work. Jira holds the work, `docs/DECISIONS.md` still holds the why.
+
+Statuses, and who moves a ticket into each:
+
+- `Backlog` — proposed (audits, agents). Not to be worked on.
+- `Selected for Development` — accepted by the owner, ready. Pick from here only, highest
+  priority first, then lowest key.
+- `En cours` — an agent is on it (assigned).
+- `En revue` — PR open, waiting for the owner.
+- `Terminé(e)` — the owner, after merge. Never an agent.
+
+Labels: `pret-agent` (self-contained, an agent can take it), `a-decider` (needs an owner
+decision first: never code it), `proprietaire` (the owner does it by hand), `recurrent` (never
+closed, comment each run), plus an area (`memoire`, `veille`, `initiative`, `navigateur`, `web`,
+`gardien`, `evals`, `ops`...). Epics group the work (P1, P2, Exploitation).
+
+- Start: read the ticket, its epic and its links; assign it to yourself; move it to `En cours`.
+- A ticket without a clear "Fait quand", or that contradicts a decision (Dxxx): comment the
+  question on the ticket, add `a-decider`, move it back to `Backlog`, and stop. Do not guess.
+- One ticket = one branch `ORION-<n>-<topic>` = one PR whose title starts with `ORION-<n>`.
+- PR open: comment on the ticket with the link, what was done, what was not, and what was
+  verified (tests run, pyright). Move it to `En revue`.
+- Work found along the way goes into a new `Backlog` ticket linked to the current one, not into
+  the current PR. Tickets you create: Contexte / À faire / Fait quand / Références, in French.
