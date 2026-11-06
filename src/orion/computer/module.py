@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 
 from orion.computer.browser import Session
-from orion.computer.direct import BrowserDesk, Refused, browser_tools
+from orion.computer.direct import BROWSER_DEADLINE, BrowserDesk, Refused, browser_tools
 from orion.computer.vault import LocalVault
 from orion.core.events import Trust
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
@@ -149,6 +149,7 @@ class ComputerModule(Module):
                         else {}
                     ),
                 },
+                deadline=BROWSER_DEADLINE,
             ),
         ]
 

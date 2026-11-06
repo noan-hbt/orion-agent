@@ -21,7 +21,15 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
-from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolHandler, ToolResult
+from orion.tools.base import (
+    DEFAULT_DEADLINE,
+    Effect,
+    Reversibility,
+    Tool,
+    ToolContext,
+    ToolHandler,
+    ToolResult,
+)
 
 
 @dataclass(frozen=True)
@@ -85,6 +93,7 @@ def action_tool(
     *,
     reversibility: Reversibility = Reversibility.REVERSIBLE,
     accepts_untrusted_context: bool = False,
+    deadline: float | None = DEFAULT_DEADLINE,
 ) -> Tool:
     """A tool whose `action` picks one of `actions`; the other fields are that action's
     parameters (all optional in the schema, with their type and allowed values, checked
@@ -183,13 +192,20 @@ def action_tool(
         untrusted_of=untrusted_of,
         informs_of=informs_of,
         check=check,
+        deadline=deadline,
     )
 
 
 _EFFECT_ORDER = [Effect.NONE, Effect.INTERNAL, Effect.EXTERNAL]
 
 
-def grouped(name: str, description: str, tools: list[Tool], renames: dict[str, str]) -> Tool:
+def grouped(
+    name: str,
+    description: str,
+    tools: list[Tool],
+    renames: dict[str, str],
+    deadline: float | None = DEFAULT_DEADLINE,
+) -> Tool:
     """Tools of one domain as the actions of one tool: `renames` maps each tool's name to its
     action (every tool must be named). Each keeps its model, handler, effect and trust rule."""
     by_name = {t.name: t for t in tools}
@@ -213,4 +229,5 @@ def grouped(name: str, description: str, tools: list[Tool], renames: dict[str, s
         reversibility=max(
             (t.reversibility for t in tools), key=lambda r: list(Reversibility).index(r)
         ),
+        deadline=deadline,
     )

@@ -5907,3 +5907,26 @@ travail en plusieurs étapes. Le moteur `orion.workflows` les journalise étape 
   compte rendu au propriétaire, et les travaux en attente ou incertains à la revue du soir.
 - **Compatibilité** : rien à migrer. Les événements sont nouveaux, et `job.started` /
   `job.finished` restent ceux qu'on avait.
+
+## D260 — Un appel d'outil a une échéance, et ce qu'il a peut-être fait est dit incertain
+
+*06/11/2026 · acceptée · ORION-25*
+
+Le 06/11, un `browser open` sur une page OVH n'a jamais répondu : le tour a tenu sa conversation
+38 minutes, jusqu'au redémarrage du service. Rien ne coupait un appel d'outil.
+
+- **Échéance par appel** : chaque `Tool` porte `deadline` (secondes, temps mur), 15 min par
+  défaut. Une famille qui n'a aucune raison d'aller si loin met moins : le navigateur 120 s, ses
+  propres délais Playwright étant de 3 à 30 s par étape. `None` : aucune limite. L'échéance ne
+  couvre que l'outil, pas l'attente d'une approbation du gardien.
+- **À l'échéance** : l'appel est annulé, ses verrous sont rendus, et le modèle reçoit un
+  résultat en erreur qui donne la vraie durée. Pour un outil à effet externe, ce résultat dit
+  `UNCERTAIN` : l'action a peut-être eu lieu, il faut vérifier avant de la refaire et le dire non
+  confirmé. Jamais de rejeu automatique. Journal : `tool.executed` avec la décision
+  `timed out`, et le log `tool.timed_out` (outil, fil, `correlation_id`, durée).
+- **Le navigateur repart à neuf** : une action coupée marque la session « bloquée ». L'action
+  suivante relance Chromium comme après un plantage (D171). La fermeture de l'ancien est bornée
+  à 15 s.
+- **Limite** : l'annulation suppose que l'outil rend la main à la boucle asyncio (c'est le cas
+  de Playwright async). Du code synchrone bloquant n'est pas interrompu. Aucun outil n'en
+  contient à ce jour.
