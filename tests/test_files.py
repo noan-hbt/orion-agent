@@ -123,6 +123,8 @@ async def test_a_screenshot_of_the_page_shown(journal: SqliteJournal, tmp_path: 
         assert f"`attachment_look` ({file_id})" in shot.content  # it can see what it sends
         full = await run(tools["browser_screenshot"], full=True)
         assert "Capture prête" in full.content
+        await desk.close(CTX.thread_id)  # idle, the tab closed between two of his messages
+        assert not (await run(tools["browser_screenshot"])).is_error  # its page opens again
     finally:
         await desk.aclose()
     trusts = [e.trust for e in await journal.read() if e.kind == MADE]

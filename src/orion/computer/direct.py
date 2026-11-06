@@ -396,14 +396,21 @@ class BrowserDesk:
         name, data, kind = found
         return await self._on_page(ctx, lambda s: s.upload(element, name, data, kind))
 
+    async def _reopen(self, ctx: ToolContext) -> bool:
+        """The conversation's tab closed (idle, a restart): its last page opens again. Whether
+        it had to."""
+        if ctx.thread_id in self._live and (self._session is None or self._session.alive):
+            return False
+        await self._runner.catch_up()
+        last = self.state.last.get(ctx.thread_id)
+        if last is None:
+            raise Refused("No page is open: browser open first.")
+        await self._act(ctx, lambda s: s.goto(last), whole=True)
+        return True
+
     async def read(self, part: int, find: str, ctx: ToolContext) -> str:
         reopened = ""
-        if ctx.thread_id not in self._live or (self._session and not self._session.alive):
-            await self._runner.catch_up()
-            last = self.state.last.get(ctx.thread_id)
-            if last is None:
-                raise Refused("No page is open: browser open first.")
-            await self._act(ctx, lambda s: s.goto(last), whole=True)
+        if await self._reopen(ctx):
             reopened = "[Ton onglet s'était fermé : rouvert sur sa dernière page.]\n\n"
         live = self._live[ctx.thread_id]
 
@@ -934,9 +941,10 @@ class BrowserDesk:
         return f"Déconnecté de {site}." if site else "Déconnecté de tous les sites."
 
     async def screenshot(self, full: bool, ctx: ToolContext) -> bytes:
+        # « Envoie une capture » a while later: the tab had closed, and he got « no page »
+        # (05/11). Like `read`, it opens the last page again.
+        await self._reopen(ctx)
         async with self._lock:
-            if ctx.thread_id not in self._live:
-                raise Refused("No page is open: browser open first.")
             await self._tab(ctx.thread_id)
             return await self.session.screenshot(full)
 

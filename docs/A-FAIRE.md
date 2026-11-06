@@ -52,7 +52,7 @@ Rappels : lire `CLAUDE.md` (règles du dépôt), travailler dans un worktree
 6. [x] **Limites de `task` qui font perdre des étapes.** (plafonnées, plus refusées) `budget_usd` > 3 refusé, `summary` >
    2000 caractères refusé deux fois de suite (05/11, 18 h 05 et 18 h 07). Plafonner/tronquer au
    lieu de refuser, ou dire la limite dans la description de l'outil.
-7. [ ] **Onglet fermé entre deux messages.** « Envoie une capture » → « No page is open » puis
+7. [x] **Onglet fermé entre deux messages.** (`screenshot` rouvre comme `read`) « Envoie une capture » → « No page is open » puis
    réouverture (05/11, 13 h 35 et 15 h 13) ; une fois il a répondu « aucune page ouverte » au
    lieu de rouvrir. `screenshot` sans onglet devrait rouvrir la dernière page
    (`BrowsingState.last`) comme le fait déjà `read` (`_need_tab`).
