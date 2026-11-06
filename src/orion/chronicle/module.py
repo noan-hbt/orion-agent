@@ -17,12 +17,16 @@ The page ends with Orion's own errors of the week, when there were any (D69): wh
 to (`mistake`: a reminder set a day late, a wrong fact, a promise not kept), and what failed on
 its side (a file that never left, a tool that broke). Owned, briefly, with what it drew from
 them: the owner learns where to trust it and where to check.
+
+The page looks back; the Sunday message also looks ahead (D256): after the page, the week to
+come, from what is read at that moment (his agenda, the commitments due, the intentions he
+follows). Nothing of it is journaled with the page: the diary stays the week that was.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
@@ -57,6 +61,10 @@ NOTICED = "chronicle.noticed"
 NOTICE_WEEKS = 5
 """The last pages read for the month's observations; fewer than three: none."""
 EXPIRES = timedelta(days=2)
+AHEAD = timedelta(days=7)
+"""How far the Sunday message looks ahead."""
+Ahead = tuple[Trust, Callable[[datetime], Awaitable[list[str]]]]
+"""A source of the week to come: how far its lines are trusted, and the lines."""
 MAX_TRANSCRIPT = 60_000
 MIN_LINES = 6
 """Fewer exchanges than this in a week: no page (there is nothing to tell)."""
@@ -197,6 +205,43 @@ def _failure(event: Event) -> str | None:
     return None
 
 
+def _day(due: str | None) -> date | None:
+    """A commitment's due day, when it is a date; « avant l'été » is left to the night."""
+    if not due:
+        return None
+    try:
+        return date.fromisoformat(due[:10])
+    except ValueError:
+        return None
+
+
+async def read_ahead(
+    sources: list[Ahead], memory: MemoryService | None, now: datetime, span: timedelta
+) -> tuple[list[str], Trust]:
+    """What is coming over `span`, as read now (D256): what each source shows, then the open
+    commitments falling due by then, and how far it is all trusted (the least of its sources).
+    The Sunday message reads the week with it, the morning his next two days."""
+    lines: list[str] = []
+    trust = Trust.SYSTEM
+    for source_trust, read in sources:
+        try:
+            found = await read(now)
+        except Exception:
+            log.exception("chronicle.ahead_failed")
+            continue
+        if found:
+            lines += found
+            trust = min(trust, source_trust)
+    if memory is not None:
+        until = (now + span).date()
+        for c in await memory.store.commitments():
+            due = _day(c.due)
+            if due is not None and now.date() <= due < until:
+                lines.append(f"- échéance le {due:%d/%m} : {c.debtor} → {c.creditor} : {c.what}")
+                trust = min(trust, c.trust)
+    return lines, trust
+
+
 def monday_of(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
@@ -228,6 +273,8 @@ class Chronicle:
         self.clock = clock or (lambda: datetime.now(self.zone))
         self.state = ChronicleState()
         self._runner = ProjectionRunner(journal, [self.state])
+        self.ahead: list[Ahead] = []
+        """What the week to come holds (agenda, intentions), read when the page goes out."""
 
     async def sync(self) -> None:
         await self._runner.catch_up()
@@ -411,6 +458,11 @@ class Chronicle:
                 return page
         return None
 
+    async def coming(self, now: datetime) -> tuple[list[str], Trust]:
+        """The week to come, as read now, and how far it is trusted (the least of its
+        sources): his agenda, what he owes or is owed by then, his intentions."""
+        return await read_ahead(self.ahead, self._memory, now, AHEAD)
+
     async def alerts(self, now: datetime) -> list[Alert]:
         await self.sync()
         found: list[Alert] = []
@@ -420,14 +472,27 @@ class Chronicle:
             )
             if not written <= now < written + EXPIRES:
                 continue
+            notice = (
+                "Tu as écrit la page de sa semaine, la voici. Envoie-la-lui telle quelle, "
+                "précédée d'une courte phrase à toi :\n\n" + page.text
+            )
+            lines, trust = await self.coming(now)
+            fallback = page.text
+            if lines:
+                fallback += "\n\nLa semaine qui vient :\n" + "\n".join(lines)
+                notice += (
+                    "\n\nAprès la page, dis-lui en quelques lignes la semaine qui vient : ce qui "
+                    "compte dans son agenda, ce qui arrive à échéance, où il en est de ses "
+                    "intentions. Seulement ce que montrent ces lignes, rien d'autre :\n"
+                    "<semaine-qui-vient>\n" + "\n".join(lines) + "\n</semaine-qui-vient>"
+                )
             found.append(
                 Alert(
                     key=f"chronicle:{page.week.isoformat()}",
-                    notice="Tu as écrit la page de sa semaine, la voici. Envoie-la-lui telle "
-                    "quelle, précédée d'une courte phrase à toi :\n\n" + page.text,
+                    notice=notice,
                     why="la chronique de la semaine",
-                    fallback=page.text,
-                    trust=page.trust,
+                    fallback=fallback,
+                    trust=min(page.trust, trust),
                     expires_at=written + EXPIRES,
                     importance=0.3,
                 )
@@ -550,12 +615,24 @@ class ChronicleModule(Module):
         return [Planned(page, "écrire la page de ta semaine")] if page < until else []
 
     async def serve(self, daemon: Daemon) -> None:
+        from orion.calendar.module import CalendarModule
+        from orion.intentions.module import IntentionsModule
         from orion.library.module import LibraryModule
 
         if self.chronicle is None:  # pragma: no cover - assemble always runs first
             return
         library = daemon.plate.module(LibraryModule)
         self.chronicle.library = library.library if library is not None else None
+        calendar = daemon.plate.module(CalendarModule)
+        if calendar is not None and calendar.calendar is not None:
+            agenda = calendar.calendar
+            # An invitation he has not answered is someone else's word.
+            self.chronicle.ahead.append(
+                (Trust.THIRD_PARTY, lambda now: agenda.ahead(now, AHEAD.days))
+            )
+        intentions = daemon.plate.module(IntentionsModule)
+        if intentions is not None and intentions.intentions is not None:
+            self.chronicle.ahead.append((Trust.SYSTEM, intentions.intentions.lines))
         daemon.alerts.append(self.chronicle)
         daemon.add_service("chronicle.week", self.chronicle.run)
 

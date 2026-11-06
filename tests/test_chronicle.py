@@ -88,6 +88,22 @@ async def test_the_week_is_written_on_sunday_evening_and_sent(
     await store.close()
 
 
+async def test_the_sunday_message_also_says_the_week_to_come(journal: SqliteJournal) -> None:
+    await a_week(journal)
+    chronicle = chronicle_for(journal, ScriptedProvider(reply(PAGE)), SUNDAY_EVENING)
+    await chronicle.tick()
+
+    async def agenda(now: datetime) -> list[str]:
+        return ["- mardi 27 : 14:00 entretien chez Airbus"]
+
+    chronicle.ahead.append((Trust.THIRD_PARTY, agenda))
+    (alert,) = await chronicle.alerts(SUNDAY_EVENING)
+    assert PAGE in alert.notice and "entretien chez Airbus" in alert.notice
+    assert "entretien chez Airbus" in alert.fallback  # still said if the wording fails
+    assert alert.trust == Trust.THIRD_PARTY  # the least of what it was made of
+    assert "Airbus" not in chronicle.state.pages[MONDAY].text  # the diary is the week past
+
+
 async def test_a_quiet_week_has_no_page(journal: SqliteJournal) -> None:
     await a_week(journal, days=1)
     provider = ScriptedProvider()

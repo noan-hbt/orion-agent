@@ -161,11 +161,68 @@ async def test_orion_works_the_night_himself_and_tells_him_in_the_morning(
 
     morning = datetime(2026, 10, 21, 8, 0, tzinfo=PARIS)
     (alert,) = await thinking.alerts(morning)
-    assert alert.key.startswith("thought:") and "le trajet" in alert.notice
+    assert "le trajet" in alert.notice
     assert "Cette nuit" in alert.notice and alert.why == "ta nuit"
     assert alert.trust == Trust.SYSTEM
-    later = [a.key for a in await thinking.alerts(morning + timedelta(days=3))]
-    assert not any(k.startswith("thought:") for k in later)  # a note goes stale
+    later = [a.notice for a in await thinking.alerts(morning + timedelta(days=1))]
+    assert not any("le trajet" in n for n in later)  # a note goes with its morning only
+
+
+WAKE = datetime(2026, 10, 21, 8, 0, tzinfo=PARIS)
+
+
+def with_agenda(thinking: Thinking, agenda: list[str]) -> None:
+    async def read(now: datetime) -> list[str]:
+        return list(agenda)
+
+    thinking.ahead.append((Trust.THIRD_PARTY, read))
+
+
+async def test_a_night_without_a_note_still_gives_his_day_when_he_wakes_once(
+    journal: SqliteJournal,
+) -> None:
+    thinking = thinking_for(journal, WAKE)
+    with_agenda(thinking, ["- aujourd'hui : 14:00 dentiste"])
+    assert await thinking.alerts(WAKE - timedelta(hours=1)) == []  # not before he wakes
+    (first,) = await thinking.alerts(WAKE)
+    (again,) = await thinking.alerts(WAKE + timedelta(hours=2))
+    assert "dentiste" in first.notice and "dentiste" in first.fallback
+    assert first.key == again.key  # one message a day: the engine's ledger sends it once
+    assert first.trust == Trust.THIRD_PARTY
+    assert await thinking.alerts(WAKE + timedelta(hours=7)) == []  # too late for a morning
+
+
+async def test_the_morning_reads_his_agenda_as_it_is_now_with_the_nights_note(
+    journal: SqliteJournal,
+) -> None:
+    await journal.append(
+        [
+            NewEvent(
+                kind=NOTE,
+                payload={
+                    "note_id": "t_1",
+                    "note": "J'ai comparé Lyon et Nantes.",
+                    "at": NIGHT.isoformat(),
+                },
+                provenance=Provenance(source="thread:night", actor="orion:thinking"),
+                trust=Trust.SYSTEM,
+            )
+        ]
+    )
+    thinking = thinking_for(journal, WAKE)
+    agenda = ["- aujourd'hui : 10:00 entretien"]
+    with_agenda(thinking, agenda)
+    agenda[0] = "- aujourd'hui : 15:00 entretien (déplacé)"  # moved after the night
+    alerts = await thinking.alerts(WAKE)
+    (alert,) = alerts  # one message: the night and the day together
+    assert "Lyon et Nantes" in alert.notice and "15:00 entretien" in alert.notice
+    assert "10:00" not in alert.notice
+
+
+async def test_an_empty_night_and_an_empty_day_say_nothing(journal: SqliteJournal) -> None:
+    thinking = thinking_for(journal, WAKE)
+    with_agenda(thinking, [])
+    assert await thinking.alerts(WAKE) == []
 
 
 async def test_asked_about_his_night_orion_reads_what_it_really_did(
@@ -371,7 +428,7 @@ async def test_a_promised_question_always_gets_an_answer(journal: SqliteJournal)
     assert report is not None and "je maintiens" in report.note
     assert "faut-il accepter lyon" in str(scripted(orion).requests[-1].messages).lower()
     assert not thinking.state.promised  # answered: not taken up again
-    (alert,) = await thinking.alerts(NIGHT + timedelta(hours=3))
+    (alert,) = await thinking.alerts(WAKE)
     assert alert.importance > 0.5
 
 
