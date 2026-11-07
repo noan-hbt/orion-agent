@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -212,6 +213,7 @@ async def test_a_silence_settles_each_doubt_and_what_stays_open_is_said_once(
         reply('{"ok": false, "issues": ' + str(doubts).replace("'", '"') + "}"),
         reply('{"settled": [true, false, false]}'),
         reply('{"settled": [true, false, false]}'),
+        reply('{"settled": [true, false, false]}'),
     )
     orion = make_orion(journal, provider)
     await orion.start()
@@ -235,9 +237,73 @@ async def test_a_silence_settles_each_doubt_and_what_stays_open_is_said_once(
         "unresolved",
     ]
 
-    # The same doubts again, after a restart: already told, not repeated.
+    # The line never went out (the send failed): nothing was told, it is said again.
     again = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: at(9))
     await again.tick()
     [same] = await again.alerts(at(9))
     assert same.settle is not None
-    assert await same.settle(None, "") is None
+    told = await same.settle(None, "")
+    assert told is not None
+    await same.settle(told, "")  # it went out this time
+
+    # After a restart: already told, not repeated.
+    third = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: at(9))
+    await third.tick()
+    [last] = await third.alerts(at(9))
+    assert last.settle is not None
+    assert await last.settle(None, "") is None
+
+
+async def test_a_reply_corrects_only_the_points_it_sets_right(journal: SqliteJournal) -> None:
+    """Review of #197: « ok, je vérifie » corrects nothing; a reply that sets one point of three
+    right leaves the two others open, and they come back once."""
+    provider = ScriptedProvider(
+        call_tools(("echo", {"text": "inbox: 2 mails from Jira, none from the pharmacy"})),
+        reply("Deux mails Jira, la pharmacie a confirmé, et Paul a payé."),
+    )
+    doubts = ["« deux mails Jira »", "« la pharmacie a confirmé »", "« Paul a payé »"]
+    checks = ScriptedProvider(
+        reply('{"ok": false, "issues": ' + str(doubts).replace("'", '"') + "}"),
+        reply('{"settled": [true, false, false]}'),
+    )
+    orion = make_orion(journal, provider)
+    await orion.start()
+    now = [at(0)]
+    review = GroundingReview(orion, Verifier(checks, "verifier"), journal, lambda: now[0])
+    await review.tick()
+    await orion.handle_owner_message(OWNER_THREAD, "Quoi de neuf ?", "t", now=at(1))
+    await review.tick()
+    now[0] = at(9)
+    assert await review.tick()
+    [alert] = await review.alerts(at(9))
+    assert alert.settle is not None
+    assert await alert.settle("Je me suis avancé : un seul mail Jira.", "") is None
+    [settled] = [e.payload for e in await journal.read(0, 10_000) if e.kind == "grounding.settled"]
+    assert [p["status"] for p in settled["points"]] == [  # type: ignore[index]
+        "corrected",
+        "unresolved",
+        "unresolved",
+    ]
+    [_, back] = await review.alerts(at(9))
+    assert "pharmacie" in back.notice and "Jira" not in back.notice
+
+
+async def test_alerts_sent_together_are_each_settled() -> None:
+    """Review of #197: an alert bundled with others was never settled; its SILENCE left
+    nothing said."""
+    from orion.initiative.engine import _settle_all  # pyright: ignore[reportPrivateUsage]
+
+    seen: list[tuple[str, str | None]] = []
+
+    def one(name: str, says: str | None) -> Callable[[str | None, str], Awaitable[str | None]]:
+        async def settle(spoken: str | None, _read: str) -> str | None:
+            seen.append((name, spoken))
+            return says
+
+        return settle
+
+    both = _settle_all([one("a", "A reste ouvert."), one("b", None)])
+    assert both is not None
+    assert await both(None, "") == "A reste ouvert."
+    await both("A reste ouvert.", "")
+    assert seen == [("a", None), ("b", None), ("a", "A reste ouvert."), ("b", "A reste ouvert.")]

@@ -5976,6 +5976,13 @@ vérification. Le SILENCE n'était soumis à rien : le doute disparaissait avec 
   (`_deliver_together`) n'est pas revérifiée.
 - Les faux positifs du vérificateur restent traités par ORION-24.
 
+- **Complément (07/11, review de #197)** : une réponse envoyée ne corrige que les points
+  qu'elle rectifie vraiment. Le vérificateur les lit un par un (`Verifier.corrected`). « Ok,
+  je vérifie » ne corrige rien. Ce qu'elle laisse ouvert revient une fois (`:again`), puis
+  c'est à lui de demander. Des alertes envoyées ensemble sont chacune réglées. Un doute n'est
+  dit (`grounding.told`) qu'une fois la ligne vraiment partie : si l'envoi échoue, rien n'est
+  marqué dit, et il le sera au prochain essai.
+
 ## D260 — Un appel d'outil a une échéance, et ce qu'il a peut-être fait est dit incertain
 
 *06/11/2026 · acceptée · ORION-25*
