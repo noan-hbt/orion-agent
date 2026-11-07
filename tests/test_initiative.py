@@ -735,3 +735,29 @@ async def test_a_source_he_thanks_rises_and_one_he_ignores_sinks(world: World) -
     assert "curiosity : importance +" in shown and "chronicle : importance -" in shown
     await engine.tick()  # nothing moved: nothing journaled again
     assert len(await kinds(world.journal, WEIGHED)) == 2
+
+
+async def test_a_booking_claimed_without_proof_is_stopped_without_a_model_call(
+    world: World,
+) -> None:
+    """F-09: « j'ai réservé » needs an action seen CONFIRMED; the proof rule decides, in code."""
+    from orion.cognition.verifier import Verifier
+
+    class Dinner:
+        async def alerts(self, now: datetime) -> list[Alert]:
+            return [Alert("dinner:1", "Le restaurant a une table ce soir.", "une table",
+                          "Une table ce soir", importance=0.9)]  # fmt: skip
+
+    checker = ScriptedProvider()
+    engine = InitiativeEngine(
+        world.orion, world.journal, world.timers, world.inbox, SETTINGS,
+        memory=world.memory.store, clock=world.clock, alerts=[Dinner()],
+        verifier=Verifier(checker, "verifier"),
+    )  # fmt: skip
+    world.clock.now = at(20, 11)
+    world.provider.extend(reply("J'ai réservé ta table pour ce soir."), reply("SILENCE"))
+    assert await engine.tick() == []
+    assert world.inbox.messages == []
+    assert checker.requests == []
+    checks = (await kinds(world.journal, SUPPRESSED))[-1]["checks"]
+    assert [(c["kind"], c["ok"]) for c in checks] == [("outcome", False)]  # type: ignore[union-attr, index]

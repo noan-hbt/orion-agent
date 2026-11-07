@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from orion.cognition.loop import StopReason
-from orion.cognition.verifier import Verifier
+from orion.cognition.verifier import Verification, Verifier
 from orion.context.recent import day_since
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event, NewEvent, Provenance, Trust
@@ -46,6 +46,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.arbiter import Moment, PresenceSource, judge, merge
+from orion.initiative.checks import Check, outcome_check
 from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
@@ -119,6 +120,12 @@ TAIL = 500
 
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
+DETECTED = "opportunity.detected"
+"""Something worth doing for him was seen, once per thing (D277): its key, type and reason."""
+DECIDED = "opportunity.decided"
+"""What became of it (D277): said, kept quiet, and why. The model proposes, the rules decide."""
+ACTS = ("FAIRE", "PRÉPARER", "DEMANDER", "INFORMER", "SILENCE")
+"""What the model may propose for an opportunity (D277)."""
 GAVE_WAY = "gave way to him"
 """He wrote while Orion was about to speak, or speaking, first: the initiative waits."""
 TRY_AGAIN = "wording failed, tried again later"
@@ -258,6 +265,19 @@ def _settle_all(settles: Sequence[Settle]) -> Settle | None:
 
 
 @dataclass(frozen=True)
+class Opportunity:
+    """Something the model saw worth doing for him (D277): what it proposes, and why. It does
+    not decide: the gate and the arbiter do, and `opportunity.decided` says what came of it."""
+
+    key: str
+    """Its source and its object: the same thing seen twice is one opportunity."""
+    act: str
+    """One of `ACTS`."""
+    what: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Alert:
     """Something worth an unrequested message (an event about to start…). Unlike a report, it
     is subject to quiet hours and the daily budget, and it is dropped once `expires_at` is
@@ -280,6 +300,8 @@ class Alert:
     settle: Settle | None = None
     """Told how it ended: what was said (None: SILENCE) and what Orion read while writing. On
     a SILENCE, what it returns goes out instead: the silence was not borne out (ORION-26)."""
+    opportunities: tuple[Opportunity, ...] = ()
+    """What the message carries (D277): each is told decided when it goes out or is dropped."""
 
 
 class AlertSource(Protocol):
@@ -389,6 +411,8 @@ class Candidate:
     level: str = ""
     settle: Settle | None = None
     """See `Alert.settle`."""
+    opportunities: tuple[Opportunity, ...] = ()
+    """See `Alert.opportunities`."""
 
     @property
     def kind(self) -> str:
@@ -623,6 +647,15 @@ def digest_lines(
     return lines
 
 
+def _results(messages: Sequence[Message]) -> list[str]:
+    """The tool results of the turn that wrote a draft, as returned."""
+    return [
+        content
+        for m in messages
+        if m.get("role") == "tool" and isinstance(content := m.get("content"), str)
+    ]
+
+
 def _read_while_writing(messages: Sequence[Message]) -> str:
     """The memory and tool results of the turn that wrote a draft: what it may rest on.
 
@@ -685,6 +718,8 @@ class InitiativeEngine:
         self._presence = list(presence)
         self._waiting: dict[str, datetime] = {}
         self._failed_once: set[str] = set()
+        self._checks: dict[str, list[Check]] = {}
+        """Each check's outcome on the last draft of a candidate, journaled with its decision."""
         """Candidates whose wording failed once (`TRY_AGAIN`)."""
         """Messages the arbiter held back, since when (asked again each tick)."""
         self._caller = caller
@@ -940,6 +975,7 @@ class InitiativeEngine:
                     notify_kind=a.notify_kind,
                     level=a.level,
                     settle=a.settle,
+                    opportunities=a.opportunities,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -1131,6 +1167,7 @@ class InitiativeEngine:
             notify_kind=parts[0].notification,
             level=_loudest(self._level(c) for c in parts),
             settle=_settle_all([c.settle for c in (*parts, *carried) if c.settle is not None]),
+            opportunities=parts[0].opportunities,
         )
         if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
@@ -1311,7 +1348,17 @@ class InitiativeEngine:
                 return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
+        checks = self._checks[candidate.key] = []
+        results = _results(self._orion.threads.get(self._settings.thread_id).messages[earlier:])
+        outcome = outcome_check(draft, candidate.notice, results)
+        checks.append(outcome)
         if self._verifier is None or not verifying:
+            if not outcome.ok:
+                return (
+                    (_after_review(candidate.fallback), "fallback: " + outcome.reason)
+                    if candidate.explicit
+                    else (None, "rejected: " + outcome.reason)
+                )
             return draft, "unverified"
         facts = (
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
@@ -1326,7 +1373,20 @@ class InitiativeEngine:
                 if read
                 else ""
             )
-            verification = await self._verifier.check(draft, known, conversation)
+            outcome = outcome_check(
+                draft,
+                candidate.notice,
+                _results(self._orion.threads.get(self._settings.thread_id).messages[earlier:]),
+            )
+            if outcome.ok:
+                verification = await self._verifier.check(draft, known, conversation)
+                checks[:] = [
+                    outcome,
+                    Check("factual", verification.ok, "; ".join(verification.issues)),
+                ]
+            else:  # no model call: the proof rule decides (F-09)
+                verification = Verification(False, [outcome.reason])
+                checks[:] = [outcome]
             if verification.ok:
                 return draft, "verified" if attempt == 1 else "verified on a second draft"
             # The draft and its facts too: from the reasons alone, nobody could tell on 01/11
@@ -1402,18 +1462,39 @@ class InitiativeEngine:
             payload["bundled"] = True
         if not candidate.budgeted:
             payload["unbudgeted"] = True
+        checks = self._checks.pop(candidate.key, None)
+        if checks:
+            payload["checks"] = [check.journaled() for check in checks]
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)
+        provenance = Provenance(source="orion:initiative", actor="orion:initiative")
+        correlation_id = correlation_id or new_id()
+        decided = [
+            NewEvent(
+                kind=DECIDED,
+                payload={
+                    "key": o.key,
+                    "act": o.act,
+                    "outcome": "said" if kind == DELIVERED else "quiet",
+                    "reason": reason or arbiter or how or "",
+                },
+                provenance=provenance,
+                trust=min(Trust.SYSTEM, candidate.trust),
+                correlation_id=correlation_id,
+            )
+            for o in candidate.opportunities
+        ]
         await self._journal.append(
             [
                 NewEvent(
                     kind=kind,
                     payload=payload,
-                    provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
+                    provenance=provenance,
                     trust=min(Trust.SYSTEM, candidate.trust),  # its fallback is its words
-                    correlation_id=correlation_id or new_id(),
-                )
+                    correlation_id=correlation_id,
+                ),
+                *decided,
             ]
         )
         await self._runner.catch_up()
