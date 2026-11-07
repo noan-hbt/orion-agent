@@ -100,9 +100,9 @@ class Tool:
     concurrency_safe: bool = False
     accepts_untrusted_context: bool = False
     max_output_chars: int = 20_000
-    deadline: float | None = DEFAULT_DEADLINE
+    deadline: float = DEFAULT_DEADLINE
     """Wall-clock seconds a call may take before it is cut (`DEFAULT_DEADLINE`); a family that
-    should never take that long sets less. None: no limit."""
+    should never take that long sets less. Never more than `MAX_DEADLINE` (the loop's)."""
     acts: bool = False
     """It acts on something outside without being classed EXTERNAL (a click on a page, D115):
     cut mid-way, what it did is not known (ORION-32)."""
