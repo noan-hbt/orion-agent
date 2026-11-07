@@ -6422,3 +6422,17 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D288 — Une routine est un objectif qu'il déclare, lu comme un écart à sa référence
+
+ORI-023 (audit du 05/11). Précise D267. Le consentement est la déclaration : une routine
+n'existe que s'il la crée ; Orion ne propose jamais d'expérience de lui-même (les domaines
+consentis restent à ORION-12).
+
+- Pas de module : une routine est un objectif. L'action `measure` de l'outil `goal` pose sa
+  référence (`goal.baseline` : valeur, unité, période) puis des valeurs datées
+  (`goal.measured`). Seulement sur sa parole, dans sa conversation : jamais des chiffres
+  d'Orion.
+- Le pilote dure 14 jours (un jalon daté s'il veut une échéance). La description de l'objectif
+  (relecture du dimanche, `list`) donne la moyenne de ces 14 jours et l'écart à la référence,
+  dit comme un écart observé, jamais comme une cause.

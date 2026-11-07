@@ -180,3 +180,38 @@ async def test_what_orion_suggests_waits_for_the_owner(journal: SqliteJournal) -
         tool, WATCH_LIBRE, action="note", goal=goal.id, kind="progress", text="vu sur un site"
     )
     assert goal.trust is Trust.OWNER
+
+
+async def test_a_routine_he_declared_reads_as_a_gap_to_its_baseline(
+    journal: SqliteJournal,
+) -> None:
+    """ORI-023: his routine, his figures; after 14 days, the gap to the baseline, no cause."""
+    import json
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from orion.goals.module import Goals, goal_tool
+
+    start = datetime(2026, 11, 2, 9, 0, tzinfo=ZoneInfo("Europe/Paris"))
+    now = [start]
+    goals = Goals(journal, "Europe/Paris", lambda: now[0])
+    tool = goal_tool(goals)
+    owner = await his_message(journal)
+    set_ = {"action": "set", "title": "Dormir plus", "done_when": "7 h par nuit en moyenne"}
+    await tool.handler(tool.parse(json.dumps({**set_, "next_action": "coucher 23 h"})), owner)
+    (goal,) = goals.book.goals
+    base = {"action": "measure", "goal": goal, "kind": "baseline", "value": 6, "unit": "h"}
+    await tool.handler(tool.parse(json.dumps(base)), owner)
+    for day in range(14):
+        now[0] = start + timedelta(days=day)
+        value = {"action": "measure", "goal": goal, "kind": "measure", "value": 7,
+                 "when": now[0].date().isoformat()}  # fmt: skip
+        await tool.handler(tool.parse(json.dumps(value)), owner)
+
+    said = goals.describe(goals.get(goal), now[0])
+    assert "+1" in said  # 7 h against 6 h
+
+    orion_alone = ToolContext("veille", "c", context_trust=Trust.OWNER)
+    again = {"action": "measure", "goal": goal, "kind": "measure", "value": 9}
+    refused = await tool.handler(tool.parse(json.dumps(again)), orion_alone)
+    assert refused.is_error  # never Orion's own figures
