@@ -120,11 +120,11 @@ TAIL = 500
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
 DETECTED = "opportunity.detected"
-"""Something worth doing for him was seen, once per thing (D276): its key, type and reason."""
+"""Something worth doing for him was seen, once per thing (D277): its key, type and reason."""
 DECIDED = "opportunity.decided"
-"""What became of it (D276): said, kept quiet, and why. The model proposes, the rules decide."""
+"""What became of it (D277): said, kept quiet, and why. The model proposes, the rules decide."""
 ACTS = ("FAIRE", "PRÉPARER", "DEMANDER", "INFORMER", "SILENCE")
-"""What the model may propose for an opportunity (D276)."""
+"""What the model may propose for an opportunity (D277)."""
 GAVE_WAY = "gave way to him"
 """He wrote while Orion was about to speak, or speaking, first: the initiative waits."""
 TRY_AGAIN = "wording failed, tried again later"
@@ -265,7 +265,7 @@ def _settle_all(settles: Sequence[Settle]) -> Settle | None:
 
 @dataclass(frozen=True)
 class Opportunity:
-    """Something the model saw worth doing for him (D276): what it proposes, and why. It does
+    """Something the model saw worth doing for him (D277): what it proposes, and why. It does
     not decide: the gate and the arbiter do, and `opportunity.decided` says what came of it."""
 
     key: str
@@ -300,7 +300,7 @@ class Alert:
     """Told how it ended: what was said (None: SILENCE) and what Orion read while writing. On
     a SILENCE, what it returns goes out instead: the silence was not borne out (ORION-26)."""
     opportunities: tuple[Opportunity, ...] = ()
-    """What the message carries (D276): each is told decided when it goes out or is dropped."""
+    """What the message carries (D277): each is told decided when it goes out or is dropped."""
 
 
 class AlertSource(Protocol):

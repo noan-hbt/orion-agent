@@ -25,7 +25,7 @@ without asking (D247), elsewhere the guardian refuses it and what needs his yes 
 conclusion. Only trusted turns are read. What the watch did itself (its `tool.executed` with an
 outcome) goes with its conclusion, told as its own, never as a state found (D262).
 
-Each thing it saw comes typed (D276): FAIRE, PRÉPARER, DEMANDER, INFORMER or SILENCE, with its
+Each thing it saw comes typed (D277): FAIRE, PRÉPARER, DEMANDER, INFORMER or SILENCE, with its
 reason. The model proposes; whether and when it reaches him is the rules' and the arbiter's.
 Each is journaled once (`opportunity.detected`, keyed by its object) and told decided
 (`opportunity.decided`), silence included.
@@ -233,7 +233,7 @@ class WatchState:
     )
     """(seq, account, change, start, title) waiting for their sync's time."""
     detected: set[str] = field(default_factory=set[str])
-    """The key of each opportunity seen: seen again, it is the same one (D276)."""
+    """The key of each opportunity seen: seen again, it is the same one (D277)."""
     _acts: dict[str, dict[str, Act]] = field(default_factory=dict[str, dict[str, Act]])
     """correlation id → what the watch turn did so far, its latest outcome per action."""
     _seq: int = 0
@@ -367,7 +367,7 @@ def _object_key(what: str) -> str:
 
 
 def opportunities(text: str) -> tuple[str, list[Opportunity]]:
-    """The typed lines of a conclusion (D276), and the rest of it: its message."""
+    """The typed lines of a conclusion (D277), and the rest of it: its message."""
     found: dict[str, Opportunity] = {}
     for m in _TYPED.finditer(text):
         act = m.group(1).upper().replace("PREPARER", "PRÉPARER")

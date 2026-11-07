@@ -250,7 +250,7 @@ async def test_what_the_watch_did_itself_is_told_as_its_own(journal: SqliteJourn
 async def test_a_thing_seen_twice_is_one_opportunity_journaled_even_unsaid(
     journal: SqliteJournal,
 ) -> None:
-    """D276: the model types what it saw; the same thing seen at two watches is one
+    """D277: the model types what it saw; the same thing seen at two watches is one
     opportunity, and what reaches no message is still journaled, decided quiet."""
     store = MemoryStore(":memory:")
     await store.open()

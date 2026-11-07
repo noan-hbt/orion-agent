@@ -1046,7 +1046,7 @@ CASES: tuple[Case, ...] = (
             says(r"(?i)passeport", "the watch links the trip and the passport"),
             says(
                 r"(?im)^\W*(FAIRE|PR[ÉE]PARER|DEMANDER|INFORMER)\s*\|.*passeport",
-                "the watch types what it saw (D276)",
+                "the watch types what it saw (D277)",
             ),
         ),
     ),

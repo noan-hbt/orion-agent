@@ -6423,7 +6423,7 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
 
-## D276 — La veille type ce qu'elle voit ; elle propose, les règles décident
+## D277 — La veille type ce qu'elle voit ; elle propose, les règles décident
 
 *07/11/2026 — ORION-6, audit du 05/11 (ORI-011). Précise D150, D20 et D146.*
 
