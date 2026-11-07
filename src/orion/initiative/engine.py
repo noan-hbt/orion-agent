@@ -37,7 +37,7 @@ from zoneinfo import ZoneInfo
 import structlog
 
 from orion.cognition.loop import StopReason
-from orion.cognition.verifier import Verifier
+from orion.cognition.verifier import Verification, Verifier
 from orion.context.recent import day_since
 from orion.context.threads import MESSAGE_KIND
 from orion.core.events import Event, NewEvent, Provenance, Trust
@@ -46,6 +46,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.initiative.arbiter import Moment, PresenceSource, judge, merge
+from orion.initiative.checks import Check, outcome_check
 from orion.initiative.timers import Timer, Timers
 from orion.initiative.tools import describe_moment
 from orion.memory.model import CommitmentStatus, SettingKey
@@ -623,6 +624,15 @@ def digest_lines(
     return lines
 
 
+def _results(messages: Sequence[Message]) -> list[str]:
+    """The tool results of the turn that wrote a draft, as returned."""
+    return [
+        content
+        for m in messages
+        if m.get("role") == "tool" and isinstance(content := m.get("content"), str)
+    ]
+
+
 def _read_while_writing(messages: Sequence[Message]) -> str:
     """The memory and tool results of the turn that wrote a draft: what it may rest on.
 
@@ -685,6 +695,8 @@ class InitiativeEngine:
         self._presence = list(presence)
         self._waiting: dict[str, datetime] = {}
         self._failed_once: set[str] = set()
+        self._checks: dict[str, list[Check]] = {}
+        """Each check's outcome on the last draft of a candidate, journaled with its decision."""
         """Candidates whose wording failed once (`TRY_AGAIN`)."""
         """Messages the arbiter held back, since when (asked again each tick)."""
         self._caller = caller
@@ -1311,7 +1323,17 @@ class InitiativeEngine:
                 return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
+        checks = self._checks[candidate.key] = []
+        results = _results(self._orion.threads.get(self._settings.thread_id).messages[earlier:])
+        outcome = outcome_check(draft, candidate.notice, results)
+        checks.append(outcome)
         if self._verifier is None or not verifying:
+            if not outcome.ok:
+                return (
+                    (_after_review(candidate.fallback), "fallback: " + outcome.reason)
+                    if candidate.explicit
+                    else (None, "rejected: " + outcome.reason)
+                )
             return draft, "unverified"
         facts = (
             f"Now: {describe_moment(now, self._settings.timezone)}\n"
@@ -1326,7 +1348,20 @@ class InitiativeEngine:
                 if read
                 else ""
             )
-            verification = await self._verifier.check(draft, known, conversation)
+            outcome = outcome_check(
+                draft,
+                candidate.notice,
+                _results(self._orion.threads.get(self._settings.thread_id).messages[earlier:]),
+            )
+            if outcome.ok:
+                verification = await self._verifier.check(draft, known, conversation)
+                checks[:] = [
+                    outcome,
+                    Check("factual", verification.ok, "; ".join(verification.issues)),
+                ]
+            else:  # no model call: the proof rule decides (F-09)
+                verification = Verification(False, [outcome.reason])
+                checks[:] = [outcome]
             if verification.ok:
                 return draft, "verified" if attempt == 1 else "verified on a second draft"
             # The draft and its facts too: from the reasons alone, nobody could tell on 01/11
@@ -1402,6 +1437,9 @@ class InitiativeEngine:
             payload["bundled"] = True
         if not candidate.budgeted:
             payload["unbudgeted"] = True
+        checks = self._checks.pop(candidate.key, None)
+        if checks:
+            payload["checks"] = [check.journaled() for check in checks]
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)

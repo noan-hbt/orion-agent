@@ -6422,3 +6422,19 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D279 — Un message proactif passe des contrôles séparés ; l'issue d'une action se prouve en code
+
+F-09 (audit du 05/11). Précise D103 (relecture par un second modèle) et D274 (seule règle de
+preuve). Un seul appel au second modèle mêlait faits et preuve d'effet ; rien n'était journalisé
+par type de contrôle.
+
+- `initiative/checks.py` : un `Check(kind, ok, reason)` par type. Chaque décision
+  (`initiative.delivered` / `initiative.suppressed`) porte la liste `checks` du dernier jet.
+- `outcome`, en code et sans appel modèle : un message où Orion dit avoir fait quelque chose
+  (« j'ai réservé », « j'ai envoyé », « j'ai payé »…) exige une action vue `CONFIRMED`
+  (`orion.tools.outcome`), dans son tour ou dans ce qu'on lui a transmis. Sinon le jet est
+  rejeté comme par la relecture : réécrit une fois, puis tu ou repli s'il l'avait demandé.
+- `factual` : le `Verifier` existant, appelé seulement si `outcome` passe.
+- Pas encore : la pertinence liée à un objectif et la politique du gardien sur une action
+  (ORION-46).
