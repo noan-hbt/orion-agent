@@ -12,6 +12,7 @@ import pytest
 from orion.core.events import Trust
 from orion.core.journal import SqliteJournal
 from orion.memory.night import Consolidator, NightSettings
+from orion.memory.portrait import WRITTEN
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from tests.fakes import ScriptedProvider, reply
@@ -39,7 +40,15 @@ async def test_his_portrait_is_written_from_what_is_trusted_and_opens_a_conversa
     now = datetime(2026, 10, 25, 3, 45, tzinfo=ZoneInfo("Europe/Paris"))
     writer = ScriptedProvider(
         json_reply({"temporary": []}),
-        reply("Étudiant en droit, en pleins partiels jusqu'au 3/11."),
+        json_reply(
+            {
+                "portrait": "Étudiant en droit, en pleins partiels jusqu'au 3/11.",
+                "claims": [
+                    {"text": "Il passe ses partiels de droit", "facts": [1]},
+                    {"text": "Il a gagné un téléphone", "facts": [7]},  # never shown: dropped
+                ],
+            }
+        ),
     )
     consolidator = Consolidator(
         journal, memory, writer, "judge", NightSettings(), "Europe/Paris",
@@ -49,6 +58,10 @@ async def test_his_portrait_is_written_from_what_is_trusted_and_opens_a_conversa
     await consolidator.tick()
     read = str(writer.requests[-1].messages[-1]["content"])
     assert "partiels de droit" in read and "iPhone" not in read  # a mail never paints him
+    claims = [e.payload for e in await journal.read(0, 1000) if e.kind == WRITTEN][-1]["claims"]
+    assert [c["text"] for c in claims] == ["Il passe ses partiels de droit"]  # ORI-018
+    fact = next(f for f in await memory.store.facts() if "partiels" in f.statement)
+    assert claims[0]["fact_ids"] == [fact.id] and claims[0]["source_seqs"] == [fact.known_from_seq]
 
     world = World(journal, memory, Clock(now))
     await world.orion.start()

@@ -245,3 +245,39 @@ async def test_what_the_watch_did_itself_is_told_as_its_own(journal: SqliteJourn
     (alert,) = await watch.alerts(noon)
     assert "browser:amazon.fr#1" in alert.notice and "browser:amazon.fr#1" in alert.fallback
     await store.close()
+
+
+async def test_a_thing_seen_twice_is_one_opportunity_journaled_even_unsaid(
+    journal: SqliteJournal,
+) -> None:
+    """D277: the model types what it saw; the same thing seen at two watches is one
+    opportunity, and what reaches no message is still journaled, decided quiet."""
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    clock = [datetime(2026, 10, 28, 12, 40, tzinfo=PARIS)]
+    provider = ScriptedProvider(
+        reply("INFORMER | Passeport qui expire | il part vendredi\nSILENCE"),
+        reply("- informer | passeport qui EXPIRE | vendredi approche\nAU POINT : Ton passeport."),
+    )
+    watch = Watch(journal, memory, WatchSettings(), STRONG_MODEL, "Europe/Paris", lambda: clock[0])
+    watch.orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+        memory=memory,
+    )
+    await watch.orion.start()
+    assert await watch.tick() is None
+    clock[0] = datetime(2026, 10, 28, 18, 45, tzinfo=PARIS)
+    assert await watch.tick() == "Ton passeport."
+
+    events = await journal.read(0, 10_000)
+    detected = [e for e in events if e.kind == "opportunity.detected"]
+    decided = [e for e in events if e.kind == "opportunity.decided"]
+    assert len(detected) == 1 and detected[0].payload["act"] == "INFORMER"
+    assert [d.payload["outcome"] for d in decided] == ["quiet"]
+    await store.close()
