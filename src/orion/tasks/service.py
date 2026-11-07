@@ -164,7 +164,7 @@ class TaskState:
 
 class Tasks:
     def __init__(self, journal: EventStore) -> None:
-        self._journal = journal
+        self.journal = journal
         self.state = TaskState()
         self._runner = ProjectionRunner(journal, [self.state])
         self.waking: list[Callable[[], None]] = []
@@ -260,7 +260,7 @@ class Tasks:
         task = await self.get(task_id)
         payload: dict[str, object] = {"task_id": task_id, "how": how, "summary": summary}
         if how == "done" and task is not None and task.done_when:
-            proof = await confirmed_proof(self._journal, action)
+            proof = await confirmed_proof(self.journal, action)
             if proof is None:
                 payload["how"] = "unproven"
             else:
@@ -280,7 +280,7 @@ class Tasks:
         trust: Trust,
         correlation_id: str | None,
     ) -> None:
-        await self._journal.append(
+        await self.journal.append(
             [
                 NewEvent(
                     kind=kind,
