@@ -40,6 +40,9 @@ log = structlog.get_logger(__name__)
 
 REVIEWED = "grounding.reviewed"
 SETTLED = "grounding.settled"
+TOLD = "grounding.told"
+"""Doubts still open, told to him: written once the line went out, never before."""
+AGAIN = ":again"
 RESOLVED = "resolved_with_evidence"
 CORRECTED = "corrected"
 UNRESOLVED = "unresolved"
@@ -115,6 +118,8 @@ class GroundingReview:
         """(key, issues, when, what was said) of readings that found something."""
         self._told: set[str] = set()
         """Doubts already passed on to him as unresolved: never twice."""
+        self._telling: dict[str, list[str]] = {}
+        """Alert key → the doubts its SILENCE asked to tell him, until that line has gone out."""
         self._seen = 0
         self._seen_at = clock()
 
@@ -178,9 +183,17 @@ class GroundingReview:
     async def _settle(
         self, key: str, issues: list[str], said: str, spoken: str | None, read: str
     ) -> str | None:
-        """How the alert `key` ended; on a SILENCE, what to tell him instead, if anything."""
+        """How the alert `key` ended; on a SILENCE, what to tell him instead, if anything.
+
+        Said (`spoken`): either the line a SILENCE asked for has now gone out (`_telling`), and
+        only now are its doubts told; or it is Orion's reply, and each doubt is corrected only
+        if the reply sets that very point right. What it leaves open comes back once more."""
+        if spoken is not None and key in self._telling:
+            await self._told_him(key, self._telling.pop(key))
+            return None
         if spoken is not None:
-            statuses = [CORRECTED] * len(issues)
+            fixed = await self._verifier.corrected(issues, said, spoken)
+            statuses = [CORRECTED if ok else UNRESOLVED for ok in fixed]
         else:
             thread = self._orion.threads.get(OWNER_THREAD)
             facts, _ = evidence(thread.messages[thread.base :])
@@ -200,11 +213,29 @@ class GroundingReview:
         )
         new = [i for i, s in zip(issues, statuses, strict=True) if s == UNRESOLVED]
         new = [i for i in new if i not in self._told]
-        self._told.update(new)
-        log.info("grounding.settled", key=key, statuses=statuses, told=len(new))
+        log.info("grounding.settled", key=key, statuses=statuses, open=len(new))
         if not new:
             return None
+        if spoken is not None:
+            if not key.endswith(AGAIN):  # once more, then it is his to ask
+                self._found.append((key + AGAIN, new, self._clock(), said))
+            return None
+        # Told once the line has gone out (`_told_him`): a send that fails tells nothing.
+        self._telling[key] = new
         return UNSETTLED.format(issues=" ; ".join(new)[:600])
+
+    async def _told_him(self, key: str, issues: list[str]) -> None:
+        self._told.update(issues)
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=TOLD,
+                    payload={"key": key, "issues": issues, "at": self._clock().isoformat()},
+                    provenance=_ACTOR,
+                    trust=Trust.SYSTEM,
+                )
+            ]
+        )
 
     async def _load(self, after: int, last: int) -> None:
         """Where the last reading stopped, and what it found, from the journal (from the
@@ -226,12 +257,8 @@ class GroundingReview:
                                 str(event.payload.get("said", "")),
                             )
                         )
-                elif event.kind == SETTLED:
-                    self._told.update(
-                        str(p["issue"])
-                        for p in event.payload.get("points", [])
-                        if p.get("status") == UNRESOLVED
-                    )
+                elif event.kind == TOLD:
+                    self._told.update(str(i) for i in event.payload.get("issues", []))
             after = events[-1].seq
         self._through = through if through is not None else last
 

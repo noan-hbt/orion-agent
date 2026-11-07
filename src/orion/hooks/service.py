@@ -14,7 +14,10 @@ calls, an hour), an optional filter (`match`: words the event must hold), and wh
 Everything is journaled; the hooks and what they did are a projection of the journal:
 
     hook.created  hook.changed  hook.deleted  hook.token
-    hook.fired  hook.received  hook.ran  hook.capped
+    hook.fired  hook.received  hook.ran  hook.capped  hook.unfulfilled  hook.told
+
+A fire Orion could not do (a call failed, then SILENCE) is said to him, at most every three
+hours, and journaled with its attempts and since when (D264); a hook for once stays on.
 
 Trust: a hook made in a conversation holding outside content (a mail, a page) is made paused,
 and only the owner turns it on. When it fires, what it does is never more trusted than the
@@ -36,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -47,6 +51,7 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.private import write_private
 from orion.core.projections import ProjectionRunner
+from orion.guardian.policy import OWNER_THREAD
 from orion.hooks.catalog import (
     GIST,
     JOURNAL,
@@ -61,7 +66,7 @@ from orion.hooks.catalog import (
     trigger,
 )
 from orion.hooks.cron import Cron, CronError, readable
-from orion.initiative.engine import Report
+from orion.initiative.engine import Report, Settle
 from orion.memory.store import name_key
 from orion.modules.base import Planned
 
@@ -75,6 +80,14 @@ FIRED = "hook.fired"
 RECEIVED = "hook.received"
 RAN = "hook.ran"
 CAPPED = "hook.capped"
+UNFULFILLED = "hook.unfulfilled"
+TOLD_AGAIN_AFTER = timedelta(hours=3)
+"""A hook that still cannot be done is said again no sooner: one message for a site down all
+morning, not one per fire."""
+HOOK_TOLD = "hook.told"
+"""He was told a hook could not be done: written once the line went out, never before."""
+MODEL_MISTAKES = frozenset({"invalid input", "unknown tool", "repeat refused"})
+"""Errors of the model's own making: they say nothing of the site the hook needs."""
 
 LEVELS = ("", "muette", "normale", "urgente")
 """How what a hook says rings: "" follows the owner's choice for hooks (`notifications`)."""
@@ -244,6 +257,8 @@ class Fire:
     """What set it off: `seq:<n>`, `webhook:<id>`, `schedule:<minute>`, `test`."""
     gist: str
     trust: Trust
+    seq: int = 0
+    """Its `hook.fired` event: what Orion did for it comes after."""
 
 
 @dataclass(frozen=True)
@@ -278,6 +293,11 @@ class HookState:
     ran: dict[str, Ran] = field(default_factory=dict[str, Ran])
     capped: set[str] = field(default_factory=set[str])
     """`<hook>:<day>`: already said it hit its ceiling that day."""
+    unfulfilled: dict[str, str] = field(default_factory=dict[str, str])
+    """fire id → hook id, for the fires Orion could not do (a tool failed, D264)."""
+    failed: dict[str, int] = field(default_factory=dict[str, int])
+    told: dict[str, datetime] = field(default_factory=dict[str, datetime])
+    """When he was last told a hook could not be done."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -292,6 +312,9 @@ class HookState:
         self.total.clear()
         self.ran.clear()
         self.capped.clear()
+        self.unfulfilled.clear()
+        self.failed.clear()
+        self.told.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -324,6 +347,7 @@ class HookState:
                 str(p.get("source", "")),
                 str(p.get("gist", "")),
                 event.trust,
+                event.seq,
             )
             self.fires[fire.id] = fire
             while len(self.fires) > KEPT_FIRES:
@@ -343,10 +367,30 @@ class HookState:
                 self.ran.pop(next(iter(self.ran)))
         elif event.kind == CAPPED:
             self.capped.add(f"{p.get('hook_id')}:{p.get('day')}")
+        elif event.kind == UNFULFILLED:
+            hook_id = str(p.get("hook_id"))
+            self.unfulfilled[str(p.get("fire_id"))] = hook_id
+            self.failed[hook_id] = self.failed.get(hook_id, 0) + 1
+            if p.get("told"):  # before hook.told: the line was taken as said
+                self.told[hook_id] = _at(event)
+        elif event.kind == HOOK_TOLD:
+            self.told[str(p.get("hook_id"))] = _at(event)
 
     def spent(self, hook: Hook) -> bool:
-        """A hook for once that already fired."""
-        return hook.once and self.total.get(hook.id, 0) > 0
+        """A hook for once that already fired, and did what it asked: one that could not
+        (a site down) stays on for the next time (D264)."""
+        return hook.once and self.total.get(hook.id, 0) - self.failed.get(hook.id, 0) > 0
+
+    def streak(self, hook_id: str, before: int) -> list[Fire]:
+        """Its fires before this seq that could not be done, the latest in a row, oldest
+        first."""
+        mine = [f for f in self.fires.values() if f.hook_id == hook_id and f.seq < before]
+        run: list[Fire] = []
+        for fire in reversed(mine):
+            if fire.id not in self.unfulfilled:
+                break
+            run.insert(0, fire)
+        return run
 
     def live(self, hook: Hook, today: date) -> bool:
         return hook.enabled and not self.spent(hook) and (hook.until is None or today <= hook.until)
@@ -732,6 +776,7 @@ class Hooks:
                         trust=trust,
                         notify_kind="hook",
                         level=hook.level,
+                        settle=self._settle(hook, fire),
                     )
                 )
             elif ran is not None and not ran.ok:
@@ -749,6 +794,90 @@ class Hooks:
                     )
                 )
         return found
+
+    def _settle(self, hook: Hook, fire: Fire) -> Settle:
+        """On a SILENCE after its fire: if a call failed meanwhile (a site refusing the
+        connection), what it asked was not done. He is told, once in a while, and the hook
+        stays on (D264). 06/11: Hyperplanning down, « dis-moi ma salle » ended in SILENCE."""
+
+        telling: list[str] = []
+        """The line a SILENCE asked to send, until it has gone out."""
+
+        async def settle(said: str | None, read: str) -> str | None:
+            del read
+            if said is not None:
+                if telling and said == telling[0]:
+                    # Gone out: only now is he told (review of #202: a failed send told nothing).
+                    await self._append(
+                        HOOK_TOLD,
+                        {"hook_id": hook.id, "fire_id": fire.id},
+                        Provenance(source=f"hook:{hook.id}", actor="orion:hooks"),
+                        Trust.SYSTEM,
+                    )
+                return None
+            failures = await self._failures(fire)
+            if not failures:
+                return None
+            await self.sync()
+            now = datetime.now(UTC)
+            last = self.state.told.get(hook.id)
+            due = last is None or now - last >= TOLD_AGAIN_AFTER
+            streak = [*self.state.streak(hook.id, fire.seq), fire]
+            await self._append(
+                UNFULFILLED,
+                {
+                    "hook_id": hook.id,
+                    "fire_id": fire.id,
+                    "failures": failures,
+                    "attempts": len(streak),
+                    "since": streak[0].at.isoformat(),
+                    "told": False,
+                },
+                Provenance(source=f"hook:{hook.id}", actor="orion:hooks"),
+                Trust.SYSTEM,
+            )
+            log.warning("hooks.unfulfilled", hook=hook.id, fire=fire.id, attempts=len(streak))
+            if not due:
+                return None
+            what = ", ".join(dict.fromkeys(failures))
+            line = (
+                f"Ton hook « {hook.name} » : je n'ai pas pu le faire, {what} n'a pas répondu. "
+                "Rien n'est vérifié. Il reste actif : je réessaie à son prochain déclenchement."
+            )
+            telling[:] = [line]
+            return line
+
+        return settle
+
+    async def _failures(self, fire: Fire) -> list[str]:
+        """The calls that failed in the turn that just wrote about the fire (the last one of his
+        conversation: SILENCE is its answer), as he would name them: the site or the tool. A
+        failure is a call that returned an error (a page refused, a 403), not a mistake of the
+        model's (review of #202: `browser` open returns its error, it raises nothing); another
+        turn's failure says nothing of this fire."""
+        turn: str | None = None
+        calls: list[Event] = []
+        after = fire.seq
+        while True:
+            events = await self._journal.read(after, SCAN_BATCH)
+            if not events:
+                break
+            after = events[-1].seq
+            for event in events:
+                if event.payload.get("thread_id") != OWNER_THREAD:
+                    continue
+                if event.kind == "turn.finished":
+                    turn = event.correlation_id
+                elif event.kind == "tool.executed":
+                    calls.append(event)
+        return [
+            _target(str(c.payload.get("tool", "")), c.payload.get("arguments"))
+            for c in calls
+            if turn is not None
+            and c.correlation_id == turn
+            and c.payload.get("is_error")
+            and c.payload.get("decision") not in MODEL_MISTAKES
+        ]
 
     # -- reading ------------------------------------------------------------------------------
 
@@ -830,6 +959,19 @@ class Hooks:
         await self.sync()
 
 
+def _target(tool: str, arguments: object) -> str:
+    """What a failed call was trying to reach: a site's name if it had an address."""
+    if isinstance(arguments, str):
+        with contextlib.suppress(ValueError):
+            arguments = json.loads(arguments)
+    if isinstance(arguments, dict):
+        url = cast(dict[str, Any], arguments).get("url")
+        host = urlparse(str(url)).hostname if url else None
+        if host:
+            return host
+    return tool
+
+
 def _notice(hook: Hook, fire: Fire, ran: Ran | None) -> str:
     asked = "Il t'a demandé" if hook.by == "owner" else "Tu t'étais donné"
     lines = [f"Son hook « {hook.name} » s'est déclenché : {hook.when()}."]
@@ -849,7 +991,9 @@ def _notice(hook: Hook, fire: Fire, ran: Ran | None) -> str:
     lines.append(f"{asked} de faire alors : {hook.then}")
     lines.append(
         "Fais-le maintenant. Écris-lui seulement ce qui compte (ce que tu as fait, ce que tu as "
-        "trouvé) ; si rien ne mérite d'être dit, réponds SILENCE."
+        "trouvé) ; si rien ne mérite d'être dit, réponds SILENCE. Si tu n'as pas pu le faire (un "
+        "site injoignable, un outil en erreur), ce n'est pas rien : dis-le-lui en une phrase, "
+        "avec ce qui n'est donc pas vérifié."
     )
     return "\n".join(lines)
 
