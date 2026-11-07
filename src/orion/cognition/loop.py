@@ -176,6 +176,15 @@ class ModelCalled:
 
 
 @dataclass(frozen=True)
+class ToolStarted:
+    """A call about to run, journaled before it does: a turn frozen in it, or killed, shows
+    where (ORION-25)."""
+
+    call: ToolCall
+    deadline: float
+
+
+@dataclass(frozen=True)
 class ToolExecuted:
     call: ToolCall
     result: ToolResult
@@ -296,7 +305,7 @@ def _family(name: str) -> str:
     return name.split("_", 1)[0]
 
 
-LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
+LoopEvent = MessageEmitted | ModelCalled | ToolStarted | ToolExecuted | Told | Finished
 
 
 async def run_agent(
@@ -574,6 +583,9 @@ async def run_agent(
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
+        for call in calls:
+            if (tool := registry.get(call.name)) is not None:
+                yield ToolStarted(call, deadline_of(tool))
         started = time.monotonic()
         try:
             executions = await _execute_calls(
@@ -845,7 +857,7 @@ async def _execute_one(
         unrestricted=guardian.unrestricted(settings.thread_id),
     )
     started = time.monotonic()
-    limit = asyncio.timeout(tool.deadline)
+    limit = asyncio.timeout(deadline_of(tool))
     try:
         async with limit:
             result = await _run(tool, arguments, ctx, settings)
@@ -920,6 +932,15 @@ def _stray(task: asyncio.Future[ToolResult], tool: Tool, settings: LoopSettings)
     task.add_done_callback(ended)
 
 
+MAX_DEADLINE = 3600.0
+"""The longest any call may run, whatever its tool asks: a turn holds his thread (ORION-25).
+His approval is asked before, outside this limit."""
+
+
+def deadline_of(tool: Tool) -> float:
+    return min(tool.deadline, MAX_DEADLINE)
+
+
 def _may_have_acted(tool: Tool, arguments: BaseModel) -> bool:
     """A call that, cut mid-way, may have changed something: one with an outside effect, or one
     that acts on a page (a click may have sent the form before the cut)."""
@@ -962,22 +983,28 @@ def _timed_out(
 ) -> ToolResult:
     """A call cut at its deadline (ORION-25). What it may have changed outside is not known:
     said so, so that it is checked rather than done twice."""
-    external = tool.effect_for(arguments) is Effect.EXTERNAL
+    acted = _may_have_acted(tool, arguments)
     log.warning(
         "tool.timed_out",
         tool=tool.name,
         thread=settings.thread_id,
         correlation_id=settings.correlation_id,
         seconds=round(seconds, 1),
-        external=external,
+        may_have_acted=acted,
     )
     said = f"Timed out: no answer after {seconds:.0f} s, the call was cut."
-    if external:
-        said += (
-            " UNCERTAIN: what it was doing may or may not have happened. Check (the page, the"
-            " mail, the journal) before doing it again, and tell him it is not confirmed."
-        )
-    return ToolResult(said, is_error=True)
+    if not acted:
+        return ToolResult(said, is_error=True)
+    said += (
+        " What it was doing may or may not have happened. Check (the page, the mail, the"
+        " journal) before doing it again, and tell him it is not confirmed."
+    )
+    return ToolResult(
+        said,
+        is_error=True,
+        outcome=Outcome.UNCERTAIN,
+        action_id=f"{tool.name}:{settings.correlation_id}",
+    )
 
 
 def _clip(result: ToolResult, tool: Tool) -> ToolResult:

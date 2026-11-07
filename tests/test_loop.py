@@ -764,7 +764,8 @@ async def test_an_empty_reply_where_silence_is_an_answer_stays_silent() -> None:
 async def test_a_call_that_never_answers_is_cut_and_the_next_message_goes_through(
     journal: SqliteJournal,
 ) -> None:
-    """ORION-25: a `browser open` held his conversation 38 minutes on 06/11."""
+    """ORION-25: a `browser open` held his conversation 38 minutes on 06/11. A click is not
+    classed external (D115), yet cut it may have sent the form: UNCERTAIN, never redone."""
     from orion.config import AgentConfig
     from orion.context.compiler import ContextCompiler
     from orion.guardian.policy import ActionProposal, Approval
@@ -784,9 +785,10 @@ async def test_a_call_that_never_answers_is_cut_and_the_next_message_goes_throug
         description="Books it.",
         input_model=Empty,
         handler=hangs,
-        effect=Effect.EXTERNAL,
+        effect=Effect.NONE,
         reversibility=Reversibility.REVERSIBLE,
         deadline=0.2,
+        acts=True,
     )
     provider = ScriptedProvider(
         call_tools(("book", {})), reply("Pas confirmé."), reply("Oui, je suis là.")
@@ -805,6 +807,11 @@ async def test_a_call_that_never_answers_is_cut_and_the_next_message_goes_throug
         assert turn.text == "Pas confirmé."
         answer = provider.requests[1].messages[-1]["content"]
         assert "Timed out" in str(answer) and "UNCERTAIN" in str(answer)
+        events = await journal.read(0, 10_000)
+        kinds = [e.kind for e in events]
+        assert kinds.index("tool.started") < kinds.index("tool.executed")
+        executed = next(e for e in events if e.kind == "tool.executed")
+        assert executed.payload["outcome"] == "UNCERTAIN"
         assert not orion.lock(OWNER_THREAD).locked()
         again = await orion.handle_owner_message(OWNER_THREAD, "Tu es là ?", "t")
         assert again.text == "Oui, je suis là."
