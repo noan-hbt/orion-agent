@@ -25,13 +25,19 @@ without asking (D247), elsewhere the guardian refuses it and what needs his yes 
 conclusion. Only trusted turns are read. What the watch did itself (its `tool.executed` with an
 outcome) goes with its conclusion, told as its own, never as a state found (D262).
 
-    watch.done  watch.noted
+Each thing it saw comes typed (D277): FAIRE, PRÉPARER, DEMANDER, INFORMER or SILENCE, with its
+reason. The model proposes; whether and when it reaches him is the rules' and the arbiter's.
+Each is journaled once (`opportunity.detected`, keyed by its object) and told decided
+(`opportunity.decided`), silence included.
+
+    watch.done  watch.noted  opportunity.detected  opportunity.decided
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -49,7 +55,15 @@ from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.policy import TRUSTED_FLOOR, WATCH_THREAD
-from orion.initiative.engine import Alert, InitiativeSettings, effective_settings
+from orion.initiative.engine import (
+    ACTS,
+    DECIDED,
+    DETECTED,
+    Alert,
+    InitiativeSettings,
+    Opportunity,
+    effective_settings,
+)
 from orion.memory.service import MemoryService
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.runtime import OWNER_THREAD, is_silence
@@ -88,6 +102,10 @@ sans doute la suite : rattache-la à ton action quand son contenu le montre (mê
 objet), sinon dis que le lien n'est pas prouvé. Ce que tu lui as déjà dit ne se redit pas comme
 une nouvelle."""
 _LEAD = re.compile(r"^\s*(MAINTENANT|AU POINT)\s*:\s*", re.IGNORECASE)
+_TYPED = re.compile(
+    r"^\s*[-*]?\s*(FAIRE|PR[ÉE]PARER|DEMANDER|INFORMER|SILENCE)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 BRIEF = """C'est ta veille de {slot} : un moment à toi pour prendre du recul sur sa vie, comme
 un ami qui le connaît bien et y pense entre deux conversations. Personne ne te demande rien.
@@ -115,7 +133,17 @@ agissent dehors compris, sans demander : fais ce qui l'aide vraiment. Rien ne lu
 d'ici, ce que tu as à lui dire va dans ta conclusion ; ce qui engage gros ou ne se rattrape pas,
 propose-le-lui là aussi.
 
-Ta réponse finale est ta conclusion, l'une des trois :
+Ta réponse finale commence par une ligne par chose vue qui vaut quelque chose, de la forme
+`TYPE | la chose, en quelques mots | pourquoi`, TYPE étant l'un de :
+- `FAIRE` : tu l'as fait ou le fais d'ici (tes outils passent par le gardien, comme toujours) ;
+- `PRÉPARER` : tu as préparé un brouillon, une recherche, rien qui agisse dehors ;
+- `DEMANDER` : il faut sa réponse ou son accord ;
+- `INFORMER` : il voudra le savoir ;
+- `SILENCE` : vu, mais rien à faire ni à dire.
+Tu proposes ; ce n'est pas toi qui décides s'il est dérangé ni quand. Nomme la même chose avec
+les mêmes mots d'une veille à l'autre.
+
+Puis ta conclusion, l'une des trois :
 - `SILENCE` : rien qui vaille un message (le plus souvent : ne parle que si ça l'aide) ;
 - `MAINTENANT : ` puis le message à lui envoyer tout de suite, parce que ça ne peut pas
   attendre (un conflit aujourd'hui, une chose à faire avant ce soir) ;
@@ -171,6 +199,7 @@ class Note:
     at: datetime
     trust: Trust
     acts: tuple[Act, ...] = ()
+    opportunities: tuple[Opportunity, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -203,6 +232,8 @@ class WatchState:
         default_factory=list[tuple[int, str, str, datetime, str]]
     )
     """(seq, account, change, start, title) waiting for their sync's time."""
+    detected: set[str] = field(default_factory=set[str])
+    """The key of each opportunity seen: seen again, it is the same one (D277)."""
     _acts: dict[str, dict[str, Act]] = field(default_factory=dict[str, dict[str, Act]])
     """correlation id → what the watch turn did so far, its latest outcome per action."""
     _seq: int = 0
@@ -217,6 +248,7 @@ class WatchState:
         self.stirred.clear()
         self.agenda.clear()
         self.synced.clear()
+        self.detected.clear()
         self._changes.clear()
         self._acts.clear()
         self.last_at = None
@@ -247,7 +279,10 @@ class WatchState:
                 self.stirred = [*self.stirred[-30:], date.fromisoformat(str(payload["day"]))]
         elif event.kind.startswith("calendar.") or event.kind == "initiative.delivered":
             self._stir(event, payload)
+        elif event.kind == DETECTED:
+            self.detected.add(str(payload["key"]))
         elif event.kind == NOTED:
+            found: list[dict[str, str]] = payload.get("opportunities") or []
             self.notes.append(
                 Note(
                     str(payload["note_id"]),
@@ -256,6 +291,7 @@ class WatchState:
                     datetime.fromisoformat(str(payload["at"])),
                     event.trust,
                     tuple(self._acts.pop(event.correlation_id or "", {}).values()),
+                    tuple(Opportunity(**o) for o in found),
                 )
             )
             self.notes = self.notes[-20:]
@@ -322,6 +358,23 @@ def _agenda_stirs(changes: list[tuple[int, str, str, datetime, str]], at: dateti
         when = f"{start.astimezone(at.tzinfo):%a %d/%m %H:%M}"
         found.append(Stir(seq, f"à l'agenda, nouveau : « {title} », {when}"))
     return sorted(found, key=lambda s: s.seq)
+
+
+def _object_key(what: str) -> str:
+    """The same thing in other cases or accents is the same: « Billet Lyon » = « billet lyon »."""
+    bare = unicodedata.normalize("NFKD", what).encode("ascii", "ignore").decode().lower()
+    return "watch:" + "-".join(re.findall(r"[a-z0-9]+", bare))[:80]
+
+
+def opportunities(text: str) -> tuple[str, list[Opportunity]]:
+    """The typed lines of a conclusion (D277), and the rest of it: its message."""
+    found: dict[str, Opportunity] = {}
+    for m in _TYPED.finditer(text):
+        act = m.group(1).upper().replace("PREPARER", "PRÉPARER")
+        key = _object_key(m.group(2))
+        if act in ACTS and key != "watch:":
+            found.setdefault(key, Opportunity(key, act, m.group(2), m.group(3)))
+    return _TYPED.sub("", text).strip(), list(found.values())
 
 
 def conclusion(text: str) -> tuple[str, bool] | None:
@@ -427,27 +480,59 @@ class Watch:
             max_cost_usd=self.settings.budget_usd,
         )
         log.info("watch.worked", slot=slot, steps=turn.steps, cost=turn.usage.cost_usd)
-        found = conclusion(turn.text) if turn.reason in NOTE_ENDS else None
+        ended = turn.reason in NOTE_ENDS
+        rest, seen = opportunities(turn.text) if ended else ("", [])
+        found = conclusion(rest) if ended else None
+        trust = min(Trust.SYSTEM, self.orion.threads.get(WATCH_THREAD).window_trust())
+        source = Provenance(source=f"thread:{WATCH_THREAD}", actor="orion:watch")
+        new = [o for o in seen if o.key not in self.state.detected]
+        carried = [o for o in new if o.act != "SILENCE"] if found is not None else []
+        events = [
+            NewEvent(
+                kind=DETECTED,
+                payload={**vars(o), "slot": slot},
+                provenance=source,
+                trust=trust,
+                correlation_id=turn.correlation_id,
+            )
+            for o in new
+        ]
+        events += [  # what reaches no message is decided here, by the rules: quiet
+            NewEvent(
+                kind=DECIDED,
+                payload={
+                    "key": o.key,
+                    "act": o.act,
+                    "outcome": "quiet",
+                    "reason": "proposed silence" if o.act == "SILENCE" else "no message",
+                },
+                provenance=source,
+                trust=trust,
+                correlation_id=turn.correlation_id,
+            )
+            for o in new
+            if o not in carried
+        ]
         if found is not None:
             message, urgent = found
-            trust = min(Trust.SYSTEM, self.orion.threads.get(WATCH_THREAD).window_trust())
-            await self._journal.append(
-                [
-                    NewEvent(
-                        kind=NOTED,
-                        payload={
-                            "note_id": f"w_{new_id()}",
-                            "text": message,
-                            "now": urgent,
-                            "at": now.isoformat(),
-                            "slot": slot,
-                        },
-                        provenance=Provenance(source=f"thread:{WATCH_THREAD}", actor="orion:watch"),
-                        trust=trust,
-                        correlation_id=turn.correlation_id,
-                    )
-                ]
+            events.append(
+                NewEvent(
+                    kind=NOTED,
+                    payload={
+                        "note_id": f"w_{new_id()}",
+                        "text": message,
+                        "now": urgent,
+                        "at": now.isoformat(),
+                        "slot": slot,
+                        "opportunities": [vars(o) for o in carried],
+                    },
+                    provenance=source,
+                    trust=trust,
+                    correlation_id=turn.correlation_id,
+                )
             )
+        if events:
+            await self._journal.append(events)
         await self._done(now, slot, upto, cost=turn.usage.cost_usd, stirred=stirred, stirs=stirs)
         return found[0] if found else None
 
@@ -579,12 +664,14 @@ class Watch:
                 continue
             acts = "\n".join(a.line() for a in note.acts)
             mine = f"\n(Fait par moi pendant ma veille :\n{acts})" if acts else ""
+            proposed = "".join(f"\n- {o.act} : {o.what} ({o.reason})" for o in note.opportunities)
             found.append(
                 Alert(
                     key=f"watch:{note.id}",
                     notice="Pendant ta veille, tu as pris du recul sur sa vie, et tu as conclu "
                     f"qu'il fallait lui dire :\n{note.text}\n"
                     + (ACTED.format(acts=acts) if acts else "")
+                    + (f"Ce que tu y as vu :{proposed}\n" if proposed else "")
                     + "Dis-le-lui avec tes mots, comme une chose que tu as remarquée. Ce qui a "
                     "été réglé depuis, laisse-le ; si plus rien ne vaut, réponds SILENCE.",
                     why="ta veille",
@@ -592,6 +679,7 @@ class Watch:
                     trust=note.trust,
                     expires_at=note.at + timedelta(hours=8),
                     importance=NOW_IMPORTANCE if note.now else POINT_IMPORTANCE,
+                    opportunities=note.opportunities,
                 )
             )
         return found
