@@ -75,6 +75,7 @@ LABELS = {
     "memory.fact.pinned": "a épinglé un souvenir",
     "commitment.created": "nouvel engagement",
     "commitment.closed": "engagement clos",
+    "commitment.seen": "engagement revu ailleurs",
     "playbook.rule.learned": "nouvelle règle",
     "playbook.rule.retired": "règle retirée",
     "autonomy.granted": "autonomie accordée",
