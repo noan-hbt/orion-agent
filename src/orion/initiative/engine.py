@@ -120,6 +120,12 @@ TAIL = 500
 
 DELIVERED = "initiative.delivered"
 SUPPRESSED = "initiative.suppressed"
+DETECTED = "opportunity.detected"
+"""Something worth doing for him was seen, once per thing (D277): its key, type and reason."""
+DECIDED = "opportunity.decided"
+"""What became of it (D277): said, kept quiet, and why. The model proposes, the rules decide."""
+ACTS = ("FAIRE", "PRÉPARER", "DEMANDER", "INFORMER", "SILENCE")
+"""What the model may propose for an opportunity (D277)."""
 GAVE_WAY = "gave way to him"
 """He wrote while Orion was about to speak, or speaking, first: the initiative waits."""
 TRY_AGAIN = "wording failed, tried again later"
@@ -259,6 +265,19 @@ def _settle_all(settles: Sequence[Settle]) -> Settle | None:
 
 
 @dataclass(frozen=True)
+class Opportunity:
+    """Something the model saw worth doing for him (D277): what it proposes, and why. It does
+    not decide: the gate and the arbiter do, and `opportunity.decided` says what came of it."""
+
+    key: str
+    """Its source and its object: the same thing seen twice is one opportunity."""
+    act: str
+    """One of `ACTS`."""
+    what: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class Alert:
     """Something worth an unrequested message (an event about to start…). Unlike a report, it
     is subject to quiet hours and the daily budget, and it is dropped once `expires_at` is
@@ -281,6 +300,8 @@ class Alert:
     settle: Settle | None = None
     """Told how it ended: what was said (None: SILENCE) and what Orion read while writing. On
     a SILENCE, what it returns goes out instead: the silence was not borne out (ORION-26)."""
+    opportunities: tuple[Opportunity, ...] = ()
+    """What the message carries (D277): each is told decided when it goes out or is dropped."""
 
 
 class AlertSource(Protocol):
@@ -390,6 +411,8 @@ class Candidate:
     level: str = ""
     settle: Settle | None = None
     """See `Alert.settle`."""
+    opportunities: tuple[Opportunity, ...] = ()
+    """See `Alert.opportunities`."""
 
     @property
     def kind(self) -> str:
@@ -952,6 +975,7 @@ class InitiativeEngine:
                     notify_kind=a.notify_kind,
                     level=a.level,
                     settle=a.settle,
+                    opportunities=a.opportunities,
                 )
                 for a in await alerts.alerts(now)
             )
@@ -1143,6 +1167,7 @@ class InitiativeEngine:
             notify_kind=parts[0].notification,
             level=_loudest(self._level(c) for c in parts),
             settle=_settle_all([c.settle for c in (*parts, *carried) if c.settle is not None]),
+            opportunities=parts[0].opportunities,
         )
         if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
@@ -1443,15 +1468,33 @@ class InitiativeEngine:
         if kind == SUPPRESSED and candidate.fallback:
             payload["fallback"] = candidate.fallback[:300]
         log.info(kind, key=candidate.key, reason=reason)
+        provenance = Provenance(source="orion:initiative", actor="orion:initiative")
+        correlation_id = correlation_id or new_id()
+        decided = [
+            NewEvent(
+                kind=DECIDED,
+                payload={
+                    "key": o.key,
+                    "act": o.act,
+                    "outcome": "said" if kind == DELIVERED else "quiet",
+                    "reason": reason or arbiter or how or "",
+                },
+                provenance=provenance,
+                trust=min(Trust.SYSTEM, candidate.trust),
+                correlation_id=correlation_id,
+            )
+            for o in candidate.opportunities
+        ]
         await self._journal.append(
             [
                 NewEvent(
                     kind=kind,
                     payload=payload,
-                    provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
+                    provenance=provenance,
                     trust=min(Trust.SYSTEM, candidate.trust),  # its fallback is its words
-                    correlation_id=correlation_id or new_id(),
-                )
+                    correlation_id=correlation_id,
+                ),
+                *decided,
             ]
         )
         await self._runner.catch_up()

@@ -16,10 +16,12 @@ from orion.cognition.loop import StopReason
 from orion.core.events import Provenance, Trust
 from orion.initiative.engine import Alert
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
+from orion.providers.base import ProviderError
 from orion.runtime import Orion, is_silence
 from orion.tasks.service import Task, Tasks
 from orion.tools.actions import grouped
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+from orion.workflows.engine import Run, Step, StepContext, Workflow, WorkflowEngine
 
 if TYPE_CHECKING:
     from orion.config import Effort, OrionConfig
@@ -27,6 +29,7 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 REPORT_EXPIRES = timedelta(days=1)
+PASS = "task.pass"
 LIMITS = {
     "budget": "son budget est épuisé",
     "time": "son temps est écoulé",
@@ -40,7 +43,13 @@ class TaskSettings(ModuleSettings):
 
 
 class TaskWork:
-    """Runs each task pass after pass, and hands what they write to Orion as alerts."""
+    """Runs each task pass after pass, and hands what they write to Orion as alerts.
+
+    Each pass is the one step of a workflow run (F-05, D257): journaled before it runs, so a
+    pass cut by a restart is redone once, never the passes already done; a model out of quota
+    pauses the pass instead of ending the task. The calls a cut pass made are settled
+    UNCERTAIN at startup (D271), so the redone pass sees them and never replays them blindly.
+    """
 
     def __init__(
         self,
@@ -57,44 +66,76 @@ class TaskWork:
         self._effort: Effort | None = effort
         self._clock = clock
         self._woken = asyncio.Event()
-        self._running: dict[str, asyncio.Task[None]] = {}
+        self.engine = WorkflowEngine(
+            tasks.journal,
+            [Workflow(PASS, (Step("pass", self._pass, attempts=2),), ended=self._ended)],
+            "orion:tasks",
+            clock,
+        )
         tasks.waking.append(self._woken.set)
 
     async def run(self, tick: float = 30.0) -> None:
         while True:
+            await self.engine.resume_all()  # passes cut by a restart, or waiting for the model
             await self.start_ready()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._woken.wait(), tick)
             self._woken.clear()
 
     async def start_ready(self) -> list[str]:
+        await self.engine.sync()
+        await self._tasks.sync()
+        busy = {
+            str(r.inputs.get("task_id"))
+            for r in self.engine.mine()
+            if not r.finished and int(r.inputs.get("pass", 0)) > self._passes(r)
+        }
         started: list[str] = []
         for task in await self._tasks.running():
-            if task.ready() and task.id not in self._running:
-                self._running[task.id] = asyncio.create_task(self._pass_then_wake(task))
+            if task.ready() and task.id not in busy:
+                await self.engine.start(
+                    PASS,
+                    task.goal,
+                    {"task_id": task.id, "pass": task.passes + 1},
+                    Provenance(source=task.thread, actor="orion:tasks"),
+                )
                 started.append(task.id)
         return started
 
     async def settle(self) -> None:
         """For tests: let the passes under way finish."""
-        while self._running:
-            await asyncio.gather(*self._running.values())
+        await self.engine.wait()
 
-    async def _pass_then_wake(self, task: Task) -> None:
-        try:
-            await self.one_pass(task)
-        except Exception:
-            log.exception("task.pass_failed", task=task.id)
-            await self._tasks.finish(
-                task.id,
-                "failed",
-                "",
-                Provenance(source=task.thread, actor="orion:tasks"),
-                Trust.SYSTEM,
-            )
-        finally:
-            self._running.pop(task.id, None)
-            self._woken.set()
+    def _passes(self, run: Run) -> int:
+        task = self._tasks.state.tasks.get(str(run.inputs.get("task_id")))
+        return task.passes if task is not None else 1 << 30
+
+    async def _pass(self, ctx: StepContext) -> dict[str, Any]:
+        task = await self._tasks.get(str(ctx.inputs["task_id"]))
+        # Done already (journaled before a restart cut the run) or ended: nothing to redo.
+        if task is not None and task.finished is None and task.passes < int(ctx.inputs["pass"]):
+            try:
+                await self.one_pass(task)
+            finally:
+                self._woken.set()
+        return {}
+
+    async def _ended(self, run: Run) -> None:
+        """A pass that failed for good ends its task, so Orion hears of it."""
+        task = await self._tasks.get(str(run.inputs.get("task_id")))
+        if task is None or task.finished is not None:
+            return
+        log.warning("task.pass_failed", task=task.id, error=run.blocked)
+        await self._tasks.finish(
+            task.id,
+            "failed",
+            run.blocked,
+            Provenance(source=task.thread, actor="orion:tasks"),
+            Trust.SYSTEM,
+        )
+        await self._tasks.report(
+            task, f"(Fin de la tâche : échouée, {run.blocked[:300]}.)", self._clock(), Trust.SYSTEM
+        )
 
     async def one_pass(self, task: Task) -> None:
         now = self._clock()
@@ -118,6 +159,8 @@ class TaskWork:
             model=self._model,
             effort=self._effort,
         )
+        if turn.reason is StopReason.PROVIDER_ERROR:  # not a pass: the run waits, then redoes it
+            raise ProviderError(turn.detail or "model unavailable", retryable=True)
         current = await self._tasks.get(task.id)
         if current is None:
             return
@@ -420,5 +463,6 @@ class TasksModule(Module):
             self.config.models.tasks.model,
             self.config.effort("tasks"),
         )
+        await work.engine.recover()
         daemon.alerts.append(work)
         daemon.add_service("tasks.work", work.run)
