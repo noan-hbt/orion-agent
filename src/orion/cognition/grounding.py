@@ -17,6 +17,9 @@ or uncertain (`orion.tools.outcome`) may not be reported done. The same check, i
 such a reply back once. It reads the reply clause by clause and ties each to the actions it
 names (the mail, the site, the work): « le mail est en attente » covers the mail, not « j'ai
 soumis la déclaration » next to it. A careful word never lets the whole reply through.
+
+Nor is a state Orion just produced found that way (D262): « Amazon indique déjà invitation
+demandée », right after he asked for it, is sent back once too.
 """
 
 from __future__ import annotations
@@ -83,6 +86,20 @@ UNSETTLED_NOTE = (
     "serveur, remise non vérifiée », « formulaire envoyé, pas de confirmation vue »). Puis écris "
     "ta réponse finale, entière.]"
 )
+
+ALREADY_NOTE = (
+    "[Orion · Ta réponse n'est pas encore partie. Elle dit « déjà » d'un état que tu as peut-être "
+    "produit toi-même : pendant ce tour, tu as agi ici :\n{actions}\nCe qu'une page ou un "
+    "message montre après ton action vient sans doute d'elle. Dis ce que tu as fait (« j'ai "
+    "demandé… », « j'ai cliqué sur… ») et où ça en est, jamais « c'était déjà fait ». Si ce "
+    "« déjà » parle d'autre chose que tes actions, garde-le. Puis écris ta réponse finale, "
+    "entière.]"
+)
+
+_ALREADY = re.compile(r"\bdéjà\b|\balready\b", re.IGNORECASE)
+"""Said of a state: found that way, not brought about."""
+_MINE = re.compile(r"\bj(?:e l|e les|e t|e lui|e leur)?'(?:ai|avais)\b", re.IGNORECASE)
+"""« j'ai déjà demandé » owns the action: not a state found."""
 
 _DELIVERED = re.compile(
     r"\b(?:reçue?s?|arrivée?s?|livrée?s?|délivrée?s?|remise?s?|distribuée?s?)\b|"
@@ -154,17 +171,53 @@ async def ground_check(
     tools called this turn; `messages`: what this turn added."""
     if not called:
         return UNCHECKED_NOTE if claims_a_state(text) else None
-    open_ = unsettled(messages)
-    if not open_:
-        return None
+    found = outcomes(_text(m) for m in messages if m.get("role") == "tool")
+    acted = {action: seen for action, seen in found.items() if seen[0] is not Outcome.FAILED}
+    open_ = {action: seen for action, seen in found.items() if seen[0] in UNSETTLED}
+    notes: list[str] = []
+    already = {action: acted[action] for action in _found_already(text, acted)}
+    if already:
+        notes.append(ALREADY_NOTE.format(actions=_lines(already)))
     wrong = {action: open_[action] for action in _overclaimed(text, open_)}
-    if not wrong:
-        return None
-    actions = "\n".join(
+    if wrong:
+        notes.append(UNSETTLED_NOTE.format(actions=_lines(wrong)))
+    return "\n".join(notes) or None
+
+
+def _lines(actions: dict[str, tuple[Outcome, str]]) -> str:
+    return "\n".join(
         f"- {action} : {MEANING[outcome]}" + (f" ({proof})" if proof else "")
-        for action, (outcome, proof) in wrong.items()
+        for action, (outcome, proof) in actions.items()
     )
-    return UNSETTLED_NOTE.format(actions=actions)
+
+
+async def acted_check(
+    text: str,
+    called: Sequence[str],
+    messages: Sequence[Message],
+) -> str | None:
+    """`ground_check` for a turn that reads a brief, not tools (the watch, D262): only what it
+    did itself is checked; a state it read in the brief needs no tool."""
+    return await ground_check(text, called, messages) if called else None
+
+
+def _found_already(text: str, acted: dict[str, tuple[Outcome, str]]) -> list[str]:
+    """The actions of this turn some clause says were already so, as if found that way: the
+    state is likely Orion's own doing (« Amazon indique déjà invitation demandée », right after
+    he asked for it, 06/11). A clause names its actions, or is about all of them."""
+    if not acted:
+        return []
+    cues = {action: _cue(action) for action in acted}
+    found: dict[str, None] = {}
+    for sentence in _SENTENCE.findall(text.translate(_TYPOGRAPHY)):
+        if sentence.rstrip().endswith("?"):
+            continue
+        for clause in _CLAUSE.findall(sentence):
+            if _ALREADY.search(clause) is None or _MINE.search(clause) is not None:
+                continue
+            named = [a for a, cue in cues.items() if cue.search(clause)]
+            found.update(dict.fromkeys(named or acted))
+    return list(found)
 
 
 def _overclaimed(text: str, open_: dict[str, tuple[Outcome, str]]) -> list[str]:
