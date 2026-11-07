@@ -9,7 +9,7 @@ from orion.mail.service import Fetch, Mailbox, MailSettings
 from orion.mail.smtp import Postman, Send
 from orion.mail.tidy import local_draft, local_mark, local_tidy
 from orion.mail.tools import mail_tools
-from orion.modules.base import Daemon, Module, Plate
+from orion.modules.base import Capability, Daemon, Module, Plate
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -90,6 +90,24 @@ class MailModule(Module):
         daemon.add_service("mail.sync", mailbox.run)
         daemon.alerts.append(mailbox)
         daemon.digests.append(mailbox)
+
+    def capabilities(self) -> list[Capability]:
+        """Each mailbox, unavailable when it has no account or its secret cannot be read."""
+        settings: MailSettings = self.settings
+        if not settings.accounts:
+            return [Capability("mail", False, "aucun compte configuré")]
+        if self.config.guardian.enabled:
+            return [
+                Capability(f"mail:{a.name}", True, "lu par le gardien") for a in settings.accounts
+            ]
+        found: list[Capability] = []
+        for account in settings.accounts:
+            try:
+                account.password.resolve()
+                found.append(Capability(f"mail:{account.name}", True, account.host))
+            except LookupError as exc:
+                found.append(Capability(f"mail:{account.name}", False, str(exc)))
+        return found
 
     def doctor(self) -> list[str]:
         settings: MailSettings = self.settings

@@ -364,6 +364,7 @@ async def build_app(
             summary_model=config.agent.summary_model or config.agent.extractor_model,
             summary_effort=config.effort("summary"),
         )
+        orion.intents = plate.intents
         await orion.start()
         await plate.timers.sync()
         yield App(plate, orion)

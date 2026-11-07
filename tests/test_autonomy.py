@@ -90,6 +90,7 @@ async def test_it_is_offered_after_a_run_of_yeses_once_a_month(journal: SqliteJo
         "approved_times": 3,
         "recipients": [],
         "domains": [],
+        "until": "",
     }
     now[0] += timedelta(days=3)
     assert await autonomy.ritual(owner, grant_tool, never_quiet) is None
@@ -188,3 +189,22 @@ async def test_the_guardian_records_the_grant_and_enforces_it(tmp_path: Path) ->
         assert len(written) == 2
         await g.client.post("/v1/autonomy/revoke", {"action": "calendar_add"})
         assert (await g.client.get("/v1/autonomy"))["autonomous"] == []
+
+
+async def test_an_autonomy_given_for_a_month_asks_again_after(journal: SqliteJournal) -> None:
+    """ORI-022: no end unless he gives one; past it, Orion asks again."""
+    from orion.guardian.limits import Limits
+
+    now = [NOON]
+    autonomy = Autonomy(journal, ["calendar_add"], clock=lambda: now[0])
+    await autonomy.start()
+    await autonomy.grant("calendar_add", "g", None, Limits(until="2026-12-02"))
+    owner = Owner()
+    guardian = Guardian(owner, autonomy.allows)
+    add = tool("calendar_add")
+    args = add.parse('{"title": "x", "start": "2026-11-03T10:00", "end": "2026-11-03T11:00"}')
+    assert (await guardian.decide(ActionProposal(add, args, Trust.OWNER, "owner"))).allowed
+    assert owner.asked == []
+    now[0] = NOON + timedelta(days=31)
+    await guardian.decide(ActionProposal(add, args, Trust.OWNER, "owner"))
+    assert len(owner.asked) == 1

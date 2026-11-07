@@ -22,6 +22,7 @@ def builtin_modules() -> list[type[Module]]:
     from orion.awaiting.module import AwaitingModule
     from orion.booking.module import BookingModule
     from orion.calendar.module import CalendarModule
+    from orion.capabilities.module import CapabilitiesModule
     from orion.channels.module import IMessageModule
     from orion.channels.telegram_module import TelegramModule
     from orion.chronicle.module import ChronicleModule
@@ -76,6 +77,7 @@ def builtin_modules() -> list[type[Module]]:
         DelegationModule,
         AdaptationModule,
         ArtifactsModule,
+        CapabilitiesModule,
         NightModule,
         DoubtModule,
         CalendarModule,

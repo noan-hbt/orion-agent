@@ -36,7 +36,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
-from orion.guardian.policy import OWNER_THREAD
+from orion.guardian.policy import OWNER_THREAD, TRUSTED_FLOOR
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import NO_ARGS, Action, action_tool
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
@@ -810,8 +810,14 @@ class GoalsModule(Module):
         self.goals: Goals | None = None
 
     async def assemble(self, plate: Plate) -> list[Tool]:
-        self.goals = Goals(plate.journal, self.config.agent.timezone)
-        await self.goals.sync()
+        goals = self.goals = Goals(plate.journal, self.config.agent.timezone)
+        await goals.sync()
+        # Recall searches what touches his goals too (ORI-016).
+        plate.intents.append(
+            lambda: [
+                f"{g.title} — {g.done_when}" for g in goals.active() if g.trust >= TRUSTED_FLOOR
+            ]
+        )
         return [goal_tool(self.goals)]
 
     async def review(self, now: datetime) -> list[str]:

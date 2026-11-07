@@ -23,6 +23,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust, owned_by
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.guardian.policy import TRUSTED_FLOOR
 from orion.memory.model import (
     COMMITMENT_CLOSED,
     COMMITMENT_CREATED,
@@ -137,11 +138,30 @@ class MemoryService:
         self.situations = Situations()
         self._runner = ProjectionRunner(journal, [store, self.situations])
 
-    async def search(self, text: str, limit: int = 8, include_past: bool = False) -> list[Fact]:
-        """By meaning and by words when semantic search is set up, by words otherwise."""
+    async def search(
+        self, text: str, limit: int = 8, include_past: bool = False, *, intent: str = ""
+    ) -> list[Fact]:
+        """By meaning and by words when semantic search is set up, by words otherwise.
+        `intent`: what he is working towards, searched too (ORI-016)."""
         if self.semantic is not None:
-            return await self.semantic.search(text, limit, include_past)
-        return await self.store.search(text, limit, include_past)
+            return await self.semantic.search(text, limit, include_past, intent=intent)
+        found = await self.store.search(text, limit, include_past)
+        if intent.strip():
+            seen = {f.id for f in found}
+            more = await self.store.search(intent, limit, include_past)
+            found += [f for f in more if f.id not in seen][: max(1, limit // 2)]
+        return found
+
+    async def intent(self) -> str:
+        """What he is working towards, as memory holds it: what is going on now and what is
+        owed, trusted only. A second query for recall (ORI-016)."""
+        lines = [s.title for s in self.situations.current() if s.trust >= TRUSTED_FLOOR]
+        lines += [
+            c.what
+            for c in await self.store.commitments(CommitmentStatus.OPEN)
+            if c.trust >= TRUSTED_FLOOR
+        ]
+        return "\n".join(lines)
 
     async def sync(self) -> None:
         await self._runner.catch_up()
