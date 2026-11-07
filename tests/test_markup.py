@@ -56,6 +56,20 @@ def test_other_channels_read_the_same_thing_as_text() -> None:
     assert plain("Pas de balise ici.") == "Pas de balise ici."
 
 
+def test_no_channel_loses_what_a_piece_says() -> None:
+    """ORI-021: every tag, read as text, keeps each piece's information."""
+    message = MESSAGE + (
+        '\n<event title="Visite T2" when="2026-11-01T10:00" end="2026-11-01T10:30" '
+        'where="12 rue X"/>\n<mail from="Agence Foncia" subject="Votre dossier">Il manque '
+        "l'avis.</mail>\n"
+        '<progress label="Dossier" value="0.6"/>'
+    )
+    text = plain(message)
+    for said in ("Demander une visite", "Visite T2", "10:30", "12 rue X", "Agence Foncia",
+                 "Votre dossier", "l'avis", "Dossier", "60"):  # fmt: skip
+        assert said in text, said
+
+
 def test_other_channels_get_no_markdown_marks() -> None:
     """Seen for real on Telegram: `**bold**` and `*italic*` showed their stars."""
     text = plain("## Le point\n* C'est **important** et *urgent*, [ici](https://example.com).")

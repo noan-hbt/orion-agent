@@ -56,7 +56,7 @@ def test_an_event_a_mail_a_screen_and_a_progress_are_drawn() -> None:
     assert opened == {"type": "open", "screen": "papers", "label": "Voir tes papiers"}
     assert progress["value"] == 1.0  # held between 0 and 1
     flat = plain(text)
-    assert "Visite du T2 · 01/11 10:00 · 12 rue X" in flat
+    assert "Visite du T2 · 01/11 10:00" in flat and "12 rue X" in flat
     assert "✉ Agence Foncia · « Votre dossier »" in flat
     assert "Dossier : 100 %" in flat
     assert "papers" not in flat  # a screen of the app means nothing on another channel

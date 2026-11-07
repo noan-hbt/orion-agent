@@ -1497,6 +1497,8 @@ class InitiativeEngine:
             payload["arbiter"] = arbiter
         if bundled:
             payload["bundled"] = True
+        if kind == DELIVERED:  # the kind of message that went out, to every channel (D225)
+            payload["notify_kind"] = candidate.notification
         if not candidate.budgeted:
             payload["unbudgeted"] = True
         checks = self._checks.pop(candidate.key, None)

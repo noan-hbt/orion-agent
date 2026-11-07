@@ -6333,6 +6333,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6354,6 +6355,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   l'honore : UID CalDAV (`If-None-Match: *`, un 412 = déjà écrit) et id d'événement Google (un
   409 = déjà écrit, relu). Le mail (SMTP) ne peut pas : il reste couvert par la réconciliation
   ci-dessus et `mail.sent`. Les canaux avaient déjà la leur (outbox, D19).
+
 
 
 
@@ -6388,6 +6390,7 @@ restent en mémoire (D257).
 
 
 
+
 ## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
 
 *07/11/2026 · acceptée · complète D156 · ORION-37 (audit ORI-013)*
@@ -6404,6 +6407,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 
@@ -6448,6 +6452,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
 
 
 
+
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
 
 *07/11/2026 — ORION-42, audit du 05/11 (ORI-005). Précise D37 et D267.*
@@ -6474,10 +6479,6 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   autre source l'a vu depuis.
 
 
-
-
-
-
 ## D276 — Une passe de tâche de fond est une étape de workflow
 
 *07/11/2026 · acceptée · précise D110, D257 · ORION-43 (audit F-05)*
@@ -6497,6 +6498,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
   refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
 - **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
 - Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
 
 
 
@@ -6536,6 +6538,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
 
 
 
+
 ## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
 
 ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
@@ -6548,6 +6551,7 @@ redémarrage, un message retenu depuis des heures repartait de zéro.
 - L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
   `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
 - Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
+
 
 
 
@@ -6581,6 +6585,7 @@ par type de contrôle.
 
 
 
+
 ## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
 
 ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
@@ -6594,6 +6599,7 @@ crois-tu ? » n'avait pas de réponse lisible.
 - `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
   l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
   au portrait suivant.
+
 
 
 
@@ -6619,6 +6625,7 @@ remontait pas.
 
 
 
+
 ## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
 
 ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
@@ -6636,6 +6643,7 @@ trop longue ; le milieu était perdu, sans moyen de le relire.
 
 
 
+
 ## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
 
 ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
@@ -6648,6 +6656,7 @@ tombé, ni depuis quand.
 - Module `capabilities` (actif par défaut) : sonde toutes les 5 minutes, journalise
   `capability.health_changed` seulement à une transition.
 - Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
+
 
 
 
@@ -6672,6 +6681,7 @@ l'arbitre décide de se taire.
 
 
 
+
 ## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
 
 ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
@@ -6688,6 +6698,7 @@ expiration par défaut.
 
 
 
+
 ## D286 — Mesurer la réussite par rôle et par modèle avant de router
 
 ORI-020 (audit du 05/11). D147 tient (le fond suit le modèle principal sur forfait) : pas de
@@ -6701,4 +6712,21 @@ modèle.
   `veille`…) ; le modèle, celui de `model.usage` du tour. Rien de nouveau n'est journalisé.
 - `orion week` (et l'app) donnent le taux par rôle et modèle, à côté des sections de D273. Le
   routage par risque sera un ticket à part, le jour où ces chiffres le justifient.
+
+
+## D287 — Aucun canal ne perd ce qu'une pièce structurée dit
+
+ORI-021 (audit du 05/11). D126 tient : les balises restent le format du contenu, un seul
+texte rendu par canal ; pas d'objet message à part.
+
+- Tous les canaux qui ne dessinent rien (Telegram, iMessage, voix…) passent déjà par
+  `markup.plain()`. Il gardait presque tout ; il garde maintenant aussi la fin d'un événement
+  et ce que fait le bouton d'un choix multiple. Seul `open` (un écran de l'app) ne dit rien
+  ailleurs.
+- `initiative.delivered` porte `notify_kind` (le type de notification de D225). Le lien à un
+  objectif (`goal_id`) attend que les candidats le portent (ORION-46).
+
+
+
+
 
