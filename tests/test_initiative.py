@@ -735,3 +735,35 @@ async def test_a_source_he_thanks_rises_and_one_he_ignores_sinks(world: World) -
     assert "curiosity : importance +" in shown and "chronicle : importance -" in shown
     await engine.tick()  # nothing moved: nothing journaled again
     assert len(await kinds(world.journal, WEIGHED)) == 2
+
+
+async def test_a_held_message_keeps_its_age_across_a_restart(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ORI-014: the arbiter's wait lived in memory; a restart made old messages look new."""
+    import orion.initiative.engine as engine_module
+    from orion.initiative.arbiter import Judgement
+
+    seen: list[datetime | None] = []
+
+    def judge(*args: object) -> Judgement:
+        seen.append(args[-1])  # type: ignore[arg-type]
+        return Judgement(False, 0.1, 0.9)
+
+    monkeypatch.setattr(engine_module, "judge", judge)
+
+    class Small:
+        async def alerts(self, now: datetime) -> list[Alert]:
+            return [Alert("small:1", "un détail", "un détail", "Un détail", importance=0.8)]
+
+    def engine() -> InitiativeEngine:
+        return InitiativeEngine(
+            world.orion, world.journal, world.timers, world.inbox, SETTINGS,
+            memory=world.memory.store, clock=world.clock, alerts=[Small()],
+        )  # fmt: skip
+
+    world.clock.now = at(20, 10)
+    await engine().tick()
+    world.clock.now = at(20, 12)
+    await engine().tick()  # a new engine: Orion restarted
+    assert seen == [None, at(20, 10)]

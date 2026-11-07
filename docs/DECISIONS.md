@@ -6422,3 +6422,16 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
+
+ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
+retenu selon le temps qu'il attend (`waiting_since`), mais ce temps vivait en mémoire : après un
+redémarrage, un message retenu depuis des heures repartait de zéro.
+
+- La première retenue d'un message par l'arbitre journalise `initiative.waiting` (clé, depuis,
+  raison, `expires_at`), une seule fois. Le `Ledger` de l'initiative en tient la liste ; elle se
+  reconstruit du journal seul.
+- L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
+  `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
+- Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
