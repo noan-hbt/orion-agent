@@ -6323,6 +6323,19 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
   (D258), pas seulement un texte.
 
+## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
+
+*07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
+
+Un job avec shell coupé par un redémarrage restait UNCERTAIN et attendait toujours le
+propriétaire, même quand l'agent avait fini. Le CLI écrit maintenant son JSON final dans le
+dossier du job (`.orion-result.json`, plus en mémoire seulement) ; il survit à Orion.
+`DelegatedAgent.left` le relit, et c'est le `check` de l'étape `work` : un JSON entier → l'étape
+est faite avec ce résultat, le job se termine sans relance ni question. Absent ou tronqué → on ne
+sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
+présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
+restent en mémoire (D257).
+
 ## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
 
 *07/11/2026 · acceptée · complète D156 · ORION-37 (audit ORI-013)*
