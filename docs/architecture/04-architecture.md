@@ -315,6 +315,10 @@ Implémente D12 (détail dans `03-jarvis.md` §4).
   **cette** action seulement.
 - **Outbox** : chaque effet externe a une clé d'idempotence ; si le résultat est inconnu, on
   demande au lieu de réessayer.
+- **Appels coupés** (D271) : un appel d'outil qui pouvait agir et qu'un crash a coupé (un
+  `tool.started` sans `tool.executed`) devient `UNCERTAIN` au démarrage du démon, dit une fois,
+  jamais rejoué. Une même action redemandée dans un tour porte la même clé
+  (`ToolContext.idempotency_key`), que les connecteurs qui le peuvent transmettent (agenda).
 - **Fenêtres d'annulation** pour les envois (quelques secondes à minutes selon le niveau de
   confiance).
 

@@ -6323,6 +6323,28 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
   (D258), pas seulement un texte.
 
+## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
+
+*07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
+
+`tool.started` (ORION-25) n'avait aucun lecteur : un processus tué entre `tool.started` et
+`tool.executed` laissait l'appel sans issue, et rien ne le disait. Désormais :
+
+- **`tool.started` dit si l'appel peut agir** (`may_act` : effet externe, ou `Tool.acts`, la même
+  règle que le délai et le Stop) et porte ses arguments. La projection `CutCalls`
+  (`tools/interrupted.py`, reconstructible) garde ceux qui n'ont pas d'issue.
+- **Au démarrage du démon** (`serve.start`, avant tout tour), chacun reçoit son `tool.executed`
+  `outcome=UNCERTAIN`, `decision="interrupted by a restart"`. Pas à chaque `Orion.start` : une
+  commande CLI lancée à côté du démon réglerait les appels qu'il est en train de faire. Rien
+  n'est rejoué ; le fil montre déjà l'appel sans réponse (`NO_RESULT`, « vérifie avant »).
+- **Dit une fois** : un `Report` par appel (clé `cut:<corrélation>:<call_id>`), que le registre
+  de l'initiative ne repasse pas.
+- **Clé d'idempotence** : `ToolContext.idempotency_key`, dérivée de (fil, corrélation, outil,
+  arguments normalisés), jamais du `call_id` (le modèle en change quand il redemande). L'agenda
+  l'honore : UID CalDAV (`If-None-Match: *`, un 412 = déjà écrit) et id d'événement Google (un
+  409 = déjà écrit, relu). Le mail (SMTP) ne peut pas : il reste couvert par la réconciliation
+  ci-dessus et `mail.sent`. Les canaux avaient déjà la leur (outbox, D19).
+
 ## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
 
 *07/11/2026 · acceptée · étend D267, D258 · ORION-41 (audit du 05/11, ORI-008, F-07)*

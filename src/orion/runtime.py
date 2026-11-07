@@ -69,6 +69,8 @@ from orion.providers.base import Message, ModelProvider, ToolCall, Usage, cache_
 from orion.providers.foreground import foreground
 from orion.tools.base import ToolRegistry, ToolResult
 from orion.tools.builtin import TellInput
+from orion.tools.interrupted import INTERRUPTED, CutCall, CutCalls
+from orion.tools.outcome import Outcome
 
 log = structlog.get_logger(__name__)
 
@@ -361,10 +363,11 @@ class Orion:
         self._agent = agent
         self.threads = ThreadProjection()
         self.portrait = Portrait()
+        self.cut_calls = CutCalls()
         self.owner_wrote_at: datetime | None = None
         """When the owner last wrote (this run): quiet hours do not hold Orion back while he
         is up and talking (`initiative.engine`)."""
-        self._projections = ProjectionRunner(journal, [self.threads, self.portrait])
+        self._projections = ProjectionRunner(journal, [self.threads, self.portrait, self.cut_calls])
         self._locks: dict[str, asyncio.Lock] = {}
         self.owner_waiting: Callable[[], bool] | None = None
         """Whether one of his messages waits for an answer (the inbox sets it): Orion's own
@@ -380,6 +383,40 @@ class Orion:
         await self._projections.catch_up()
         if self._memory is not None:
             await self._memory.sync()
+
+    async def settle_cut_calls(self) -> list[CutCall]:
+        """Daemon start only, before any turn: a call left without an outcome by the process
+        that died is UNCERTAIN, never run again (ORI-007). Not at every `start`: a CLI command
+        run beside the daemon would settle the calls it is making."""
+        await self._projections.catch_up()
+        cut = list(self.cut_calls.open.values())
+        if not cut:
+            return []
+        await self._journal.append(
+            [
+                self._event(
+                    "tool.executed",
+                    {
+                        "thread_id": c.thread_id,
+                        "tool": c.tool,
+                        "arguments": c.arguments,
+                        "is_error": True,
+                        "decision": INTERRUPTED,
+                        "call_id": c.call_id,
+                        "outcome": Outcome.UNCERTAIN.value,
+                        "action_id": c.action_id,
+                        "proof": "",
+                    },
+                    Trust.SYSTEM,
+                    c.correlation_id,
+                    c.causation_id,
+                )
+                for c in cut
+            ]
+        )
+        await self._projections.catch_up()
+        log.warning("tool.cut_calls_settled", calls=[c.tool for c in cut])
+        return cut
 
     async def handle_owner_message(
         self,
@@ -958,7 +995,7 @@ class Orion:
                 case Told(text=told):
                     if progress is not None:
                         await progress(told, correlation_id)
-                case ToolStarted(call=call, deadline=deadline):
+                case ToolStarted(call=call, deadline=deadline, may_act=may_act):
                     await self._journal.append(
                         [
                             self._event(
@@ -966,8 +1003,10 @@ class Orion:
                                 {
                                     "thread_id": thread_id,
                                     "tool": call.name,
+                                    "arguments": call.arguments,
                                     "call_id": call.id,
                                     "deadline": deadline,
+                                    "may_act": may_act,
                                 },
                                 Trust.SYSTEM,
                                 correlation_id,

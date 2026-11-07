@@ -21,13 +21,13 @@ from orion.cognition.verifier import Verifier
 from orion.core import busy
 from orion.core.supervisor import Supervisor
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
-from orion.initiative.engine import InitiativeEngine, InitiativeSettings
+from orion.initiative.engine import InitiativeEngine, InitiativeSettings, Report
 from orion.memory.batch import MemoryBatcher
 from orion.memory.extractor import MemoryExtractor
 from orion.modules.base import Daemon, ModuleError
 from orion.providers.base import splits_messages
 from orion.providers.spending import Spending
-from orion.runtime import OWNER_THREAD
+from orion.runtime import OWNER_THREAD, Orion
 
 log = structlog.get_logger(__name__)
 
@@ -71,6 +71,8 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
             "no owner channel is enabled (e.g. `enabled = true` in [channels.imessage])"
         )
     daemon = Daemon(app.plate, app.orion, inbox, supervisor)
+    await app.orion.settle_cut_calls()
+    daemon.reports.append(CutCallReports(app.orion))
     supervisor.add("inbox", inbox.run)
     supervisor.add("memory.batch", memory_batcher(app).run)
     guardian = app.plate.guardian
@@ -128,6 +130,27 @@ async def start(app: App, inbox: OwnerInbox, supervisor: Supervisor) -> Daemon:
         initiative=initiative.enabled,
     )
     return daemon
+
+
+class CutCallReports:
+    """Each call a restart left UNCERTAIN, told once (ORI-007): the ledger keeps the key."""
+
+    def __init__(self, orion: Orion) -> None:
+        self._orion = orion
+
+    async def reports(self) -> list[Report]:
+        return [
+            Report(
+                key=f"cut:{c.key}",
+                notice=f"J'ai redémarré pendant un appel « {c.tool} » ({c.arguments[:300]}) :"
+                " je ne sais pas s'il a eu lieu. Dis-le-lui en une phrase, sans le refaire ;"
+                " propose de vérifier.",
+                why="un appel qui pouvait agir a été coupé par un redémarrage",
+                fallback=f"Coupé par un redémarrage : « {c.tool} » a peut-être eu lieu,"
+                " peut-être pas. Je n'ai rien refait.",
+            )
+            for c in self._orion.cut_calls.settled.values()
+        ]
 
 
 async def heartbeat(guardian: GuardianClient, every: float) -> None:
