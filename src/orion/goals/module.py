@@ -36,6 +36,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.guardian.policy import OWNER_THREAD
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import NO_ARGS, Action, action_tool
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
@@ -186,8 +187,10 @@ class GoalBook:
         goal = self.goals.get(str(payload.get("goal_id", "")))
         if goal is None:
             return
-        goal.trust = min(goal.trust, event.trust)
         if event.kind == CHANGED:
+            # What defines it lowers its trust; a note, a link or a step seen does not (a web
+            # note must not hide a goal he set, review of #205).
+            goal.trust = min(goal.trust, event.trust)
             for name, value in payload.items():
                 if name == "review_on":
                     goal.review_on = date.fromisoformat(str(value))
@@ -234,6 +237,10 @@ class GoalError(ValueError):
     """A change that contradicts what is known of the goals: said back to the model."""
 
 
+CONFIRMED_SCAN = 5_000
+"""How far back an observed outcome is looked for in the journal."""
+
+
 class Goals:
     def __init__(
         self, journal: EventStore, timezone: str, clock: Callable[[], datetime] | None = None
@@ -246,6 +253,32 @@ class Goals:
 
     async def sync(self) -> None:
         await self._runner.catch_up()
+
+    async def his_word(self, ctx: ToolContext) -> bool:
+        """Whether this call answers a message he wrote, in his conversation: never a watch,
+        a night or an initiative of Orion's, whatever they may do (`libre`, review of #205)."""
+        if ctx.thread_id != OWNER_THREAD or ctx.origin_event_id is None:
+            return False
+        if ctx.context_trust < Trust.OWNER and not ctx.unrestricted:
+            return False
+        origin = await self._journal.get(ctx.origin_event_id)
+        return (
+            origin is not None
+            and origin.kind == "message.received"
+            and origin.provenance.actor.startswith("owner")
+        )
+
+    async def _confirmed(self, action: str) -> str | None:
+        """The proof of `action`, if a recent call journaled it CONFIRMED (D258): what Orion
+        saw, checked by the code, not its own words."""
+        last = await self._journal.last_seq()
+        events = await self._journal.read(max(0, last - CONFIRMED_SCAN), CONFIRMED_SCAN)
+        proof: str | None = None
+        for event in events:
+            p = event.payload
+            if event.kind == "tool.executed" and action in str(p.get("action_id", "")).split(","):
+                proof = str(p.get("proof", "")) if p.get("outcome") == "CONFIRMED" else None
+        return proof
 
     def get(self, goal_id: str) -> Goal:
         goal = self.book.goals.get(goal_id)
@@ -387,6 +420,7 @@ class Goals:
         prov: Provenance,
         trust: Trust,
         said_by_owner: bool,
+        action: str = "",
     ) -> str:
         """Mark a milestone, or the goal itself, reached: on his word in his conversation, or on
         what Orion observed (D258). Returns what is said back."""
@@ -396,6 +430,14 @@ class Goals:
             raise GoalError(
                 "Il ne l'a pas dit ici : demande-le-lui, ou cite ce que tu as vu (basis observed)."
             )
+        if basis == "observed":
+            proof = await self._confirmed(action) if action else None
+            if proof is None:
+                raise GoalError(
+                    "Une observation se prouve : donne l'action confirmée qui le montre (action, "
+                    "ligne « [issue CONFIRMED · action … »). Sans elle, demande-le-lui."
+                )
+            evidence = f"{evidence} (action {action}, preuve {proof})".strip()
         if goal.state is not GoalState.ACTIVE and goal.state is not GoalState.BLOCKED:
             raise GoalError(f"{goal_id} est {_SAID[goal.state]}.")
         if milestone_id:
@@ -620,6 +662,9 @@ class ReachedInput(BaseModel):
     milestone: str = Field(default="", description="j_…; empty: the goal")
     basis: Literal["owner", "observed"] = Field(description="observed: you saw it, cite it")
     evidence: str = Field(min_length=3, max_length=300)
+    seen: str = Field(
+        default="", max_length=200, description="observed: the action id shown CONFIRMED"
+    )
 
 
 class LinkInput(BaseModel):
@@ -649,9 +694,6 @@ def goal_tool(goals: Goals) -> Tool:
             derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
         )
 
-    def his_word(ctx: ToolContext) -> bool:
-        return ctx.context_trust >= Trust.OWNER or ctx.unrestricted
-
     async def guarded(run: Callable[[], Any]) -> ToolResult:
         try:
             return ToolResult(str(await run()))
@@ -663,7 +705,7 @@ def goal_tool(goals: Goals) -> Tool:
 
         async def run() -> str:
             goal_id = await goals.set(
-                fields, args.suggested, where(ctx), ctx.context_trust, his_word(ctx)
+                fields, args.suggested, where(ctx), ctx.context_trust, await goals.his_word(ctx)
             )
             if goals.get(goal_id).state is GoalState.PROPOSED:
                 return f"Proposé ({goal_id}) : il l'accepte, et state active."
@@ -688,7 +730,7 @@ def goal_tool(goals: Goals) -> Tool:
                 args.why,
                 where(ctx),
                 ctx.context_trust,
-                his_word(ctx),
+                await goals.his_word(ctx),
             )
             return f"Objectif {_SAID[GoalState(args.state)]}."
 
@@ -712,7 +754,8 @@ def goal_tool(goals: Goals) -> Tool:
                 args.basis,
                 where(ctx),
                 ctx.context_trust,
-                his_word(ctx),
+                await goals.his_word(ctx),
+                args.seen,
             )
 
         return await guarded(run)

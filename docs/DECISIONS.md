@@ -6054,3 +6054,10 @@ réussir un examen, lancer son site. Le module `goals` (activé par défaut) le 
   leur confiance.
 - **Pas encore** : pas de rappel à part quand la date de réévaluation passe (le matin le dit),
   pas de lecture automatique de l'état des engagements ou tâches liés.
+- **Complément (07/11, review de #205)** : « sa parole », c'est un tour qui répond à un
+  message qu'il a écrit dans sa conversation (`message.received`, acteur `owner`). Jamais la
+  veille, la nuit ou une initiative, même en `libre` : leur main libre n'est pas sa parole.
+  `observed` ne se croit plus sur texte. Il faut une action que le journal montre `CONFIRMED`
+  (D258, champ `seen`), sinon c'est refusé et il faut lui demander. La confiance d'un objectif
+  ne baisse que si sa définition change : une note lue sur le web ne le fait plus disparaître
+  des lignes ni de la curiosité.
