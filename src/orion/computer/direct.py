@@ -1512,6 +1512,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
         model: type[BaseModel],
         handler: Any,
         effect: Effect = Effect.NONE,
+        acts: bool = False,
     ) -> Tool:
         return Tool(
             name=name,
@@ -1519,6 +1520,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             input_model=model,
             handler=handler,
             effect=effect,
+            acts=acts,
             reversibility=Reversibility.REVERSIBLE
             if effect is not Effect.EXTERNAL
             else Reversibility.IRREVERSIBLE,
@@ -1572,6 +1574,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "Click an element of the page shown (link, button, tab). Then see the new page.",
             ElementInput,
             run(lambda a, c: desk.click(a.element, c), acts=True),
+            acts=True,
         ),
         tool(
             "browser_pay",
@@ -1587,12 +1590,14 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "to send a form).",
             TypeInput,
             run(lambda a, c: desk.type(a.element, a.text, a.enter, c), acts=True),
+            acts=True,
         ),
         tool(
             "browser_select",
             "Choose an option in a list of the page shown.",
             SelectInput,
             run(lambda a, c: desk.select(a.element, a.option, c), acts=True),
+            acts=True,
         ),
         tool(
             "browser_scroll",
@@ -1616,6 +1621,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "arrows move in a list.",
             PressInput,
             run(lambda a, c: desk.press(a.key, a.element, c), acts=True),
+            acts=True,
         ),
         tool(
             "browser_hover",
@@ -1646,6 +1652,7 @@ def browser_tools(desk: BrowserDesk, keep: Keep | None = None, looks: bool = Fal
             "or a form login did not find).",
             FillInput,
             run(lambda a, c: desk.fill(a.element, a.field, c), acts=True),
+            acts=True,
         ),
         tool(
             "browser_accounts",

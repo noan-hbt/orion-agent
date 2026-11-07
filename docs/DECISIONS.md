@@ -6006,6 +6006,13 @@ Le 06/11, un `browser open` sur une page OVH n'a jamais répondu : le tour a ten
   de Playwright async). Du code synchrone bloquant n'est pas interrompu. Aucun outil n'en
   contient à ce jour.
 
+- **Complément (07/11, review de #198)** : au délai, un appel qui a pu agir (effet externe, ou
+  action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
+  (D258), comme au Stop. Le délai n'est plus désactivable : `Tool.deadline` est un nombre, et
+  aucun appel ne dépasse `MAX_DEADLINE` (1 h), quoi que demande son outil ; l'approbation est
+  demandée avant, hors délai. `tool.started` (outil, call_id, délai) est journalisé avant
+  l'appel : un tour figé ou tué montre où.
+
 ## D261 — Stop coupe l'outil en cours, et ne se dit fait qu'une fois fait
 
 *06/11/2026 · acceptée · ORION-32*
@@ -6299,3 +6306,11 @@ d'autre ne voit :
 Le manuel (195 règles apprises en 14 jours au 05/11) se fusionne avec ce qui existe déjà
 (`adapt` avec `replaces`, `unlearn`) sur les données de prod : ce n'est pas du code, et rien
 n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à part.
+
+- **Complément (07/11, review de #199)** : un appel qui ne s'arrête pas dans les 10 s de grâce
+  (handler qui ignore l'annulation) n'est jamais dit arrêté. Le journal écrit
+  `turn.stop_failed` (avec les outils encore en cours), l'app reste sur « en train d'arrêter »,
+  et `turn.stop_completed` ne vient qu'une fois l'appel vraiment fini. Tant qu'il tourne, les
+  outils de sa famille (`browser_*`…) sont refusés. Un appel coupé qui a pu agir (effet externe,
+  ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
+  (D258), pas seulement un texte.
