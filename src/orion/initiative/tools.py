@@ -103,7 +103,8 @@ def reminder_tools(timers: Timers, clock: Any = None, calls: bool = False) -> li
         if due < current - _GRACE:
             return ToolResult(
                 f"{describe_moment(due, timezone)} is in the past "
-                f"(now: {describe_moment(current, timezone)}).",
+                f"(now: {describe_moment(current, timezone)}). Nothing scheduled. Do not pick "
+                "a later time on your own: if it still matters, say so now, otherwise drop it.",
                 is_error=True,
             )
         if due > current + _HORIZON:

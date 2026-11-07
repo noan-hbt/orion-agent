@@ -7,17 +7,62 @@ side-effect free and allowed everywhere.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from datetime import datetime
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Trust
+from orion.guardian.policy import OWNER_THREAD
 from orion.memory.model import Category, Closing, CommitmentStatus
 from orion.memory.render import format_commitment, format_fact
 from orion.memory.service import MemoryRefused, MemoryService, Origin
 from orion.memory.situations import Ending
+from orion.memory.store import Commitment
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
+
+_WORD = re.compile(r"\w{4,}")
+SAME_WORDS = 0.75
+"""Share of the shorter wording's words that makes two commitments one."""
+
+
+def same_commitment(
+    what: str, debtor: str, creditor: str, due: str | None, known: Commitment
+) -> bool:
+    """Whether a new commitment is this known one again, in other words (06/11: « restaurer le
+    projet Jira » recorded twice, the second after he said « tu peux le supp »). Same debtor and
+    same creditor (the documents owed to Alice are not those owed to Bob), the same due day or
+    none on both sides (one with a date and one without are two), and most words in common."""
+    if debtor.casefold() != known.debtor.casefold():
+        return False
+    if creditor.casefold() != known.creditor.casefold():
+        return False
+    if (due or "")[:10] != (known.due or "")[:10]:
+        return False
+    new = {w.casefold() for w in _WORD.findall(what)}
+    old = {w.casefold() for w in _WORD.findall(known.what)}
+    if not new or not old:
+        return False
+    return len(new & old) / min(len(new), len(old)) >= SAME_WORDS
+
+
+def _past(due: str, zone: ZoneInfo) -> bool:
+    """Whether a due date is over: a day once it has ended, a time once it has come (06/11,
+    07:34: a reminder « for 06:00 » that same morning). A date it cannot read is not taken as
+    past: the store refuses it on its own terms."""
+    now = datetime.now(zone)
+    try:
+        moment = datetime.fromisoformat(due)
+    except ValueError:
+        return False
+    if len(due) <= 10:  # a day: past once it has ended
+        return moment.date() < now.date()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=zone)  # his local time, summer or winter
+    return moment < now
 
 
 def origin_of(ctx: ToolContext) -> Origin:
@@ -178,6 +223,28 @@ def memory_tools(memory: MemoryService) -> list[Tool]:
         return ToolResult("\n".join(lines))
 
     async def commitment_add(args: Any, ctx: ToolContext) -> ToolResult:
+        alone = ctx.thread_id != OWNER_THREAD  # his words are not behind it (the watch, D263)
+        if alone and args.due and _past(args.due, ZoneInfo(ctx.timezone)):
+            return ToolResult(
+                f"Its due date {args.due} is past: not recorded. Do not move it later on your "
+                "own; if it still matters, say it in your conclusion, otherwise drop it.",
+                is_error=True,
+            )
+        for known in await memory.store.commitments(status=None):
+            if not same_commitment(args.what, args.debtor, args.creditor, args.due, known):
+                continue
+            if known.status is CommitmentStatus.OPEN:
+                return ToolResult(
+                    f"Already recorded, open: {format_commitment(known)}. Complete or close it "
+                    "rather than adding a variant.",
+                    is_error=True,
+                )
+            if alone:
+                return ToolResult(
+                    f"Already {known.status.value}: {format_commitment(known)}. It was settled: "
+                    "never record it again unless he asks for it.",
+                    is_error=True,
+                )
         cid = await memory.add_commitment(
             args.what, origin_of(ctx), debtor=args.debtor, creditor=args.creditor, due=args.due
         )
