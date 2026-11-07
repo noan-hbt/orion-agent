@@ -6334,6 +6334,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6367,6 +6368,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6379,6 +6381,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 
@@ -6419,6 +6422,7 @@ Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affa
 
 
 
+
 ## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
 
 *07/11/2026 · acceptée · étend D267, D258 · ORION-41 (audit du 05/11, ORI-008, F-07)*
@@ -6441,6 +6445,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
   `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
   c'est déjà la vérification humaine.
 - Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
 
 
 
@@ -6509,6 +6514,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
 
 
 
+
 ## D277 — La veille type ce qu'elle voit ; elle propose, les règles décident
 
 *07/11/2026 — ORION-6, audit du 05/11 (ORI-011). Précise D150, D20 et D146.*
@@ -6539,6 +6545,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
 
 
 
+
 ## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
 
 ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
@@ -6551,6 +6558,7 @@ redémarrage, un message retenu depuis des heures repartait de zéro.
 - L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
   `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
 - Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
+
 
 
 
@@ -6586,6 +6594,7 @@ par type de contrôle.
 
 
 
+
 ## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
 
 ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
@@ -6599,6 +6608,7 @@ crois-tu ? » n'avait pas de réponse lisible.
 - `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
   l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
   au portrait suivant.
+
 
 
 
@@ -6626,6 +6636,7 @@ remontait pas.
 
 
 
+
 ## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
 
 ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
@@ -6644,6 +6655,7 @@ trop longue ; le milieu était perdu, sans moyen de le relire.
 
 
 
+
 ## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
 
 ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
@@ -6656,6 +6668,7 @@ tombé, ni depuis quand.
 - Module `capabilities` (actif par défaut) : sonde toutes les 5 minutes, journalise
   `capability.health_changed` seulement à une transition.
 - Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
+
 
 
 
@@ -6682,6 +6695,7 @@ l'arbitre décide de se taire.
 
 
 
+
 ## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
 
 ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
@@ -6695,6 +6709,7 @@ expiration par défaut.
   expirée, et les cinq derniers effets faits seul (lus du journal : `tool.executed` décidé
   « seul »). La révocation reste le chemin existant. Le mode `libre` et les domaines consentis
   (ORION-12) ne sont pas touchés.
+
 
 
 
@@ -6714,6 +6729,7 @@ modèle.
   routage par risque sera un ticket à part, le jour où ces chiffres le justifient.
 
 
+
 ## D287 — Aucun canal ne perd ce qu'une pièce structurée dit
 
 ORI-021 (audit du 05/11). D126 tient : les balises restent le format du contenu, un seul
@@ -6729,4 +6745,19 @@ texte rendu par canal ; pas d'objet message à part.
 
 
 
+
+
+## D288 — Une routine est un objectif qu'il déclare, lu comme un écart à sa référence
+
+ORI-023 (audit du 05/11). Précise D267. Le consentement est la déclaration : une routine
+n'existe que s'il la crée ; Orion ne propose jamais d'expérience de lui-même (les domaines
+consentis restent à ORION-12).
+
+- Pas de module : une routine est un objectif. L'action `measure` de l'outil `goal` pose sa
+  référence (`goal.baseline` : valeur, unité, période) puis des valeurs datées
+  (`goal.measured`). Seulement sur sa parole, dans sa conversation : jamais des chiffres
+  d'Orion.
+- Le pilote dure 14 jours (un jalon daté s'il veut une échéance). La description de l'objectif
+  (relecture du dimanche, `list`) donne la moyenne de ces 14 jours et l'écart à la référence,
+  dit comme un écart observé, jamais comme une cause.
 

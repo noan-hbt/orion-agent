@@ -52,6 +52,12 @@ MILESTONE = "goal.milestone"
 REACHED = "goal.reached"
 LINKED = "goal.linked"
 NOTED = "goal.noted"
+BASELINE = "goal.baseline"
+"""A routine he declared: where it stands before any change (ORI-023, D288)."""
+MEASURED = "goal.measured"
+"""A value he gave for a routine, on a day."""
+TRIAL = timedelta(days=14)
+"""How long a routine's pilot is read against its baseline."""
 
 REVIEW_AFTER = timedelta(days=30)
 """When a goal is reconsidered if he names no date."""
@@ -131,6 +137,10 @@ class Goal:
     links: list[tuple[str, str, str]] = field(default_factory=list[tuple[str, str, str]])
     """(kind, id, a few words) of what serves it elsewhere in Orion."""
     notes: list[Note] = field(default_factory=list[Note])
+    baseline: tuple[float, str, str] | None = None
+    """A routine's starting point: (value, unit, period it was taken over)."""
+    measures: list[tuple[date, float]] = field(default_factory=list[tuple[date, float]])
+    """A routine's values since, as he gave them."""
     history: list[tuple[datetime, GoalState]] = field(
         default_factory=list[tuple[datetime, GoalState]]
     )
@@ -224,6 +234,15 @@ class GoalBook:
                     m.reached = evidence
         elif event.kind == LINKED:
             goal.links.append((str(payload["kind"]), str(payload["ref"]), str(payload["what"])))
+        elif event.kind == BASELINE:
+            goal.baseline = (
+                float(payload["value"]),
+                str(payload.get("unit", "")),
+                str(payload.get("period", "")),
+            )
+            goal.measures.clear()
+        elif event.kind == MEASURED:
+            goal.measures.append((date.fromisoformat(str(payload["on"])), float(payload["value"])))
         elif event.kind == NOTED:
             goal.notes.append(
                 Note(
@@ -547,7 +566,40 @@ class Goals:
             )
         if goal.context:
             parts.append(f"  contexte : {goal.context}")
+        trial = trial_report(goal, now.date())
+        if trial:
+            parts.append(f"  {trial}")
         return "\n".join(parts)
+
+    async def measure(
+        self,
+        goal_id: str,
+        kind: str,
+        value: float,
+        unit: str,
+        when: str,
+        prov: Provenance,
+        trust: Trust,
+        his_word: bool,
+    ) -> None:
+        """A routine's baseline or a value since: only on his word (D288). A routine exists
+        because he declared it; Orion never starts an experiment of its own."""
+        if not his_word:
+            raise GoalError("a routine's figures come from him: ask him, do not infer them")
+        await self.sync()
+        goal = self.get(goal_id)
+        if kind == "baseline":
+            payload = {"goal_id": goal.id, "value": value, "unit": unit, "period": when}
+            await self._append(BASELINE, payload, prov, trust)
+            return
+        if goal.baseline is None:
+            raise GoalError("no baseline yet: ask him where it stands first")
+        on = when or self.clock().date().isoformat()
+        try:
+            date.fromisoformat(on)
+        except ValueError as exc:
+            raise GoalError("measure: `when` is the day, YYYY-MM-DD") from exc
+        await self._append(MEASURED, {"goal_id": goal.id, "value": value, "on": on}, prov, trust)
 
     async def lines(self, now: datetime) -> list[str]:
         """Each open goal, and those reached or dropped this week, for the weekly review and the
@@ -663,6 +715,40 @@ class LinkInput(BaseModel):
     what: str = Field(default="", max_length=120)
 
 
+class MeasureInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str
+    kind: Literal["baseline", "measure"] = Field(
+        description="baseline: where it stands before (once); measure: a value since"
+    )
+    value: float
+    unit: str = Field(default="", max_length=40, description="baseline: e.g. heures, pas, €")
+    when: str = Field(
+        default="",
+        max_length=60,
+        description="baseline: the period it covers (« semaine du 2/11 »); measure: YYYY-MM-DD",
+    )
+
+
+def trial_report(goal: Goal, today: date) -> str:
+    """A routine against its baseline, over the last `TRIAL`: the gap, said as a gap. Never a
+    cause: what changed alongside is not known (ORI-023)."""
+    if goal.baseline is None:
+        return ""
+    base, unit, period = goal.baseline
+    since = [v for on, v in goal.measures if today - on < TRIAL]
+    unit = f" {unit}" if unit else ""
+    head = f"référence : {base:g}{unit}" + (f" ({period})" if period else "")
+    if not since:
+        return head + " ; aucune mesure ces 14 jours"
+    mean = sum(since) / len(since)
+    return (
+        f"{head} ; ces 14 jours : moyenne {mean:.4g}{unit} sur {len(since)} mesure(s), "
+        f"écart {mean - base:+.4g}{unit} à la référence (un écart observé, pas une cause)"
+    )
+
+
 class NoteInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -761,6 +847,22 @@ def goal_tool(goals: Goals) -> Tool:
 
         return await guarded(run)
 
+    async def measure(args: Any, ctx: ToolContext) -> ToolResult:
+        async def run() -> str:
+            await goals.measure(
+                args.goal,
+                args.kind,
+                args.value,
+                args.unit,
+                args.when,
+                where(ctx),
+                ctx.context_trust,
+                await goals.his_word(ctx),
+            )
+            return trial_report(goals.get(args.goal), goals.clock().date()) or "Noté."
+
+        return await guarded(run)
+
     async def listing(_args: Any, _ctx: ToolContext) -> ToolResult:
         await goals.sync()
         now = goals.clock()
@@ -788,6 +890,13 @@ def goal_tool(goals: Goals) -> Tool:
             ),
             Action("link", "Tie a commitment, task, mission… to it (by id).", LinkInput, link),
             Action("note", "Progress or an obstacle he mentions.", NoteInput, note),
+            Action(
+                "measure",
+                "A routine he set himself: its baseline, then values he gives you (his figures "
+                "only; never start one yourself).",
+                MeasureInput,
+                measure,
+            ),
             Action(
                 "list",
                 "His open goals, where each stands.",

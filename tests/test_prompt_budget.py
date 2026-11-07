@@ -43,9 +43,9 @@ defaults, 26/10/2026; 36.4k with `awaiting`, D129; 38.6k once grouped tools show
 type and allowed values, D132; 40k with `situation`, D149; 32.7k with the rare
 in the drawer, `orion`, D151; 30.3k with one way to say « later », D157; 30.4k with
 `contacts` in the drawer, D159; 30.6k with D166 to D169; 31.7k with D176 and D177)."""
-ONE_TOOL = 2_500
+ONE_TOOL = 3_000
 """Characters of one tool's schema, actions included (the largest, `intention`: 1.6k; `later`:
-1.9k with repeating reminders, D166; 2k by D177)."""
+1.9k with repeating reminders, D166; 2k by D177; `goal`: 2.8k with routines, D288)."""
 DRAWER = 2_500
 """Characters of the drawer, `orion`, which lists a line per rare tool (1.9k with `contacts`,
 D159)."""
