@@ -1042,7 +1042,13 @@ CASES: tuple[Case, ...] = (
             "Noan part à Londres avec Léa le 31 octobre 2026, en Eurostar.",
         ),
         steps=(Watch(),),
-        checks=(says(r"(?i)passeport", "the watch links the trip and the passport"),),
+        checks=(
+            says(r"(?i)passeport", "the watch links the trip and the passport"),
+            says(
+                r"(?im)^\W*(FAIRE|PR[ÉE]PARER|DEMANDER|INFORMER)\s*\|.*passeport",
+                "the watch types what it saw (D276)",
+            ),
+        ),
     ),
     Case(
         name="la_veille_se_tait_sans_raison",

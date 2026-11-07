@@ -6422,3 +6422,28 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D276 — La veille type ce qu'elle voit ; elle propose, les règles décident
+
+*07/11/2026 — ORION-6, audit du 05/11 (ORI-011). Précise D150, D20 et D146.*
+
+L'audit demandait un « Opportunity Engine » : un type par chose vue, un objet opportunité, un
+journal de détection et de choix. Pas de nouveau package : l'opportunité vit sur ce qui existe.
+
+- La conclusion de la veille commence par une ligne par chose vue :
+  `TYPE | la chose | pourquoi`, TYPE parmi FAIRE, PRÉPARER, DEMANDER, INFORMER, SILENCE. Le
+  reste (`SILENCE`, `MAINTENANT :`, `AU POINT :`) ne change pas.
+- Le modèle **propose** ; il ne décide pas s'il dérange ni quand : le seuil, le budget, les
+  heures calmes et l'arbitre tranchent comme avant (D20, D146). FAIRE passe par le gardien
+  comme tout outil ; PRÉPARER, c'est un brouillon, jamais un effet dehors.
+- `Opportunity` (clé, type, chose, raison) est portée par l'`Alert` de la note puis par le
+  `Candidate` (`initiative/engine.py`) : pas d'objet à part.
+- `opportunity.detected` : une fois par chose. La clé est la source et l'objet
+  (`watch:` + la chose sans casse ni accents) ; revue à une autre veille, rien n'est rejournalisé.
+- `opportunity.decided` : ce qu'il en est advenu. `quiet` à la veille même si elle l'a
+  proposée SILENCE ou si sa conclusion n'a pas de message ; sinon au moment où le moteur dit
+  ou écarte le message qui la porte (`said` / `quiet`, avec la raison de l'arbitre ou du
+  filtre).
+- Limites : la clé tient à ce que le modèle nomme la même chose avec les mêmes mots (le brief
+  le lui demande) ; une note périmée (8 h) n'a pas de `decided`. L'exécution de fond, les
+  déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
