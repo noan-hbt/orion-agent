@@ -6018,3 +6018,10 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+- **Complément (07/11, review de #199)** : un appel qui ne s'arrête pas dans les 10 s de grâce
+  (handler qui ignore l'annulation) n'est jamais dit arrêté. Le journal écrit
+  `turn.stop_failed` (avec les outils encore en cours), l'app reste sur « en train d'arrêter »,
+  et `turn.stop_completed` ne vient qu'une fois l'appel vraiment fini. Tant qu'il tourne, les
+  outils de sa famille (`browser_*`…) sont refusés. Un appel coupé qui a pu agir (effet externe,
+  ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
+  (D258), pas seulement un texte.

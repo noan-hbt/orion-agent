@@ -37,6 +37,7 @@ from orion.channels.imessage import APPROVAL_DECIDED, APPROVAL_REQUESTED
 from orion.channels.inbox import Attachment, OwnerInbox
 from orion.channels.inbox import Inbound as InboxItem
 from orion.channels.markup import plain, public
+from orion.cognition.loop import stray_calls, strays_ended
 from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
@@ -53,6 +54,8 @@ log = structlog.get_logger(__name__)
 CHANNEL = "app"
 STOP_REQUESTED = "turn.stop_requested"
 STOP_COMPLETED = "turn.stop_completed"
+STOP_FAILED = "turn.stop_failed"
+"""A Stop that did not end a call within its grace: stop_completed follows once it ends."""
 INBOUND = "mobile.inbound"
 OUTBOUND = "mobile.outbound"
 SUBSCRIBED = "mobile.subscribed"
@@ -309,6 +312,8 @@ class MobileChannel:
         self.work: dict[str, Any] | None = None
         """The work on his message, while it runs: since when, and whether he asked to stop."""
         self._stop = False
+        self._ending: asyncio.Task[None] | None = None
+        """Waits for the calls a Stop could not end, to say the stop done only then."""
         self.asked: dict[str, Asked] = {}
         self._changed: set[str] = set()
         inbox.register(self)
@@ -514,14 +519,35 @@ class MobileChannel:
         try:
             yield
         finally:
-            if self._stop:
+            still = stray_calls() if self._stop else []
+            if self._stop and not still:
                 # The turn is over: only now has the stop happened (ORION-32).
                 await self._stop_event(STOP_COMPLETED)
                 log.info("mobile.stop_completed")
             self.typing = False
-            self.work = None
             self._stop = False
             self.hub.publish({"type": "typing", "on": False})
+            if still:
+                # A call did not stop: it is not said stopped until it has ended (ORION-32).
+                await self._stop_event(STOP_FAILED, {"still": still})
+                log.error("mobile.stop_failed", still=still)
+                self.work = {**(self.work or {"since": _now()}), "stopping": True}
+                self.hub.publish({"type": "work", "work": self.work})
+                self._ending = asyncio.create_task(self._stop_when_ended(self.work))
+            else:
+                self.work = None
+
+    async def _stop_when_ended(self, work: dict[str, Any]) -> None:
+        try:
+            await strays_ended()
+            await self._stop_event(STOP_COMPLETED, since=work.get("since"))
+        except Exception:
+            log.exception("mobile.stop_completion_failed", since=work.get("since"))
+            return
+        log.info("mobile.stop_completed", late=True)
+        if self.work is work:  # no new turn began meanwhile
+            self.work = None
+            self.hub.publish({"type": "work", "work": None})
 
     async def stopped(self) -> bool:
         return self._stop
@@ -539,12 +565,15 @@ class MobileChannel:
         log.info("mobile.stop_asked")
         return True
 
-    async def _stop_event(self, kind: str) -> None:
+    async def _stop_event(
+        self, kind: str, more: dict[str, Any] | None = None, since: Any = None
+    ) -> None:
+        since = since if since is not None else (self.work or {}).get("since")
         await self._journal.append(
             [
                 NewEvent(
                     kind=kind,
-                    payload={"channel": CHANNEL, "since": (self.work or {}).get("since")},
+                    payload={"channel": CHANNEL, "since": since, **(more or {})},
                     provenance=Provenance(source="app", actor="owner"),
                     trust=Trust.OWNER,
                 )

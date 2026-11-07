@@ -103,6 +103,9 @@ class Tool:
     deadline: float | None = DEFAULT_DEADLINE
     """Wall-clock seconds a call may take before it is cut (`DEFAULT_DEADLINE`); a family that
     should never take that long sets less. None: no limit."""
+    acts: bool = False
+    """It acts on something outside without being classed EXTERNAL (a click on a page, D115):
+    cut mid-way, what it did is not known (ORION-32)."""
     informs: bool = True
     """Whether its result tells the model something it needs to go on. Not for a tool that only
     records (`remember`): the words written beside it have left, so the turn ends there (D223)."""
