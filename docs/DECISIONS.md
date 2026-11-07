@@ -6324,6 +6324,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   (D258), pas seulement un texte.
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6347,6 +6348,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   ci-dessus et `mail.sent`. Les canaux avaient déjà la leur (outbox, D19).
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6359,6 +6361,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 ## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
@@ -6377,6 +6380,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 ## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
@@ -6401,6 +6405,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
   `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
   c'est déjà la vérification humaine.
 - Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
 
 
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
@@ -6428,18 +6433,6 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
 
-## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
-
-ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
-retenu selon le temps qu'il attend (`waiting_since`), mais ce temps vivait en mémoire : après un
-redémarrage, un message retenu depuis des heures repartait de zéro.
-
-- La première retenue d'un message par l'arbitre journalise `initiative.waiting` (clé, depuis,
-  raison, `expires_at`), une seule fois. Le `Ledger` de l'initiative en tient la liste ; elle se
-  reconstruit du journal seul.
-- L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
-  `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
-- Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
 
 ## D276 — Une passe de tâche de fond est une étape de workflow
 
@@ -6460,6 +6453,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
   refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
 - **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
 - Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
 
 ## D277 — La veille type ce qu'elle voit ; elle propose, les règles décident
 
@@ -6485,3 +6479,17 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
 - Limites : la clé tient à ce que le modèle nomme la même chose avec les mêmes mots (le brief
   le lui demande) ; une note périmée (8 h) n'a pas de `decided`. L'exécution de fond, les
   déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
+
+## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
+
+ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
+retenu selon le temps qu'il attend (`waiting_since`), mais ce temps vivait en mémoire : après un
+redémarrage, un message retenu depuis des heures repartait de zéro.
+
+- La première retenue d'un message par l'arbitre journalise `initiative.waiting` (clé, depuis,
+  raison, `expires_at`), une seule fois. Le `Ledger` de l'initiative en tient la liste ; elle se
+  reconstruit du journal seul.
+- L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
+  `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
+- Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
+
