@@ -6168,3 +6168,46 @@ rien n'a été supprimé à tort, mais l'objet avait été deviné.
   shell.
 - **Pas couvert** : « supprime les 2 mails Jira et Atlassian » → seulement ces deux-là. Les
   évals n'ont pas de boîte mail simulée.
+
+## D267 — Ses objectifs : un résultat à atteindre, prouvé, relu le dimanche
+
+*07/11/2026 · acceptée · complète D53, D47, D256, D258 · ORION-9*
+
+Orion savait ce qu'il veut devenir (intentions, D53), ce qu'il doit (engagements) et ce
+qu'Orion fait pour lui (missions, D47), mais pas ce qu'il cherche à obtenir : trouver un appart,
+réussir un examen, lancer son site. Le module `goals` (activé par défaut) le tient.
+
+- **Un objectif** : un titre, un domaine, ce qui dira qu'il est atteint (`done_when`), la toute
+  prochaine action, une date de réévaluation (30 jours si rien n'est dit), une échéance et une
+  priorité (1 à 3) éventuelles, le contexte, ses contraintes réelles (budget, lieu, dates), et
+  les objectifs qu'il attend. Un outil, `goal` : `set`, `change`, `state`, `milestone`,
+  `reached`, `link`, `note`, `list`.
+- **États** : `proposed`, `active`, `blocked`, `achieved`, `abandoned`, chaque passage
+  journalisé (`goal.set`, `goal.changed`, `goal.state`, `goal.milestone`, `goal.reached`,
+  `goal.linked`, `goal.noted`) ; la projection se reconstruit du journal seul. Suspendre, c'est
+  `blocked` avec sa raison : pas d'état de plus.
+- **Le sien ou une idée d'Orion** : une suggestion d'Orion (`suggested`), ou un objectif posé
+  hors de sa conversation, reste `proposed`. Seule sa parole, dans sa conversation (confiance
+  propriétaire, ou `libre`, D232), change un état.
+- **Atteint sur preuve** (D258) : un jalon, ou l'objectif, n'est atteint que sur sa parole dans
+  sa conversation, ou sur ce qu'Orion a vu et cite (`observed`) ; la preuve est gardée. Un
+  objectif dont un jalon est ouvert, ou dont un prérequis n'est pas atteint, ne l'est pas. Deux
+  objectifs ne peuvent pas s'attendre l'un l'autre. Un second objectif au même titre qu'un
+  ouvert est refusé : on modifie le premier.
+- **Liens, pas de copie** : engagements, tâches, missions, intentions, situations, procédures,
+  travaux sont reliés par leur id. Pas d'« obligation » ni de « résultat » à part : les
+  contraintes sont un champ, le résultat est la preuve gardée par `reached`.
+- **Relu** : le dimanche, la semaine qui vient (D256) dit pour chaque objectif ce qui a avancé,
+  ce qui coince, la prochaine action et pourquoi celle-là ; le matin, ce qui arrive à échéance
+  ou à réévaluer dans les deux jours ; la revue du soir les voit (`Module.review`). Seuls les
+  objectifs de confiance système au moins y figurent ; les autres restent dans `list`, avec
+  leur confiance.
+- **Pas encore** : pas de rappel à part quand la date de réévaluation passe (le matin le dit),
+  pas de lecture automatique de l'état des engagements ou tâches liés.
+- **Complément (07/11, review de #205)** : « sa parole », c'est un tour qui répond à un
+  message qu'il a écrit dans sa conversation (`message.received`, acteur `owner`). Jamais la
+  veille, la nuit ou une initiative, même en `libre` : leur main libre n'est pas sa parole.
+  `observed` ne se croit plus sur texte. Il faut une action que le journal montre `CONFIRMED`
+  (D258, champ `seen`), sinon c'est refusé et il faut lui demander. La confiance d'un objectif
+  ne baisse que si sa définition change : une note lue sur le web ne le fait plus disparaître
+  des lignes ni de la curiosité.
