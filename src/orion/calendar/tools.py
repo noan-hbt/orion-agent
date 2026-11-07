@@ -93,7 +93,12 @@ def calendar_tools(calendar: Calendar, memory: MemoryService | None = None) -> l
         if end <= start:
             return ToolResult("The end must come after the start.", is_error=True)
         event = NewCalendarEvent(
-            title=args.title, start=start, end=end, location=args.location, notes=args.notes
+            title=args.title,
+            start=start,
+            end=end,
+            location=args.location,
+            notes=args.notes,
+            uid=ctx.idempotency_key[1:33],
         )
         try:
             account, occurrence = await calendar.add(event, ctx.grant, ctx.correlation_id)

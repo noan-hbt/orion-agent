@@ -44,6 +44,7 @@ from orion.tools.base import (
     ToolInputError,
     ToolRegistry,
     ToolResult,
+    idempotency_key,
 )
 from orion.tools.outcome import Outcome
 
@@ -182,6 +183,9 @@ class ToolStarted:
 
     call: ToolCall
     deadline: float
+    may_act: bool = False
+    """Cut mid-way, it may have changed something outside: a restart settles it UNCERTAIN
+    (`orion.tools.interrupted`)."""
 
 
 @dataclass(frozen=True)
@@ -585,7 +589,7 @@ async def run_agent(
 
         for call in calls:
             if (tool := registry.get(call.name)) is not None:
-                yield ToolStarted(call, deadline_of(tool))
+                yield ToolStarted(call, deadline_of(tool), _call_may_act(tool, call))
         started = time.monotonic()
         try:
             executions = await _execute_calls(
@@ -855,6 +859,9 @@ async def _execute_one(
         alone=decision.reason == ALONE,
         approved=decision.reason == APPROVED_DESPITE,
         unrestricted=guardian.unrestricted(settings.thread_id),
+        idempotency_key=idempotency_key(
+            settings.thread_id, settings.correlation_id, tool.name, arguments
+        ),
     )
     started = time.monotonic()
     limit = asyncio.timeout(deadline_of(tool))
@@ -945,6 +952,13 @@ def _may_have_acted(tool: Tool, arguments: BaseModel) -> bool:
     """A call that, cut mid-way, may have changed something: one with an outside effect, or one
     that acts on a page (a click may have sent the form before the cut)."""
     return tool.effect_for(arguments) is Effect.EXTERNAL or tool.acts
+
+
+def _call_may_act(tool: Tool, call: ToolCall) -> bool:
+    try:
+        return _may_have_acted(tool, tool.parse(call.arguments))
+    except ToolInputError:
+        return False  # refused before it runs
 
 
 def _cut(
