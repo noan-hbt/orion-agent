@@ -478,6 +478,7 @@ async def test_the_night_never_acts_on_the_world_nor_asks_him(thread: str) -> No
     assert await verdict("initiative_settings", Effect.INTERNAL) is Verdict.DENY
     assert await verdict("hand_notify", Effect.INTERNAL) is Verdict.DENY  # on his Mac, at 3am
     assert await verdict("remember", Effect.INTERNAL, trust=Trust.WEB) is Verdict.DENY
+    assert await verdict("mail_mark", Effect.INTERNAL) is Verdict.DENY  # his mailbox (ORION-29)
     assert approver.asked == 0  # never put to him at night
 
 

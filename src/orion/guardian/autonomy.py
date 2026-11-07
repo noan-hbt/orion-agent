@@ -127,6 +127,11 @@ class GrantInput(BaseModel):
         "contact_message: the contacts' names (required; give them all, it replaces the "
         "earlier list)",
     )
+    domains: list[str] = Field(
+        default_factory=list[str],
+        description="browser (paying, ORION-13): only on these sites, e.g. sncf-connect.com "
+        "(required)",
+    )
 
 
 class RevokeInput(BaseModel):
@@ -290,18 +295,14 @@ def _grant_header(grant: str | None) -> dict[str, str] | None:
 
 def autonomy_tools(autonomy: Autonomy) -> list[Tool]:
     async def grant(args: Any, ctx: ToolContext) -> ToolResult:
+        limits = Limits(recipients=args.recipients, domains=args.domains)
         try:
-            await autonomy.grant(
-                args.action,
-                ctx.grant,
-                ctx.correlation_id,
-                Limits(recipients=args.recipients),
-            )
+            await autonomy.grant(args.action, ctx.grant, ctx.correlation_id, limits)
         except ValueError as exc:
             return ToolResult(str(exc), is_error=True)
         except GuardianUnavailableError as exc:
             return ToolResult(f"Refused: {exc}", is_error=True)
-        bounds = Limits(recipients=args.recipients).describe()
+        bounds = limits.describe()
         return ToolResult(
             f"Désormais je peux {label(args.action)}{f' ({bounds})' if bounds else ''} sans "
             "lui demander."

@@ -199,6 +199,9 @@ class Report:
     """How it rings, when its source says (a hook's own level); empty: his choice for its kind."""
     skippable: bool = False
     """Orion may find it pointless by now (done, already said): SILENCE then means nothing goes."""
+    settle: Settle | None = None
+    """See `Alert.settle`: on a SILENCE, what it returns goes out instead (a hook whose tool
+    failed, D264)."""
 
 
 def together_notice(parts: Sequence[str]) -> str:
@@ -239,6 +242,19 @@ class ReportSource(Protocol):
 
 
 Settle = Callable[[str | None, str], Awaitable[str | None]]
+
+
+def _settle_all(settles: Sequence[Settle]) -> Settle | None:
+    """Alerts sent as one message are each settled (review of #197): what their SILENCE leaves
+    to tell him, together."""
+    if not settles:
+        return None
+
+    async def settle(spoken: str | None, read: str) -> str | None:
+        said = [await s(spoken, read) for s in settles]
+        return "\n".join(t for t in said if t) or None
+
+    return settle
 
 
 @dataclass(frozen=True)
@@ -903,6 +919,7 @@ class InitiativeEngine:
                     skippable=r.skippable,
                     notify_kind=r.notify_kind,
                     level=r.level,
+                    settle=r.settle,
                 )
                 for r in await source.reports()
             )
@@ -1113,6 +1130,7 @@ class InitiativeEngine:
             importance=parts[0].importance,
             notify_kind=parts[0].notification,
             level=_loudest(self._level(c) for c in parts),
+            settle=_settle_all([c.settle for c in (*parts, *carried) if c.settle is not None]),
         )
         if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
@@ -1155,7 +1173,8 @@ class InitiativeEngine:
         await self._record(
             DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
         )
-        if candidate.settle is not None and how != "silence not borne out":
+        if candidate.settle is not None:
+            # Gone out: Orion's reply, or the line a SILENCE asked for, told only now (#197).
             await candidate.settle(text, "")
         for item in together:
             await self._record(
@@ -1281,8 +1300,6 @@ class InitiativeEngine:
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
             return self._failed(candidate, f"fallback: {turn.reason.value}")
         if is_silence(turn.text):
-            if candidate.explicit and not candidate.skippable:
-                return candidate.fallback, "fallback: model chose silence"
             if candidate.settle is not None:
                 read = _read_while_writing(
                     self._orion.threads.get(self._settings.thread_id).messages[earlier:]
@@ -1290,6 +1307,8 @@ class InitiativeEngine:
                 instead = await candidate.settle(None, read)
                 if instead:
                     return instead, "silence not borne out"
+            if candidate.explicit and not candidate.skippable:
+                return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
         if self._verifier is None or not verifying:
