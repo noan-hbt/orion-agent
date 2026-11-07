@@ -7,7 +7,8 @@ conversation; the initiative engine reports the result in the owner's thread whe
 
 A job is a workflow run (D257): `work` (the agent) then `finish` (job.finished). After a restart,
 a job whose agent only writes in its workspace is run again; one with a shell may have done
-things on the server, so it turns UNCERTAIN and the owner is told, never replayed. A job that
+things on the server, so it turns UNCERTAIN and is never replayed: done if the agent left its
+final result in the job's directory (`DelegatedAgent.left`), otherwise the owner is told. A job that
 needed a session (`options`, never journaled) cannot resume and is marked failed.
 """
 
@@ -35,6 +36,7 @@ from orion.workflows.engine import (
     Step,
     StepContext,
     StepFailed,
+    Verdict,
     Workflow,
     WorkflowEngine,
 )
@@ -54,6 +56,10 @@ class DelegatedAgent(Protocol):
         self, task: str, workdir: Path, options: dict[str, Any] | None = None
     ) -> AgentOutcome:
         """`options`: per-task settings that are never journaled (a site session…)."""
+        ...
+
+    def left(self, workdir: Path) -> AgentOutcome | None:
+        """The outcome a run that ended left in `workdir`; None when it cannot tell."""
         ...
 
 
@@ -147,7 +153,7 @@ class JobService:
                 Workflow(
                     self.workflow,
                     (
-                        Step("work", self._work, effect=shell, attempts=2),
+                        Step("work", self._work, effect=shell, check=self._check_work, attempts=2),
                         Step("finish", self._done),
                     ),
                     ended=self._ended,
@@ -225,14 +231,16 @@ class JobService:
         options = self._options.pop(job.id, None)
         if ctx.inputs.get("needs_session") and options is None:
             raise StepFailed("its session did not survive a restart", retryable=False)
-        outcome = await self._agent.run(job.task, Path(job.workdir), options)
-        return {
-            "ok": outcome.ok,
-            "result": outcome.result[:MAX_RESULT_CHARS],
-            "files": outcome.files[:50],
-            "error": outcome.error,
-            "cost_usd": outcome.cost_usd,
-        }
+        return _checkpoint(await self._agent.run(job.task, Path(job.workdir), options))
+
+    async def _check_work(self, ctx: StepContext) -> Verdict:
+        """A job with a shell cut by a restart: done if the agent left its final result in the
+        job's directory; otherwise not known, and the owner is asked (ORI-010)."""
+        job = self.projection.jobs[str(ctx.inputs["job_id"])]
+        outcome = self._agent.left(Path(job.workdir))
+        if outcome is None:
+            return Verdict(None)
+        return Verdict(True, _checkpoint(outcome), evidence="final result in its directory")
 
     async def _ended(self, run: Run) -> None:
         """A run that failed or was cancelled settles its job, so the owner hears of it."""
@@ -293,6 +301,16 @@ class JobService:
             ]
         )
         await self.sync()
+
+
+def _checkpoint(outcome: AgentOutcome) -> dict[str, Any]:
+    return {
+        "ok": outcome.ok,
+        "result": outcome.result[:MAX_RESULT_CHARS],
+        "files": outcome.files[:50],
+        "error": outcome.error,
+        "cost_usd": outcome.cost_usd,
+    }
 
 
 def _report(job: Job, trust: Trust = Trust.SYSTEM) -> Report:
