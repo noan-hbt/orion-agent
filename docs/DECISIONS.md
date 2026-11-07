@@ -5976,6 +5976,13 @@ vérification. Le SILENCE n'était soumis à rien : le doute disparaissait avec 
   (`_deliver_together`) n'est pas revérifiée.
 - Les faux positifs du vérificateur restent traités par ORION-24.
 
+- **Complément (07/11, review de #197)** : une réponse envoyée ne corrige que les points
+  qu'elle rectifie vraiment. Le vérificateur les lit un par un (`Verifier.corrected`). « Ok,
+  je vérifie » ne corrige rien. Ce qu'elle laisse ouvert revient une fois (`:again`), puis
+  c'est à lui de demander. Des alertes envoyées ensemble sont chacune réglées. Un doute n'est
+  dit (`grounding.told`) qu'une fois la ligne vraiment partie : si l'envoi échoue, rien n'est
+  marqué dit, et il le sera au prochain essai.
+
 ## D260 — Un appel d'outil a une échéance, et ce qu'il a peut-être fait est dit incertain
 
 *06/11/2026 · acceptée · ORION-25*
@@ -6018,6 +6025,252 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D262 — Ce que la veille a fait, elle le dit comme le sien
+
+*06/11/2026 · acceptée · complète D150, D258 · ORION-27*
+
+Le 06/11 à 14:41, la veille a demandé une invitation Amazon, puis a écrit « Amazon indique déjà
+invitation demandée » : l'état qu'elle venait de produire était rendu comme trouvé. Le mail de
+confirmation qui a suivi n'était relié à rien.
+
+- **« Déjà » après sa propre action** : le contrôle du tour (`grounding.ground_check`) renvoie
+  une fois une réponse qui dit « déjà » d'un état, quand Orion a agi pendant ce tour (toute
+  action non échouée, même `CONFIRMED`). La proposition qui nomme le site ou le mail vise cette
+  action ; celle qui n'en nomme aucune vise toutes celles du tour. « J'ai déjà… » n'est pas
+  visé : il dit que c'est lui. La note demande « j'ai demandé… » et où ça en est. Seulement des
+  motifs, gratuit : un « déjà » sans rapport coûte un tour de plus, et la note dit de le garder.
+- **La veille est contrôlée aussi** : le même contrôle tourne sur sa conclusion, mais seulement
+  quand elle a appelé un outil (`acted_check`) : ce qu'elle lit dans sa consigne n'a pas besoin
+  d'outil. Une action `ATTEMPTED` dite faite y est donc renvoyée, comme dans la conversation.
+- **Le message sait ce qu'elle a fait** : la projection de la veille relie à chaque conclusion
+  les `tool.executed` de son tour (même `correlation_id`) qui portent une issue. L'alerte qui la
+  porte au propriétaire les liste (« ce que tu as fait toi-même, avec où ça en est »), le
+  secours aussi. Rien de nouveau au journal : tout se relit depuis lui.
+- **Les suites** : la veille suivante voit, sous ses dernières conclusions, ce qu'elle avait
+  fait. Une confirmation qui arrive ensuite (un mail, une page) est rattachée à l'action quand
+  son contenu le montre, sinon dite « lien non prouvé », et pas redite comme une nouvelle.
+  C'est une consigne au modèle, pas un rapprochement en code par identifiant.
+- **Limite** : une veille qui agit puis conclut SILENCE ne garde pas ses actions pour la suite.
+
+## D263 — La veille ne repose pas ce qui est réglé, passé, ou à lui
+
+*07/11/2026 · acceptée · complète D150, D247 · ORION-29*
+
+Le 06/11, la veille a posé un rappel pour 06:00 à 07:34 (refusé, mais elle a insisté), a marqué
+un mail lu sans qu'on le lui demande, et a noté une deuxième fois « restaurer le projet Jira »
+alors qu'il avait déjà dit « tu peux le supp ».
+
+- **Un engagement n'est noté qu'une fois** : `commitment_add` refuse un engagement qui en
+  répète un ouvert (même débiteur, pas d'échéance différente, et au moins 3 mots sur 4 en commun
+  pour la formulation la plus courte, mots de 4 lettres et plus). Il renvoie celui qui existe, à
+  compléter ou à fermer. C'est une comparaison de mots, pas de sens : une reformulation éloignée
+  passe encore.
+- **Ce qui est réglé ne revient pas** : hors de sa conversation (veille, nuit, autres fils),
+  un engagement qui répète un engagement fait ou annulé est refusé : il a été réglé, seul le
+  propriétaire peut le redemander. Dans sa conversation, il peut toujours le reprendre.
+- **Pas d'échéance passée** : hors de sa conversation, un engagement dont l'échéance est
+  passée n'est pas noté. Un rappel dans le passé était déjà refusé ; le refus dit maintenant de
+  ne pas choisir une autre heure d'office : le dire s'il compte encore, sinon laisser.
+- **Sa boîte est à lui** : `mail_mark` (lu, suivi) est refusé à la veille et à la nuit, `libre`
+  compris, sauf autonomie qu'il a donnée pour cet outil (D201). Lire un mail ne change déjà pas
+  son état (`BODY.PEEK`).
+- **La consigne de la veille** le dit aussi : regarder l'heure, ses engagements (avec leur id,
+  pour pouvoir les fermer) et ce qu'il a dit depuis, avant un rappel ou un engagement ; ce qu'il
+  a abandonné se ferme, ne se recrée pas.
+- **Limite** : que « tu peux le supp » ferme l'engagement reste au modèle (la veille voit ses
+  derniers mots et l'id) ; rien en code ne lit sa décision.
+- **Complément (07/11, review de #201)** : deux engagements ne sont le même que s'ils ont le
+  même débiteur et le même créancier (les documents dus à Alice ne sont pas ceux dus à Bob), et
+  le même jour d'échéance ou aucun des deux côtés (l'un daté, l'autre non : deux). Une échéance
+  avec heure est passée dès que l'heure est passée, à l'heure locale (fuseau et heure d'été) ;
+  une échéance qui n'est qu'une date l'est une fois le jour fini.
+
+## D264 — Un hook qu'Orion n'a pas pu faire est dit, une fois, et reste allumé
+
+*07/11/2026 · acceptée · complète D225, D259 · ORION-28*
+
+Le 06/11, Hyperplanning a refusé la connexion (`net::ERR_CONNECTION_REFUSED`) à 06:02, 08:46,
+12:49 et 14:01. À 12:49, le hook « à l'arrivée à l'école, dis-moi ma salle » a fini en SILENCE :
+le propriétaire n'a rien su, alors que rien n'était vérifié.
+
+- **Un SILENCE se justifie** : un rapport peut porter `settle`, comme une alerte (D259). Le
+  moteur l'appelle avant le secours d'un rapport demandé. Le rapport d'un hook regarde, après
+  son déclenchement, les appels de sa conversation qui ont vraiment échoué (`tool.executed`
+  avec `tool error` ou `timed out` ; un refus du gardien n'en est pas un). S'il y en a, la
+  demande n'est pas faite : à la place du silence part « Ton hook « … » : je n'ai pas pu le
+  faire, <site> n'a pas répondu. Rien n'est vérifié. Il reste actif. » Le site vient de l'adresse
+  de l'appel, sinon le nom de l'outil.
+- **Pas de rafale** : un même hook n'est redit qu'au bout de trois heures. Les échecs entre-temps
+  sont journalisés quand même.
+- **Journal** : `hook.unfulfilled` (hook, déclenchement, échecs, `attempts` en suivant, `since` :
+  le premier de la série, `told`). Rejouable : la projection des hooks en tire la série.
+- **Il reste allumé** : un hook « une fois » qui n'a pas pu se faire n'est pas consommé : il
+  repart au déclenchement suivant.
+- **La consigne** du déclenchement dit aussi qu'un échec n'est pas rien, et qu'il se dit.
+- **Pas fait ici** : le diagnostic réseau d'Hyperplanning depuis le VPS (DNS, IPv4/IPv6,
+  TCP/TLS, restriction d'IP), qui demande la prod ; il a son ticket. Pas de distinction plus fine
+  entre « rien de nouveau » et « indisponible » qu'un appel en échec. Une erreur d'une autre
+  conversation entre le déclenchement et le rapport compte aussi (rare : le rapport suit de près).
+- **Complément (07/11, review de #202)** : un échec est un appel qui a rendu une erreur
+  (`is_error`, comme le navigateur qui renvoie `ERR_CONNECTION_REFUSED` sans rien lever), et
+  pas une faute du modèle (entrée invalide, outil inconnu, répétition). Seuls comptent les
+  appels du tour qui vient d'écrire sur ce déclenchement (sa `correlation_id`) : une erreur
+  d'une autre conversation entre-temps ne dit rien de ce hook. Il n'est dit « prévenu »
+  (`hook.told`) qu'une fois la ligne partie : si l'envoi échoue, la fenêtre de 3 h ne démarre
+  pas.
+
+## D265 — Le clic qui paie passe par le gardien
+
+*07/11/2026 · acceptée · ORION-13 · exception ciblée à D115*
+
+D115 a rendu les clics libres, et rien n'empêchait un clic « Payer ». L'exception est étroite :
+seul ce qui paie ou confirme un achat est retenu, le reste de la navigation ne change pas.
+
+- **Ce qui est retenu** : un clic, Entrée ou Espace sur un bouton qui paie, quelle que soit la
+  page (« Payer », « Acheter maintenant », « Passer la commande », « Confirmer la commande »,
+  Apple Pay, PayPal…), un lien aussi : un GET peut commander sur un site où il est connecté
+  (review du 07/11). Sur une page de paiement
+  (son adresse : checkout, paiement, commande… ; ou ses champs de carte, son total à payer),
+  aussi tout bouton et tout mot qui confirme, Entrée dans un champ, et un élément qu'Orion n'a
+  pas vu : dans le doute, on demande.
+- **`browser` pay** : le clic retenu est refusé et renvoie à `pay`, à effet externe, avec la
+  page et ce qui est acheté. Le propriétaire voit « Avant que je paie sur <site> : … ». `pay`
+  ne clique que sur la page nommée dans la demande, adresse entière avec sa requête
+  (`/checkout?order=B` n'est pas `?order=A`) ; si elle a changé, rien n'est payé.
+- **Autonomie par site** : `autonomy_grant` accepte `domains`. Une autonomie `browser` limitée
+  à un site y laisse payer sans demander ; ailleurs, on demande toujours.
+- **Ni la nuit ni la veille** ne paient librement en `libre` (D247) : il faut son oui ou cette
+  autonomie (`NEVER_FREE`). En `prudent`, la page lue rend la conversation non fiable : `pay`
+  y est refusé comme tout effet externe (D26), sauf autonomie du site (D168).
+- **Limite** : la détection lit des mots et des adresses. Un bouton de paiement sans mot connu,
+  sur une page qui ne ressemble pas à un paiement, passe encore. Ce n'est pas une autorisation
+  générale des clics connectés (ORION-31).
+
+## D266 — « Le supp » : l'objet est sûr avant ce qui ne se rattrape pas
+
+*07/11/2026 · acceptée · ORION-30*
+
+Le 06/11 à 12:19, le propriétaire a écrit « tu peux le supp » après avoir parlé d'un projet Jira
+et de mails Jira et Atlassian. Orion l'a pris pour un mail. Il a fini par demander lesquels, et
+rien n'a été supprimé à tort, mais l'objet avait été deviné.
+
+- **Une question avant l'outil** : la constitution le dit. Avant une action qui ne se rattrape
+  pas (supprimer, résilier, annuler, envoyer, acheter, valider), si « le » ou « ça » peut
+  désigner plusieurs choses de la conversation, Orion pose une seule question courte, ne fait
+  rien avant la réponse, puis seulement ce qui est confirmé.
+- **Rien de neuf dans le code** : la demande d'accord porte déjà les arguments exacts de
+  l'appel, et l'accord ne vaut que pour eux (D28). L'issue de chaque action est journalisée
+  (D258). Le gardien ne sait pas de quoi parle la conversation : la résolution du référent
+  reste au modèle, la règle et l'éval la tiennent.
+- **Éval** `le_supp_demande_lequel` : un projet et deux mails dans la conversation, puis « tu
+  peux le supp ». Orion demande lequel et n'appelle ni `mail_tidy`, ni le navigateur, ni le
+  shell.
+- **Pas couvert** : « supprime les 2 mails Jira et Atlassian » → seulement ces deux-là. Les
+  évals n'ont pas de boîte mail simulée.
+
+## D267 — Ses objectifs : un résultat à atteindre, prouvé, relu le dimanche
+
+*07/11/2026 · acceptée · complète D53, D47, D256, D258 · ORION-9*
+
+Orion savait ce qu'il veut devenir (intentions, D53), ce qu'il doit (engagements) et ce
+qu'Orion fait pour lui (missions, D47), mais pas ce qu'il cherche à obtenir : trouver un appart,
+réussir un examen, lancer son site. Le module `goals` (activé par défaut) le tient.
+
+- **Un objectif** : un titre, un domaine, ce qui dira qu'il est atteint (`done_when`), la toute
+  prochaine action, une date de réévaluation (30 jours si rien n'est dit), une échéance et une
+  priorité (1 à 3) éventuelles, le contexte, ses contraintes réelles (budget, lieu, dates), et
+  les objectifs qu'il attend. Un outil, `goal` : `set`, `change`, `state`, `milestone`,
+  `reached`, `link`, `note`, `list`.
+- **États** : `proposed`, `active`, `blocked`, `achieved`, `abandoned`, chaque passage
+  journalisé (`goal.set`, `goal.changed`, `goal.state`, `goal.milestone`, `goal.reached`,
+  `goal.linked`, `goal.noted`) ; la projection se reconstruit du journal seul. Suspendre, c'est
+  `blocked` avec sa raison : pas d'état de plus.
+- **Le sien ou une idée d'Orion** : une suggestion d'Orion (`suggested`), ou un objectif posé
+  hors de sa conversation, reste `proposed`. Seule sa parole, dans sa conversation (confiance
+  propriétaire, ou `libre`, D232), change un état.
+- **Atteint sur preuve** (D258) : un jalon, ou l'objectif, n'est atteint que sur sa parole dans
+  sa conversation, ou sur ce qu'Orion a vu et cite (`observed`) ; la preuve est gardée. Un
+  objectif dont un jalon est ouvert, ou dont un prérequis n'est pas atteint, ne l'est pas. Deux
+  objectifs ne peuvent pas s'attendre l'un l'autre. Un second objectif au même titre qu'un
+  ouvert est refusé : on modifie le premier.
+- **Liens, pas de copie** : engagements, tâches, missions, intentions, situations, procédures,
+  travaux sont reliés par leur id. Pas d'« obligation » ni de « résultat » à part : les
+  contraintes sont un champ, le résultat est la preuve gardée par `reached`.
+- **Relu** : le dimanche, la semaine qui vient (D256) dit pour chaque objectif ce qui a avancé,
+  ce qui coince, la prochaine action et pourquoi celle-là ; le matin, ce qui arrive à échéance
+  ou à réévaluer dans les deux jours ; la revue du soir les voit (`Module.review`). Seuls les
+  objectifs de confiance système au moins y figurent ; les autres restent dans `list`, avec
+  leur confiance.
+- **Pas encore** : pas de rappel à part quand la date de réévaluation passe (le matin le dit),
+  pas de lecture automatique de l'état des engagements ou tâches liés.
+- **Complément (07/11, review de #205)** : « sa parole », c'est un tour qui répond à un
+  message qu'il a écrit dans sa conversation (`message.received`, acteur `owner`). Jamais la
+  veille, la nuit ou une initiative, même en `libre` : leur main libre n'est pas sa parole.
+  `observed` ne se croit plus sur texte. Il faut une action que le journal montre `CONFIRMED`
+  (D258, champ `seen`), sinon c'est refusé et il faut lui demander. La confiance d'un objectif
+  ne baisse que si sa définition change : une note lue sur le web ne le fait plus disparaître
+  des lignes ni de la curiosité.
+
+
+## D268 — La curiosité, chaque jour, au service de ses objectifs
+
+*07/11/2026 · acceptée · complète D76, D160, D267 · ORION-10*
+
+Une fois par semaine, la curiosité (D76) découvrait des sujets, sans faire avancer ce qu'il
+cherche à obtenir. Elle lit désormais ses objectifs (D267).
+
+- **Quand** : la piste du samedi reste (libre ou pour un objectif). Les autres jours, à la même
+  heure, une recherche pour un objectif, seulement s'il en a un d'actif (`daily`, activé par
+  défaut). Un objectif qui passe `blocked`, ou qui bute sur un obstacle noté, lance tout de
+  suite une recherche pour lui seul, une fois par blocage. Trois recherches par jour au plus,
+  toutes causes confondues : la limite de coût et d'attention.
+- **Ce qu'elle lit** : en plus de ce qu'elle lisait, chaque objectif tel que la revue le montre
+  (condition de réussite, prochaine action, contraintes, obstacles, ce qu'il attend) et ce qui
+  lui a déjà été apporté, avec les recherches faites ce mois-ci.
+- **Rattachée** : chaque piste nomme son objectif (`objectif`, un id actif vérifié en code), ou,
+  le samedi seulement, est libre avec sa raison (`pourquoi`). Sinon rien n'est cherché.
+- **Dédoublonnée** : une requête lancée dans les 30 derniers jours n'est pas relancée ; une page
+  déjà apportée n'est pas reprise ; pour un objectif, la page lue passe par un troisième appel
+  qui en tire une seule chose utilisable (comparaison, option, information manquante,
+  démarche, question), en séparant ce que dit la page de ce qu'Orion suppose, et qui dit si
+  c'est nouveau par rapport à ce qui a déjà été apporté. Pas utile ou pas nouveau : rien
+  n'est envoyé.
+- **Gardé** : la source (l'adresse), le jour où elle a été lue, les faits et les hypothèses
+  sont dans `curiosity.found` ; le message les dit séparément. Il passe par l'arbitre comme
+  avant (contenu web, importance 0,35) ; SILENCE s'il ne sert plus.
+- **Mesuré** : `curiosity` (list) donne, pour les 14 derniers jours et les 14 d'avant, les
+  recherches (dont pour un objectif), les trouvailles partagées, ses verdicts, et les objectifs
+  qui ont avancé après une trouvaille (avancée notée ou objectif atteint). La comparaison
+  avant/après se lit là ; elle demande deux semaines d'usage réel.
+- **Pas encore** : un événement qui crée une question (un mail, un rendez-vous) ne déclenche
+  rien ; c'est la veille qui agit (ORION-6). Les interruptions ne sont pas comptées à part.
+
+## D269 — L'arbitre apprend de ses retours, source par source
+
+*07/11/2026 · acceptée · complète D144, D146, D82 · ORION-11*
+
+L'importance d'un message dépendait seulement de la source qui le proposait, réglée à la main.
+Une source qu'il ignore toujours restait aussi pressante qu'une qu'il remercie.
+
+- **Un retour par message** : chaque message qu'Orion envoie de lui-même reçoit un retour, lu
+  dans le journal. Un tapback ❤️ 👍 😂 ‼️ ou un message avec « merci », « top », « génial »…
+  dans les trois heures : `thanks`. 👎 ou « pas maintenant », « plus tard », « laisse tomber »… :
+  `not_now` (« merci, mais pas maintenant » est un `not_now`). Toute autre réponse : `answered`.
+  Rien dans les trois heures : `ignored`. Le retour va au dernier message envoyé ; ceux d'avant
+  dans la fenêtre comptent comme répondus.
+- **Un poids par source** (la famille de la clé : `curiosity`, `chronicle`, `intention`…) : la
+  moyenne des retours des 30 derniers jours (merci +1, répondu +0,5, ignoré −0,5, pas
+  maintenant −1), ramenée à ±0,2, une fois trois messages au moins. Il s'ajoute à l'importance
+  des alertes de cette source, avant le seuil `GOES_NOW` et l'arbitre. Ce qu'il a demandé (rappels,
+  comptes rendus) n'est jamais touché. L'arrêt après quatre messages ignorés (D146) reste.
+- **Journalisé, reconstructible** : les retours sont ses messages et tapbacks, déjà au journal ;
+  le registre de l'initiative les relit. Quand le poids d'une source bouge, `initiative.weight`
+  le journalise avec l'ancien poids et le compte des retours.
+- **Visible** : `orion initiative` donne chaque source, son poids et ses retours ; la console
+  montre chaque ajustement dans l'activité (« a ajusté l'importance d'une source »).
+- **Limite** : les mots sont lus par des règles simples, pas par un modèle ; une réponse sans
+  rapport dans les trois heures compte comme une réponse.
 
 ## D270 — Les relances restent : la relecture ne couvre que les affirmations
 

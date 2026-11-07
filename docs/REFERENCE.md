@@ -41,6 +41,7 @@ Une partie des outils est rangée dans un tiroir : l'outil `orion` les liste et 
 | `awaiting` | Attend une réponse et relance (D129) | `awaiting_*` |
 | `chronicle` | La page de ta semaine, ses erreurs (D52, D69) | `chronicle`, `mistake` |
 | `intentions` | Ce que tu veux devenir, et le droit de te contredire (D53, D66) | `intention_*`, `intentions` |
+| `goals` | Tes objectifs : jalons atteints sur preuve, liens, revue du dimanche (D267) | `goal` |
 | `relations` | Anniversaires, avant de voir quelqu'un, garder le lien (D56) | `person_birthday`, `keep_in_touch`, `saw_someone`, `meeting_soon` |
 | `contacts` | Le carnet d'adresses de ton téléphone (D159) | `contacts` |
 | `departure` | La veille d'un départ ou d'un examen (D77) | `departure_*` |

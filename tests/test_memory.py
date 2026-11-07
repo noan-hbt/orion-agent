@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -373,6 +374,44 @@ async def test_in_libre_he_can_replace_or_forget_a_fact_after_a_web_page(
     gone = json.dumps({"fact_id": fact.id, "reason": "faux"})
     assert not (await forget.handler(forget.parse(gone), ctx)).is_error
     assert await memory.store.facts() == []
+
+
+async def test_the_watch_never_records_a_settled_or_past_commitment_again(
+    memory: MemoryService,
+) -> None:
+    """ORION-29, 06/11: the watch recorded « restaurer le projet Jira » a second time, after he
+    had said « tu peux le supp »."""
+    from orion.guardian.policy import WATCH_THREAD
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    tools = {t.name: t for t in memory_tools(memory)}
+    add, close = tools["commitment_add"], tools["commitment_close"]
+    watch = ToolContext(WATCH_THREAD, "c", context_trust=Trust.SYSTEM)
+
+    def owed(what: str, due: str | None = None, to: str = "owner") -> object:
+        return add.parse(json.dumps({"what": what, "debtor": "orion", "creditor": to,
+                                     "due": due}))  # fmt: skip
+
+    first = await add.handler(owed("Restaurer le projet Jira ORION"), watch)
+    again = await add.handler(owed("Restaurer le projet Jira supprimé"), watch)
+    assert not first.is_error and again.is_error  # two passes, one commitment
+    cid = str(first.data["commitment_id"])
+    cancel = close.parse(json.dumps({"commitment_id": cid, "status": "cancelled"}))
+    await close.handler(cancel, ToolContext("owner", "c"))  # « tu peux le supp »
+    assert (await add.handler(owed("Restaurer le projet Jira ORION"), watch)).is_error
+    assert (await add.handler(owed("Payer la cantine", "2020-01-01"), watch)).is_error  # past
+    assert not (await add.handler(owed("Payer la cantine"), watch)).is_error
+    assert len(await memory.store.commitments()) == 1
+
+    # Review of #201: earlier today is past too; distinct creditors or a date against none
+    # are two commitments, not one.
+    earlier = f"{datetime.now(ZoneInfo('Europe/Paris')) - timedelta(minutes=5):%Y-%m-%dT%H:%M}"
+    assert (await add.handler(owed("Rappeler le garage", earlier), watch)).is_error
+    assert not (await add.handler(owed("Envoyer les documents", to="Alice"), watch)).is_error
+    assert not (await add.handler(owed("Envoyer les documents", to="Bob"), watch)).is_error
+    assert not (await add.handler(owed("Payer la cantine", "2099-01-01"), watch)).is_error
+    assert len(await memory.store.commitments()) == 4
 
 
 async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -> None:

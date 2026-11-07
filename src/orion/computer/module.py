@@ -127,6 +127,7 @@ class ComputerModule(Module):
                 {
                     "browser_open": "open",
                     "browser_click": "click",
+                    "browser_pay": "pay",
                     "browser_type": "type",
                     "browser_select": "select",
                     "browser_scroll": "scroll",

@@ -128,6 +128,7 @@ lui-même, avec ton accord sur le changement exact (D92).
 orion doctor                 # configuration, stockage, état de chaque module
 orion simulate --days 7      # ce qu'il enverrait cette semaine, sans rien envoyer
 orion week                   # tours interrompus, erreurs d'outils, corrections, coût
+orion initiative             # ce qu'il a appris de tes retours, source par source (D269)
 orion misses                 # ses ratés : tes 👎 et tes corrections
 orion evals export           # les ratés de la semaine en brouillons de cas (evals/cases.py)
 ```

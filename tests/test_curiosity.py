@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -197,3 +197,91 @@ async def test_a_page_that_cannot_be_read_brings_nothing(journal: SqliteJournal)
     )
     hunt = await curious(journal, None, provider, PdfWeb(ARTICLE), [SATURDAY]).tick()
     assert hunt is not None and hunt.outcome == "page unreadable" and hunt.found is None
+
+
+GOAL_LEAD = {
+    "piste": "Les garants en ligne acceptés par les agences lyonnaises",
+    "objectif": "",
+    "pourquoi": "Il n'a pas de garant.",
+    "recherches": ["garant en ligne Visale agence Lyon"],
+}
+
+
+async def test_every_day_a_hunt_for_his_goals_and_right_away_when_one_gets_stuck(
+    journal: SqliteJournal,
+) -> None:
+    """D268: daily for a goal, a blocked goal starts one at once, nothing said twice."""
+    from orion.goals.module import Goals, goal_tool
+    from tests.test_goals import his_message
+
+    monday = datetime(2026, 11, 2, 7, 0, tzinfo=PARIS)
+    now = [monday]
+    goals = Goals(journal, "Europe/Paris", lambda: now[0])
+    tool = goal_tool(goals)
+    owner = await his_message(journal)
+    set_ = {"action": "set", "title": "Trouver un appart à Lyon", "done_when": "un bail signé"}
+    await tool.handler(tool.parse(json.dumps({**set_, "next_action": "monter le dossier"})), owner)
+    (goal,) = goals.book.goals
+    lead = {**GOAL_LEAD, "objectif": goal}
+    distilled = {
+        "utile": True,
+        "nouveau": True,
+        "genre": "option",
+        "conclusion": "Demander Visale, gratuit, accepté par la plupart des agences.",
+        "faits": ["Visale est gratuit pour les moins de 30 ans."],
+        "hypotheses": ["Son agence l'accepte sans doute."],
+    }
+    provider = ScriptedProvider(
+        reply(json.dumps({**lead, "objectif": ""}, ensure_ascii=False)),  # a free lead: no
+    )
+    web = FakeWeb(ARTICLE)
+    curiosity = curious(journal, None, provider, web, now)
+    curiosity.goals = goals
+    hunt = await curiosity.tick()
+    assert hunt is not None and hunt.outcome == "no lead"  # not the free lead's day
+    assert "Trouver un appart" in str(provider.requests[0].messages[1]["content"])
+    assert await curiosity.tick() is None  # today's hunt is done
+
+    now[0] = monday + timedelta(days=1)
+    provider.extend(
+        reply(json.dumps(lead, ensure_ascii=False)),
+        reply(json.dumps({"garder": True, "page": 0, "pour_lui": "pas de garant"})),
+        reply(json.dumps(distilled, ensure_ascii=False)),
+    )
+    hunt = await curiosity.tick()
+    assert hunt is not None and hunt.outcome == "found" and hunt.found is not None
+    assert hunt.found.goal_id == goal and hunt.found.url == ARTICLE.url
+    (alert,) = await curiosity.alerts(now[0].replace(hour=11))
+    assert "Visale est gratuit" in alert.notice and "Son agence" in alert.notice
+    assert "supposes" in alert.notice and "lue le 03/11/2026" in alert.notice
+
+    # Stuck: a hunt for that goal at once, without waiting; the same query is not run again,
+    # and a conclusion already brought is not brought twice.
+    now[0] = monday + timedelta(days=1, hours=6)
+    await tool.handler(
+        tool.parse(json.dumps({"action": "state", "goal": goal, "state": "blocked"})), owner
+    )
+    provider.extend(reply(json.dumps(lead, ensure_ascii=False)))
+    searched = len(web.searched)
+    hunt = await curiosity.tick()
+    assert hunt is not None and hunt.outcome == "already searched"
+    assert len(web.searched) == searched and "bloqué" in str(
+        provider.requests[-1].messages[1]["content"]
+    )
+    now[0] = monday + timedelta(days=1, hours=7)
+    await tool.handler(
+        tool.parse(
+            json.dumps({"action": "note", "goal": goal, "kind": "obstacle", "text": "refusé"})
+        ),
+        owner,
+    )
+    provider.extend(
+        reply(json.dumps({**lead, "recherches": ["autre garant"]}, ensure_ascii=False)),
+        reply(json.dumps({"garder": True, "page": 0})),
+        reply(json.dumps({**distilled, "nouveau": False})),
+    )
+    web.results.append(Result("https://example.org/autre", "Autre"))
+    hunt = await curiosity.tick()
+    assert hunt is not None and hunt.outcome == "nothing new" and hunt.found is None
+    assert await curiosity.tick() is None  # three hunts today: that is the cap
+    assert any("pour un objectif" in line for line in curiosity.impact(now[0]))
