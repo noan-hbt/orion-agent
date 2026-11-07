@@ -197,19 +197,36 @@ def _confirming(proof: str, pages: list[Seen]) -> Seen | None:
 
 def settled_steps(args: ProcedureInput, seen: list[Seen]) -> list[str]:
     """The actions a confirmed démarche settles (D258): its last step, the one the proof
-    follows, and the steps it names that this turn's browser took on its site (or on the site
-    that step acted on) up to it. Never the rest of the site: another démarche there keeps its
-    own outcome."""
+    follows, and the steps it names that led to it page after page (`_chain`). Never the rest
+    of the site: another démarche there keeps its own outcome."""
     site = site_of(args.site)
     step = _confirming(_flat(args.proof), [p for p in seen if site_of(p.url) == site])
     if step is None or not step.action_id:
         return []
     upto = next(i for i, p in enumerate(seen) if p is step)
-    sites = {site, step.acted_on or site}
-    taken = {
-        p.action_id for p in seen[:upto] if p.action_id and {site_of(p.url), p.acted_on} & sites
-    }
-    return [step.action_id, *(a for a in dict.fromkeys(args.actions) if a in taken)]
+    chain = _chain(seen[:upto])
+    return [step.action_id, *(a for a in dict.fromkeys(args.actions) if a in chain)]
+
+
+_LOOKS = ("scroll", "hover", "read")
+"""What only looks at the page it is on: it does not break a chain of steps."""
+
+
+def _chain(before: list[Seen]) -> set[str]:
+    """The steps that led, one page to the next, to the page the confirming step acted on: the
+    trace links them to it, not the model's list (review of #196). Walking back, a call that
+    acted is a step; a look at the same page is passed; anything else (an address opened, a
+    page gone back to) ends the chain: what came before is another démarche."""
+    linked: set[str] = set()
+    for i in range(len(before) - 1, -1, -1):
+        page = before[i]
+        if page.action_id:
+            linked.add(page.action_id)
+            continue
+        looked = page.action.startswith(_LOOKS) and i > 0 and before[i - 1].url == page.url
+        if not looked:
+            break
+    return linked
 
 
 def _contradicted(steps: str, site: str, pages: list[Seen]) -> list[str]:

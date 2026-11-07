@@ -98,7 +98,11 @@ _HEDGED = re.compile(
 )
 """A clause that says the outcome is not known: it covers the actions it is about."""
 
-_CLAUSE = re.compile(r"[^,;:]+[,;:]*")
+_CLAUSE = re.compile(
+    r"[,;:]|\b(?:mais|et|tandis que|alors que|cependant|pourtant|puis|sauf que)\b", re.IGNORECASE
+)
+"""Where a clause ends: punctuation, or a word that joins two (« j'ai soumis le formulaire mais
+le mail est en attente » is two: the care of the second covers only the mail)."""
 _FAMILY = {
     "mail": r"mails?|e-mails?|courriels?|messages?",
     "browser": r"pages?|sites?|formulaires?|navigateur",
@@ -179,7 +183,7 @@ def _overclaimed(text: str, open_: dict[str, tuple[Outcome, str]]) -> list[str]:
     for sentence in _SENTENCE.findall(text.translate(_TYPOGRAPHY)):
         if sentence.rstrip().endswith("?"):
             continue
-        for clause in _CLAUSE.findall(sentence):
+        for clause in filter(str.strip, _CLAUSE.split(sentence)):
             named = {a for a, cue in cues.items() if cue.search(clause)}
             if _HEDGED.search(clause):
                 covered |= named or previous

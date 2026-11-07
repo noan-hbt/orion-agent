@@ -155,6 +155,18 @@ UNSURE = _a(Outcome.UNCERTAIN, "workflow:w1")
             "Le mail est en attente. La déclaration est soumise, pas de confirmation vue.",
             None,
         ),
+        # Joined without a comma, the care of one claim does not cover the other (#196).
+        (
+            [QUEUED, FORM],
+            "J'ai soumis le formulaire mais le mail est en attente.",
+            "browser:impots.gouv.fr",
+        ),
+        (
+            [QUEUED, FORM],
+            "Le mail est en attente et j'ai soumis le formulaire.",
+            "browser:impots.gouv.fr",
+        ),
+        ([FORM], "J'ai soumis le formulaire mais pas de confirmation vue.", None),
         # Another action's proof proves nothing about this one.
         (
             [QUEUED, _a(Outcome.CONFIRMED, "mail:m2", "outbox delivered")],

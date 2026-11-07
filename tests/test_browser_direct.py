@@ -260,6 +260,7 @@ async def test_confirming_one_demarche_leaves_another_on_the_same_site_unsettled
             task="envoyer la déclaration",
             steps="« Envoyer la déclaration »",
             proof="Déclaration enregistrée",
+            actions=[address],  # named by the model, but another démarche (#196)
         )
         await call("browser_back")
         await call("browser_click", element=number(home, "Payer"))

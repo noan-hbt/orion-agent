@@ -5953,6 +5953,14 @@ disaient « Envoyé » dès la remise.
   autres outils externes (agenda, contacts, commandes) n'en rendent pas et gardent leur message
   d'avant. Pas de lecture de confirmation pour le mail (dossier Envoyés, accusé de remise).
 
+- **Complément (07/11, review de #196)** : une démarche confirmée ne règle, en plus de son
+  dernier pas, que les actions que la trace relie à lui page après page (un clic, puis le
+  suivant sur la page où il a mené ; un simple regard sur la même page ne coupe pas). Une
+  adresse ouverte ou un retour arrière clôt la chaîne : ce qui précède est une autre démarche,
+  même si le modèle le nomme dans `actions`. Et la prudence se lit par proposition : « mais »,
+  « et », « tandis que »… séparent comme une virgule, donc « j'ai soumis le formulaire mais le
+  mail est en attente » ne couvre que le mail.
+
 ## D259 — Un SILENCE après une relecture se justifie, point par point
 
 *06/11/2026 · acceptée · ORION-26*
