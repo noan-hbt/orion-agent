@@ -169,6 +169,8 @@ def _browser(params: dict[str, Any]) -> str:
         )
     page = str(params.get("page") or "")
     site = urlsplit(page).hostname or page
+    if params.get("action") == "pay":  # ORION-13, D265
+        return f"Avant que je paie sur {site} : {params.get('what')}\n(Page : {page})"
     typed = [f"« {f.get('text')} »" for f in cast(list[dict[str, Any]], params.get("fields") or [])]
     with_text = f"\nEn tapant : {', '.join(typed)}" if typed else ""
     return f"Avant que je l'envoie sur {site} : {params.get('what')}{with_text}\n(Page : {page})"
