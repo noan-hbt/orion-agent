@@ -6422,3 +6422,19 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D281 — Le rappel cherche aussi sur ce vers quoi il travaille
+
+ORI-016 (audit du 05/11). Précise ORION-4 (rappel sur la conversation). Le rappel suivait les
+mots du message : une contrainte liée à un objectif, sans mot commun avec la question, ne
+remontait pas.
+
+- L'intention : titres et « réussi quand » des objectifs actifs ou bloqués (fournis par le
+  module `goals` via `Plate.intents`, le cœur ne connaît pas les objectifs), situations en
+  cours et engagements ouverts (mémoire), de confiance seulement.
+- `search(text, ..., intent=...)` cherche aussi l'intention, par les mots et par le sens ; ses
+  classements entrent dans la même fusion RRF. Pas de nouveau seuil. Sans recherche sémantique,
+  quelques faits de l'intention s'ajoutent après ceux du message.
+- Le résultat reste dans `<memoire>` du message courant, jamais dans le message système
+  (contrat de cache).
+- Cas d'éval `contrainte_oubliee`.

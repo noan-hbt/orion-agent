@@ -178,6 +178,9 @@ class Plate:
     """The guardian process, when Orion runs split (D28): it holds the secrets, so modules
     reach Inkbox, calendars and mailboxes through it."""
     autonomy: Autonomy | None = None
+    intents: list[Callable[[], list[str]]] = field(default_factory=list["Callable[[], list[str]]"])
+    """What he is working towards (his active goals): recall searches it along with his
+    message (ORI-016)."""
 
     def module(self, kind: type[M]) -> M | None:
         """An enabled module, by class (for modules that build on another)."""

@@ -113,28 +113,40 @@ class SemanticIndex:
             found.update(fresh)
         return found
 
-    async def search(self, text: str, limit: int = 8, include_past: bool = False) -> list[Fact]:
-        lexical = await self._store.search(text, limit * 2, include_past)
+    async def search(
+        self, text: str, limit: int = 8, include_past: bool = False, *, intent: str = ""
+    ) -> list[Fact]:
+        """By words and by meaning, fused by rank. `intent` (his goals, what is going on, what
+        he owes, ORI-016) is a second query whose rankings join the fusion: a constraint tied
+        to a plan comes up though the question shares no word with it."""
+        queries = [q for q in (text, intent) if q.strip()]
+        lexical = [await self._store.search(q, limit * 2, include_past) for q in queries]
         facts = await self._store.facts(include_past)
         if not facts or not text.strip():
-            return lexical[:limit]
+            return lexical[0][:limit] if lexical else []
         try:
-            vectors = await self.vectors([text, *(f.statement for f in facts)])
+            vectors = await self.vectors([*queries, *(f.statement for f in facts)])
         except ProviderError as exc:
             log.warning("memory.semantic_unavailable", error=str(exc))
-            return lexical[:limit]
-        query = vectors[text]
-        scored = sorted(
-            ((float(np.dot(query, vectors[f.statement])), f) for f in facts),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-        semantic = [f for score, f in scored[: limit * 2] if score >= MIN_SIMILARITY]
-        ranks: dict[str, float] = {}
-        by_id: dict[str, Fact] = {}
-        for ranking in (lexical, semantic):
-            for rank, fact in enumerate(ranking):
-                ranks[fact.id] = ranks.get(fact.id, 0.0) + 1.0 / (RRF_K + rank)
-                by_id[fact.id] = fact
-        best = sorted(ranks, key=lambda fact_id: ranks[fact_id], reverse=True)
-        return [by_id[fact_id] for fact_id in best[:limit]]
+            return _fused(lexical, limit)
+        semantic: list[list[Fact]] = []
+        for q in queries:
+            scored = sorted(
+                ((float(np.dot(vectors[q], vectors[f.statement])), f) for f in facts),
+                key=lambda item: item[0],
+                reverse=True,
+            )
+            semantic.append([f for score, f in scored[: limit * 2] if score >= MIN_SIMILARITY])
+        return _fused([*lexical, *semantic], limit)
+
+
+def _fused(rankings: list[list[Fact]], limit: int) -> list[Fact]:
+    """Reciprocal rank fusion of several rankings."""
+    ranks: dict[str, float] = {}
+    by_id: dict[str, Fact] = {}
+    for ranking in rankings:
+        for rank, fact in enumerate(ranking):
+            ranks[fact.id] = ranks.get(fact.id, 0.0) + 1.0 / (RRF_K + rank)
+            by_id[fact.id] = fact
+    best = sorted(ranks, key=lambda fact_id: ranks[fact_id], reverse=True)
+    return [by_id[fact_id] for fact_id in best[:limit]]

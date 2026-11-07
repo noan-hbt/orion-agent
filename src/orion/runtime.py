@@ -357,6 +357,9 @@ class Orion:
         self._registry = registry
         self._guardian = guardian
         self._compiler = compiler
+        self.intents: list[Callable[[], list[str]]] = []
+        """What he is working towards, from modules (his active goals): searched along with
+        his message so what touches his plans comes up (ORI-016)."""
         self.inline: Callable[[Message], Message] | None = None
         """Turns a journaled message into what goes on the wire (photos the model looks at
         itself, D87): same input, same bytes, so the prompt cache holds."""
@@ -1303,8 +1306,13 @@ class Orion:
         delta = playbook_delta(rules, settings, shown)
         if delta:
             blocks.append(delta)
+        intent = "\n".join(
+            [await self._memory.intent(), *(line for source in self.intents for line in source())]
+        )
         relevant = [
-            f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
+            f
+            for f in await self._memory.search(text, self._recall_limit, intent=intent)
+            if f.id not in shown
         ]
         # A follow-up (« et pour lui ? ») names nothing: the subject lives in the last
         # exchange, so it is searched too, for a few more slots (ORION-4).
