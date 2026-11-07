@@ -6330,6 +6330,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6359,6 +6360,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6371,6 +6373,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 
@@ -6395,6 +6398,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 
@@ -6433,6 +6437,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
 
 
 
+
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
 
 *07/11/2026 — ORION-42, audit du 05/11 (ORI-005). Précise D37 et D267.*
@@ -6460,6 +6465,7 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
 
 
 
+
 ## D276 — Une passe de tâche de fond est une étape de workflow
 
 *07/11/2026 · acceptée · précise D110, D257 · ORION-43 (audit F-05)*
@@ -6479,6 +6485,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
   refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
 - **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
 - Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
 
 
 
@@ -6512,6 +6519,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
   déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
 
 
+
 ## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
 
 ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
@@ -6524,6 +6532,7 @@ redémarrage, un message retenu depuis des heures repartait de zéro.
 - L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
   `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
 - Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
+
 
 
 
@@ -6550,6 +6559,7 @@ par type de contrôle.
 
 
 
+
 ## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
 
 ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
@@ -6564,6 +6574,23 @@ crois-tu ? » n'avait pas de réponse lisible.
   l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
   au portrait suivant.
 
+
+
+## D281 — Le rappel cherche aussi sur ce vers quoi il travaille
+
+ORI-016 (audit du 05/11). Précise ORION-4 (rappel sur la conversation). Le rappel suivait les
+mots du message : une contrainte liée à un objectif, sans mot commun avec la question, ne
+remontait pas.
+
+- L'intention : titres et « réussi quand » des objectifs actifs ou bloqués (fournis par le
+  module `goals` via `Plate.intents`, le cœur ne connaît pas les objectifs), situations en
+  cours et engagements ouverts (mémoire), de confiance seulement.
+- `search(text, ..., intent=...)` cherche aussi l'intention, par les mots et par le sens ; ses
+  classements entrent dans la même fusion RRF. Pas de nouveau seuil. Sans recherche sémantique,
+  quelques faits de l'intention s'ajoutent après ceux du message.
+- Le résultat reste dans `<memoire>` du message courant, jamais dans le message système
+  (contrat de cache).
+- Cas d'éval `contrainte_oubliee`.
 
 
 
@@ -6584,6 +6611,7 @@ tombé, ni depuis quand.
 
 
 
+
 ## D284 — Une piste de curiosité dit ce qu'elle vise et s'inscrit sur son objectif
 
 ORI-015 (audit du 05/11). Précise D268, qui tient : la trouvaille passe par l'initiative et
@@ -6595,6 +6623,7 @@ l'arbitre décide de se taire.
 - Chaque recherche pour un objectif s'inscrit en note de l'objectif (`goal.noted`, kind
   `research` : la piste et son issue), dite ou non : l'objectif garde ce qu'on a cherché pour
   lui. Ces notes ne sont ni des avancées ni des obstacles (le blocage ne les lit pas).
+
 
 
 
