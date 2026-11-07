@@ -6761,3 +6761,22 @@ consentis restent à ORION-12).
   (relecture du dimanche, `list`) donne la moyenne de ces 14 jours et l'écart à la référence,
   dit comme un écart observé, jamais comme une cause.
 
+
+## D289 — La relecture compte ce qu'il a vu, pas seulement ses outils
+
+*07/11/2026 · acceptée · modifie D253, D259*
+
+Sur 104 relectures en prod (06–07/11), 18 ont relevé quelque chose, et les deux doutes dits au
+propriétaire étaient faux : « entre 13h45 et 16h45 à Villepreux » venait du mail Amazon reçu en
+initiative, que le vérificateur ne voyait pas ; « It Takes Two se joue à deux sur une PS4 »,
+Orion l'avait revérifié (« 2 joueurs | Coop locale ») et le règlement l'a gardé ouvert, la
+phrase disant « tous ».
+
+- **Ce qu'il a vu est une preuve** (`grounding.evidence`) : résultats d'outils, mais aussi les
+  initiatives, les rappels et les souvenirs qui lui ont apporté un mail, un lieu, un fait. Seuls
+  ses messages à lui restent « Lui ». Lu sur 32 000 caractères au lieu de 16 000.
+- **Le vérificateur ne relève que ce qui tromperait** : ni une nuance de formulation, ni un
+  chiffre d'exemple annoncé comme tel, ni un fait public connu.
+- **Le règlement juge le seul point du doute**, et un fait public connu que rien ne contredit
+  le règle.
+- **Ce qui est dit au propriétaire** cite ce qu'il lui a dit (« … »), pas la note du vérificateur.

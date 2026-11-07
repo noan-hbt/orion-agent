@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from orion.cognition.grounding import UNCHECKED_NOTE, claims_a_state
+from orion.cognition.grounding import UNCHECKED_NOTE, claims_a_state, evidence
 from orion.cognition.review import GroundingReview
 from orion.cognition.verifier import Verifier
 from orion.config import AgentConfig
@@ -220,7 +220,11 @@ async def test_a_silence_settles_each_doubt_and_what_stays_open_is_said_once(
         call_tools(("echo", {"text": "inbox: 2 mails from Jira, none from the pharmacy"})),
         reply("Deux mails Jira, la pharmacie a confirmé, et Paul a payé."),
     )
-    doubts = ["« deux mails Jira »", "« la pharmacie a confirmé »", "« Paul a payé »"]
+    doubts = [
+        "« deux mails Jira »",
+        "« la pharmacie a confirmé » : les informations fournies ne le montrent pas",
+        "« Paul a payé »",
+    ]
     checks = ScriptedProvider(
         reply('{"ok": false, "issues": ' + str(doubts).replace("'", '"') + "}"),
         reply('{"settled": [true, false, false]}'),
@@ -242,6 +246,7 @@ async def test_a_silence_settles_each_doubt_and_what_stays_open_is_said_once(
     said = await alert.settle(None, "")  # he answered SILENCE
     assert said is not None
     assert "pharmacie" in said and "Paul" in said and "Jira" not in said
+    assert "informations fournies" not in said  # his words, not the verifier's
     [settled] = [e.payload for e in await journal.read(0, 10_000) if e.kind == "grounding.settled"]
     assert [p["status"] for p in settled["points"]] == [  # type: ignore[index]
         "resolved_with_evidence",
@@ -273,7 +278,11 @@ async def test_a_reply_corrects_only_the_points_it_sets_right(journal: SqliteJou
         call_tools(("echo", {"text": "inbox: 2 mails from Jira, none from the pharmacy"})),
         reply("Deux mails Jira, la pharmacie a confirmé, et Paul a payé."),
     )
-    doubts = ["« deux mails Jira »", "« la pharmacie a confirmé »", "« Paul a payé »"]
+    doubts = [
+        "« deux mails Jira »",
+        "« la pharmacie a confirmé » : les informations fournies ne le montrent pas",
+        "« Paul a payé »",
+    ]
     checks = ScriptedProvider(
         reply('{"ok": false, "issues": ' + str(doubts).replace("'", '"') + "}"),
         reply('{"settled": [true, false, false]}'),
@@ -319,3 +328,23 @@ async def test_alerts_sent_together_are_each_settled() -> None:
     assert await both(None, "") == "A reste ouvert."
     await both("A reste ouvert.", "")
     assert seen == [("a", None), ("b", None), ("a", "A reste ouvert."), ("b", "A reste ouvert.")]
+
+
+def test_what_came_without_a_tool_counts_as_shown() -> None:
+    """07/11: « entre 13h45 et 16h45 à Villepreux » came from a mail in an initiative, not a
+    tool; the verifier never saw it and the owner was told it was unconfirmed."""
+    facts, words = evidence(
+        [
+            {
+                "role": "user",
+                "content": "[samedi 2026-11-07 11:35 · initiative]"
+                + chr(10)
+                + "Nouveau mail Amazon : "
+                "tranche horaire 13:45 - 16:45, Noan - Villepreux",
+            },
+            {"role": "assistant", "content": "Ton poster passe entre 13h45 et 16h45."},
+            {"role": "user", "content": "[samedi 2026-11-07 11:40]" + chr(10) + "Merci"},
+        ]
+    )
+    assert "13:45 - 16:45" in facts and "Merci" not in facts
+    assert "Merci" in words and "13:45" not in words

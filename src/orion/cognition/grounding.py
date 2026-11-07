@@ -64,8 +64,11 @@ _STATE = re.compile(
     re.IGNORECASE,
 )
 
-EVIDENCE_CHARS = 16_000
-"""What the verifier reads of the tool results in the conversation, newest kept."""
+EVIDENCE_CHARS = 32_000
+"""What the verifier reads of what Orion was shown in the conversation, newest kept: tool
+results, and what came to him without a tool (a mail in an initiative, a place, his memories).
+At 16 000, with tool results alone, the mail that gave « 13h45 - 16h45, Villepreux » was out of
+sight and the reply was said unconfirmed to the owner (07/11)."""
 WORDS_CHARS = 4_000
 """What it reads of the owner's own words, newest kept: what the claim answers."""
 
@@ -151,18 +154,31 @@ def _text(message: Message) -> str:
     return content if isinstance(content, str) else ""
 
 
+def from_him(message: Message) -> bool:
+    """A message the owner wrote, not an initiative or a note Orion gave itself."""
+    line = _text(message).split("\n", 1)[0]
+    return (
+        message.get("role") == "user"
+        and line.startswith("[")
+        and not line.startswith("[Orion")
+        and "· initiative" not in line
+    )
+
+
 def evidence(messages: Sequence[Message]) -> tuple[str, str]:
-    """(what the tools returned, what he said) in these messages, each newest kept."""
+    """(what Orion was shown, what he said) in these messages, each newest kept. What Orion was
+    shown: tool results, and the initiatives and notes that brought him a mail, a place or his
+    memories without a tool. A fact he got that way is known, not invented (07/11)."""
     results: list[str] = []
     words: list[str] = []
     for message in messages:
         text = _text(message).strip()
         if not text:
             continue
-        if message.get("role") == "tool":
-            results.append(text)
-        elif message.get("role") == "user" and not text.startswith("[Orion"):
+        if from_him(message):
             words.append(f"Lui : {text}")
+        elif message.get("role") in ("tool", "user"):
+            results.append(text)
     return "\n---\n".join(results)[-EVIDENCE_CHARS:], "\n".join(words)[-WORDS_CHARS:]
 
 

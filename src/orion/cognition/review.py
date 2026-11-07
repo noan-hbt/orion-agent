@@ -22,6 +22,7 @@ open. What is still open goes to him in one plain line rather than nowhere, once
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -65,6 +66,17 @@ UNSETTLED = (
     "Je reviens sur ce que je t'ai dit plus tôt : je n'ai pas pu le vérifier, prends-le comme "
     "non confirmé. {issues}"
 )
+"""Gives the owner his words, not the verifier's: « les informations fournies n'établissent
+pas… » read as alarming and meant nothing to him (07/11)."""
+
+_QUOTED = re.compile(r"«[^»]*»")
+
+
+def _claim(issue: str) -> str:
+    """What was said, as the verifier quoted it; its whole note when it quoted nothing."""
+    quoted = _QUOTED.match(issue.strip())
+    return quoted.group(0) if quoted else issue
+
 
 _ACTOR = Provenance(source="orion:grounding", actor="orion:verifier")
 
@@ -222,7 +234,7 @@ class GroundingReview:
             return None
         # Told once the line has gone out (`_told_him`): a send that fails tells nothing.
         self._telling[key] = new
-        return UNSETTLED.format(issues=" ; ".join(new)[:600])
+        return UNSETTLED.format(issues=" ; ".join(_claim(i) for i in new)[:600])
 
     async def _told_him(self, key: str, issues: list[str]) -> None:
         self._told.update(issues)
