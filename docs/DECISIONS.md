@@ -6422,3 +6422,17 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D286 — Mesurer la réussite par rôle et par modèle avant de router
+
+ORI-020 (audit du 05/11). D147 tient (le fond suit le modèle principal sur forfait) : pas de
+routage par risque ou difficulté tant qu'aucun chiffre ne montre qu'un rôle échoue sur un
+modèle.
+
+- Un tour réussit s'il finit normalement (ni limite, ni erreur, ni Stop), qu'aucune de ses
+  actions ne finit UNCERTAIN ou FAILED, et qu'il ne l'a pas corrigé (un raté relevé le soir, à
+  10 minutes de sa réponse).
+- Le rôle est le fil du tour (`conversation` pour lui, sinon la famille du fil : `tasks`,
+  `veille`…) ; le modèle, celui de `model.usage` du tour. Rien de nouveau n'est journalisé.
+- `orion week` (et l'app) donnent le taux par rôle et modèle, à côté des sections de D273. Le
+  routage par risque sera un ticket à part, le jour où ces chiffres le justifient.

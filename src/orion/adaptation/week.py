@@ -5,6 +5,10 @@ the owner also needs the week at a glance: the turns that stopped on a limit or 
 instead of finishing, the tools that failed most, the answers he corrected, and the cost,
 beside the week before. All of it is read from the journal; nothing new is recorded.
 
+How well each role does on each model (ORI-020, D286): a turn succeeds when he did not correct
+it, did not stop it, it was not cut short, and none of its actions ended UNCERTAIN or FAILED.
+Measured before any routing by risk is considered (D147 holds).
+
 What was really done (ORI-013, D273): the outcomes of the actions (D258), the calls cut at
 their deadline, the workflows and their uncertain steps, the goals reached, and the noise:
 how often Orion spoke unasked, how often that went without a reaction, and what it held back.
@@ -59,7 +63,10 @@ KINDS = (
     REACHED,
     DELIVERED,
     SUPPRESSED,
+    "model.usage",
 )
+MISS_WITHIN = timedelta(minutes=10)
+"""A correction counts against his answered turn this close to the exchange it notes."""
 
 
 @dataclass
@@ -97,6 +104,10 @@ class Week:
     """Of those, the ones he did not react to within `ENGAGED_WITHIN`."""
     held: int = 0
     """Things Orion decided not to say."""
+    success: dict[tuple[str, str], list[int]] = field(
+        default_factory=dict[tuple[str, str], list[int]]
+    )
+    """(role, model) → [turns that succeeded, turns] (D286)."""
 
     def top_costs(self, n: int) -> list[tuple[str, float]]:
         ranked = sorted(self.cost_by.items(), key=lambda item: -item[1])
@@ -145,6 +156,10 @@ class Week:
             "spoke": self.spoke,
             "unanswered": self.unanswered,
             "held": self.held,
+            "success": [
+                {"role": role, "model": model, "ok": ok, "turns": total}
+                for (role, model), (ok, total) in sorted(self.success.items())
+            ],
             **({"before": before.payload()} if before is not None else {}),
         }
 
@@ -155,6 +170,12 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
     found = Week(end - WEEK, end)
     spoken: list[datetime] = []
     engaged: list[datetime] = []
+    models: dict[str, str] = {}
+    """Turn (correlation id) → the model that answered it."""
+    failed: set[str] = set()
+    """Turns with an action left UNCERTAIN or FAILED."""
+    finished: list[tuple[datetime, str, str, bool]] = []
+    """(when, correlation id, role, ended well) for each turn."""
     for e in events:
         if e.redacted:
             continue
@@ -165,6 +186,10 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
         if e.kind not in KINDS or not found.start <= event_time(e, zone) < end:
             continue
         payload = e.payload
+        turn = e.correlation_id or ""
+        if e.kind == "model.usage":
+            models[turn] = str(payload.get("model") or "?")
+            continue
         if e.kind == WORKFLOW_FINISHED:
             found.workflows[str(payload.get("state", "?"))] += 1
             continue
@@ -189,6 +214,8 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
             if reason in STOPPED:
                 found.stopped[reason] += 1
                 found.stopped_owner += owner
+            role = "conversation" if owner else str(payload.get("thread_id", "?")).split(":")[0]
+            finished.append((event_time(e, zone), turn, role, reason == "completed"))
         elif e.kind == "tool.executed":
             found.tool_calls += 1
             if payload.get("is_error"):
@@ -197,6 +224,8 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
                 found.timed_out += 1
             if outcome := payload.get("outcome"):
                 found.outcomes[str(outcome)] += 1
+                if outcome in ("UNCERTAIN", "FAILED"):
+                    failed.add(turn)
                 if outcome == "UNCERTAIN":
                     found.uncertain.append(
                         f"{payload.get('tool', '?')}: {payload.get('action_id') or '?'}"
@@ -213,6 +242,19 @@ def week(events: Sequence[Event], zone: ZoneInfo, end: datetime) -> Week:
         not any(timedelta(0) <= at - said <= ENGAGED_WITHIN for at in engaged) for said in spoken
     )
     found.misses = [m for m in misses(events, zone) if found.start <= m.at < end]
+    corrected: set[str] = set()
+    for miss in found.misses:
+        answered = [
+            (at, turn)
+            for at, turn, role, _ in finished
+            if role == "conversation" and abs(miss.at - at) <= MISS_WITHIN
+        ]
+        if answered:
+            corrected.add(max(answered)[1])
+    for _, turn, role, ended_well in finished:
+        tally = found.success.setdefault((role, models.get(turn, "?")), [0, 0])
+        tally[0] += ended_well and turn not in failed and turn not in corrected
+        tally[1] += 1
     return found
 
 
@@ -267,6 +309,14 @@ def report(this: Week, before: Week) -> str:
             f"{this.uncertain_steps} étape(s) restée(s) incertaine(s)."
         )
     lines.append(f"Objectifs atteints : {versus(this.goals_reached, before.goals_reached)}.")
+    if this.success:
+        lines.append("Réussite par rôle et modèle (ni corrigé, ni arrêté, ni action ratée) :")
+        lines += [
+            f"  - {role} sur {model} : {ok}/{total} ({100 * ok // total} %)"
+            for (role, model), (ok, total) in sorted(
+                this.success.items(), key=lambda item: -item[1][1]
+            )[:10]
+        ]
     lines.append(
         f"Bruit : parlé de lui-même {versus(this.spoke, before.spoke)}, dont {this.unanswered}"
         f" sans réaction ; {this.held} chose(s) tue(s)."
