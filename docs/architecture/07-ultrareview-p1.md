@@ -14,9 +14,9 @@ Engine, 012 banc multi-jours, 013 métriques.
 
 ## Comment reprendre
 
-**Avancement au 07/11.** Fusionnés : ORI-007 (#214), ORI-010 (#215), ORI-013 (#216), ORI-012 (#217), ORI-008 (#218), ORI-005 (#219). En revue : F-05 (ORION-43, D276). Fermés
-sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38). Reste : ORI-011
-(ORION-6). Prochain Dxxx libre : D277.
+**Avancement au 07/11.** Fusionnés : ORI-007 (#214), ORI-010 (#215), ORI-013 (#216), ORI-012 (#217), ORI-008 (#218), ORI-005 (#219), F-05 (#221, D276). En revue : ORI-011 (ORION-6, D277). Fermés
+sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38).
+Prochain Dxxx libre : D278.
 
 - Un point = un ticket Jira `ORION-<n>` = une branche = une PR (règles dans `CLAUDE.md`).
   L'épopée est **ORION-1** (Backlog, label `audit-2026-11-05`). Une partie est déjà faite par
@@ -38,8 +38,8 @@ sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38). R
 | ORI-008 contrats d'achèvement (F-07) | fait : PR #218 (ORION-41, D274) | étendre le contrat D267 |
 | ORI-005 Obligation | fait : PR #219 (ORION-42, D275) | pas d'entité ; dédoublonner partout |
 | ORI-009 migration Missions | absent — à fermer (ORION-38) | pas de migration, fermé |
-| ORI-011 Opportunity Engine | partiel — décision commentée sur ORION-6 | le modèle propose un type, les règles décident |
-| F-05 tâches en workflow | **en revue** (ORION-43, D276) | une passe = une étape ; missions inchangées |
+| ORI-011 Opportunity Engine | **en revue** : ORION-6, D277 | le modèle propose un type, les règles décident |
+| F-05 tâches en workflow | fait : PR #221 (ORION-43, D276) | une passe = une étape ; missions inchangées |
 
 ---
 
@@ -279,8 +279,9 @@ brouillon, jamais un effet. Pas de nouveau package : l'opportunité est le `Cand
 enrichi. Cette réponse lève le `a-decider` d'ORION-6, qui porte le travail (commenter le
 ticket avec cette décision, puis le passer en `Selected for Development`).
 
-**État (07/11).** Décision commentée sur ORION-6, `a-decider` retiré ; le passage en
-`Selected for Development` reste à faire par le propriétaire.
+**État (07/11).** ORION-6, D277. La veille type chaque chose vue (`TYPE | chose | pourquoi`) ;
+`Opportunity` portée par `Alert` et `Candidate` ; `opportunity.detected` une fois par clé,
+`opportunity.decided` à la veille (silence) ou par le moteur (dit / écarté).
 
 **Plan.** `Candidate` gagne `kind` et `reason` ; la veille (`Watch.conclusion`) rend un type
 par `Stir` ; journaliser `opportunity.detected` (clé stable = source + objet, donc une seule par
