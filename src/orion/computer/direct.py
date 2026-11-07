@@ -98,7 +98,7 @@ PAYS = re.compile(
     r"|le paiement|l'achat)|commande avec obligation de paiement)\b",
     re.IGNORECASE,
 )
-"""A button that pays, whatever the page (ORION-13, D265): a link does not, off a payment page."""
+"""What pays, whatever the page and whatever its tag, a link too (ORION-13, D265)."""
 CHECKOUT_URL = re.compile(r"checkout|payment|paiement|/pay\b|billing|/buy/|/commande|/order", re.I)
 CHECKOUT_TEXT = re.compile(
     r"num[ée]ro de (?:la )?carte|card number|\bcvv\b|\bcvc\b|cryptogramme|date d'expiration"
@@ -123,8 +123,7 @@ def pays(element: str | None, url: str, text: str) -> bool:
         return checkout
     found = _ELEMENT.match(element)
     tag, label = (found.group(1), found.group(2)) if found else ("", element)
-    link = " -> " in element
-    if PAYS.search(label) and (checkout or not link):
+    if PAYS.search(label):  # a link too: a GET may order on a site he is signed in to
         return True
     return checkout and bool(SENDS.search(tag) or SENDS.search(label))
 
@@ -476,7 +475,13 @@ class BrowserDesk:
         await self._need_tab(ctx.thread_id)
         live = self._live[ctx.thread_id]
         here, named = urlsplit(live.page.url), urlsplit(page)
-        if (here.hostname, here.path) != (named.hostname, named.path):
+        # The whole address, its query too: `/checkout?order=B` is not the order he approved.
+        if (here.scheme, here.netloc, here.path, here.query) != (
+            named.scheme,
+            named.netloc,
+            named.path,
+            named.query,
+        ):
             raise Refused(
                 f"The page is now {live.page.url}, not {page}: nothing was paid. Look at it "
                 "again and pay on the page it is."
