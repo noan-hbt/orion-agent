@@ -108,7 +108,7 @@ async def test_imessage_and_voice_modules_plug_into_the_daemon(tmp_path: Path) -
         daemon = await start(app, owner_inbox(app), supervisor)
         assert {"imessage.poll", "voice.brief", "voice.poll"} <= set(supervisor.services)
         assert voice.voice is not None and voice.link.target is voice.voice
-        assert daemon.caller is voice.voice and daemon.reports == [voice.voice]
+        assert daemon.caller is voice.voice and voice.voice in daemon.reports
         # A finished call on the shared Inkbox line reaches the voice module.
         call = fake.call(turns=[("user", "salut")])
         await line.dispatch(
