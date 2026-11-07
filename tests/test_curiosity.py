@@ -212,12 +212,13 @@ async def test_every_day_a_hunt_for_his_goals_and_right_away_when_one_gets_stuck
 ) -> None:
     """D268: daily for a goal, a blocked goal starts one at once, nothing said twice."""
     from orion.goals.module import Goals, goal_tool
+    from tests.test_goals import his_message
 
     monday = datetime(2026, 11, 2, 7, 0, tzinfo=PARIS)
     now = [monday]
     goals = Goals(journal, "Europe/Paris", lambda: now[0])
     tool = goal_tool(goals)
-    owner = ToolContext("owner", "c", context_trust=Trust.OWNER)
+    owner = await his_message(journal)
     set_ = {"action": "set", "title": "Trouver un appart à Lyon", "done_when": "un bail signé"}
     await tool.handler(tool.parse(json.dumps({**set_, "next_action": "monter le dossier"})), owner)
     (goal,) = goals.book.goals
