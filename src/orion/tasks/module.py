@@ -126,7 +126,7 @@ class TaskWork:
         if turn.reason is StopReason.HALTED:
             return
         text = turn.text.strip()
-        if current.finished == "done":  # its summary went to Orion with `done`
+        if current.finished in ("done", "unproven"):  # its summary went to Orion with `done`
             return
         if text and not is_silence(text):
             trust = self._orion.threads.get(task.thread).window_trust()
@@ -189,6 +189,13 @@ class StartInput(BaseModel):
     )
     budget_usd: float = Field(default=1.0, gt=0, le=3.0, description="3 at most")
     minutes: int = Field(default=30, ge=5, le=180)
+    done_when: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=300,
+        description="What will show it is done, when its word is not enough (a place still "
+        "free, a document found): it then ends done only on a confirmed action showing it",
+    )
 
     @field_validator("budget_usd", "minutes", mode="before")
     @classmethod
@@ -216,6 +223,11 @@ class DoneInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str = Field(min_length=3, description=f"{SUMMARY_MAX} characters at most")
+    seen: str = Field(
+        default="",
+        max_length=200,
+        description="If it was given done_when: the action id whose CONFIRMED line shows it",
+    )
 
     @field_validator("summary", mode="before")
     @classmethod
@@ -264,6 +276,7 @@ def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) ->
                 _origin(ctx),
                 ctx.correlation_id,
                 ctx.context_trust,
+                args.done_when or "",
             )
         return ToolResult(
             f"Tâche lancée ({task_id}) : elle travaille déjà, et t'écrira ce qu'elle trouve. "
@@ -307,7 +320,22 @@ def task_tools(tasks: Tasks, clock: Callable[[], datetime], max_running: int) ->
         task = await tasks.get(task_id)
         if task is None or task.finished is not None:
             return ToolResult("This task is already over.", is_error=True)
-        await tasks.finish(task_id, "done", args.summary, _origin(ctx), ctx.context_trust)
+        how = await tasks.finish(
+            task_id, "done", args.summary, _origin(ctx), ctx.context_trust, args.seen
+        )
+        if how == "unproven":
+            await tasks.report(
+                task,
+                f"{args.summary}\n\n(Non prouvé : « {task.done_when} » n'est montré par aucune "
+                "action confirmée. Ne lui dis pas que c'est fait : vérifie, ou dis-lui ce qui "
+                "manque.)",
+                clock(),
+                ctx.context_trust,
+            )
+            return ToolResult(
+                "Tâche close, non prouvée : aucune action confirmée ne montre « "
+                f"{task.done_when} ». Orion le saura. Ne fais plus rien."
+            )
         await tasks.report(task, args.summary, clock(), ctx.context_trust)
         return ToolResult("Tâche close : ton bilan part à Orion. Ne fais plus rien.")
 

@@ -8,6 +8,10 @@ conversation, and « je continue » is true: the task carries on by itself.
 
     task.started  task.said (Orion → task)  task.reported (task → Orion)  task.waiting
     task.passed  task.finished
+
+A task started with `done_when` says « fait » only on evidence, like a goal (D267, D274): its
+`done` names the action journaled CONFIRMED that shows it. Without one it ends `unproven`,
+and Orion hears it as such, never as done.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from orion.core.events import Event, NewEvent, Provenance, Trust
 from orion.core.ids import new_id
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
+from orion.tools.outcome import confirmed_proof
 
 STARTED = "task.started"
 SAID = "task.said"
@@ -53,6 +58,8 @@ class Task:
     finished: str | None = None
     """How it ended (done, stopped, out of budget…), once ended."""
     summary: str = ""
+    done_when: str = ""
+    """How to tell it is done (D274); empty: its own word is enough."""
     trust: Trust = Trust.SYSTEM
     """The lowest trust of what it was told (its brief, Orion's messages): a brief written
     after reading a page is worth that page."""
@@ -128,6 +135,7 @@ class TaskState:
                 budget_usd=float(payload["budget_usd"]),
                 minutes=int(payload["minutes"]),
                 started_at=datetime.fromisoformat(str(payload["at"])),
+                done_when=str(payload.get("done_when", "")),
                 trust=min(Trust.SYSTEM, event.trust),
             )
             return
@@ -183,6 +191,7 @@ class Tasks:
         provenance: Provenance,
         correlation_id: str | None,
         trust: Trust = Trust.OWNER,
+        done_when: str = "",
     ) -> str:
         task_id = f"t_{new_id()}"
         await self._record(
@@ -194,6 +203,7 @@ class Tasks:
                 "budget_usd": budget_usd,
                 "minutes": minutes,
                 "at": now.isoformat(),
+                **({"done_when": done_when} if done_when else {}),
             },
             provenance,
             trust,
@@ -237,11 +247,26 @@ class Tasks:
         )
 
     async def finish(
-        self, task_id: str, how: str, summary: str, provenance: Provenance, trust: Trust
-    ) -> None:
-        await self._record(
-            FINISHED, {"task_id": task_id, "how": how, "summary": summary}, provenance, trust, None
-        )
+        self,
+        task_id: str,
+        how: str,
+        summary: str,
+        provenance: Provenance,
+        trust: Trust,
+        action: str = "",
+    ) -> str:
+        """End it; returns how it ended. `done` on a task with `done_when` holds only with the
+        CONFIRMED `action` that shows it, else it ends `unproven` (D274)."""
+        task = await self.get(task_id)
+        payload: dict[str, object] = {"task_id": task_id, "how": how, "summary": summary}
+        if how == "done" and task is not None and task.done_when:
+            proof = await confirmed_proof(self._journal, action)
+            if proof is None:
+                payload["how"] = "unproven"
+            else:
+                payload |= {"action": action, "proof": proof}
+        await self._record(FINISHED, payload, provenance, trust, None)
+        return str(payload["how"])
 
     def _wake(self) -> None:
         for tell in self.waking:

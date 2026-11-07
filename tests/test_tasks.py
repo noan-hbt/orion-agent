@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from orion.config import AgentConfig
 from orion.context.compiler import ContextCompiler
-from orion.core.events import Trust
+from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import ActionProposal, Guardian, Verdict
 from orion.runtime import Orion
@@ -203,3 +203,42 @@ def test_a_task_over_its_limits_is_capped_not_refused() -> None:
     assert start.budget_usd == 3.0
     report = DoneInput.model_validate({"summary": "étape. " * 2000})
     assert report.summary.startswith("étape.") and len(report.summary) < 5000
+
+
+async def test_a_task_with_a_done_when_ends_done_only_on_a_confirmed_action(
+    journal: SqliteJournal,
+) -> None:
+    """D274: like a goal, its word is not enough; the action that shows it is."""
+    world = World(journal, ScriptedProvider())
+    when = "une place libre samedi trouvée sur le site"
+    await world.use(
+        OWNER, action="start", goal="Une place au resto", brief="Samedi soir, 4.", done_when=when
+    )
+    await world.use(
+        OWNER, action="start", goal="Une place au ciné", brief="Samedi soir, 4.", done_when=when
+    )
+    first, second = await world.tasks.running()
+
+    said = await world.use(ToolContext(first.thread, "c1"), action="done", summary="Trouvé.")
+    assert "non prouvée" in said.content
+    assert (await world.tasks.get(first.id)).finished == "unproven"  # type: ignore[union-attr]
+    [alert] = await world.work.alerts(world.now)
+    assert "Non prouvé" in alert.notice
+
+    await journal.append(
+        [
+            NewEvent(
+                kind="tool.executed",
+                payload={"outcome": "CONFIRMED", "action_id": "web:resa#1", "proof": "Table 20h"},
+                provenance=Provenance(source=second.thread, actor="orion:core"),
+                trust=Trust.SYSTEM,
+            )
+        ]
+    )
+    await world.use(
+        ToolContext(second.thread, "c2"),
+        action="done",
+        summary="Table à 20h.",
+        seen="web:resa#1",
+    )
+    assert (await world.tasks.get(second.id)).finished == "done"  # type: ignore[union-attr]
