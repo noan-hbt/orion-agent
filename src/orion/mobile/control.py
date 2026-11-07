@@ -472,15 +472,27 @@ class Control:
             return []
         await self.autonomy.start()
         state = self.autonomy.state
-        return [
-            {
-                "action": action,
-                "label": label(action),
-                "alone": action in state.granted,
-                "streak": state.streak.get(action, 0),
-            }
-            for action in self.autonomy.shown()
-        ]
+        today = self.now().date()
+        found: list[dict[str, Any]] = []
+        for action in self.autonomy.shown():
+            bounds = state.limits.get(action)
+            found.append(
+                {
+                    "action": action,
+                    "label": label(action),
+                    "alone": action in state.granted,
+                    "streak": state.streak.get(action, 0),
+                    # What it covers, until when, and what Orion last did with it (ORI-022).
+                    "scope": bounds.describe() if bounds is not None else "",
+                    "until": bounds.until if bounds is not None else "",
+                    "expired": bounds is not None and bounds.expired(today),
+                    "effects": [
+                        {"at": at, "arguments": arguments}
+                        for at, arguments in reversed(state.effects.get(action, []))
+                    ],
+                }
+            )
+        return found
 
     async def take_back(self, action: str) -> None:
         if self.autonomy is None or action not in self.autonomy.shown():
