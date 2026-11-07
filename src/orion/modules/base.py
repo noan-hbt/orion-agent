@@ -83,6 +83,15 @@ class ModuleSettings(BaseModel):
     enabled: bool = False
 
 
+@dataclass(frozen=True)
+class Capability:
+    """Something Orion can do through a module, and whether it can right now."""
+
+    name: str
+    available: bool
+    detail: str = ""
+
+
 class Module:
     """Subclass and override the hooks you need; all are optional."""
 
@@ -137,6 +146,12 @@ class Module:
     def doctor(self) -> list[str]:
         """Lines for `orion doctor` when the module is enabled (config problems first)."""
         return []
+
+    def capabilities(self) -> list[Capability]:
+        """What the module lets Orion do and whether it can right now (ORI-019), read by the
+        `capabilities` module. By default one entry, available, with its `doctor` lines: a
+        module that can tell a broken connector from a working one says so here."""
+        return [Capability(self.name, True, "; ".join(self.doctor()))]
 
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         """What the module will do for the owner on its own between now and `until`, so he

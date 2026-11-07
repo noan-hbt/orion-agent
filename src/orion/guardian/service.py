@@ -153,6 +153,7 @@ def _limits(params: dict[str, Any]) -> Limits:
     raw: dict[str, Any] = {
         "recipients": list(params.get("recipients") or []),
         "domains": list(params.get("domains") or []),
+        "until": str(params.get("until") or ""),
     }
     return Limits.model_validate(raw)
 
@@ -1054,7 +1055,10 @@ class GuardianService:
             ):
                 return False
             bounds = state.limits.get(action)
-            if not within(action, Limits.model_validate(bounds) if bounds else None, params or {}):
+            limits = Limits.model_validate(bounds) if bounds else None
+            if limits is not None and limits.expired(self.clock().date()):
+                return False  # past the day he gave it: asked again (D285)
+            if not within(action, limits, params or {}):
                 return False
             day = self.clock().date().isoformat()
             if state.autonomous_days.get(day, 0) >= self.config.guardian.max_autonomous_per_day:
