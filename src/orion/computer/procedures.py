@@ -48,7 +48,7 @@ PATH_STEPS = 15
 """Actions of the observed path kept with a procedure, the last ones."""
 _ADDRESS = re.compile(r"https?://[^\s»\"”)]+")
 _LABEL = re.compile(r"«([^»]+)»|“([^”]+)”|\"([^\"]+)\"")
-_ACTS = ("click", "type", "select", "press", "upload")
+_ACTS = ("click", "pay", "type", "select", "press", "upload")
 """Actions that change something on the site: what an outcome follows."""
 
 
