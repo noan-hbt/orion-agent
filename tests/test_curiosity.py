@@ -204,6 +204,8 @@ GOAL_LEAD = {
     "objectif": "",
     "pourquoi": "Il n'a pas de garant.",
     "recherches": ["garant en ligne Visale agence Lyon"],
+    "benefice": "Un garant accepté débloque son dossier.",
+    "abandon": "Si aucune agence ne les accepte.",
 }
 
 
@@ -251,6 +253,11 @@ async def test_every_day_a_hunt_for_his_goals_and_right_away_when_one_gets_stuck
     hunt = await curiosity.tick()
     assert hunt is not None and hunt.outcome == "found" and hunt.found is not None
     assert hunt.found.goal_id == goal and hunt.found.url == ARTICLE.url
+    # ORI-015: the run says what it was for and its budget; the goal keeps what was searched.
+    run = [e.payload for e in await journal.read(0, 1000) if e.kind == "curiosity.run"][-1]
+    assert run["goal_id"] == goal and run["budget"] and run["expected_benefit"]
+    await goals.sync()
+    assert any(n.kind == "research" for n in goals.get(goal).notes)
     (alert,) = await curiosity.alerts(now[0].replace(hour=11))
     assert "Visale est gratuit" in alert.notice and "Son agence" in alert.notice
     assert "supposes" in alert.notice and "lue le 03/11/2026" in alert.notice
