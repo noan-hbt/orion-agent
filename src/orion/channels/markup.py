@@ -27,8 +27,9 @@ and, since D140, records the app draws as iOS does (self-closing, or with a clos
 
 Tags rather than a tool: no extra model call, nothing that changes the tool registry (cache),
 and a message stays one message, journaled as sent. The app draws the pieces; every other
-channel gets `plain()`, which reads well as text. Anything malformed stays text, as written,
-except choices left open at the end of the message: they are closed there.
+channel gets `plain()`, which reads well as text and loses nothing a piece carries (ORI-021,
+D287): only `open`, a screen of the app, means nothing elsewhere. Anything malformed stays
+text, as written, except choices left open at the end of the message: they are closed there.
 """
 
 from __future__ import annotations
@@ -203,13 +204,20 @@ def _plain(piece: Piece) -> str:
     if piece.kind == "text":
         return str(data["text"])
     if piece.kind == "choices":
-        return "\n".join(f"- {o}" for o in data["options"])
+        options = "\n".join(f"- {o}" for o in data["options"])
+        if data["multiple"]:  # what the button would do, said: no channel loses it (ORI-021)
+            return f"{options}\n(à choisir, puis : {data['send']})"
+        return options
     if piece.kind == "card":
         head = data["title"] + (f" · {data['subtitle']}" if data["subtitle"] else "")
         return "\n".join([head, *data["lines"], *([data["link"]] if data["link"] else [])])
     if piece.kind == "event":
         when = datetime.fromisoformat(data["when"])
         at = when.strftime("%d/%m") if data["all_day"] else when.strftime("%d/%m %H:%M")
+        if data["end"]:
+            end = datetime.fromisoformat(data["end"])
+            same_day = end.date() == when.date()
+            at += " - " + end.strftime("%H:%M" if same_day else "%d/%m %H:%M")
         return " · ".join(x for x in (data["title"], at, data["where"]) if x)
     if piece.kind == "mail":
         subject = f"« {data['subject']} »" if data["subject"] else ""

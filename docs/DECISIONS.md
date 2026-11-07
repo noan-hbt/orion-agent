@@ -6422,3 +6422,15 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D287 — Aucun canal ne perd ce qu'une pièce structurée dit
+
+ORI-021 (audit du 05/11). D126 tient : les balises restent le format du contenu, un seul
+texte rendu par canal ; pas d'objet message à part.
+
+- Tous les canaux qui ne dessinent rien (Telegram, iMessage, voix…) passent déjà par
+  `markup.plain()`. Il gardait presque tout ; il garde maintenant aussi la fin d'un événement
+  et ce que fait le bouton d'un choix multiple. Seul `open` (un écran de l'app) ne dit rien
+  ailleurs.
+- `initiative.delivered` porte `notify_kind` (le type de notification de D225). Le lien à un
+  objectif (`goal_id`) attend que les candidats le portent (ORION-46).
