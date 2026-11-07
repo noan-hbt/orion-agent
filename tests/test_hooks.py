@@ -211,7 +211,7 @@ async def test_a_hook_it_could_not_do_is_said_once_and_stays_on(journal: SqliteJ
     hook = await hooks.create(spec, BY_HIM, Trust.OWNER)
     inbox = _Inbox()
     engine = InitiativeEngine(
-        orion, journal, Timers(journal, TimerProjection()), inbox, InitiativeSettings(),
+        orion, journal, Timers(journal, TimerProjection()), inbox, InitiativeSettings(digests=()),
         clock=lambda: datetime.now(PARIS), reports=[hooks],
     )  # fmt: skip
     opened: tuple[str, dict[str, object]] = (

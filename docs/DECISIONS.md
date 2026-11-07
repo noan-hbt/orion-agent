@@ -6344,3 +6344,56 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   l'honore : UID CalDAV (`If-None-Match: *`, un 412 = déjà écrit) et id d'événement Google (un
   409 = déjà écrit, relu). Le mail (SMTP) ne peut pas : il reste couvert par la réconciliation
   ci-dessus et `mail.sent`. Les canaux avaient déjà la leur (outbox, D19).
+
+## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
+
+*07/11/2026 · acceptée · étend D267, D258 · ORION-41 (audit du 05/11, ORI-008, F-07)*
+
+L'audit demandait des contrats d'achèvement (`expected_outcome`, `acceptance_checks`,
+`evidence_requirements`, `verify_after`, `human_signoff`). Pas de nouveau modèle : on étend celui
+des objectifs (D267), un `done_when` rédigé à la création et une action journalisée `CONFIRMED`
+(D258) pour le dire atteint.
+
+- **Tâche de fond** : `task` (start) prend un `done_when` optionnel. Quand il existe, `task`
+  (done) doit nommer (`seen`) l'action dont la ligne `CONFIRMED` le montre ; sans elle, la tâche
+  se clôt `unproven`, et Orion reçoit son bilan marqué « non prouvé », jamais « fait ».
+  `Tasks.finish` applique la règle, pas l'outil.
+- **Job délégué** : `delegate` prend le même `done_when`. Rien de ce que fait l'agent délégué
+  n'est journalisé comme action confirmée : un job qui réussit selon lui arrive « non prouvé »,
+  avec la consigne de vérifier la condition avant de la lui dire faite.
+- **Une seule règle** : `tools/outcome.confirmed_proof` (la dernière issue de l'action, dans les
+  5 000 derniers événements), lue par les objectifs et les tâches.
+- **Hors contrat** : les missions, récurrentes, n'ont pas de « fini ». `verify_after` et
+  `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
+  c'est déjà la vérification humaine.
+- Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
+## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
+
+*07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
+
+Un job avec shell coupé par un redémarrage restait UNCERTAIN et attendait toujours le
+propriétaire, même quand l'agent avait fini. Le CLI écrit maintenant son JSON final dans le
+dossier du job (`.orion-result.json`, plus en mémoire seulement) ; il survit à Orion.
+`DelegatedAgent.left` le relit, et c'est le `check` de l'étape `work` : un JSON entier → l'étape
+est faite avec ce résultat, le job se termine sans relance ni question. Absent ou tronqué → on ne
+sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
+présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
+restent en mémoire (D257).
+
+## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
+
+*07/11/2026 · acceptée · complète D156 · ORION-37 (audit ORI-013)*
+
+`orion week` (et `GET /api/week`) comptait ce qui avait mal tourné et le coût. Il dit aussi,
+toujours lu du journal seul, sans événement nouveau :
+
+- **les actions** par issue (D258 : confirmées, en attente, tentées, échouées, incertaines), et
+  les incertaines une à une ;
+- **les appels coupés au délai** (ORION-25) ;
+- **les travaux de fond** : workflows finis par état, étapes restées incertaines (D257) ;
+- **les objectifs atteints** (`goal.reached`, D267) ;
+- **le bruit** : combien de fois Orion a parlé de lui-même, combien sont restées sans réaction
+  dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
+
+Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.

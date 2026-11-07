@@ -40,6 +40,7 @@ from orion.guardian.policy import OWNER_THREAD
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.tools.actions import NO_ARGS, Action, action_tool
 from orion.tools.base import Effect, Tool, ToolContext, ToolResult
+from orion.tools.outcome import confirmed_proof
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -237,10 +238,6 @@ class GoalError(ValueError):
     """A change that contradicts what is known of the goals: said back to the model."""
 
 
-CONFIRMED_SCAN = 5_000
-"""How far back an observed outcome is looked for in the journal."""
-
-
 class Goals:
     def __init__(
         self, journal: EventStore, timezone: str, clock: Callable[[], datetime] | None = None
@@ -267,18 +264,6 @@ class Goals:
             and origin.kind == "message.received"
             and origin.provenance.actor.startswith("owner")
         )
-
-    async def _confirmed(self, action: str) -> str | None:
-        """The proof of `action`, if a recent call journaled it CONFIRMED (D258): what Orion
-        saw, checked by the code, not its own words."""
-        last = await self._journal.last_seq()
-        events = await self._journal.read(max(0, last - CONFIRMED_SCAN), CONFIRMED_SCAN)
-        proof: str | None = None
-        for event in events:
-            p = event.payload
-            if event.kind == "tool.executed" and action in str(p.get("action_id", "")).split(","):
-                proof = str(p.get("proof", "")) if p.get("outcome") == "CONFIRMED" else None
-        return proof
 
     def get(self, goal_id: str) -> Goal:
         goal = self.book.goals.get(goal_id)
@@ -431,7 +416,7 @@ class Goals:
                 "Il ne l'a pas dit ici : demande-le-lui, ou cite ce que tu as vu (basis observed)."
             )
         if basis == "observed":
-            proof = await self._confirmed(action) if action else None
+            proof = await confirmed_proof(self._journal, action)
             if proof is None:
                 raise GoalError(
                     "Une observation se prouve : donne l'action confirmée qui le montre (action, "
