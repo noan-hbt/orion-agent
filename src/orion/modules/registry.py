@@ -18,9 +18,11 @@ def builtin_modules() -> list[type[Module]]:
     # Imported here: a module's dependencies load only when modules are listed.
     from orion.adaptation.module import AdaptationModule
     from orion.advice.module import AdviceModule
+    from orion.artifacts.module import ArtifactsModule
     from orion.awaiting.module import AwaitingModule
     from orion.booking.module import BookingModule
     from orion.calendar.module import CalendarModule
+    from orion.capabilities.module import CapabilitiesModule
     from orion.channels.module import IMessageModule
     from orion.channels.telegram_module import TelegramModule
     from orion.chronicle.module import ChronicleModule
@@ -74,6 +76,8 @@ def builtin_modules() -> list[type[Module]]:
         VoiceModule,
         DelegationModule,
         AdaptationModule,
+        ArtifactsModule,
+        CapabilitiesModule,
         NightModule,
         DoubtModule,
         CalendarModule,

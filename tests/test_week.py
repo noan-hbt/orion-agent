@@ -133,3 +133,27 @@ async def test_the_week_shows_what_was_really_done_and_the_noise(journal: Sqlite
     assert this.outcomes == {"CONFIRMED": 1, "UNCERTAIN": 1}
     assert this.goals_reached == 1 and this.spoke == 1 and this.held == 1
     assert "book: book:c2" in report(this, before)
+
+
+async def test_a_turn_that_went_wrong_lowers_its_roles_rate_on_its_model(
+    journal: SqliteJournal,
+) -> None:
+    """ORI-020: measure before routing; success per role and model, read from the journal."""
+    from orion.core.events import Provenance, Trust
+
+    def on(turn: str, kind: str, **payload: object) -> NewEvent:
+        prov = Provenance(source="test:1", actor="test:runner")
+        return NewEvent(kind=kind, payload=payload, provenance=prov, trust=Trust.SYSTEM,
+                        correlation_id=turn)  # fmt: skip
+
+    await journal.append(
+        [
+            on("t1", "model.usage", model="fast"),
+            on("t1", "turn.finished", thread_id="tasks:abc", reason="completed"),
+            on("t2", "model.usage", model="fast"),
+            on("t2", "tool.executed", tool="mail_send", outcome="FAILED"),
+            on("t2", "turn.finished", thread_id="tasks:def", reason="completed"),
+        ]
+    )
+    this = week(await journal.read(0, 1000), PARIS, datetime.now(PARIS) + timedelta(minutes=1))
+    assert this.success[("tasks", "fast")] == [1, 2]

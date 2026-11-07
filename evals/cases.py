@@ -1042,7 +1042,13 @@ CASES: tuple[Case, ...] = (
             "Noan part à Londres avec Léa le 31 octobre 2026, en Eurostar.",
         ),
         steps=(Watch(),),
-        checks=(says(r"(?i)passeport", "the watch links the trip and the passport"),),
+        checks=(
+            says(r"(?i)passeport", "the watch links the trip and the passport"),
+            says(
+                r"(?im)^\W*(FAIRE|PR[ÉE]PARER|DEMANDER|INFORMER)\s*\|.*passeport",
+                "the watch types what it saw (D277)",
+            ),
+        ),
     ),
     Case(
         name="la_veille_se_tait_sans_raison",
@@ -1353,5 +1359,24 @@ CASES: tuple[Case, ...] = (
         ),
         live_web=True,
         modules=("web",),
+    ),
+    Case(
+        name="contrainte_oubliee",
+        origin="ORI-016 (audit du 05/11) : le rappel suivait les mots du message ; une contrainte "
+        "liée à un objectif, sans mot commun avec la question, ne remontait pas.",
+        at=paris(2026, 11, 7, 9, 0),
+        facts=(
+            *OWNER,
+            "Son kiné lui interdit toute course à pied avant le 20/11 (entorse à la cheville).",
+        ),
+        steps=(
+            Say(
+                "Nouvel objectif : finir le semi-marathon de Lyon le 30/11. C'est réussi quand "
+                "j'ai passé la ligne d'arrivée."
+            ),
+            Say("Je fais quoi samedi matin pour avancer ?", at=paris(2026, 11, 7, 9, 5)),
+        ),
+        checks=(says(r"(?i)kiné|cheville|entorse|20/11|20 novembre", "it forgot the constraint"),),
+        modules=("goals",),
     ),
 )

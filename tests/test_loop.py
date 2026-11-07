@@ -403,7 +403,7 @@ async def test_a_long_output_keeps_its_start_and_its_end() -> None:
     _, messages = await collect(provider, ToolRegistry([big]))
     shown = str(next(m["content"] for m in messages if m["role"] == "tool"))
     assert shown.startswith("D" * 40) and shown.endswith("F" * 20)
-    assert "[… 140 characters cut here, of 200 …]" in shown
+    assert "140 characters cut here" in shown
 
 
 async def test_a_reply_cut_by_the_length_limit_is_continued_and_sent_whole() -> None:

@@ -83,6 +83,15 @@ class ModuleSettings(BaseModel):
     enabled: bool = False
 
 
+@dataclass(frozen=True)
+class Capability:
+    """Something Orion can do through a module, and whether it can right now."""
+
+    name: str
+    available: bool
+    detail: str = ""
+
+
 class Module:
     """Subclass and override the hooks you need; all are optional."""
 
@@ -138,6 +147,12 @@ class Module:
         """Lines for `orion doctor` when the module is enabled (config problems first)."""
         return []
 
+    def capabilities(self) -> list[Capability]:
+        """What the module lets Orion do and whether it can right now (ORI-019), read by the
+        `capabilities` module. By default one entry, available, with its `doctor` lines: a
+        module that can tell a broken connector from a working one says so here."""
+        return [Capability(self.name, True, "; ".join(self.doctor()))]
+
     async def planned(self, now: datetime, until: datetime) -> list[Planned]:
         """What the module will do for the owner on its own between now and `until`, so he
         can see it all in one place and call any of it off (D78)."""
@@ -178,6 +193,9 @@ class Plate:
     """The guardian process, when Orion runs split (D28): it holds the secrets, so modules
     reach Inkbox, calendars and mailboxes through it."""
     autonomy: Autonomy | None = None
+    intents: list[Callable[[], list[str]]] = field(default_factory=list["Callable[[], list[str]]"])
+    """What he is working towards (his active goals): recall searches it along with his
+    message (ORI-016)."""
 
     def module(self, kind: type[M]) -> M | None:
         """An enabled module, by class (for modules that build on another)."""

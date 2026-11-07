@@ -13,6 +13,7 @@ leaving them with a half-finished thought.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections import Counter
@@ -1021,19 +1022,39 @@ def _timed_out(
     )
 
 
+ARTIFACT_MAX_BYTES = 1_000_000
+"""What of a clipped output the journal keeps whole (D282): past it, the first part, said so."""
+
+
 def _clip(result: ToolResult, tool: Tool) -> ToolResult:
     """Too long: the start and the end are kept (where totals, errors and conclusions sit), and
-    the middle is cut, with what was cut said in its place."""
+    the middle is cut, with what was cut said in its place. The whole output becomes an
+    artifact the note names, read back with the `artifact` tool (ORI-017): no cut without a
+    way to read the rest."""
     content = result.content
     limit = tool.max_output_chars
     if len(content) <= limit:
         return result
+    raw = content.encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    artifact_id = f"art-{digest[:12]}"
     tail = limit // 3
     head = limit - tail
     cut = len(content) - head - tail
-    note = f"\n[… {cut} characters cut here, of {len(content)} …]\n"
+    note = (
+        f"\n[… {cut} characters cut here, of {len(content)}. The whole output is kept as "
+        f'{artifact_id}: artifact(action="read" or "search", id="{artifact_id}") …]\n'
+    )
     kept = content[:head] + note + (content[-tail:] if tail else "")
-    return replace(result, content=kept)
+    artifact: dict[str, object] = {
+        "artifact_id": artifact_id,
+        "sha256": digest,
+        "size": len(content),
+        "lines": content.count("\n") + 1,
+        "truncated": len(raw) > ARTIFACT_MAX_BYTES,
+        "content": raw[:ARTIFACT_MAX_BYTES].decode("utf-8", errors="ignore"),
+    }
+    return replace(result, content=kept, artifact=artifact)
 
 
 def _signature(call: ToolCall) -> tuple[str, str]:

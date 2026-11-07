@@ -70,6 +70,9 @@ class ToolResult:
     """The action the outcome is about, stable across the calls that touch it (`mail:<id>`)."""
     proof: str = ""
     """A short reference to what shows the outcome (a Message-ID, an outbox id, page words)."""
+    artifact: dict[str, Any] | None = None
+    """Set when the content was clipped: the whole output, journaled as `tool.artifact` and
+    read back with the `artifact` tool (ORI-017)."""
 
     def shown(self) -> str:
         """The content as the model reads it: the outcome first, where clipping and pruning

@@ -14,6 +14,7 @@ site's session), and the core checks them too, before even asking.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -40,10 +41,19 @@ class Limits(BaseModel):
     domains: list[str] = Field(
         default_factory=list[str], description="Sites where sending is allowed (e.g. doctolib.fr)"
     )
+    until: str = Field(
+        default="",
+        pattern=r"^(\d{4}-\d{2}-\d{2})?$",
+        description="Last day it holds (YYYY-MM-DD), only when he set one; empty: no end (D285)",
+    )
 
     @property
     def empty(self) -> bool:
-        return not self.recipients and not self.domains
+        return not self.recipients and not self.domains and not self.until
+
+    def expired(self, today: date) -> bool:
+        """Past the last day he gave it (ORI-022): Orion asks again."""
+        return bool(self.until) and today > date.fromisoformat(self.until)
 
     def describe(self) -> str:
         parts: list[str] = []
@@ -51,6 +61,8 @@ class Limits(BaseModel):
             parts.append("seulement à " + ", ".join(self.recipients))
         if self.domains:
             parts.append("seulement sur " + ", ".join(self.domains))
+        if self.until:
+            parts.append(f"jusqu'au {date.fromisoformat(self.until):%d/%m/%Y}")
         return " ; ".join(parts)
 
 

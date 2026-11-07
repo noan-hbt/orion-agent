@@ -357,6 +357,9 @@ class Orion:
         self._registry = registry
         self._guardian = guardian
         self._compiler = compiler
+        self.intents: list[Callable[[], list[str]]] = []
+        """What he is working towards, from modules (his active goals): searched along with
+        his message so what touches his plans comes up (ORI-016)."""
         self.inline: Callable[[Message], Message] | None = None
         """Turns a journaled message into what goes on the wire (photos the model looks at
         itself, D87): same input, same bytes, so the prompt cache holds."""
@@ -555,8 +558,23 @@ class Orion:
         result, reason = await execute_call(
             call, self._registry, self._guardian, settings, min(trust, Trust.SYSTEM)
         )
+        provenance = Provenance(source=f"thread:{thread_id}", actor="orion:core")
+        kept = (
+            [
+                NewEvent(
+                    kind="tool.artifact",
+                    payload={**result.artifact, "tool": name, "call_id": call.id},
+                    provenance=provenance,
+                    trust=result.trust,
+                    correlation_id=correlation_id,
+                )
+            ]
+            if result.artifact is not None
+            else []
+        )
         await self._journal.append(
             [
+                *kept,
                 NewEvent(
                     kind="tool.executed",
                     payload={
@@ -571,7 +589,7 @@ class Orion:
                     provenance=Provenance(source=f"thread:{thread_id}", actor="orion:core"),
                     trust=Trust.SYSTEM,
                     correlation_id=correlation_id,
-                )
+                ),
             ]
         )
         return result, reason
@@ -1015,8 +1033,20 @@ class Orion:
                         ]
                     )
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
+                    kept: list[NewEvent] = []
+                    if tool_result.artifact is not None:  # clipped: kept whole (ORI-017)
+                        kept.append(
+                            self._event(
+                                "tool.artifact",
+                                {**tool_result.artifact, "tool": call.name, "call_id": call.id},
+                                tool_result.trust,
+                                correlation_id,
+                                received.id,
+                            )
+                        )
                     await self._journal.append(
                         [
+                            *kept,
                             self._event(
                                 "tool.executed",
                                 {
@@ -1031,7 +1061,7 @@ class Orion:
                                 Trust.SYSTEM,
                                 correlation_id,
                                 received.id,
-                            )
+                            ),
                         ]
                     )
                 case Finished(
@@ -1303,8 +1333,13 @@ class Orion:
         delta = playbook_delta(rules, settings, shown)
         if delta:
             blocks.append(delta)
+        intent = "\n".join(
+            [await self._memory.intent(), *(line for source in self.intents for line in source())]
+        )
         relevant = [
-            f for f in await self._memory.search(text, self._recall_limit) if f.id not in shown
+            f
+            for f in await self._memory.search(text, self._recall_limit, intent=intent)
+            if f.id not in shown
         ]
         # A follow-up (« et pour lui ? ») names nothing: the subject lives in the last
         # exchange, so it is searched too, for a few more slots (ORION-4).
