@@ -214,6 +214,19 @@ class ReportSource(Protocol):
 Settle = Callable[[str | None, str], Awaitable[str | None]]
 
 
+def _settle_all(settles: Sequence[Settle]) -> Settle | None:
+    """Alerts sent as one message are each settled (review of #197): what their SILENCE leaves
+    to tell him, together."""
+    if not settles:
+        return None
+
+    async def settle(spoken: str | None, read: str) -> str | None:
+        said = [await s(spoken, read) for s in settles]
+        return "\n".join(t for t in said if t) or None
+
+    return settle
+
+
 @dataclass(frozen=True)
 class Alert:
     """Something worth an unrequested message (an event about to start…). Unlike a report, it
@@ -993,6 +1006,7 @@ class InitiativeEngine:
             importance=parts[0].importance,
             notify_kind=parts[0].notification,
             level=_loudest(self._level(c) for c in parts),
+            settle=_settle_all([c.settle for c in (*parts, *carried) if c.settle is not None]),
         )
         if not await self._deliver(joined, now, ready[0][1], together=[*parts[1:], *carried]):
             return []
@@ -1035,7 +1049,8 @@ class InitiativeEngine:
         await self._record(
             DELIVERED, candidate, now, correlation_id=correlation_id, how=how, arbiter=why_now
         )
-        if candidate.settle is not None and how != "silence not borne out":
+        if candidate.settle is not None:
+            # Gone out: Orion's reply, or the line a SILENCE asked for, told only now (#197).
             await candidate.settle(text, "")
         for item in together:
             await self._record(
