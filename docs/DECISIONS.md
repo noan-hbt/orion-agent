@@ -6018,3 +6018,31 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D270 — Les relances restent : la relecture ne couvre que les affirmations
+
+*07/11/2026 · acceptée · complète D252, D253 · ORION-16*
+
+L'audit du 05/11 supposait qu'une fois la preuve en place (D252/D253), une partie des relances
+`[Orion · …]` deviendrait inutile. Relues une à une le 07/11 (11 dans le code, 9 au 05/11 plus
+les deux de `grounding`), aucune ne l'est : la relecture et `ground_check` ne regardent qu'une
+chose, une affirmation d'état sans preuve. Chaque relance a un autre déclencheur, que rien
+d'autre ne voit :
+
+- **Mécanique de la boucle** (`cognition/loop.py`) : limite du tour atteinte (`WRAP_UP`), même
+  échec deux fois (`SAME_FAILURE`), réponse coupée par la longueur (`CUT`), message arrivé
+  pendant la réponse (`UNSENT`). Ce sont des faits du tour, pas du contenu à vérifier.
+- **Réponse vide** : rien dit du tout (`SAY_SOMETHING`, D216), ou un résultat lu après les
+  derniers mots partis (`UNREPORTED`, 03/11). La relecture ne lit que ce qui est dit ; un
+  silence n'affirme rien.
+- **Plan inachevé** (`UNFINISHED`, D182) : une réponse qui s'arrête à mi-chemin n'affirme rien
+  de faux, elle laisse le travail.
+- **`finish_check`** (D118, D144, D151, D205) : offre en fin de réponse, promesse sans suite
+  programmée, formules d'assistant, demande remise à plus tard sans chercher. Aucune n'est une
+  affirmation d'état.
+- **`RECAP_LINE`** (`runtime.py`, D219) : un en-tête de résumé, pas une relance.
+- **`grounding`** (D252, D253, D258) : c'est le contrôle lui-même.
+
+Le manuel (195 règles apprises en 14 jours au 05/11) se fusionne avec ce qui existe déjà
+(`adapt` avec `replaces`, `unlearn`) sur les données de prod : ce n'est pas du code, et rien
+n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à part.
