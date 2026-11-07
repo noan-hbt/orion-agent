@@ -6245,3 +6245,29 @@ cherche à obtenir. Elle lit désormais ses objectifs (D267).
   avant/après se lit là ; elle demande deux semaines d'usage réel.
 - **Pas encore** : un événement qui crée une question (un mail, un rendez-vous) ne déclenche
   rien ; c'est la veille qui agit (ORION-6). Les interruptions ne sont pas comptées à part.
+
+## D269 — L'arbitre apprend de ses retours, source par source
+
+*07/11/2026 · acceptée · complète D144, D146, D82 · ORION-11*
+
+L'importance d'un message dépendait seulement de la source qui le proposait, réglée à la main.
+Une source qu'il ignore toujours restait aussi pressante qu'une qu'il remercie.
+
+- **Un retour par message** : chaque message qu'Orion envoie de lui-même reçoit un retour, lu
+  dans le journal. Un tapback ❤️ 👍 😂 ‼️ ou un message avec « merci », « top », « génial »…
+  dans les trois heures : `thanks`. 👎 ou « pas maintenant », « plus tard », « laisse tomber »… :
+  `not_now` (« merci, mais pas maintenant » est un `not_now`). Toute autre réponse : `answered`.
+  Rien dans les trois heures : `ignored`. Le retour va au dernier message envoyé ; ceux d'avant
+  dans la fenêtre comptent comme répondus.
+- **Un poids par source** (la famille de la clé : `curiosity`, `chronicle`, `intention`…) : la
+  moyenne des retours des 30 derniers jours (merci +1, répondu +0,5, ignoré −0,5, pas
+  maintenant −1), ramenée à ±0,2, une fois trois messages au moins. Il s'ajoute à l'importance
+  des alertes de cette source, avant le seuil `GOES_NOW` et l'arbitre. Ce qu'il a demandé (rappels,
+  comptes rendus) n'est jamais touché. L'arrêt après quatre messages ignorés (D146) reste.
+- **Journalisé, reconstructible** : les retours sont ses messages et tapbacks, déjà au journal ;
+  le registre de l'initiative les relit. Quand le poids d'une source bouge, `initiative.weight`
+  le journalise avec l'ancien poids et le compte des retours.
+- **Visible** : `orion initiative` donne chaque source, son poids et ses retours ; la console
+  montre chaque ajustement dans l'activité (« a ajusté l'importance d'une source »).
+- **Limite** : les mots sont lus par des règles simples, pas par un modèle ; une réponse sans
+  rapport dans les trois heures compte comme une réponse.

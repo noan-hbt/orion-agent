@@ -65,6 +65,36 @@ ENGAGED_WITHIN = timedelta(hours=3)
 """A message or a tapback this soon after Orion wrote counts as engaging with it."""
 DIGEST_KEY = "digest:"
 FEEDBACK_REACTION = "feedback.reaction"
+WEIGHED = "initiative.weight"
+"""A source's learned importance changed (D269): its new weight and the feedback behind it."""
+LEARN_FOR = timedelta(days=30)
+"""The feedback a source's weight is learned from: the last 30 days."""
+LEARN_FROM = 3
+"""Deliveries of a source needed before its weight moves."""
+MAX_WEIGHT = 0.2
+"""How far feedback moves a source's importance, either way."""
+_SCORES = {"thanks": 1.0, "answered": 0.5, "ignored": -0.5, "not_now": -1.0}
+_THANKS = re.compile(r"\b(merci|top|g[ée]nial|super|parfait|nickel|excellent|bien vu)\b", re.I)
+_NOT_NOW = re.compile(
+    r"(pas maintenant|plus tard|pas le moment|pas besoin|laisse tomber|osef|on s'en fout|"
+    r"[çc]a m'int[ée]resse pas|arr[êe]te)",
+    re.I,
+)
+_REACTIONS = {"love": "thanks", "like": "thanks", "laugh": "thanks", "emphasize": "thanks"}
+_REACTIONS["dislike"] = "not_now"
+
+
+def feedback_of(event: Event) -> str:
+    """What the owner's message or tapback says of what Orion just sent: thanks, not now, or
+    simply an answer. A « merci, mais pas maintenant » is a not now."""
+    if event.kind == FEEDBACK_REACTION:
+        return _REACTIONS.get(str(event.payload.get("reaction")), "answered")
+    text = str(event.payload.get("text", ""))
+    if _NOT_NOW.search(text):
+        return "not_now"
+    return "thanks" if _THANKS.search(text) else "answered"
+
+
 POINT_HEAD = (
     "C'est ton point de {slot}. Un seul message, du plus utile au moins utile, une ou deux "
     "lignes par sujet ; laisse tomber ce qui ne vaut pas sa lecture."
@@ -395,7 +425,10 @@ class Ledger:
     spent: dict[date, int] = field(default_factory=dict[date, int])
     unsaid: list[Unsaid] = field(default_factory=list[Unsaid])
     sent: list[list[Any]] = field(default_factory=list[list[Any]])
-    """[when, kind, engaged] for each delivery of what Orion said of its own accord."""
+    """[when, kind, engaged, feedback] for each delivery of what Orion said of its own accord;
+    feedback is « thanks », « not_now » or « answered », empty while none came."""
+    weights: dict[str, float] = field(default_factory=dict[str, float])
+    """Each source's weight as last journaled (`initiative.weight`)."""
     _seq: int = 0
 
     def ignored(self, kind: str, now: datetime) -> bool:
@@ -403,6 +436,34 @@ class Ledger:
         recent = [s for s in self.sent if s[1] == kind and now - s[0] <= IGNORED_FOR]
         last = recent[-IGNORED_AFTER:]
         return len(last) == IGNORED_AFTER and not any(s[2] for s in last)
+
+    def feedback(self, kind: str, now: datetime) -> dict[str, int]:
+        """What he made of this source's messages over the last 30 days: thanked, answered,
+        ignored (no word within `ENGAGED_WITHIN`), not now. Too recent to tell: left out."""
+        counts = dict.fromkeys(_SCORES, 0)
+        for at, sent_kind, engaged, said in self.sent:
+            if sent_kind != kind or not timedelta(0) <= now - at <= LEARN_FOR:
+                continue
+            if said:
+                counts[said] += 1
+            elif engaged:  # he answered what came after it, soon after
+                counts["answered"] += 1
+            elif now - at > ENGAGED_WITHIN:
+                counts["ignored"] += 1
+        return counts
+
+    def weight(self, kind: str, now: datetime) -> float:
+        """How much feedback raises or lowers this source's importance (D269): the mean of
+        its scores, scaled to ±`MAX_WEIGHT`, once there are `LEARN_FROM` of them."""
+        counts = self.feedback(kind, now)
+        total = sum(counts.values())
+        if total < LEARN_FROM:
+            return 0.0
+        mean = sum(_SCORES[k] * n for k, n in counts.items()) / total
+        return round(MAX_WEIGHT * mean, 2)
+
+    def kinds(self) -> list[str]:
+        return sorted({str(s[1]) for s in self.sent} | set(self.weights))
 
     async def checkpoint(self) -> int:
         return self._seq
@@ -413,6 +474,7 @@ class Ledger:
         self.spent.clear()
         self.unsaid.clear()
         self.sent.clear()
+        self.weights.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -439,11 +501,17 @@ class Ledger:
         if event.kind == FEEDBACK_REACTION or (
             event.kind == "message.received" and event.provenance.actor == "owner:main"
         ):
-            for sent in self.sent:
-                if timedelta(0) <= at - sent[0] <= ENGAGED_WITHIN:
-                    sent[2] = True
+            within = [s for s in self.sent if timedelta(0) <= at - s[0] <= ENGAGED_WITHIN]
+            for sent in within:
+                sent[2] = True
+            if within:  # what he says is about the last thing Orion sent
+                said = feedback_of(event)
+                if said != "answered" or not within[-1][3]:
+                    within[-1][3] = said
         if event.kind == DELIVERED and not payload.get("explicit"):
-            self.sent.append([at, str(payload["key"]).split(":", 1)[0], False])
+            self.sent.append([at, str(payload["key"]).split(":", 1)[0], False, ""])
+        if event.kind == WEIGHED:
+            self.weights[str(payload["kind"])] = float(payload["weight"])
         if event.kind == DELIVERED:
             day = date.fromisoformat(str(payload["day"]))
             for item in payload.get("mentions", []):
@@ -451,6 +519,22 @@ class Ledger:
             if not (payload.get("explicit") or payload.get("bundled") or payload.get("unbudgeted")):
                 self.spent[day] = self.spent.get(day, 0) + 1
         self._seq = event.seq
+
+
+def weights_lines(ledger: Ledger, now: datetime) -> list[str]:
+    """Each source Orion spoke from these 30 days: its learned weight, and what he made of it."""
+    lines: list[str] = []
+    for kind in ledger.kinds():
+        counts = ledger.feedback(kind, now)
+        if not sum(counts.values()):
+            continue
+        weight = ledger.weight(kind, now)
+        lines.append(
+            f"- {kind} : importance {weight:+.2f} ({counts['thanks']} merci, "
+            f"{counts['answered']} répondu, {counts['ignored']} ignoré, "
+            f"{counts['not_now']} pas maintenant)"
+        )
+    return lines
 
 
 def _due_date(c: Commitment) -> date | None:
@@ -638,6 +722,7 @@ class InitiativeEngine:
         if self._memory is not None:
             self._settings = effective_settings(self._base, await self._memory.settings())
         now = self._clock().astimezone(self._zone)
+        await self._learn(now)
         delivered: list[str] = []
         ready: list[tuple[Candidate, str]] = []
         candidates = await self._candidates(now)
@@ -687,6 +772,43 @@ class InitiativeEngine:
         elif ready:
             delivered += await self._deliver_together(ready, now)
         return delivered
+
+    async def _learn(self, now: datetime) -> None:
+        """Journal each source whose learned weight moved (D269), with the feedback behind it:
+        the weight itself is read from the ledger, so it rebuilds from the journal."""
+        moved = [
+            (kind, self.ledger.weight(kind, now))
+            for kind in self.ledger.kinds()
+            if self.ledger.weight(kind, now) != self.ledger.weights.get(kind, 0.0)
+        ]
+        if not moved:
+            return
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=WEIGHED,
+                    payload={
+                        "kind": kind,
+                        "weight": weight,
+                        "was": self.ledger.weights.get(kind, 0.0),
+                        **self.ledger.feedback(kind, now),
+                    },
+                    provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
+                    trust=Trust.SYSTEM,
+                )
+                for kind, weight in moved
+            ]
+        )
+        await self._runner.catch_up()
+        log.info("initiative.weights", moved=dict(moved))
+
+    def learned(self, importance: float, kind: str, now: datetime) -> float:
+        """An alert's importance, raised or lowered by what he made of its source lately."""
+        return round(min(max(importance + self.ledger.weight(kind, now), 0.0), 1.0), 2)
+
+    def weights_view(self, now: datetime) -> list[str]:
+        """Each source, its learned weight and why: for `orion initiative` and the console."""
+        return weights_lines(self.ledger, now)
 
     def _ignored(self, candidate: Candidate, now: datetime) -> bool:
         return (
@@ -810,7 +932,9 @@ class InitiativeEngine:
                     fallback=a.fallback,
                     trust=a.trust,
                     expires_at=a.expires_at,
-                    importance=a.importance,
+                    importance=a.importance
+                    if a.spoken_to
+                    else self.learned(a.importance, a.key.split(":", 1)[0], now),
                     budgeted=not a.spoken_to,
                     raw_last=True,
                     notify_kind=a.notify_kind,
