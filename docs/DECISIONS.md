@@ -6422,3 +6422,16 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
+
+ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
+tombé, ni depuis quand.
+
+- `Module.capabilities()`, optionnel : ce que le module permet et s'il le peut maintenant. Par
+  défaut, une entrée disponible avec les lignes de `doctor()` (pas de seconde sonde) ; un module
+  qui sait reconnaître un connecteur cassé le dit (mail : par compte, secret illisible =
+  indisponible). Une sonde qui lève rend son module indisponible, journalisé.
+- Module `capabilities` (actif par défaut) : sonde toutes les 5 minutes, journalise
+  `capability.health_changed` seulement à une transition.
+- Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
