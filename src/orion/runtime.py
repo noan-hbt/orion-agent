@@ -24,7 +24,7 @@ import structlog
 from pydantic import ValidationError
 
 from orion.cognition.finish import finish_check
-from orion.cognition.grounding import ground_check
+from orion.cognition.grounding import acted_check, ground_check
 from orion.cognition.loop import (
     ANSWERED,
     Budget,
@@ -36,6 +36,7 @@ from orion.cognition.loop import (
     StopReason,
     Told,
     ToolExecuted,
+    ToolStarted,
     Waiting,
     execute_call,
     run_agent,
@@ -844,8 +845,11 @@ class Orion:
             finish_check=finish_check
             if thread_id == OWNER_THREAD and kind == "message.received"
             else None,
+            # The watch's conclusion is what he reads of its own actions (D262): checked too.
             ground_check=ground_check
             if thread_id == OWNER_THREAD and kind == "message.received"
+            else acted_check
+            if thread_id == WATCH_THREAD
             else None,
             budget=Budget(
                 max_steps=max_steps or self._agent.max_steps,
@@ -954,6 +958,23 @@ class Orion:
                 case Told(text=told):
                     if progress is not None:
                         await progress(told, correlation_id)
+                case ToolStarted(call=call, deadline=deadline):
+                    await self._journal.append(
+                        [
+                            self._event(
+                                "tool.started",
+                                {
+                                    "thread_id": thread_id,
+                                    "tool": call.name,
+                                    "call_id": call.id,
+                                    "deadline": deadline,
+                                },
+                                Trust.SYSTEM,
+                                correlation_id,
+                                received.id,
+                            )
+                        ]
+                    )
                 case ToolExecuted(call=call, result=tool_result, decision_reason=reason):
                     await self._journal.append(
                         [

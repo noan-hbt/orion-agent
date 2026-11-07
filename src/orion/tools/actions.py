@@ -93,7 +93,7 @@ def action_tool(
     *,
     reversibility: Reversibility = Reversibility.REVERSIBLE,
     accepts_untrusted_context: bool = False,
-    deadline: float | None = DEFAULT_DEADLINE,
+    deadline: float = DEFAULT_DEADLINE,
 ) -> Tool:
     """A tool whose `action` picks one of `actions`; the other fields are that action's
     parameters (all optional in the schema, with their type and allowed values, checked
@@ -204,7 +204,7 @@ def grouped(
     description: str,
     tools: list[Tool],
     renames: dict[str, str],
-    deadline: float | None = DEFAULT_DEADLINE,
+    deadline: float = DEFAULT_DEADLINE,
 ) -> Tool:
     """Tools of one domain as the actions of one tool: `renames` maps each tool's name to its
     action (every tool must be named). Each keeps its model, handler, effect and trust rule."""

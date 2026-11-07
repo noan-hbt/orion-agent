@@ -14,10 +14,12 @@ from orion.guardian.policy import WATCH_THREAD, Guardian
 from orion.memory.service import MemoryService, Origin
 from orion.memory.store import MemoryStore
 from orion.runtime import OWNER_THREAD, Orion
-from orion.tools.base import ToolRegistry
+from orion.tools.base import Effect, Tool, ToolRegistry
+from orion.tools.outcome import Outcome
 from orion.watch.module import POINT_IMPORTANCE, Watch, WatchSettings, conclusion
 from tests.conftest import make_event
-from tests.fakes import ScriptedProvider, reply
+from tests.fakes import ScriptedProvider, call_tools, reply
+from tests.test_grounding import _act, _ActInput  # pyright: ignore[reportPrivateUsage]
 
 PARIS = ZoneInfo("Europe/Paris")
 OWNER = Origin("owner:main", "imessage:owner", Trust.OWNER)
@@ -205,4 +207,41 @@ async def test_stirred_watches_have_a_ceiling(journal: SqliteJournal) -> None:
         clock[0] = datetime(2026, 10, 28, 9, 0, tzinfo=PARIS) + timedelta(minutes=minutes)
         await watch.tick()
     assert len(provider.requests) == 1  # one a day, here
+    await store.close()
+
+
+async def test_what_the_watch_did_itself_is_told_as_its_own(journal: SqliteJournal) -> None:
+    """ORION-27: on 06/11 the watch asked Amazon for an invitation, then wrote « Amazon indique
+    déjà invitation demandée ». A state its own action produced is not found « déjà » so, and
+    the message he gets knows what the watch did."""
+    store = MemoryStore(":memory:")
+    await store.open()
+    memory = MemoryService(journal, store)
+    noon = datetime(2026, 10, 28, 12, 40, tzinfo=PARIS)
+    act = Tool("act", "Act.", _ActInput, _act, effect=Effect.NONE, accepts_untrusted_context=True)
+    clicked: dict[str, object] = {
+        "outcome": Outcome.ATTEMPTED.value,
+        "action": "browser:amazon.fr#1",
+    }
+    provider = ScriptedProvider(
+        call_tools(("act", clicked)),
+        reply("MAINTENANT : Amazon indique déjà invitation demandée."),
+        reply("MAINTENANT : J'ai demandé une invitation sur Amazon, pas de confirmation vue."),
+    )
+    watch = Watch(journal, memory, WatchSettings(), STRONG_MODEL, "Europe/Paris", lambda: noon)
+    watch.orion = Orion(
+        journal=journal,
+        provider=provider,
+        registry=ToolRegistry([act]),
+        guardian=Guardian(),
+        compiler=ContextCompiler("C"),
+        agent=AgentConfig(),
+        memory=memory,
+    )
+    await watch.orion.start()
+    told = await watch.tick()
+    assert told is not None and "déjà" not in told
+    assert "browser:amazon.fr#1" in str(provider.requests[2].messages[-1]["content"])
+    (alert,) = await watch.alerts(noon)
+    assert "browser:amazon.fr#1" in alert.notice and "browser:amazon.fr#1" in alert.fallback
     await store.close()

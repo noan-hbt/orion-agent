@@ -45,6 +45,7 @@ from orion.tools.base import (
     ToolRegistry,
     ToolResult,
 )
+from orion.tools.outcome import Outcome
 
 log = structlog.get_logger(__name__)
 
@@ -175,6 +176,15 @@ class ModelCalled:
 
 
 @dataclass(frozen=True)
+class ToolStarted:
+    """A call about to run, journaled before it does: a turn frozen in it, or killed, shows
+    where (ORION-25)."""
+
+    call: ToolCall
+    deadline: float
+
+
+@dataclass(frozen=True)
 class ToolExecuted:
     call: ToolCall
     result: ToolResult
@@ -271,8 +281,31 @@ STOP_POLL_SECONDS = 0.5
 """How often a running call looks whether he asked to stop (ORION-32)."""
 STOP_GRACE_SECONDS = 10.0
 """How long a cut call gets to let go of what it holds before the turn goes on without it."""
+STRAY_RUNNING = "a stopped call still runs"
 
-LoopEvent = MessageEmitted | ModelCalled | ToolExecuted | Told | Finished
+_STRAYS: dict[asyncio.Future[ToolResult], str] = {}
+"""Calls cut by a Stop that did not end within the grace (a handler that ignores the
+cancellation): still running, so the stop is not done (ORION-32). Call → its tool's name."""
+
+
+def stray_calls() -> list[str]:
+    """The tools of the calls a Stop could not end, still running."""
+    return sorted(set(_STRAYS.values()))
+
+
+async def strays_ended() -> None:
+    """Returns once every call a Stop could not end has ended."""
+    while _STRAYS:
+        await asyncio.wait(set(_STRAYS))
+
+
+def _family(name: str) -> str:
+    """What a tool shares with its siblings (`browser_click` and `browser_open` drive one
+    browser): a call a Stop could not end keeps its family closed until it ends."""
+    return name.split("_", 1)[0]
+
+
+LoopEvent = MessageEmitted | ModelCalled | ToolStarted | ToolExecuted | Told | Finished
 
 
 async def run_agent(
@@ -550,6 +583,9 @@ async def run_agent(
             if call_counts[_signature(call)] > budget.max_identical_calls + 1:
                 stalled = True
 
+        for call in calls:
+            if (tool := registry.get(call.name)) is not None:
+                yield ToolStarted(call, deadline_of(tool))
         started = time.monotonic()
         try:
             executions = await _execute_calls(
@@ -794,6 +830,15 @@ async def _execute_one(
             )
         return ToolResult(str(exc), is_error=True), "invalid input"
 
+    if (running := [n for n in stray_calls() if _family(n) == _family(tool.name)]) != []:
+        return (
+            ToolResult(
+                f"{', '.join(running)} from a stopped call still runs (it did not stop):"
+                f" {tool.name} waits until it ends. Tell him.",
+                is_error=True,
+            ),
+            STRAY_RUNNING,
+        )
     decision = await guardian.decide(
         ActionProposal(tool, arguments, context_trust, settings.thread_id, settings.asking)
     )
@@ -812,12 +857,13 @@ async def _execute_one(
         unrestricted=guardian.unrestricted(settings.thread_id),
     )
     started = time.monotonic()
-    limit = asyncio.timeout(tool.deadline)
+    limit = asyncio.timeout(deadline_of(tool))
     try:
         async with limit:
             result = await _run(tool, arguments, ctx, settings)
-    except _Stopped:
-        return _cut(tool, arguments, settings, time.monotonic() - started), STOPPED_CALL
+    except _Stopped as stop:
+        cut = _cut(tool, arguments, settings, time.monotonic() - started, stop.ended)
+        return cut, STOPPED_CALL
     except TimeoutError as exc:
         if not limit.expired():
             log.exception("tool.failed", tool=tool.name)
@@ -830,7 +876,12 @@ async def _execute_one(
 
 
 class _Stopped(Exception):
-    """He asked to stop while the call ran: it was cut."""
+    """He asked to stop while the call ran: it was cut. `ended`: it really ended; otherwise it
+    still runs (`stray_calls`)."""
+
+    def __init__(self, ended: bool) -> None:
+        super().__init__()
+        self.ended = ended
 
 
 async def _run(
@@ -851,27 +902,80 @@ async def _run(
                 task.cancel()
                 done, _ = await asyncio.wait({task}, timeout=STOP_GRACE_SECONDS)
                 if not done:
-                    log.error("tool.stop_failed", tool=tool.name, thread=settings.thread_id)
-                raise _Stopped
+                    _stray(task, tool, settings)
+                raise _Stopped(ended=bool(done))
     finally:
-        if not task.done():
+        if not task.done() and task not in _STRAYS:
             task.cancel()
 
 
-def _cut(tool: Tool, arguments: BaseModel, settings: LoopSettings, seconds: float) -> ToolResult:
-    external = tool.effect_for(arguments) is Effect.EXTERNAL
+def _stray(task: asyncio.Future[ToolResult], tool: Tool, settings: LoopSettings) -> None:
+    """A call that did not end when cut: kept in sight until it does, never said stopped."""
+    log.error(
+        "tool.stop_failed",
+        tool=tool.name,
+        thread=settings.thread_id,
+        correlation_id=settings.correlation_id,
+    )
+    _STRAYS[task] = tool.name
+
+    def ended(done: asyncio.Future[ToolResult]) -> None:
+        _STRAYS.pop(done, None)
+        failure = None if done.cancelled() else done.exception()
+        log.warning(
+            "tool.stray_ended",
+            tool=tool.name,
+            correlation_id=settings.correlation_id,
+            error=repr(failure) if failure is not None else None,
+        )
+
+    task.add_done_callback(ended)
+
+
+MAX_DEADLINE = 3600.0
+"""The longest any call may run, whatever its tool asks: a turn holds his thread (ORION-25).
+His approval is asked before, outside this limit."""
+
+
+def deadline_of(tool: Tool) -> float:
+    return min(tool.deadline, MAX_DEADLINE)
+
+
+def _may_have_acted(tool: Tool, arguments: BaseModel) -> bool:
+    """A call that, cut mid-way, may have changed something: one with an outside effect, or one
+    that acts on a page (a click may have sent the form before the cut)."""
+    return tool.effect_for(arguments) is Effect.EXTERNAL or tool.acts
+
+
+def _cut(
+    tool: Tool, arguments: BaseModel, settings: LoopSettings, seconds: float, ended: bool
+) -> ToolResult:
+    acted = _may_have_acted(tool, arguments)
     log.info(
         "tool.stopped",
         tool=tool.name,
         thread=settings.thread_id,
         correlation_id=settings.correlation_id,
         seconds=round(seconds, 1),
-        external=external,
+        may_have_acted=acted,
+        ended=ended,
     )
-    said = f"Stopped: he asked to stop, the call was cut after {seconds:.0f} s."
-    if external:
-        said += " UNCERTAIN: what it was doing may or may not have happened; never redo it unasked."
-    return ToolResult(said, is_error=True)
+    if ended:
+        said = f"Stopped: he asked to stop, the call was cut after {seconds:.0f} s."
+    else:
+        said = (
+            f"Stop failed: he asked to stop, but after {seconds:.0f} s the call still runs; the"
+            f" {_family(tool.name)} tools wait until it ends. Tell him it is not stopped."
+        )
+    if not acted:
+        return ToolResult(said, is_error=True)
+    said += " What it was doing may or may not have happened: check before, never redo it unasked."
+    return ToolResult(
+        said,
+        is_error=True,
+        outcome=Outcome.UNCERTAIN,
+        action_id=f"{tool.name}:{settings.correlation_id}",
+    )
 
 
 def _timed_out(
@@ -879,22 +983,28 @@ def _timed_out(
 ) -> ToolResult:
     """A call cut at its deadline (ORION-25). What it may have changed outside is not known:
     said so, so that it is checked rather than done twice."""
-    external = tool.effect_for(arguments) is Effect.EXTERNAL
+    acted = _may_have_acted(tool, arguments)
     log.warning(
         "tool.timed_out",
         tool=tool.name,
         thread=settings.thread_id,
         correlation_id=settings.correlation_id,
         seconds=round(seconds, 1),
-        external=external,
+        may_have_acted=acted,
     )
     said = f"Timed out: no answer after {seconds:.0f} s, the call was cut."
-    if external:
-        said += (
-            " UNCERTAIN: what it was doing may or may not have happened. Check (the page, the"
-            " mail, the journal) before doing it again, and tell him it is not confirmed."
-        )
-    return ToolResult(said, is_error=True)
+    if not acted:
+        return ToolResult(said, is_error=True)
+    said += (
+        " What it was doing may or may not have happened. Check (the page, the mail, the"
+        " journal) before doing it again, and tell him it is not confirmed."
+    )
+    return ToolResult(
+        said,
+        is_error=True,
+        outcome=Outcome.UNCERTAIN,
+        action_id=f"{tool.name}:{settings.correlation_id}",
+    )
 
 
 def _clip(result: ToolResult, tool: Tool) -> ToolResult:

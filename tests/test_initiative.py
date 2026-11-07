@@ -698,3 +698,40 @@ async def test_a_silence_not_borne_out_is_said_instead(world: World) -> None:
     assert await engine.tick() == ["grounding:1"]
     assert world.inbox.messages == ["Je n'ai pas pu le vérifier."]
     assert told and told[0][0] is None
+
+
+async def test_a_source_he_thanks_rises_and_one_he_ignores_sinks(world: World) -> None:
+    """D269: his feedback over 30 days moves each source's importance, journaled and shown."""
+    from orion.core.events import NewEvent
+    from orion.initiative.engine import WEIGHED
+
+    said: dict[str, object] = {"why": "x", "day": "2026-11-07", "explicit": False, "mentions": []}
+    by = Provenance(source="orion:initiative", actor="orion:initiative")
+
+    def delivered(key: str) -> NewEvent:
+        return NewEvent(kind=DELIVERED, payload={**said, "key": key}, provenance=by,
+                        trust=Trust.SYSTEM)  # fmt: skip
+
+    def owner(text: str) -> NewEvent:
+        return NewEvent(kind="message.received", payload={"text": text},
+                        provenance=OWNER_PROVENANCE, trust=Trust.OWNER)  # fmt: skip
+
+    await world.journal.append([delivered("idea:1")])
+    await world.journal.append([owner("pas maintenant")])
+    for n, words in enumerate(("Merci, top !", "génial merci", "ok, merci")):
+        await world.journal.append([delivered(f"curiosity:{n}")])
+        await world.journal.append([owner(words)])
+    await world.journal.append([delivered(f"chronicle:{n}") for n in range(3)])  # no word
+
+    world.clock.now = datetime.now(PARIS) + timedelta(hours=4)
+    engine = world.engine(InitiativeSettings(digests=()))
+    await engine.tick()
+    assert engine.learned(0.3, "curiosity", world.clock.now) > 0.3  # thanked: rises
+    assert engine.learned(0.3, "chronicle", world.clock.now) < 0.3  # ignored: sinks
+    assert engine.learned(0.3, "idea", world.clock.now) == 0.3  # one answer is not enough
+    weighed = {str(p["kind"]): p for p in await kinds(world.journal, WEIGHED)}
+    assert set(weighed) == {"curiosity", "chronicle"} and weighed["curiosity"]["thanks"] == 3
+    shown = "\n".join(engine.weights_view(world.clock.now))
+    assert "curiosity : importance +" in shown and "chronicle : importance -" in shown
+    await engine.tick()  # nothing moved: nothing journaled again
+    assert len(await kinds(world.journal, WEIGHED)) == 2

@@ -404,6 +404,22 @@ async def _week(config: OrionConfig) -> int:
     return 0
 
 
+async def _initiative(config: OrionConfig) -> int:
+    """What Orion learned of his feedback, source by source (D269)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from orion.core.projections import ProjectionRunner
+    from orion.initiative.engine import Ledger, weights_lines
+
+    ledger = Ledger()
+    async with SqliteJournal(config.journal_path, HybridClock(config.instance)) as journal:
+        await ProjectionRunner(journal, [ledger]).catch_up()
+    lines = weights_lines(ledger, datetime.now(ZoneInfo(config.agent.timezone)))
+    print("\n".join(lines) or "Aucun message de lui-même ces 30 derniers jours.")
+    return 0
+
+
 async def _hands(config: OrionConfig, args: argparse.Namespace) -> int:
     from orion.hands.desk import HandsDesk
 
@@ -1096,6 +1112,7 @@ def main(argv: list[str] | None = None) -> int:
     export = evals_sub.add_parser("export", help="The week's misses as draft evaluation cases")
     export.add_argument("--days", type=int, default=7, help="How many days back (default: 7)")
     sub.add_parser("week", help="The week: turns stopped short, tool errors, corrections, cost")
+    sub.add_parser("initiative", help="What Orion learned of your feedback, source by source")
     sub.add_parser("models", help="Which model does what, and how long it thinks (D233)")
     contacts = sub.add_parser("contacts", help="His address book")
     contacts_sub = contacts.add_subparsers(dest="contacts_command", required=True)
@@ -1247,6 +1264,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(_evals_export(config, args.days))
     if args.command == "week":
         return asyncio.run(_week(config))
+    if args.command == "initiative":
+        return asyncio.run(_initiative(config))
     if args.command == "models":
         from orion.config import models_view
 

@@ -130,6 +130,9 @@ WORKER_TOOLS = frozenset(
 who acts and talks to the owner. Any read-only call (`Effect.NONE`: his mail, past
 conversations, agenda) is open to it too (D195). Never an approval to the owner, a message to
 him, or an act on the world from a task: it asks Orion instead."""
+NEVER_FREE = frozenset({"browser:pay"})
+"""Never done freely from Orion's own threads in `libre` (D247): paying needs his yes, or that
+he let Orion pay on this site (ORION-13, D265)."""
 NIGHT_THREAD = "night"
 """Orion's own night (D117): while the owner sleeps, Orion looks things up, thinks, starts
 tasks and notes what he will say in the morning. Nothing put to the owner: what he let Orion
@@ -150,6 +153,14 @@ initiative engine weighs."""
 WATCH_REFUSAL = (
     "{tool} is not for your watch: nothing leaves and nothing is put to him from here; say it "
     "in your conclusion, he gets it from there"
+)
+HIS_MARKS = frozenset({"mail_mark"})
+"""Internal, yet his to see: a mail marked read is one he will not open (06/11, the watch
+marked one unasked). From the night or the watch, only within an autonomy he granted (D263),
+`libre` included."""
+HIS_MARKS_REFUSAL = (
+    "{tool} changes what he sees in his mailbox: not from here unless he let you do it alone. "
+    "Reading a mail leaves it as it was; if it should be marked, say so in your conclusion"
 )
 REFLECTIVE_THREADS = {NIGHT_THREAD: NIGHT_REFUSAL, WATCH_THREAD: WATCH_REFUSAL}
 """Orion's own threads, where he thinks alone: nothing reaches the owner from here, and in
@@ -259,10 +270,18 @@ class Guardian:
                 or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
             ):
                 return Decision(Verdict.DENY, refusal.format(tool=tool.name))
+            if tool.name in HIS_MARKS:
+                if await self._alone(tool, proposal):
+                    return Decision(Verdict.ALLOW, ALONE)
+                return Decision(Verdict.DENY, HIS_MARKS_REFUSAL.format(tool=tool.name))
             if effect is Effect.EXTERNAL:
                 # `libre`: the night and the watch act on the world without asking (D247); code
                 # in Orion and what Orion may do alone are still decided with him.
-                if self.unrestricted(proposal.thread_id) and tool.name not in NEVER_ALONE:
+                if (
+                    self.unrestricted(proposal.thread_id)
+                    and tool.name not in NEVER_ALONE
+                    and f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" not in NEVER_FREE
+                ):
                     return Decision(Verdict.ALLOW, FREE_THREAD)
                 # What he let Orion do alone is done at night too (D201): the night prepares
                 # rather than only proposes. The rest waits for the morning, never asked now.

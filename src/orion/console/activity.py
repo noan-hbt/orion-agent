@@ -68,6 +68,7 @@ LABELS = {
     "initiative.triggered": "a eu une idée",
     "initiative.delivered": "a écrit le premier",
     "initiative.suppressed": "s'est tu",
+    "initiative.weight": "a ajusté l'importance d'une source",
     "thinking.thought": "a réfléchi",
     "memory.fact.asserted": "a retenu",
     "memory.fact.invalidated": "a oublié",
