@@ -169,6 +169,9 @@ class Report:
     """How it rings, when its source says (a hook's own level); empty: his choice for its kind."""
     skippable: bool = False
     """Orion may find it pointless by now (done, already said): SILENCE then means nothing goes."""
+    settle: Settle | None = None
+    """See `Alert.settle`: on a SILENCE, what it returns goes out instead (a hook whose tool
+    failed, D264)."""
 
 
 def together_notice(parts: Sequence[str]) -> str:
@@ -794,6 +797,7 @@ class InitiativeEngine:
                     skippable=r.skippable,
                     notify_kind=r.notify_kind,
                     level=r.level,
+                    settle=r.settle,
                 )
                 for r in await source.reports()
             )
@@ -1172,8 +1176,6 @@ class InitiativeEngine:
             log.warning("initiative.compose_incomplete", key=candidate.key, reason=turn.reason)
             return self._failed(candidate, f"fallback: {turn.reason.value}")
         if is_silence(turn.text):
-            if candidate.explicit and not candidate.skippable:
-                return candidate.fallback, "fallback: model chose silence"
             if candidate.settle is not None:
                 read = _read_while_writing(
                     self._orion.threads.get(self._settings.thread_id).messages[earlier:]
@@ -1181,6 +1183,8 @@ class InitiativeEngine:
                 instead = await candidate.settle(None, read)
                 if instead:
                     return instead, "silence not borne out"
+            if candidate.explicit and not candidate.skippable:
+                return candidate.fallback, "fallback: model chose silence"
             return None, "silence"
         draft = turn.text.strip()
         if self._verifier is None or not verifying:
