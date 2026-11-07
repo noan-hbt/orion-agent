@@ -14,9 +14,9 @@ Engine, 012 banc multi-jours, 013 métriques.
 
 ## Comment reprendre
 
-**Avancement au 07/11.** En revue : ORI-007 (#214), ORI-010 (#215), ORI-013 (#216), ORI-012 (#217), ORI-008 (#218), ORI-005 (#219). Fermés
-sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38). Reste : F-05 (à faire une fois #218 fusionnée, mêmes fichiers `tasks/`), puis ORI-011
-(ORION-6). Prochain Dxxx libre : D276.
+**Avancement au 07/11.** Fusionnés : ORI-007 (#214), ORI-010 (#215), ORI-013 (#216), ORI-012 (#217), ORI-008 (#218), ORI-005 (#219). En revue : F-05 (ORION-43, D276). Fermés
+sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38). Reste : ORI-011
+(ORION-6). Prochain Dxxx libre : D277.
 
 - Un point = un ticket Jira `ORION-<n>` = une branche = une PR (règles dans `CLAUDE.md`).
   L'épopée est **ORION-1** (Backlog, label `audit-2026-11-05`). Une partie est déjà faite par
@@ -29,17 +29,17 @@ sans code, en attente du propriétaire : ORI-004, ORI-006, ORI-009 (ORION-38). R
 
 | Point | État | Décision |
 |---|---|---|
-| ORI-007 idempotence (F-04) | **en revue** : PR #214 (ORION-35, D271) | à coder |
-| ORI-010 jobs délégués (F-03) | **en revue** : PR #215 (ORION-36, D272) | à coder (check) |
+| ORI-007 idempotence (F-04) | fait : PR #214 (ORION-35, D271) | à coder |
+| ORI-010 jobs délégués (F-03) | fait : PR #215 (ORION-36, D272) | à coder (check) |
 | ORI-004 modèle Goal | fait (D267) ; rejeu couvert par `rebuild_check` (D81) — à fermer (ORION-38) | rien à coder |
-| ORI-013 métriques | **en revue** : PR #216 (ORION-37, D273) | à coder |
-| ORI-012 banc multi-jours | **en revue** : PR #217 (ORION-40) | à coder |
+| ORI-013 métriques | fait : PR #216 (ORION-37, D273) | à coder |
+| ORI-012 banc multi-jours | fait : PR #217 (ORION-40) | à coder |
 | ORI-006 workflow durable | fait (D257) — à fermer (ORION-38) | pas de graphe ni de compensation |
-| ORI-008 contrats d'achèvement (F-07) | **en revue** : PR #218 (ORION-41, D274) | étendre le contrat D267 |
-| ORI-005 Obligation | **en revue** : PR #219 (ORION-42, D275) | pas d'entité ; dédoublonner partout |
+| ORI-008 contrats d'achèvement (F-07) | fait : PR #218 (ORION-41, D274) | étendre le contrat D267 |
+| ORI-005 Obligation | fait : PR #219 (ORION-42, D275) | pas d'entité ; dédoublonner partout |
 | ORI-009 migration Missions | absent — à fermer (ORION-38) | pas de migration, fermé |
 | ORI-011 Opportunity Engine | partiel — décision commentée sur ORION-6 | le modèle propose un type, les règles décident |
-| F-05 tâches en workflow | absent | une passe = une étape ; missions inchangées |
+| F-05 tâches en workflow | **en revue** (ORION-43, D276) | une passe = une étape ; missions inchangées |
 
 ---
 

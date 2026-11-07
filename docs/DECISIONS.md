@@ -6422,3 +6422,23 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D276 — Une passe de tâche de fond est une étape de workflow
+
+*07/11/2026 · acceptée · précise D110, D257 · ORION-43 (audit F-05)*
+
+Les tâches de fond (D110) relançaient leurs passes avec leur propre boucle : une passe coupée
+par un redémarrage était refaite sans trace, et un modèle indisponible terminait la tâche en
+`failed`. Désormais chaque passe est un run `task.pass` du moteur de workflow (D257), à une
+étape `pass` ; la tâche garde son fil `task:<id>`, seule l'exécution change.
+
+- **Coupée, la passe est refaite une fois, jamais les passes finies** : le run porte le numéro
+  de sa passe, et une passe déjà journalisée (`task.passed`) ne se rejoue pas.
+- **L'étape est INTERNAL**, pas EXTERNAL comme le prévoyait le plan : les appels qui pouvaient
+  agir pendant la passe coupée sont réglés UNCERTAIN au démarrage (D271), et la passe refaite
+  les voit dans son fil sans les rejouer. La rendre EXTERNAL laisserait la tâche bloquée sans
+  rien apprendre de plus.
+- **Modèle indisponible ou quota épuisé** : la passe se met en pause (`QUOTA_WAIT`) puis est
+  refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
+- **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
+- Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
