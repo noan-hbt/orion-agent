@@ -20,6 +20,9 @@ from orion.providers.claude_code import child_env, stop
 
 log = structlog.get_logger(__name__)
 
+RESULT_FILE = ".orion-result.json"
+"""Where the CLI's final JSON is written, in the job's directory: it outlives Orion, so a job
+cut by a restart is known done when it is there (`left`, ORI-010)."""
 FILE_TOOLS = ("Read", "Write", "Edit", "Glob", "Grep")
 BRIEF = (
     "You work for Orion, a personal assistant, on a task its owner asked for. Work only inside "
@@ -83,25 +86,45 @@ class ClaudeCodeAgent:
         self, task: str, workdir: Path, options: dict[str, Any] | None = None
     ) -> AgentOutcome:
         await asyncio.to_thread(workdir.mkdir, parents=True, exist_ok=True)
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *self.command(task),
-                cwd=workdir,
-                env=child_env(),
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as exc:
-            return AgentOutcome(False, "", error=f"cannot start {self._binary}: {exc}")
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), self._timeout)
-        except TimeoutError:
-            return AgentOutcome(False, "", error=f"timed out after {self._timeout:.0f}s")
-        finally:
-            await stop(process)  # timed out, or the job was cancelled: never left running
+        record = workdir / RESULT_FILE
+        await asyncio.to_thread(record.unlink, missing_ok=True)  # a former attempt's
+        with record.open("wb") as out:
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *self.command(task),
+                    cwd=workdir,
+                    env=child_env(),
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=out,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as exc:
+                return AgentOutcome(False, "", error=f"cannot start {self._binary}: {exc}")
+            try:
+                _, stderr = await asyncio.wait_for(process.communicate(), self._timeout)
+            except TimeoutError:
+                return AgentOutcome(False, "", error=f"timed out after {self._timeout:.0f}s")
+            finally:
+                await stop(process)  # timed out, or the job was cancelled: never left running
+        stdout = await asyncio.to_thread(record.read_bytes)
         files = await asyncio.to_thread(_list_files, workdir)
         return self._parse(process.returncode, stdout, stderr, files)
+
+    def left(self, workdir: Path) -> AgentOutcome | None:
+        """What a run that ended left in `workdir`, its final JSON whole; None: it did not end
+        (or never wrote it), so whether it did anything is not known."""
+        try:
+            data = _Result.model_validate_json((workdir / RESULT_FILE).read_bytes())
+        except (OSError, ValidationError):
+            return None
+        error = (data.subtype or "error") if data.is_error else None
+        return AgentOutcome(
+            not data.is_error,
+            data.result or "",
+            data.total_cost_usd or 0.0,
+            _list_files(workdir),
+            error,
+        )
 
     @staticmethod
     def _parse(code: int | None, stdout: bytes, stderr: bytes, files: list[str]) -> AgentOutcome:
@@ -116,7 +139,9 @@ class ClaudeCodeAgent:
 
 
 def _list_files(root: Path) -> list[str]:
-    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file())
+    return sorted(
+        str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and p.name != RESULT_FILE
+    )
 
 
 class _Result(BaseModel):

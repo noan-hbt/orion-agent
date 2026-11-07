@@ -6345,3 +6345,33 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
   `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
   c'est déjà la vérification humaine.
 - Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
+## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
+
+*07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
+
+Un job avec shell coupé par un redémarrage restait UNCERTAIN et attendait toujours le
+propriétaire, même quand l'agent avait fini. Le CLI écrit maintenant son JSON final dans le
+dossier du job (`.orion-result.json`, plus en mémoire seulement) ; il survit à Orion.
+`DelegatedAgent.left` le relit, et c'est le `check` de l'étape `work` : un JSON entier → l'étape
+est faite avec ce résultat, le job se termine sans relance ni question. Absent ou tronqué → on ne
+sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
+présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
+restent en mémoire (D257).
+
+## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
+
+*07/11/2026 · acceptée · complète D156 · ORION-37 (audit ORI-013)*
+
+`orion week` (et `GET /api/week`) comptait ce qui avait mal tourné et le coût. Il dit aussi,
+toujours lu du journal seul, sans événement nouveau :
+
+- **les actions** par issue (D258 : confirmées, en attente, tentées, échouées, incertaines), et
+  les incertaines une à une ;
+- **les appels coupés au délai** (ORION-25) ;
+- **les travaux de fond** : workflows finis par état, étapes restées incertaines (D257) ;
+- **les objectifs atteints** (`goal.reached`, D267) ;
+- **le bruit** : combien de fois Orion a parlé de lui-même, combien sont restées sans réaction
+  dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
+
+Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.

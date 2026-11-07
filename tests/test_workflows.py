@@ -160,6 +160,7 @@ class FakeAgent:
         self.runs = 0
         self.hang = True
         self.started = asyncio.Event()
+        self.leaves: AgentOutcome | None = None
 
     async def run(
         self, task: str, workdir: Path, options: dict[str, Any] | None = None
@@ -169,6 +170,9 @@ class FakeAgent:
         if self.hang:
             await asyncio.Event().wait()
         return AgentOutcome(True, "fini")
+
+    def left(self, workdir: Path) -> AgentOutcome | None:
+        return self.leaves
 
 
 @pytest.mark.parametrize("shell", [False, True])
@@ -208,3 +212,24 @@ async def test_a_job_with_a_done_when_is_reported_unproven_not_done(
     await jobs.wait()
     [report] = await jobs.reports()
     assert "non prouvée" in report.notice and "la page est en ligne" in report.notice
+
+
+async def test_a_delegated_shell_job_cut_by_a_restart_ends_alone_when_its_result_is_there(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """ORI-010: the agent finished while Orion was down; its result is in the job's directory."""
+    agent = FakeAgent(True)
+    jobs = JobService(journal, agent, tmp_path)
+    job_id = await jobs.start("Rapport", "écris le rapport", OWNER, None)
+    await agent.started.wait()
+    await _kill(jobs.engine)
+
+    agent.leaves = AgentOutcome(True, "rapport écrit", files=["rapport.md"])
+    restarted = JobService(journal, agent, tmp_path)
+    await restarted.recover()
+    await restarted.engine.resume_all()
+    await restarted.wait()
+    await restarted.sync()
+    job = restarted.projection.jobs[job_id]
+    assert job.finished and job.ok and job.files == ("rapport.md",)
+    assert agent.runs == 1  # never run again
