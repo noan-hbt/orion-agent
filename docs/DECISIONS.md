@@ -6779,4 +6779,4 @@ phrase disant « tous ».
   chiffre d'exemple annoncé comme tel, ni un fait public connu.
 - **Le règlement juge le seul point du doute**, et un fait public connu que rien ne contredit
   le règle.
-- **Ce qui est dit au propriétaire** cite ses mots à lui (« … »), plus la note du vérificateur.
+- **Ce qui est dit au propriétaire** cite ce qu'il lui a dit (« … »), pas la note du vérificateur.
