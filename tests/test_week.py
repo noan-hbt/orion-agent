@@ -115,3 +115,21 @@ def test_two_misses_in_the_same_minute_get_two_case_names() -> None:
         if k.arg == "name" and isinstance(k.value, ast.Constant)
     ]
     assert len(names) == 2 and len(set(names)) == 2
+
+
+async def test_the_week_shows_what_was_really_done_and_the_noise(journal: SqliteJournal) -> None:
+    """ORI-013: confirmed, failed, uncertain, and how often Orion spoke for nothing."""
+    await journal.append(
+        [
+            make_event("tool.executed", tool="mail", outcome="CONFIRMED", action_id="mail:1"),
+            make_event("tool.executed", tool="book", outcome="UNCERTAIN", action_id="book:c2"),
+            make_event("goal.reached", goal_id="g1"),
+            make_event("initiative.delivered", key="watch:x", day="2026-11-07"),
+            make_event("initiative.suppressed", key="watch:y", day="2026-11-07"),
+        ]
+    )
+    now = datetime.now(PARIS) + timedelta(minutes=1)
+    this, before = weeks(await journal.read(0, 100_000), PARIS, now)
+    assert this.outcomes == {"CONFIRMED": 1, "UNCERTAIN": 1}
+    assert this.goals_reached == 1 and this.spoke == 1 and this.held == 1
+    assert "book: book:c2" in report(this, before)

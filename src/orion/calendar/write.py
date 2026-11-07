@@ -64,6 +64,9 @@ class NewCalendarEvent(BaseModel):
     location: str = Field(default="", max_length=200)
     notes: str = Field(default="", max_length=1000)
     meeting: str | None = None
+    uid: str = Field(default="", pattern=r"^[0-9a-v]{0,64}$")
+    """Stable for the same call tried again (`ToolContext.idempotency_key`): the remote side
+    keeps one event for it (CalDAV UID, Google event id), so a retry is not a second event."""
 
 
 class CalendarWriteError(RuntimeError):
@@ -144,13 +147,15 @@ async def write_event(
 
 
 async def _caldav(http: httpx.AsyncClient, writer: CalDavWriter, event: NewCalendarEvent) -> str:
-    uid = f"orion-{new_id()}"
+    uid = f"orion-{event.uid}" if event.uid else f"orion-{new_id()}"
     response = await http.put(
         writer.url.rstrip("/") + f"/{uid}.ics",
         content=to_ics(event, uid, datetime.now(UTC)),
         headers={"content-type": "text/calendar; charset=utf-8", "if-none-match": "*"},
         auth=(writer.username, writer.password.resolve().get_secret_value()),
     )
+    if response.status_code == 412 and event.uid:
+        return uid  # written by an earlier try of the same call (`if-none-match`)
     if response.status_code not in (200, 201, 204):
         raise CalendarWriteError(f"CalDAV answered {response.status_code}")
     return uid
@@ -183,12 +188,14 @@ async def _google(http: httpx.AsyncClient, writer: GoogleWriter, event: NewCalen
         body["location"] = event.location
     if event.notes:
         body["description"] = event.notes
-    response = await http.post(
-        GOOGLE_EVENTS_URL.format(calendar=writer.calendar_id),
-        json=body,
-        headers={"authorization": f"Bearer {token}"},
-        params={"sendUpdates": "none"},
-    )
+    if event.uid:
+        body["id"] = f"orion{event.uid}"
+    url = GOOGLE_EVENTS_URL.format(calendar=writer.calendar_id)
+    headers = {"authorization": f"Bearer {token}"}
+    response = await http.post(url, json=body, headers=headers, params={"sendUpdates": "none"})
+    if response.status_code == 409 and event.uid:
+        # Written by an earlier try of the same call: that event is the one.
+        response = await http.get(f"{url}/orion{event.uid}", headers=headers)
     if response.status_code not in (200, 201):
         raise CalendarWriteError(f"Google Calendar answered {response.status_code}")
     return str(response.json().get("iCalUID") or response.json()["id"])

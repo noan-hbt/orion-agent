@@ -8,6 +8,7 @@ the guardian decides on.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -51,6 +52,9 @@ class ToolContext:
     unrestricted: bool = False
     """His conversation, where outside content restricts nothing (`approvals = "libre"`,
     D232): a guard on the context's trust lets the call through; what is written keeps it."""
+    idempotency_key: str = ""
+    """The same for the same call tried again in this turn (`idempotency_key`): a connector
+    that accepts one gives it to the remote side, so the effect happens once (ORI-007)."""
 
 
 @dataclass
@@ -79,6 +83,18 @@ class ToolResult:
         if self.outcome is None:
             return {}
         return {"outcome": self.outcome.value, "action_id": self.action_id, "proof": self.proof}
+
+
+def idempotency_key(thread_id: str, correlation_id: str, tool: str, arguments: BaseModel) -> str:
+    """Derived from what the call does, not from its `call_id` (the model picks a new one when
+    it asks again): the same action asked twice in a turn carries the same key."""
+    body = json.dumps(
+        [thread_id, correlation_id, tool, arguments.model_dump(mode="json")],
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return "k" + hashlib.sha256(body.encode()).hexdigest()[:40]
 
 
 ToolHandler = Callable[[Any, ToolContext], Awaitable[ToolResult]]

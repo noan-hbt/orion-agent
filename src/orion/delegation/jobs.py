@@ -7,8 +7,13 @@ conversation; the initiative engine reports the result in the owner's thread whe
 
 A job is a workflow run (D257): `work` (the agent) then `finish` (job.finished). After a restart,
 a job whose agent only writes in its workspace is run again; one with a shell may have done
-things on the server, so it turns UNCERTAIN and the owner is told, never replayed. A job that
+things on the server, so it turns UNCERTAIN and is never replayed: done if the agent left its
+final result in the job's directory (`DelegatedAgent.left`), otherwise the owner is told. A job that
 needed a session (`options`, never journaled) cannot resume and is marked failed.
+
+A job given `done_when` is never reported done on the agent's word (D274): nothing the agent
+does is journaled as a CONFIRMED action, so it lands « non prouvée » and Orion checks the
+condition itself before telling the owner.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from orion.workflows.engine import (
     Step,
     StepContext,
     StepFailed,
+    Verdict,
     Workflow,
     WorkflowEngine,
 )
@@ -56,6 +62,10 @@ class DelegatedAgent(Protocol):
         """`options`: per-task settings that are never journaled (a site session…)."""
         ...
 
+    def left(self, workdir: Path) -> AgentOutcome | None:
+        """The outcome a run that ended left in `workdir`; None when it cannot tell."""
+        ...
+
 
 @dataclass(frozen=True)
 class Job:
@@ -69,6 +79,13 @@ class Job:
     files: tuple[str, ...] = ()
     error: str | None = None
     cost_usd: float = 0.0
+    done_when: str = ""
+    """How to tell it is done (D274); empty: the agent's report is enough."""
+
+    @property
+    def unproven(self) -> bool:
+        """Finished well by the agent's account, against a condition nobody has shown."""
+        return self.finished and self.ok and bool(self.done_when)
 
 
 class JobProjection:
@@ -97,7 +114,11 @@ class JobProjection:
                 return
             job_id = str(payload["job_id"])
             self.jobs[job_id] = Job(
-                job_id, str(payload["title"]), str(payload["task"]), str(payload["workdir"])
+                job_id,
+                str(payload["title"]),
+                str(payload["task"]),
+                str(payload["workdir"]),
+                done_when=str(payload.get("done_when", "")),
             )
         elif event.kind == JOB_FINISHED:
             job = self.jobs.get(str(payload["job_id"]))
@@ -113,6 +134,7 @@ class JobProjection:
                     files=tuple(str(f) for f in payload.get("files", [])),
                     error=payload.get("error"),
                     cost_usd=float(payload.get("cost_usd", 0.0)),
+                    done_when=job.done_when,
                 )
 
     def running(self) -> list[Job]:
@@ -147,7 +169,7 @@ class JobService:
                 Workflow(
                     self.workflow,
                     (
-                        Step("work", self._work, effect=shell, attempts=2),
+                        Step("work", self._work, effect=shell, check=self._check_work, attempts=2),
                         Step("finish", self._done),
                     ),
                     ended=self._ended,
@@ -185,6 +207,7 @@ class JobService:
         provenance: Provenance,
         correlation_id: str | None,
         options: dict[str, Any] | None = None,
+        done_when: str = "",
     ) -> str:
         """`options` reach the agent in memory only (a restart fails the job anyway)."""
         job_id = f"j_{new_id()}"
@@ -199,6 +222,7 @@ class JobService:
                 "task": task,
                 "workdir": str(workdir),
                 "agent": self._agent.name,
+                **({"done_when": done_when} if done_when else {}),
             },
             provenance,
             correlation_id,
@@ -225,14 +249,16 @@ class JobService:
         options = self._options.pop(job.id, None)
         if ctx.inputs.get("needs_session") and options is None:
             raise StepFailed("its session did not survive a restart", retryable=False)
-        outcome = await self._agent.run(job.task, Path(job.workdir), options)
-        return {
-            "ok": outcome.ok,
-            "result": outcome.result[:MAX_RESULT_CHARS],
-            "files": outcome.files[:50],
-            "error": outcome.error,
-            "cost_usd": outcome.cost_usd,
-        }
+        return _checkpoint(await self._agent.run(job.task, Path(job.workdir), options))
+
+    async def _check_work(self, ctx: StepContext) -> Verdict:
+        """A job with a shell cut by a restart: done if the agent left its final result in the
+        job's directory; otherwise not known, and the owner is asked (ORI-010)."""
+        job = self.projection.jobs[str(ctx.inputs["job_id"])]
+        outcome = self._agent.left(Path(job.workdir))
+        if outcome is None:
+            return Verdict(None)
+        return Verdict(True, _checkpoint(outcome), evidence="final result in its directory")
 
     async def _ended(self, run: Run) -> None:
         """A run that failed or was cancelled settles its job, so the owner hears of it."""
@@ -295,14 +321,36 @@ class JobService:
         await self.sync()
 
 
+def _status(job: Job) -> str:
+    if job.unproven:
+        return f"terminée selon l'agent, non prouvée (réussie quand : {job.done_when})"
+    return "terminée" if job.ok else f"échouée ({job.error})"
+
+
+def _checkpoint(outcome: AgentOutcome) -> dict[str, Any]:
+    return {
+        "ok": outcome.ok,
+        "result": outcome.result[:MAX_RESULT_CHARS],
+        "files": outcome.files[:50],
+        "error": outcome.error,
+        "cost_usd": outcome.cost_usd,
+    }
+
+
 def _report(job: Job, trust: Trust = Trust.SYSTEM) -> Report:
-    status = "terminée" if job.ok else f"échouée ({job.error})"
+    status = _status(job)
     files = ", ".join(job.files[:10]) or "aucun"
+    check = (
+        "\nNe lui dis pas que c'est fait sur sa seule parole : vérifie « "
+        f"{job.done_when} » toi-même, ou dis-lui que c'est à vérifier."
+        if job.unproven
+        else ""
+    )
     return Report(
         key=f"job:{job.id}",
         notice=f"Tâche déléguée « {job.title} » {status} ({job.id}).\n"
         f"Compte rendu de l'agent :\n{job.result or '(vide)'}\n"
-        f"Fichiers produits, dans {job.workdir} : {files}",
+        f"Fichiers produits, dans {job.workdir} : {files}{check}",
         why="la tâche que tu m'as confiée vient de se terminer",
         fallback=f"Tâche « {job.title} » {status}. "
         + (f"Fichiers dans {job.workdir} : {files}" if job.ok else ""),
@@ -318,6 +366,13 @@ class DelegateInput(BaseModel):
         min_length=10,
         description="Complete, self-contained instructions: the agent sees nothing else. Say "
         "what to produce, in which form, and any constraint the owner gave.",
+    )
+    done_when: str | None = Field(
+        default=None,
+        min_length=3,
+        max_length=300,
+        description="What will show it is done (a page online, a mail sent): its result is "
+        "then reported unproven until you check it yourself",
     )
 
 
@@ -336,6 +391,7 @@ def delegation_tools(jobs: JobService) -> list[Tool]:
                 derived_from=(ctx.origin_event_id,) if ctx.origin_event_id else (),
             ),
             ctx.correlation_id,
+            done_when=args.done_when or "",
         )
         return ToolResult(
             f"Tâche lancée ({job_id}). Le résultat arrivera par message quand elle sera finie.",
@@ -353,10 +409,7 @@ def delegation_tools(jobs: JobService) -> list[Tool]:
             + ("interrompue, issue incertaine" if j.id in uncertain else "en cours")
             for j in jobs.projection.running()
         ]
-        lines += [
-            f"- ({j.id}) {j.title} : {'terminée' if j.ok else 'échec : ' + (j.error or '?')}"
-            for j in jobs.projection.finished()[-10:]
-        ]
+        lines += [f"- ({j.id}) {j.title} : {_status(j)}" for j in jobs.projection.finished()[-10:]]
         return ToolResult("\n".join(lines) if lines else "Aucune tâche déléguée.")
 
     shell = jobs.agent.allow_bash
