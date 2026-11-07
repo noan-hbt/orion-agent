@@ -151,6 +151,14 @@ WATCH_REFUSAL = (
     "{tool} is not for your watch: nothing leaves and nothing is put to him from here; say it "
     "in your conclusion, he gets it from there"
 )
+HIS_MARKS = frozenset({"mail_mark"})
+"""Internal, yet his to see: a mail marked read is one he will not open (06/11, the watch
+marked one unasked). From the night or the watch, only within an autonomy he granted (D263),
+`libre` included."""
+HIS_MARKS_REFUSAL = (
+    "{tool} changes what he sees in his mailbox: not from here unless he let you do it alone. "
+    "Reading a mail leaves it as it was; if it should be marked, say so in your conclusion"
+)
 REFLECTIVE_THREADS = {NIGHT_THREAD: NIGHT_REFUSAL, WATCH_THREAD: WATCH_REFUSAL}
 """Orion's own threads, where he thinks alone: nothing reaches the owner from here, and in
 `libre` he acts on the world without asking (D247)."""
@@ -259,6 +267,10 @@ class Guardian:
                 or f"{tool.name}:{getattr(proposal.arguments, 'action', '')}" in NIGHT_NEVER
             ):
                 return Decision(Verdict.DENY, refusal.format(tool=tool.name))
+            if tool.name in HIS_MARKS:
+                if await self._alone(tool, proposal):
+                    return Decision(Verdict.ALLOW, ALONE)
+                return Decision(Verdict.DENY, HIS_MARKS_REFUSAL.format(tool=tool.name))
             if effect is Effect.EXTERNAL:
                 # `libre`: the night and the watch act on the world without asking (D247); code
                 # in Orion and what Orion may do alone are still decided with him.
