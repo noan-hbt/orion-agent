@@ -67,6 +67,11 @@ ENGAGED_WITHIN = timedelta(hours=3)
 DIGEST_KEY = "digest:"
 FEEDBACK_REACTION = "feedback.reaction"
 WEIGHED = "initiative.weight"
+WAITING = "initiative.waiting"
+"""The arbiter held a message back for the first time: since when, so a restart keeps its age
+(ORI-014). Cleared by its delivery, its suppression, or `WAIT_CLEARED`."""
+WAIT_CLEARED = "initiative.waiting_cleared"
+"""A held-back message is no longer a candidate (its commitment was settled, its alert gone)."""
 """A source's learned importance changed (D269): its new weight and the feedback behind it."""
 LEARN_FOR = timedelta(days=30)
 """The feedback a source's weight is learned from: the last 30 days."""
@@ -453,6 +458,8 @@ class Ledger:
     feedback is « thanks », « not_now » or « answered », empty while none came."""
     weights: dict[str, float] = field(default_factory=dict[str, float])
     """Each source's weight as last journaled (`initiative.weight`)."""
+    waiting: dict[str, datetime] = field(default_factory=dict[str, datetime])
+    """Messages the arbiter holds back, since when (`initiative.waiting`)."""
     _seq: int = 0
 
     def ignored(self, kind: str, now: datetime) -> bool:
@@ -499,6 +506,7 @@ class Ledger:
         self.unsaid.clear()
         self.sent.clear()
         self.weights.clear()
+        self.waiting.clear()
         self._seq = 0
 
     async def apply(self, event: Event) -> None:
@@ -508,6 +516,12 @@ class Ledger:
         payload: dict[str, Any] = event.payload
         if event.kind in (DELIVERED, SUPPRESSED):
             self.handled.add(str(payload["key"]))
+        if event.kind in (DELIVERED, SUPPRESSED, WAIT_CLEARED):
+            self.waiting.pop(str(payload["key"]), None)
+        if event.kind == WAITING:
+            self.waiting.setdefault(
+                str(payload["key"]), datetime.fromisoformat(str(payload["since"]))
+            )
         if (
             event.kind == SUPPRESSED
             and payload.get("fallback")
@@ -716,12 +730,10 @@ class InitiativeEngine:
         presence: Sequence[PresenceSource] = (),
     ) -> None:
         self._presence = list(presence)
-        self._waiting: dict[str, datetime] = {}
         self._failed_once: set[str] = set()
         self._checks: dict[str, list[Check]] = {}
         """Each check's outcome on the last draft of a candidate, journaled with its decision."""
         """Candidates whose wording failed once (`TRY_AGAIN`)."""
-        """Messages the arbiter held back, since when (asked again each tick)."""
         self._caller = caller
         self._alerts = list(alerts)
         self._digest_sources = list(digests)
@@ -761,6 +773,7 @@ class InitiativeEngine:
         delivered: list[str] = []
         ready: list[tuple[Candidate, str]] = []
         candidates = await self._candidates(now)
+        await self._forget_gone(candidates, now)
         point = next((c for c in candidates if c.key.startswith(DIGEST_KEY)), None)
         held: list[Candidate] = []
         owed: list[Candidate] = []
@@ -1125,7 +1138,6 @@ class InitiativeEngine:
         reason = self._gate(candidate, now)
         if reason is not None:
             if reason not in ("quiet hours", "paused"):  # it waits, it is not dropped
-                self._waiting.pop(candidate.key, None)
                 await self._record(SUPPRESSED, candidate, now, reason=reason)
             return None
         judgement = judge(
@@ -1135,13 +1147,38 @@ class InitiativeEngine:
             self.ledger.spent.get(self._settings.attention_day(now), 0),
             self._settings.daily_budget,
             candidate.expires_at,
-            self._waiting.get(candidate.key),
+            self.ledger.waiting.get(candidate.key),
         )
-        if not judgement.now:
-            self._waiting.setdefault(candidate.key, now)
-            return None
-        self._waiting.pop(candidate.key, None)
-        return judgement.reason
+        if not judgement.now and candidate.key not in self.ledger.waiting:
+            await self._wait(candidate, now, judgement.reason)
+        return judgement.reason if judgement.now else None
+
+    async def _wait(self, candidate: Candidate, now: datetime, reason: str) -> None:
+        """Journal that the arbiter holds this message back, once: its age survives a restart."""
+        payload: dict[str, object] = {"key": candidate.key, "since": now.isoformat()}
+        payload["reason"] = reason
+        if candidate.expires_at is not None:
+            payload["expires_at"] = candidate.expires_at.isoformat()
+        await self._append_system(WAITING, payload)
+
+    async def _forget_gone(self, candidates: list[Candidate], now: datetime) -> None:
+        """A held-back message that is no longer a candidate stops waiting, journaled."""
+        live = {c.key for c in candidates}
+        for key in [k for k in self.ledger.waiting if k not in live]:
+            await self._append_system(WAIT_CLEARED, {"key": key, "why": "gone"})
+
+    async def _append_system(self, kind: str, payload: dict[str, object]) -> None:
+        await self._journal.append(
+            [
+                NewEvent(
+                    kind=kind,
+                    payload=payload,
+                    provenance=Provenance(source="orion:initiative", actor="orion:initiative"),
+                    trust=Trust.SYSTEM,
+                )
+            ]
+        )
+        await self._runner.catch_up()
 
     async def _deliver_together(
         self, ready: list[tuple[Candidate, str]], now: datetime
