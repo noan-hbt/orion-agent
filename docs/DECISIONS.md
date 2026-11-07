@@ -6422,3 +6422,17 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
+
+ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
+crois-tu ? » n'avait pas de réponse lisible.
+
+- Le modèle reçoit les faits numérotés (`[n]`) et rend du JSON : `portrait` (les trois
+  paragraphes, rendus comme avant) et `claims`, une entrée par affirmation importante avec les
+  numéros des faits qui la fondent.
+- Le code ne garde que les numéros qu'il a envoyés ; une affirmation sans fait valide est
+  écartée (échec fermé). Une réponse illisible n'écrit pas de portrait : le précédent reste.
+- `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
+  l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
+  au portrait suivant.
