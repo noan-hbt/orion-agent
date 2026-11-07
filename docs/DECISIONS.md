@@ -6326,6 +6326,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6351,6 +6352,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6363,6 +6365,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 
@@ -6383,6 +6386,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 
@@ -6409,6 +6413,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
   `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
   c'est déjà la vérification humaine.
 - Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
 
 
 
@@ -6461,6 +6466,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
 
 
 
+
 ## D277 — La veille type ce qu'elle voit ; elle propose, les règles décident
 
 *07/11/2026 — ORION-6, audit du 05/11 (ORI-011). Précise D150, D20 et D146.*
@@ -6487,6 +6493,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
   déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
 
 
+
 ## D279 — Un message proactif passe des contrôles séparés ; l'issue d'une action se prouve en code
 
 F-09 (audit du 05/11). Précise D103 (relecture par un second modèle) et D274 (seule règle de
@@ -6504,6 +6511,7 @@ par type de contrôle.
   (ORION-46).
 
 
+
 ## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
 
 ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
@@ -6517,4 +6525,18 @@ crois-tu ? » n'avait pas de réponse lisible.
 - `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
   l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
   au portrait suivant.
+
+
+## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
+
+ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
+tombé, ni depuis quand.
+
+- `Module.capabilities()`, optionnel : ce que le module permet et s'il le peut maintenant. Par
+  défaut, une entrée disponible avec les lignes de `doctor()` (pas de seconde sonde) ; un module
+  qui sait reconnaître un connecteur cassé le dit (mail : par compte, secret illisible =
+  indisponible). Une sonde qui lève rend son module indisponible, journalisé.
+- Module `capabilities` (actif par défaut) : sonde toutes les 5 minutes, journalise
+  `capability.health_changed` seulement à une transition.
+- Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
 
