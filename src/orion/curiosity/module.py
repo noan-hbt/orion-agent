@@ -110,7 +110,9 @@ JSON, en français :
 {"piste": "la piste, en une phrase courte et précise (25 mots au plus)",
  "objectif": "l'id g_… de l'objectif qu'elle fait avancer, ou vide pour une piste libre",
  "pourquoi": "pourquoi ça le concerne lui, en une phrase, tiré de ce que tu sais",
- "recherches": ["une à trois recherches web, précises"]}
+ "recherches": ["une à trois recherches web, précises"],
+ "benefice": "ce que ça lui apportera si tu trouves, en une phrase",
+ "abandon": "quand laisser tomber cette piste, en une phrase"}
 Si rien ne vaut la peine aujourd'hui : {"piste": ""}."""
 
 DISTILL_PROMPT = """Tu es Orion. Tu as cherché pour faire avancer un objectif de la personne que
@@ -313,6 +315,8 @@ class _Lead(BaseModel):
     objectif: Clipped = ""
     pourquoi: Clipped = ""
     recherches: list[Clipped] = Field(default_factory=list[str])
+    benefice: Clipped = ""
+    abandon: Clipped = ""
 
 
 class _Distilled(BaseModel):
@@ -341,6 +345,20 @@ class Hunt:
     found: Find | None = None
     outcome: str = "no lead"
     goal_id: str = ""
+    benefit: str = ""
+    """What the lead was expected to bring him (ORI-015)."""
+    stop_when: str = ""
+    """When to give the lead up."""
+
+
+_OUTCOME_SAID = {
+    "found": "trouvé, transmis à l'initiative",
+    "nothing found": "rien trouvé",
+    "nothing new": "rien de nouveau",
+    "not worth it": "rien qui vaille",
+    "page unreadable": "page illisible",
+    "already searched": "déjà cherché",
+}
 
 
 def _json(text: str) -> Any:
@@ -374,6 +392,9 @@ class Curiosity:
         self.reading: FeedReading | None = None
         """The week's items in his feeds (D160), weighed by the judge beside the searches."""
         self.goals: Goals | None = None
+        self._benefit = ""
+        self._stop_when = ""
+        """The current lead's expected benefit and when to give it up (ORI-015)."""
         """His goals (D267): what the daily hunt serves."""
 
     async def sync(self) -> None:
@@ -440,6 +461,7 @@ class Curiosity:
 
     async def hunt(self, now: datetime, trigger: str = "weekly", focus: Goal | None = None) -> Hunt:
         hunt, queries = await self._hunt(now, trigger, focus)
+        hunt = replace(hunt, benefit=self._benefit, stop_when=self._stop_when)
         if hunt.outcome == "model unavailable":
             # Not this hunt: the model was out of reach. The next tick tries again.
             log.warning("curiosity.hunt_postponed")
@@ -454,20 +476,34 @@ class Curiosity:
                 "lead": hunt.lead,
                 "queries": queries,
                 "outcome": hunt.outcome,
+                "expected_benefit": hunt.benefit,
+                "stop_when": hunt.stop_when,
+                "budget": {"searches": MAX_SEARCHES, "pages": 1},
             },
             Provenance(source="orion:curiosity", actor="orion:curiosity"),
             Trust.SYSTEM,
         )
         log.info("curiosity.hunt", trigger=trigger, lead=hunt.lead, outcome=hunt.outcome)
+        if hunt.goal_id and hunt.lead and self.goals is not None:
+            # The goal keeps what was searched for it, said or not (D268 holds, ORI-015).
+            await self.goals.note(
+                hunt.goal_id,
+                "research",
+                f"Piste cherchée : {hunt.lead} → {_OUTCOME_SAID.get(hunt.outcome, hunt.outcome)}",
+                Provenance(source="orion:curiosity", actor="orion:curiosity"),
+                Trust.SYSTEM,
+            )
         return hunt
 
     async def _hunt(
         self, now: datetime, trigger: str, focus: Goal | None
     ) -> tuple[Hunt, list[str]]:
         goals = await self.aims()
+        self._benefit = self._stop_when = ""
         lead = await self._lead(now, trigger, goals, focus)
         if lead is None:
             return Hunt(outcome="model unavailable"), []
+        self._benefit, self._stop_when = lead.benefice.strip(), lead.abandon.strip()
         goal = next((g for g in goals if g.id == lead.objectif.strip()), None)
         free = trigger == "weekly" and not lead.objectif.strip() and bool(lead.pourquoi.strip())
         if not lead.piste.strip() or (goal is None and not free):

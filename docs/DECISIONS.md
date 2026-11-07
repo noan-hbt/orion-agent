@@ -6422,3 +6422,15 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D284 — Une piste de curiosité dit ce qu'elle vise et s'inscrit sur son objectif
+
+ORI-015 (audit du 05/11). Précise D268, qui tient : la trouvaille passe par l'initiative et
+l'arbitre décide de se taire.
+
+- La piste demandée au modèle porte aussi `benefice` (ce qu'elle lui apportera) et `abandon`
+  (quand la laisser). `curiosity.run` les journalise (`expected_benefit`, `stop_when`) avec le
+  budget de la piste (`budget` : recherches et pages permises).
+- Chaque recherche pour un objectif s'inscrit en note de l'objectif (`goal.noted`, kind
+  `research` : la piste et son issue), dite ou non : l'objectif garde ce qu'on a cherché pour
+  lui. Ces notes ne sont ni des avancées ni des obstacles (le blocage ne les lit pas).
