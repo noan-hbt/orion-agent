@@ -89,3 +89,14 @@ async def test_a_whole_night_transcript_still_searches_by_meaning(
     [first, *_] = await memory.search(question, limit=2)
     assert first.statement.startswith("Paul est allergique")
     assert max(len(t) for call in embedder.calls for t in call) <= 8_000  # the models' limit
+
+
+async def test_what_touches_his_plans_comes_up_without_a_shared_word(
+    setup: tuple[MemoryService, Concepts],
+) -> None:
+    """ORI-016: recall is searched on his goals too, not only on the words of his message."""
+    memory, _ = setup
+    question = "organise ma semaine"
+    assert await memory.search(question, limit=2) == []
+    found = await memory.search(question, limit=2, intent="Gagner la compétition d'escalade")
+    assert [f.statement for f in found] == ["Noan grimpe en salle le jeudi."]

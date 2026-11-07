@@ -6323,6 +6323,16 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
   (D258), pas seulement un texte.
 
+
+
+
+
+
+
+
+
+
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6345,6 +6355,16 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   409 = déjà écrit, relu). Le mail (SMTP) ne peut pas : il reste couvert par la réconciliation
   ci-dessus et `mail.sent`. Les canaux avaient déjà la leur (outbox, D19).
 
+
+
+
+
+
+
+
+
+
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6357,6 +6377,16 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
+
+
+
+
+
+
+
+
+
 
 ## D273 — La semaine dit ce qui a vraiment été fait, et le bruit
 
@@ -6374,6 +6404,16 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
+
+
+
+
+
+
+
+
+
 
 ## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
 
@@ -6397,6 +6437,16 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
   `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
   c'est déjà la vérification humaine.
 - Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
+
+
+
+
+
+
+
+
+
 
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
 
@@ -6434,3 +6484,232 @@ texte rendu par canal ; pas d'objet message à part.
   ailleurs.
 - `initiative.delivered` porte `notify_kind` (le type de notification de D225). Le lien à un
   objectif (`goal_id`) attend que les candidats le portent (ORION-46).
+
+
+
+
+
+## D276 — Une passe de tâche de fond est une étape de workflow
+
+*07/11/2026 · acceptée · précise D110, D257 · ORION-43 (audit F-05)*
+
+Les tâches de fond (D110) relançaient leurs passes avec leur propre boucle : une passe coupée
+par un redémarrage était refaite sans trace, et un modèle indisponible terminait la tâche en
+`failed`. Désormais chaque passe est un run `task.pass` du moteur de workflow (D257), à une
+étape `pass` ; la tâche garde son fil `task:<id>`, seule l'exécution change.
+
+- **Coupée, la passe est refaite une fois, jamais les passes finies** : le run porte le numéro
+  de sa passe, et une passe déjà journalisée (`task.passed`) ne se rejoue pas.
+- **L'étape est INTERNAL**, pas EXTERNAL comme le prévoyait le plan : les appels qui pouvaient
+  agir pendant la passe coupée sont réglés UNCERTAIN au démarrage (D271), et la passe refaite
+  les voit dans son fil sans les rejouer. La rendre EXTERNAL laisserait la tâche bloquée sans
+  rien apprendre de plus.
+- **Modèle indisponible ou quota épuisé** : la passe se met en pause (`QUOTA_WAIT`) puis est
+  refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
+- **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
+- Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
+
+
+
+
+
+
+
+
+
+## D277 — La veille type ce qu'elle voit ; elle propose, les règles décident
+
+*07/11/2026 — ORION-6, audit du 05/11 (ORI-011). Précise D150, D20 et D146.*
+
+L'audit demandait un « Opportunity Engine » : un type par chose vue, un objet opportunité, un
+journal de détection et de choix. Pas de nouveau package : l'opportunité vit sur ce qui existe.
+
+- La conclusion de la veille commence par une ligne par chose vue :
+  `TYPE | la chose | pourquoi`, TYPE parmi FAIRE, PRÉPARER, DEMANDER, INFORMER, SILENCE. Le
+  reste (`SILENCE`, `MAINTENANT :`, `AU POINT :`) ne change pas.
+- Le modèle **propose** ; il ne décide pas s'il dérange ni quand : le seuil, le budget, les
+  heures calmes et l'arbitre tranchent comme avant (D20, D146). FAIRE passe par le gardien
+  comme tout outil ; PRÉPARER, c'est un brouillon, jamais un effet dehors.
+- `Opportunity` (clé, type, chose, raison) est portée par l'`Alert` de la note puis par le
+  `Candidate` (`initiative/engine.py`) : pas d'objet à part.
+- `opportunity.detected` : une fois par chose. La clé est la source et l'objet
+  (`watch:` + la chose sans casse ni accents) ; revue à une autre veille, rien n'est rejournalisé.
+- `opportunity.decided` : ce qu'il en est advenu. `quiet` à la veille même si elle l'a
+  proposée SILENCE ou si sa conclusion n'a pas de message ; sinon au moment où le moteur dit
+  ou écarte le message qui la porte (`said` / `quiet`, avec la raison de l'arbitre ou du
+  filtre).
+- Limites : la clé tient à ce que le modèle nomme la même chose avec les mêmes mots (le brief
+  le lui demande) ; une note périmée (8 h) n'a pas de `decided`. L'exécution de fond, les
+  déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
+
+
+
+
+
+## D278 — L'attente de l'arbitre se journalise : un redémarrage ne rajeunit rien
+
+ORI-014 (audit du 05/11, F-06). Précise D144/D146. L'arbitre ajoute de l'urgence à un message
+retenu selon le temps qu'il attend (`waiting_since`), mais ce temps vivait en mémoire : après un
+redémarrage, un message retenu depuis des heures repartait de zéro.
+
+- La première retenue d'un message par l'arbitre journalise `initiative.waiting` (clé, depuis,
+  raison, `expires_at`), une seule fois. Le `Ledger` de l'initiative en tient la liste ; elle se
+  reconstruit du journal seul.
+- L'attente cesse à la livraison ou à la suppression du message (événements existants), ou par
+  `initiative.waiting_cleared` quand il n'est plus candidat (engagement réglé, alerte partie).
+- Les heures calmes et la pause ne comptent pas comme une retenue de l'arbitre (inchangé).
+
+
+
+
+
+
+
+
+
+## D279 — Un message proactif passe des contrôles séparés ; l'issue d'une action se prouve en code
+
+F-09 (audit du 05/11). Précise D103 (relecture par un second modèle) et D274 (seule règle de
+preuve). Un seul appel au second modèle mêlait faits et preuve d'effet ; rien n'était journalisé
+par type de contrôle.
+
+- `initiative/checks.py` : un `Check(kind, ok, reason)` par type. Chaque décision
+  (`initiative.delivered` / `initiative.suppressed`) porte la liste `checks` du dernier jet.
+- `outcome`, en code et sans appel modèle : un message où Orion dit avoir fait quelque chose
+  (« j'ai réservé », « j'ai envoyé », « j'ai payé »…) exige une action vue `CONFIRMED`
+  (`orion.tools.outcome`), dans son tour ou dans ce qu'on lui a transmis. Sinon le jet est
+  rejeté comme par la relecture : réécrit une fois, puis tu ou repli s'il l'avait demandé.
+- `factual` : le `Verifier` existant, appelé seulement si `outcome` passe.
+- Pas encore : la pertinence liée à un objectif et la politique du gardien sur une action
+  (ORION-46).
+
+
+
+
+
+
+
+
+
+## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
+
+ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
+crois-tu ? » n'avait pas de réponse lisible.
+
+- Le modèle reçoit les faits numérotés (`[n]`) et rend du JSON : `portrait` (les trois
+  paragraphes, rendus comme avant) et `claims`, une entrée par affirmation importante avec les
+  numéros des faits qui la fondent.
+- Le code ne garde que les numéros qu'il a envoyés ; une affirmation sans fait valide est
+  écartée (échec fermé). Une réponse illisible n'écrit pas de portrait : le précédent reste.
+- `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
+  l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
+  au portrait suivant.
+
+
+
+
+## D281 — Le rappel cherche aussi sur ce vers quoi il travaille
+
+ORI-016 (audit du 05/11). Précise ORION-4 (rappel sur la conversation). Le rappel suivait les
+mots du message : une contrainte liée à un objectif, sans mot commun avec la question, ne
+remontait pas.
+
+- L'intention : titres et « réussi quand » des objectifs actifs ou bloqués (fournis par le
+  module `goals` via `Plate.intents`, le cœur ne connaît pas les objectifs), situations en
+  cours et engagements ouverts (mémoire), de confiance seulement.
+- `search(text, ..., intent=...)` cherche aussi l'intention, par les mots et par le sens ; ses
+  classements entrent dans la même fusion RRF. Pas de nouveau seuil. Sans recherche sémantique,
+  quelques faits de l'intention s'ajoutent après ceux du message.
+- Le résultat reste dans `<memoire>` du message courant, jamais dans le message système
+  (contrat de cache).
+- Cas d'éval `contrainte_oubliee`.
+
+
+
+
+
+
+## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
+
+ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
+trop longue ; le milieu était perdu, sans moyen de le relire.
+
+- Quand `_clip` coupe, la sortie entière est journalisée en `tool.artifact` (`artifact_id`
+  dérivé du sha256, taille, lignes, outil, appel) avec le trust de la sortie d'origine. Le
+  journal est le seul stockage : tout se reconstruit de lui, `redact` l'efface comme le reste.
+  Au-delà d'1 Mo, seul le premier Mo est gardé et l'événement le dit (`truncated: true`).
+- La note de coupure nomme l'artefact et l'outil qui le lit.
+- Outil `artifact` (module `artifacts`, actif par défaut, dans le registre trié dès le
+  démarrage) : `read` par plage de lignes (400 au plus), `search` par mots ou expression. Ce
+  qui est lu garde le trust de l'artefact.
+
+
+
+
+## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
+
+ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
+tombé, ni depuis quand.
+
+- `Module.capabilities()`, optionnel : ce que le module permet et s'il le peut maintenant. Par
+  défaut, une entrée disponible avec les lignes de `doctor()` (pas de seconde sonde) ; un module
+  qui sait reconnaître un connecteur cassé le dit (mail : par compte, secret illisible =
+  indisponible). Une sonde qui lève rend son module indisponible, journalisé.
+- Module `capabilities` (actif par défaut) : sonde toutes les 5 minutes, journalise
+  `capability.health_changed` seulement à une transition.
+- Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
+
+
+
+
+
+
+
+## D284 — Une piste de curiosité dit ce qu'elle vise et s'inscrit sur son objectif
+
+ORI-015 (audit du 05/11). Précise D268, qui tient : la trouvaille passe par l'initiative et
+l'arbitre décide de se taire.
+
+- La piste demandée au modèle porte aussi `benefice` (ce qu'elle lui apportera) et `abandon`
+  (quand la laisser). `curiosity.run` les journalise (`expected_benefit`, `stop_when`) avec le
+  budget de la piste (`budget` : recherches et pages permises).
+- Chaque recherche pour un objectif s'inscrit en note de l'objectif (`goal.noted`, kind
+  `research` : la piste et son issue), dite ou non : l'objectif garde ce qu'on a cherché pour
+  lui. Ces notes ne sont ni des avancées ni des obstacles (le blocage ne les lit pas).
+
+
+
+
+
+
+## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
+
+ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
+expiration par défaut.
+
+- `until` (dernier jour, optionnel) s'ajoute aux limites d'une autonomie, posé seulement quand
+  il dit pour combien de temps (« pour un mois »). Il fait partie de ce qu'il approuve (le texte
+  de la demande le dit). Passé ce jour, Orion et le gardien refusent l'action seule : elle
+  redemande l'accord.
+- L'app (`/autonomy`, existant) reçoit pour chaque action sa portée, son échéance, si elle est
+  expirée, et les cinq derniers effets faits seul (lus du journal : `tool.executed` décidé
+  « seul »). La révocation reste le chemin existant. Le mode `libre` et les domaines consentis
+  (ORION-12) ne sont pas touchés.
+
+
+
+## D286 — Mesurer la réussite par rôle et par modèle avant de router
+
+ORI-020 (audit du 05/11). D147 tient (le fond suit le modèle principal sur forfait) : pas de
+routage par risque ou difficulté tant qu'aucun chiffre ne montre qu'un rôle échoue sur un
+modèle.
+
+- Un tour réussit s'il finit normalement (ni limite, ni erreur, ni Stop), qu'aucune de ses
+  actions ne finit UNCERTAIN ou FAILED, et qu'il ne l'a pas corrigé (un raté relevé le soir, à
+  10 minutes de sa réponse).
+- Le rôle est le fil du tour (`conversation` pour lui, sinon la famille du fil : `tasks`,
+  `veille`…) ; le modèle, celui de `model.usage` du tour. Rien de nouveau n'est journalisé.
+- `orion week` (et l'app) donnent le taux par rôle et modèle, à côté des sections de D273. Le
+  routage par risque sera un ticket à part, le jour où ces chiffres le justifient.
+
