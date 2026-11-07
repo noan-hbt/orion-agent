@@ -6328,6 +6328,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6355,6 +6356,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6367,6 +6369,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 
@@ -6389,6 +6392,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 
@@ -6423,6 +6427,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
 
 
 
+
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
 
 *07/11/2026 — ORION-42, audit du 05/11 (ORI-005). Précise D37 et D267.*
@@ -6448,19 +6453,6 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
 
-## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
-
-ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
-expiration par défaut.
-
-- `until` (dernier jour, optionnel) s'ajoute aux limites d'une autonomie, posé seulement quand
-  il dit pour combien de temps (« pour un mois »). Il fait partie de ce qu'il approuve (le texte
-  de la demande le dit). Passé ce jour, Orion et le gardien refusent l'action seule : elle
-  redemande l'accord.
-- L'app (`/autonomy`, existant) reçoit pour chaque action sa portée, son échéance, si elle est
-  expirée, et les cinq derniers effets faits seul (lus du journal : `tool.executed` décidé
-  « seul »). La révocation reste le chemin existant. Le mode `libre` et les domaines consentis
-  (ORION-12) ne sont pas touchés.
 
 ## D276 — Une passe de tâche de fond est une étape de workflow
 
@@ -6481,6 +6473,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
   refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
 - **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
 - Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
 
 
 
@@ -6514,6 +6507,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
 
 
 
+
 ## D279 — Un message proactif passe des contrôles séparés ; l'issue d'une action se prouve en code
 
 F-09 (audit du 05/11). Précise D103 (relecture par un second modèle) et D274 (seule règle de
@@ -6529,6 +6523,7 @@ par type de contrôle.
 - `factual` : le `Verifier` existant, appelé seulement si `outcome` passe.
 - Pas encore : la pertinence liée à un objectif et la politique du gardien sur une action
   (ORION-46).
+
 
 
 
@@ -6549,6 +6544,7 @@ crois-tu ? » n'avait pas de réponse lisible.
 
 
 
+
 ## D283 — Ce qu'Orion peut faire maintenant se lit dans le journal
 
 ORI-019 (audit du 05/11). Précise D24 (modules) et D264. Rien ne disait quel connecteur était
@@ -6563,6 +6559,7 @@ tombé, ni depuis quand.
 - Outil en lecture seule `capabilities` (registre trié) ; rien dans le message système.
 
 
+
 ## D284 — Une piste de curiosité dit ce qu'elle vise et s'inscrit sur son objectif
 
 ORI-015 (audit du 05/11). Précise D268, qui tient : la trouvaille passe par l'initiative et
@@ -6574,4 +6571,19 @@ l'arbitre décide de se taire.
 - Chaque recherche pour un objectif s'inscrit en note de l'objectif (`goal.noted`, kind
   `research` : la piste et son issue), dite ou non : l'objectif garde ce qu'on a cherché pour
   lui. Ces notes ne sont ni des avancées ni des obstacles (le blocage ne les lit pas).
+
+
+## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
+
+ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
+expiration par défaut.
+
+- `until` (dernier jour, optionnel) s'ajoute aux limites d'une autonomie, posé seulement quand
+  il dit pour combien de temps (« pour un mois »). Il fait partie de ce qu'il approuve (le texte
+  de la demande le dit). Passé ce jour, Orion et le gardien refusent l'action seule : elle
+  redemande l'accord.
+- L'app (`/autonomy`, existant) reçoit pour chaque action sa portée, son échéance, si elle est
+  expirée, et les cinq derniers effets faits seul (lus du journal : `tool.executed` décidé
+  « seul »). La révocation reste le chemin existant. Le mode `libre` et les domaines consentis
+  (ORION-12) ne sont pas touchés.
 
