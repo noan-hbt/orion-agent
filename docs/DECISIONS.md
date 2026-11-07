@@ -6046,3 +6046,8 @@ alors qu'il avait déjà dit « tu peux le supp ».
   a abandonné se ferme, ne se recrée pas.
 - **Limite** : que « tu peux le supp » ferme l'engagement reste au modèle (la veille voit ses
   derniers mots et l'id) ; rien en code ne lit sa décision.
+- **Complément (07/11, review de #201)** : deux engagements ne sont le même que s'ils ont le
+  même débiteur et le même créancier (les documents dus à Alice ne sont pas ceux dus à Bob), et
+  le même jour d'échéance ou aucun des deux côtés (l'un daté, l'autre non : deux). Une échéance
+  avec heure est passée dès que l'heure est passée, à l'heure locale (fuseau et heure d'été) ;
+  une échéance qui n'est qu'une date l'est une fois le jour fini.

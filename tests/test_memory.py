@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -388,8 +389,8 @@ async def test_the_watch_never_records_a_settled_or_past_commitment_again(
     add, close = tools["commitment_add"], tools["commitment_close"]
     watch = ToolContext(WATCH_THREAD, "c", context_trust=Trust.SYSTEM)
 
-    def owed(what: str, due: str | None = None) -> object:
-        return add.parse(json.dumps({"what": what, "debtor": "orion", "creditor": "owner",
+    def owed(what: str, due: str | None = None, to: str = "owner") -> object:
+        return add.parse(json.dumps({"what": what, "debtor": "orion", "creditor": to,
                                      "due": due}))  # fmt: skip
 
     first = await add.handler(owed("Restaurer le projet Jira ORION"), watch)
@@ -402,6 +403,15 @@ async def test_the_watch_never_records_a_settled_or_past_commitment_again(
     assert (await add.handler(owed("Payer la cantine", "2020-01-01"), watch)).is_error  # past
     assert not (await add.handler(owed("Payer la cantine"), watch)).is_error
     assert len(await memory.store.commitments()) == 1
+
+    # Review of #201: earlier today is past too; distinct creditors or a date against none
+    # are two commitments, not one.
+    earlier = f"{datetime.now(ZoneInfo('Europe/Paris')) - timedelta(minutes=5):%Y-%m-%dT%H:%M}"
+    assert (await add.handler(owed("Rappeler le garage", earlier), watch)).is_error
+    assert not (await add.handler(owed("Envoyer les documents", to="Alice"), watch)).is_error
+    assert not (await add.handler(owed("Envoyer les documents", to="Bob"), watch)).is_error
+    assert not (await add.handler(owed("Payer la cantine", "2099-01-01"), watch)).is_error
+    assert len(await memory.store.commitments()) == 4
 
 
 async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -> None:
