@@ -24,7 +24,7 @@ import structlog
 from pydantic import ValidationError
 
 from orion.cognition.finish import finish_check
-from orion.cognition.grounding import acted_check, ground_check
+from orion.cognition.grounding import acted_check, from_him, ground_check
 from orion.cognition.loop import (
     ANSWERED,
     Budget,
@@ -188,17 +188,6 @@ RECAP_LINE = (
 )
 """Heads the summary and core memory after a cut. Inside his message, 50 000 characters read as
 what he had just said (D219)."""
-
-
-def _from_him(message: Message) -> bool:
-    """A message the owner wrote, not an initiative or a note Orion gave itself."""
-    line = str(message.get("content") or "").split("\n", 1)[0]
-    return (
-        message.get("role") == "user"
-        and line.startswith("[")
-        and not line.startswith("[Orion")
-        and "· initiative" not in line
-    )
 
 
 FOLLOW_UP_MESSAGES = 2
@@ -1324,7 +1313,7 @@ class Orion:
                 0,
             )
             since = window[held + 1 :]
-            asked = sum(1 for m in since if _from_him(m))
+            asked = sum(1 for m in since if from_him(m))
             if asked >= REMIND_AFTER_MESSAGES or estimate_tokens(since) > REMIND_AFTER_TOKENS:
                 reminder = reminder_block(rules)
                 if reminder:
