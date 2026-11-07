@@ -6052,3 +6052,36 @@ confirmation qui a suivi n'était relié à rien.
   son contenu le montre, sinon dite « lien non prouvé », et pas redite comme une nouvelle.
   C'est une consigne au modèle, pas un rapprochement en code par identifiant.
 - **Limite** : une veille qui agit puis conclut SILENCE ne garde pas ses actions pour la suite.
+
+## D263 — La veille ne repose pas ce qui est réglé, passé, ou à lui
+
+*07/11/2026 · acceptée · complète D150, D247 · ORION-29*
+
+Le 06/11, la veille a posé un rappel pour 06:00 à 07:34 (refusé, mais elle a insisté), a marqué
+un mail lu sans qu'on le lui demande, et a noté une deuxième fois « restaurer le projet Jira »
+alors qu'il avait déjà dit « tu peux le supp ».
+
+- **Un engagement n'est noté qu'une fois** : `commitment_add` refuse un engagement qui en
+  répète un ouvert (même débiteur, pas d'échéance différente, et au moins 3 mots sur 4 en commun
+  pour la formulation la plus courte, mots de 4 lettres et plus). Il renvoie celui qui existe, à
+  compléter ou à fermer. C'est une comparaison de mots, pas de sens : une reformulation éloignée
+  passe encore.
+- **Ce qui est réglé ne revient pas** : hors de sa conversation (veille, nuit, autres fils),
+  un engagement qui répète un engagement fait ou annulé est refusé : il a été réglé, seul le
+  propriétaire peut le redemander. Dans sa conversation, il peut toujours le reprendre.
+- **Pas d'échéance passée** : hors de sa conversation, un engagement dont l'échéance est
+  passée n'est pas noté. Un rappel dans le passé était déjà refusé ; le refus dit maintenant de
+  ne pas choisir une autre heure d'office : le dire s'il compte encore, sinon laisser.
+- **Sa boîte est à lui** : `mail_mark` (lu, suivi) est refusé à la veille et à la nuit, `libre`
+  compris, sauf autonomie qu'il a donnée pour cet outil (D201). Lire un mail ne change déjà pas
+  son état (`BODY.PEEK`).
+- **La consigne de la veille** le dit aussi : regarder l'heure, ses engagements (avec leur id,
+  pour pouvoir les fermer) et ce qu'il a dit depuis, avant un rappel ou un engagement ; ce qu'il
+  a abandonné se ferme, ne se recrée pas.
+- **Limite** : que « tu peux le supp » ferme l'engagement reste au modèle (la veille voit ses
+  derniers mots et l'id) ; rien en code ne lit sa décision.
+- **Complément (07/11, review de #201)** : deux engagements ne sont le même que s'ils ont le
+  même débiteur et le même créancier (les documents dus à Alice ne sont pas ceux dus à Bob), et
+  le même jour d'échéance ou aucun des deux côtés (l'un daté, l'autre non : deux). Une échéance
+  avec heure est passée dès que l'heure est passée, à l'heure locale (fuseau et heure d'été) ;
+  une échéance qui n'est qu'une date l'est une fois le jour fini.
