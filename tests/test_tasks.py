@@ -15,10 +15,11 @@ from orion.core.events import NewEvent, Provenance, Trust
 from orion.core.journal import SqliteJournal
 from orion.guardian.policy import ActionProposal, Guardian, Verdict
 from orion.runtime import Orion
-from orion.tasks.module import TaskWork, task_tool
+from orion.tasks.module import PASS, TaskWork, task_tool
 from orion.tasks.service import Tasks
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolRegistry, ToolResult
-from tests.fakes import ScriptedProvider, call_tools, reply
+from orion.workflows.engine import State
+from tests.fakes import ScriptedProvider, call_tools, fail, reply
 
 PARIS = ZoneInfo("Europe/Paris")
 OWNER = ToolContext("owner", "c0")
@@ -242,3 +243,57 @@ async def test_a_task_with_a_done_when_ends_done_only_on_a_confirmed_action(
         seen="web:resa#1",
     )
     assert (await world.tasks.get(second.id)).finished == "done"  # type: ignore[union-attr]
+
+
+async def test_a_task_cut_mid_pass_resumes_once_and_a_model_down_only_pauses_it(
+    journal: SqliteJournal,
+) -> None:
+    """F-05: a pass is a workflow step. A restart redoes the cut pass, never the passes done;
+    a model out of quota pauses the pass instead of ending the task."""
+    provider = ScriptedProvider(reply("Premier tri."))
+    world = World(journal, provider)
+    await world.use(OWNER, action="start", goal="Un vol pour Rome", brief="En mai, < 200 €.")
+    [task] = await world.tasks.running()
+    await world.passes()
+
+    # Pass 2 begins, then the process dies (journaled as the engine would have).
+    for kind, payload in [
+        (
+            "workflow.started",
+            {
+                "workflow": PASS,
+                "goal": task.goal,
+                "steps": ["pass"],
+                "inputs": {"task_id": task.id, "pass": 2},
+            },
+        ),
+        ("workflow.step_began", {"step": "pass", "attempt": 1}),
+    ]:
+        await journal.append(
+            [
+                NewEvent(
+                    kind=kind,
+                    payload={"run_id": "w_cut", **payload},
+                    provenance=Provenance(source="t", actor="orion:tasks"),
+                    trust=Trust.SYSTEM,
+                )
+            ]
+        )
+
+    restarted = World(journal, provider)
+    await restarted.work.engine.recover()
+    provider.extend(fail("quota", retryable=True))
+    await restarted.work.engine.resume_all()
+    await restarted.passes()
+    assert len(provider.requests) == 2  # pass 1 not redone; pass 2 tried once
+    assert await restarted.tasks.running() != []  # the model down did not end it
+    assert restarted.work.engine.projection.runs["w_cut"].state is State.WAITING
+
+    restarted.now += timedelta(minutes=20)
+    provider.extend(reply("Deux vols."))
+    await restarted.work.engine.resume_all()
+    await restarted.passes()
+    assert len(provider.requests) == 3
+    assert "Passage n°2" in str(provider.requests[-1].messages[-1]["content"])
+    [running] = await restarted.tasks.running()
+    assert running.passes == 2
