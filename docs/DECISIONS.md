@@ -6422,3 +6422,17 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
+
+ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
+trop longue ; le milieu était perdu, sans moyen de le relire.
+
+- Quand `_clip` coupe, la sortie entière est journalisée en `tool.artifact` (`artifact_id`
+  dérivé du sha256, taille, lignes, outil, appel) avec le trust de la sortie d'origine. Le
+  journal est le seul stockage : tout se reconstruit de lui, `redact` l'efface comme le reste.
+  Au-delà d'1 Mo, seul le premier Mo est gardé et l'événement le dit (`truncated: true`).
+- La note de coupure nomme l'artefact et l'outil qui le lit.
+- Outil `artifact` (module `artifacts`, actif par défaut, dans le registre trié dès le
+  démarrage) : `read` par plage de lignes (400 au plus), `search` par mots ou expression. Ce
+  qui est lu garde le trust de l'artefact.
