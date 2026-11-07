@@ -6326,6 +6326,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D271 — Un appel coupé par un crash est UNCERTAIN, dit une fois, jamais rejoué
 
 *07/11/2026 · acceptée · précise D19, D258, D260 · ORION-35 (audit ORI-007, F-04)*
@@ -6351,6 +6352,7 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
 
 
 
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
@@ -6363,6 +6365,7 @@ est faite avec ce résultat, le job se termine sans relance ni question. Absent 
 sait pas, le job reste UNCERTAIN et le propriétaire est prévenu comme avant. Les fichiers
 présents ne suffisent pas : un travail à moitié fait en laisse aussi. Les options de session
 restent en mémoire (D257).
+
 
 
 
@@ -6383,6 +6386,7 @@ toujours lu du journal seul, sans événement nouveau :
   dans les 3 h (la même fenêtre que l'arbitre, D269), et combien de choses il a tues.
 
 Pas de nouveau tableau de bord : l'app lit `/api/week` ; l'afficher est son affaire.
+
 
 
 
@@ -6413,6 +6417,7 @@ des objectifs (D267), un `done_when` rédigé à la création et une action jour
 
 
 
+
 ## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
 
 *07/11/2026 — ORION-42, audit du 05/11 (ORI-005). Précise D37 et D267.*
@@ -6438,19 +6443,6 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
 
-## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
-
-ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
-trop longue ; le milieu était perdu, sans moyen de le relire.
-
-- Quand `_clip` coupe, la sortie entière est journalisée en `tool.artifact` (`artifact_id`
-  dérivé du sha256, taille, lignes, outil, appel) avec le trust de la sortie d'origine. Le
-  journal est le seul stockage : tout se reconstruit de lui, `redact` l'efface comme le reste.
-  Au-delà d'1 Mo, seul le premier Mo est gardé et l'événement le dit (`truncated: true`).
-- La note de coupure nomme l'artefact et l'outil qui le lit.
-- Outil `artifact` (module `artifacts`, actif par défaut, dans le registre trié dès le
-  démarrage) : `read` par plage de lignes (400 au plus), `search` par mots ou expression. Ce
-  qui est lu garde le trust de l'artefact.
 
 ## D276 — Une passe de tâche de fond est une étape de workflow
 
@@ -6471,6 +6463,7 @@ par un redémarrage était refaite sans trace, et un modèle indisponible termin
   refaite ; elle ne compte pas comme une passe. La limite de temps de la tâche borne ces reprises.
 - **Deux échecs francs** : le run échoue, la tâche finit `failed` et Orion le sait.
 - Les missions ne changent pas : une passe perdue est refaite à l'échéance suivante.
+
 
 
 
@@ -6500,6 +6493,7 @@ journal de détection et de choix. Pas de nouveau package : l'opportunité vit s
   déclencheurs nouveaux et le bilan sur 7 jours du ticket ne sont pas faits ici.
 
 
+
 ## D279 — Un message proactif passe des contrôles séparés ; l'issue d'une action se prouve en code
 
 F-09 (audit du 05/11). Précise D103 (relecture par un second modèle) et D274 (seule règle de
@@ -6517,6 +6511,7 @@ par type de contrôle.
   (ORION-46).
 
 
+
 ## D280 — Chaque affirmation du portrait nomme les faits dont elle vient
 
 ORI-018 (audit du 05/11). Précise D144. Le portrait était un texte libre : « pourquoi le
@@ -6530,4 +6525,19 @@ crois-tu ? » n'avait pas de réponse lisible.
 - `memory.portrait.written` porte `claims: [{text, fact_ids, source_seqs}]` (`source_seqs` :
   l'événement qui a affirmé chaque fait). Oublier une source retire le fait, donc l'affirmation,
   au portrait suivant.
+
+
+## D282 — Une sortie d'outil coupée reste entière dans le journal, et se relit
+
+ORI-017 (audit du 05/11, F-08). Précise D231. `_clip` gardait le début et la fin d'une sortie
+trop longue ; le milieu était perdu, sans moyen de le relire.
+
+- Quand `_clip` coupe, la sortie entière est journalisée en `tool.artifact` (`artifact_id`
+  dérivé du sha256, taille, lignes, outil, appel) avec le trust de la sortie d'origine. Le
+  journal est le seul stockage : tout se reconstruit de lui, `redact` l'efface comme le reste.
+  Au-delà d'1 Mo, seul le premier Mo est gardé et l'événement le dit (`truncated: true`).
+- La note de coupure nomme l'artefact et l'outil qui le lit.
+- Outil `artifact` (module `artifacts`, actif par défaut, dans le registre trié dès le
+  démarrage) : `read` par plage de lignes (400 au plus), `search` par mots ou expression. Ce
+  qui est lu garde le trust de l'artefact.
 
