@@ -17,6 +17,9 @@ FACT_INVALIDATED = "memory.fact.invalidated"
 FACT_PINNED = "memory.fact.pinned"
 COMMITMENT_CREATED = "commitment.created"
 COMMITMENT_CLOSED = "commitment.closed"
+COMMITMENT_SEEN = "commitment.seen"
+"""An open commitment met again from another source: the source is joined to it, never a
+second commitment (ORI-005). Not a memory change, so not in `MEMORY_KINDS`."""
 RULE_LEARNED = "playbook.rule.learned"
 RULE_RETIRED = "playbook.rule.retired"
 SETTING_CHANGED = "settings.changed"
@@ -97,6 +100,13 @@ class CommitmentCreated(BaseModel):
 
 Closing = Literal[CommitmentStatus.DONE, CommitmentStatus.CANCELLED]
 """How a commitment closes: never "open" again."""
+
+
+class CommitmentSeen(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    commitment_id: str
+    what: str = Field(description="How this source worded it")
 
 
 class CommitmentClosed(BaseModel):

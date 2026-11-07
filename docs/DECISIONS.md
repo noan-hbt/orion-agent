@@ -6322,3 +6322,28 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   outils de sa famille (`browser_*`…) sont refusés. Un appel coupé qui a pu agir (effet externe,
   ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
   (D258), pas seulement un texte.
+
+## D275 — Un engagement naît en un seul point : vu ailleurs, il n'est pas créé deux fois
+
+*07/11/2026 — ORION-42, audit du 05/11 (ORI-005). Précise D37 et D267.*
+
+L'audit demandait une entité « Obligation » qui fusionne les engagements venus de partout. D267
+tient : pas de nouvelle entité, `Commitment` est l'obligation, objectifs et tâches s'y lient
+par id. Le vrai manque était le doublon entre sources : l'outil `commitment_add` (conversation,
+lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidation
+(`memory/extractor.py`) ni les rendez-vous calés entre Orion (`federation/meetings.py`).
+
+- `MemoryService.record_commitment` est le seul point de naissance (`add_commitment` y passe).
+  Un engagement **ouvert** qui est le même (`same_commitment`, déplacé dans `memory/service.py`)
+  n'est pas recréé : un événement `commitment.seen` (id de l'existant, formulation de cette
+  source) rattache la nouvelle source, et l'id existant est rendu. Un seul engagement, donc un
+  seul rappel (les rappels sont indexés par id, D250).
+- `commitment.seen` n'est pas un changement de mémoire (hors `MEMORY_KINDS`) : la projection
+  ne bouge pas, la source reste lisible dans le journal.
+- Un engagement réglé (fait, annulé) ne bloque pas un nouveau venu d'ailleurs : un rendez-vous
+  recalé après une annulation est un nouvel engagement. Seule la veille, sans le propriétaire
+  derrière, se voit refuser de rouvrir ce qui est réglé (D263, inchangé).
+- `same_commitment` compare aussi l'heure quand les deux en ont une : deux rendez-vous avec
+  Alice le même jour sont deux.
+- Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
+  autre source l'a vu depuis.

@@ -26,6 +26,7 @@ from orion.core.projections import ProjectionRunner
 from orion.memory.model import (
     COMMITMENT_CLOSED,
     COMMITMENT_CREATED,
+    COMMITMENT_SEEN,
     FACT_ASSERTED,
     FACT_INVALIDATED,
     FACT_PINNED,
@@ -36,6 +37,7 @@ from orion.memory.model import (
     Category,
     CommitmentClosed,
     CommitmentCreated,
+    CommitmentSeen,
     CommitmentStatus,
     FactAsserted,
     FactInvalidated,
@@ -58,7 +60,7 @@ from orion.memory.situations import (
     Situations,
     SituationUpdated,
 )
-from orion.memory.store import Fact, MemoryStore
+from orion.memory.store import Commitment, Fact, MemoryStore
 
 if TYPE_CHECKING:
     from orion.memory.semantic import SemanticIndex
@@ -75,6 +77,34 @@ class Origin:
     trust: Trust
     derived_from: tuple[str, ...] = ()
     correlation_id: str | None = None
+
+
+_WORD = re.compile(r"\w{4,}")
+SAME_WORDS = 0.75
+"""Share of the shorter wording's words that makes two commitments one."""
+
+
+def same_commitment(
+    what: str, debtor: str, creditor: str, due: str | None, known: Commitment
+) -> bool:
+    """Whether a new commitment is this known one again, in other words (06/11: « restaurer le
+    projet Jira » recorded twice, the second after he said « tu peux le supp »). Same debtor and
+    same creditor (the documents owed to Alice are not those owed to Bob), the same due day or
+    none on both sides (one with a date and one without are two), the same time when both have
+    one (two meetings with Alice the same day are two), and most words in common."""
+    if debtor.casefold() != known.debtor.casefold():
+        return False
+    if creditor.casefold() != known.creditor.casefold():
+        return False
+    if (due or "")[:10] != (known.due or "")[:10]:
+        return False
+    if due and known.due and len(due) > 10 and len(known.due) > 10 and due[:16] != known.due[:16]:
+        return False
+    new = {w.casefold() for w in _WORD.findall(what)}
+    old = {w.casefold() for w in _WORD.findall(known.what)}
+    if not new or not old:
+        return False
+    return len(new & old) / min(len(new), len(old)) >= SAME_WORDS
 
 
 class MemoryRefused(ValueError):
@@ -190,12 +220,29 @@ class MemoryService:
     async def add_commitment(
         self, what: str, origin: Origin, *, debtor: str, creditor: str, due: str | None = None
     ) -> str:
+        commitment_id, _ = await self.record_commitment(
+            what, origin, debtor=debtor, creditor=creditor, due=due
+        )
+        return commitment_id
+
+    async def record_commitment(
+        self, what: str, origin: Origin, *, debtor: str, creditor: str, due: str | None = None
+    ) -> tuple[str, bool]:
+        """The one way a commitment is born, whatever its source (a tool call, a mail, the
+        watch, a meeting agreed by peers): an open one that is the same again (`same_commitment`)
+        is not created twice, it is seen again from this source (ORI-005), so it exists and is
+        recalled once. Returns its id and whether it is new."""
+        for known in await self.store.commitments():
+            if same_commitment(what, debtor, creditor, due, known):
+                seen = CommitmentSeen(commitment_id=known.id, what=what)
+                await self._write(COMMITMENT_SEEN, seen, origin)
+                return known.id, False
         commitment_id = f"c_{new_id()}"
         payload = CommitmentCreated(
             commitment_id=commitment_id, debtor=debtor, creditor=creditor, what=what, due=due
         )
         await self._write(COMMITMENT_CREATED, payload, origin)
-        return commitment_id
+        return commitment_id, True
 
     async def close_commitment(
         self,

@@ -414,6 +414,39 @@ async def test_the_watch_never_records_a_settled_or_past_commitment_again(
     assert len(await memory.store.commitments()) == 4
 
 
+async def test_one_commitment_from_a_mail_then_the_watch_exists_once(
+    memory: MemoryService, journal: SqliteJournal
+) -> None:
+    """ORI-005: the same commitment, read in a mail then found again by the watch, is one
+    commitment that knows both sources, not two reminders."""
+    from orion.guardian.policy import WATCH_THREAD
+    from orion.memory.tools import memory_tools
+    from orion.tools.base import ToolContext
+
+    mail = Origin(actor="orion:extractor", source="mail:m_1", trust=Trust.THIRD_PARTY)
+    cid = await memory.add_commitment(
+        "Envoyer le devis signé à Alice", mail, debtor="owner", creditor="Alice", due="2099-05-12"
+    )
+    add = next(t for t in memory_tools(memory) if t.name == "commitment_add")
+    args = {"what": "Envoyer à Alice le devis signé", "debtor": "owner", "creditor": "Alice",
+            "due": "2099-05-12"}  # fmt: skip
+    watch = ToolContext(WATCH_THREAD, "c", context_trust=Trust.SYSTEM)
+    assert (await add.handler(add.parse(json.dumps(args)), watch)).is_error
+
+    assert [c.id for c in await memory.store.commitments()] == [cid]
+    seen = [e for e in await journal.read() if e.kind == "commitment.seen"]
+    assert [e.payload["commitment_id"] for e in seen] == [cid]
+
+    # Two meetings with Alice the same day are two.
+    other = await memory.add_commitment(
+        "Café avec Alice", OWNER, debtor="owner", creditor="Alice", due="2099-05-13T10:00"
+    )
+    later = await memory.add_commitment(
+        "Café avec Alice", OWNER, debtor="owner", creditor="Alice", due="2099-05-13T15:00"
+    )
+    assert other != later
+
+
 async def test_recall_everything_shows_the_whole_memory(memory: MemoryService) -> None:
     """03/11: sorting his memories ten at a time, Orion never knew he had seen them all (D235)."""
     from orion.memory.tools import memory_tools
