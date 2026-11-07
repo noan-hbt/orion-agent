@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,11 +28,12 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from orion.core.events import Event, NewEvent, Provenance, Trust
+from orion.core.hlc import Timestamp
 from orion.core.journal import EventStore
 from orion.core.projections import ProjectionRunner
 from orion.guardian.client import GuardianClient, GuardianUnavailableError
 from orion.guardian.limits import REQUIRED, Limits, missing, within
-from orion.guardian.policy import ANY_ACTION, ActionProposal, Approver, may_be_alone
+from orion.guardian.policy import ALONE, ANY_ACTION, ActionProposal, Approver, may_be_alone
 from orion.tools.base import Effect, Reversibility, Tool, ToolContext, ToolResult
 
 log = structlog.get_logger(__name__)
@@ -44,6 +45,7 @@ APPROVAL_REQUESTED = "approval.requested"
 APPROVAL_DECIDED = "approval.decided"
 GRANT_ACTION = "autonomy_grant"
 RITUAL_EVERY = timedelta(days=30)
+EFFECTS_KEPT = 5
 
 LABELS = {
     "calendar_add": "ajouter des événements à ton agenda",
@@ -70,6 +72,10 @@ class AutonomyState:
     limits: dict[str, Limits] = field(default_factory=dict[str, Limits])
     streak: dict[str, int] = field(default_factory=dict[str, int])
     """Approvals in a row per action, since the last refusal or revocation."""
+    effects: dict[str, list[tuple[str, str]]] = field(
+        default_factory=dict[str, list[tuple[str, str]]]
+    )
+    """Per action, the last things Orion did alone with it (when, arguments), newest last."""
     last_offer: datetime | None = None
     _asked: dict[str, str] = field(default_factory=dict[str, str])
     """approval id → action, until the answer arrives."""
@@ -82,6 +88,7 @@ class AutonomyState:
         self.granted.clear()
         self.limits.clear()
         self.streak.clear()
+        self.effects.clear()
         self.last_offer = None
         self._asked.clear()
         self._seq = 0
@@ -101,6 +108,11 @@ class AutonomyState:
                 self.streak[action] = self.streak.get(action, 0) + 1
             elif payload.get("how") != "timeout":
                 self.streak[action] = 0
+        elif event.kind == "tool.executed" and payload.get("decision") == ALONE:
+            done = self.effects.setdefault(str(payload["tool"]), [])
+            at = datetime.fromtimestamp(Timestamp.decode(event.hlc).wall_ms / 1000, UTC)
+            done.append((at.isoformat(), str(payload.get("arguments", ""))[:200]))
+            del done[:-EFFECTS_KEPT]
         elif event.kind == OFFERED:
             self.last_offer = datetime.fromisoformat(str(payload["at"]))
         elif event.kind == GRANTED:
@@ -131,6 +143,12 @@ class GrantInput(BaseModel):
         default_factory=list[str],
         description="browser (paying, ORION-13): only on these sites, e.g. sncf-connect.com "
         "(required)",
+    )
+    until: str = Field(
+        default="",
+        pattern=r"^(\d{4}-\d{2}-\d{2})?$",
+        description="Only when the owner says for how long (« pour un mois »): the last day, "
+        "YYYY-MM-DD. Leave empty otherwise: an autonomy holds until he takes it back.",
     )
 
 
@@ -182,6 +200,8 @@ class Autonomy:
         if not self.may(action) or action not in self.state.granted:
             return False
         bounds = self.state.limits.get(action)
+        if bounds is not None and bounds.expired(self._clock().date()):
+            return False  # past the day he gave it: asked again (D285)
         return within(action, None if bounds is None or bounds.empty else bounds, params or {})
 
     async def candidates(self) -> list[tuple[str, int]]:
@@ -295,7 +315,7 @@ def _grant_header(grant: str | None) -> dict[str, str] | None:
 
 def autonomy_tools(autonomy: Autonomy) -> list[Tool]:
     async def grant(args: Any, ctx: ToolContext) -> ToolResult:
-        limits = Limits(recipients=args.recipients, domains=args.domains)
+        limits = Limits(recipients=args.recipients, domains=args.domains, until=args.until)
         try:
             await autonomy.grant(args.action, ctx.grant, ctx.correlation_id, limits)
         except ValueError as exc:

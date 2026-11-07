@@ -6422,3 +6422,17 @@ lecture d'un mail, veille) appliquait `same_commitment`, mais pas la consolidati
   Alice le même jour sont deux.
 - Limite connue : oublier la source qui a créé l'engagement (`redact`) l'efface, même si une
   autre source l'a vu depuis.
+
+## D285 — Une autonomie peut avoir une fin, si le propriétaire la donne
+
+ORI-022 (audit du 05/11). Précise D167/D168, qui tiennent : une autonomie accordée tient, sans
+expiration par défaut.
+
+- `until` (dernier jour, optionnel) s'ajoute aux limites d'une autonomie, posé seulement quand
+  il dit pour combien de temps (« pour un mois »). Il fait partie de ce qu'il approuve (le texte
+  de la demande le dit). Passé ce jour, Orion et le gardien refusent l'action seule : elle
+  redemande l'accord.
+- L'app (`/autonomy`, existant) reçoit pour chaque action sa portée, son échéance, si elle est
+  expirée, et les cinq derniers effets faits seul (lus du journal : `tool.executed` décidé
+  « seul »). La révocation reste le chemin existant. Le mode `libre` et les domaines consentis
+  (ORION-12) ne sont pas touchés.
