@@ -6018,3 +6018,30 @@ son message suivant a attendu.
   peut-être eu lieu et n'est jamais refaite sans qu'on le demande.
 - **Journal** : `turn.stop_requested` quand il appuie, `turn.stop_completed` quand le tour est
   vraiment fini. Entre les deux, l'app montre « en train d'arrêter », jamais « arrêté ».
+
+## D262 — Ce que la veille a fait, elle le dit comme le sien
+
+*06/11/2026 · acceptée · complète D150, D258 · ORION-27*
+
+Le 06/11 à 14:41, la veille a demandé une invitation Amazon, puis a écrit « Amazon indique déjà
+invitation demandée » : l'état qu'elle venait de produire était rendu comme trouvé. Le mail de
+confirmation qui a suivi n'était relié à rien.
+
+- **« Déjà » après sa propre action** : le contrôle du tour (`grounding.ground_check`) renvoie
+  une fois une réponse qui dit « déjà » d'un état, quand Orion a agi pendant ce tour (toute
+  action non échouée, même `CONFIRMED`). La proposition qui nomme le site ou le mail vise cette
+  action ; celle qui n'en nomme aucune vise toutes celles du tour. « J'ai déjà… » n'est pas
+  visé : il dit que c'est lui. La note demande « j'ai demandé… » et où ça en est. Seulement des
+  motifs, gratuit : un « déjà » sans rapport coûte un tour de plus, et la note dit de le garder.
+- **La veille est contrôlée aussi** : le même contrôle tourne sur sa conclusion, mais seulement
+  quand elle a appelé un outil (`acted_check`) : ce qu'elle lit dans sa consigne n'a pas besoin
+  d'outil. Une action `ATTEMPTED` dite faite y est donc renvoyée, comme dans la conversation.
+- **Le message sait ce qu'elle a fait** : la projection de la veille relie à chaque conclusion
+  les `tool.executed` de son tour (même `correlation_id`) qui portent une issue. L'alerte qui la
+  porte au propriétaire les liste (« ce que tu as fait toi-même, avec où ça en est »), le
+  secours aussi. Rien de nouveau au journal : tout se relit depuis lui.
+- **Les suites** : la veille suivante voit, sous ses dernières conclusions, ce qu'elle avait
+  fait. Une confirmation qui arrive ensuite (un mail, une page) est rattachée à l'action quand
+  son contenu le montre, sinon dite « lien non prouvé », et pas redite comme une nouvelle.
+  C'est une consigne au modèle, pas un rapprochement en code par identifiant.
+- **Limite** : une veille qui agit puis conclut SILENCE ne garde pas ses actions pour la suite.

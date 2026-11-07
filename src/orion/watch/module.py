@@ -22,7 +22,8 @@ the last one, and not when a fixed watch comes within the hour: that one will se
 
 Like the night, nothing reaches the owner from this thread; in `libre` it acts on the world
 without asking (D247), elsewhere the guardian refuses it and what needs his yes goes in the
-conclusion. Only trusted turns are read.
+conclusion. Only trusted turns are read. What the watch did itself (its `tool.executed` with an
+outcome) goes with its conclusion, told as its own, never as a state found (D262).
 
     watch.done  watch.noted
 """
@@ -53,6 +54,7 @@ from orion.memory.service import MemoryService
 from orion.modules.base import Daemon, Module, ModuleSettings, Plate
 from orion.runtime import OWNER_THREAD, is_silence
 from orion.tools.base import Tool
+from orion.tools.outcome import MEANING, Outcome
 
 if TYPE_CHECKING:
     from orion.config import OrionConfig
@@ -76,6 +78,15 @@ STIR_AHEAD = timedelta(hours=48)
 """A change in the agenda stirs a watch when it falls within this."""
 SOON_SLOT = timedelta(hours=1)
 """A stir waits for a fixed watch this close: that one will see it."""
+ACTED = """Ce que tu as fait toi-même pendant cette veille, avec où ça en est :
+{acts}
+Un état qui vient de ces actions, c'est toi qui l'as produit : dis « j'ai demandé… », « j'ai
+lancé… », et s'il n'est pas confirmé, dis-le ; jamais « c'était déjà fait ».
+"""
+LINKS = """Une confirmation qui arrive après une de tes actions (un mail, une page) en est
+sans doute la suite : rattache-la à ton action quand son contenu le montre (même site, même
+objet), sinon dis que le lien n'est pas prouvé. Ce que tu lui as déjà dit ne se redit pas comme
+une nouvelle."""
 _LEAD = re.compile(r"^\s*(MAINTENANT|AU POINT)\s*:\s*", re.IGNORECASE)
 
 BRIEF = """C'est ta veille de {slot} : un moment à toi pour prendre du recul sur sa vie, comme
@@ -137,12 +148,25 @@ class WatchSettings(ModuleSettings):
 
 
 @dataclass(frozen=True)
+class Act:
+    """Something the watch did itself (D262): its doing, not a state it found."""
+
+    action: str
+    tool: str
+    outcome: Outcome
+
+    def line(self) -> str:
+        return f"- {self.action} ({self.tool}) : {MEANING[self.outcome]}"
+
+
+@dataclass(frozen=True)
 class Note:
     id: str
     text: str
     now: bool
     at: datetime
     trust: Trust
+    acts: tuple[Act, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -175,6 +199,8 @@ class WatchState:
         default_factory=list[tuple[int, str, str, datetime, str]]
     )
     """(seq, account, change, start, title) waiting for their sync's time."""
+    _acts: dict[str, dict[str, Act]] = field(default_factory=dict[str, dict[str, Act]])
+    """correlation id → what the watch turn did so far, its latest outcome per action."""
     _seq: int = 0
 
     async def checkpoint(self) -> int:
@@ -188,6 +214,7 @@ class WatchState:
         self.agenda.clear()
         self.synced.clear()
         self._changes.clear()
+        self._acts.clear()
         self.last_at = None
         self.upto = self.stirs_upto = self._seq = 0
 
@@ -199,7 +226,13 @@ class WatchState:
         if event.redacted:
             return
         payload: dict[str, Any] = event.payload
-        if event.kind == DONE:
+        if event.kind == "tool.executed":
+            if payload.get("thread_id") == WATCH_THREAD and payload.get("outcome"):
+                acts = self._acts.setdefault(event.correlation_id or "", {})
+                for action in filter(None, str(payload.get("action_id", "")).split(",")):
+                    acts[action] = Act(action, str(payload["tool"]), Outcome(payload["outcome"]))
+        elif event.kind == DONE:
+            self._acts.clear()  # its note, if any, came before
             self.done.add((date.fromisoformat(str(payload["day"])), str(payload["slot"])))
             self.upto = max(self.upto, int(payload.get("upto") or 0))
             self.stirs_upto = max(self.stirs_upto, int(payload.get("stirs_upto") or 0))
@@ -218,6 +251,7 @@ class WatchState:
                     bool(payload.get("now")),
                     datetime.fromisoformat(str(payload["at"])),
                     event.trust,
+                    tuple(self._acts.pop(event.correlation_id or "", {}).values()),
                 )
             )
             self.notes = self.notes[-20:]
@@ -522,10 +556,14 @@ class Watch:
             parts.append(
                 "<tes-dernieres-conclusions>\n"
                 + "\n".join(
-                    f"- {n.at.astimezone(self.zone):%a %H:%M} : {n.text}" for n in said_lately
+                    f"- {n.at.astimezone(self.zone):%a %H:%M} : {n.text}"
+                    + "".join(f"\n  (fait par toi : {a.line()[2:]})" for a in n.acts)
+                    for n in said_lately
                 )
                 + "\n</tes-dernieres-conclusions>"
             )
+            if any(n.acts for n in said_lately):
+                parts.append(LINKS)
         return "\n\n".join(parts)
 
     async def alerts(self, now: datetime) -> list[Alert]:
@@ -534,15 +572,18 @@ class Watch:
         for note in self.state.notes:
             if now - note.at > timedelta(hours=8):
                 continue
+            acts = "\n".join(a.line() for a in note.acts)
+            mine = f"\n(Fait par moi pendant ma veille :\n{acts})" if acts else ""
             found.append(
                 Alert(
                     key=f"watch:{note.id}",
                     notice="Pendant ta veille, tu as pris du recul sur sa vie, et tu as conclu "
-                    f"qu'il fallait lui dire :\n{note.text}\nDis-le-lui avec tes mots, comme "
-                    "une chose que tu as remarquée. Ce qui a été réglé depuis, laisse-le ; si "
-                    "plus rien ne vaut, réponds SILENCE.",
+                    f"qu'il fallait lui dire :\n{note.text}\n"
+                    + (ACTED.format(acts=acts) if acts else "")
+                    + "Dis-le-lui avec tes mots, comme une chose que tu as remarquée. Ce qui a "
+                    "été réglé depuis, laisse-le ; si plus rien ne vaut, réponds SILENCE.",
                     why="ta veille",
-                    fallback=note.text,
+                    fallback=note.text + mine,
                     trust=note.trust,
                     expires_at=note.at + timedelta(hours=8),
                     importance=NOW_IMPORTANCE if note.now else POINT_IMPORTANCE,
