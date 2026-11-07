@@ -23,6 +23,10 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from orion.core.journal import EventStore
 
 
 class Outcome(StrEnum):
@@ -72,3 +76,23 @@ def outcomes(contents: Iterable[str]) -> dict[str, tuple[Outcome, str]]:
         for action in filter(None, match["action"].split(",")):
             found[action] = (Outcome(match["outcome"]), match["proof"] or "")
     return found
+
+
+CONFIRMED_SCAN = 5_000
+"""How far back an observed outcome is looked for in the journal."""
+
+
+async def confirmed_proof(journal: EventStore, action: str) -> str | None:
+    """The proof of `action`, if a recent call journaled it CONFIRMED and nothing later
+    unsettled it: what Orion saw, checked by the code, not its own words. The contract of
+    anything that says « fait » on evidence: a goal (D267), a task (D274)."""
+    if not action:
+        return None
+    last = await journal.last_seq()
+    events = await journal.read(max(0, last - CONFIRMED_SCAN), CONFIRMED_SCAN)
+    proof: str | None = None
+    for event in events:
+        p = event.payload
+        if event.kind == "tool.executed" and action in str(p.get("action_id", "")).split(","):
+            proof = str(p.get("proof", "")) if p.get("outcome") == "CONFIRMED" else None
+    return proof

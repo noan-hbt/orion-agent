@@ -201,6 +201,19 @@ async def test_a_delegated_job_cut_by_a_restart_resumes_unless_it_had_a_shell(
         assert job.finished and job.ok and agent.runs == 2
 
 
+async def test_a_job_with_a_done_when_is_reported_unproven_not_done(
+    journal: SqliteJournal, tmp_path: Path
+) -> None:
+    """D274: the agent's word does not show « la page est en ligne »."""
+    agent = FakeAgent(allow_bash=False)
+    agent.hang = False
+    jobs = JobService(journal, agent, tmp_path)
+    await jobs.start("Page", "publie la page", OWNER, None, done_when="la page est en ligne")
+    await jobs.wait()
+    [report] = await jobs.reports()
+    assert "non prouvée" in report.notice and "la page est en ligne" in report.notice
+
+
 async def test_a_delegated_shell_job_cut_by_a_restart_ends_alone_when_its_result_is_there(
     journal: SqliteJournal, tmp_path: Path
 ) -> None:

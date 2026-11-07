@@ -6323,6 +6323,29 @@ n'est ajouté ici. Pourquoi il grossit si vite est une autre question, suivie à
   ou action sur une page : clic, saisie, `Tool.acts`) rend une issue structurée `UNCERTAIN`
   (D258), pas seulement un texte.
 
+## D274 — Une tâche ou un job délégué avec « fait quand » ne se dit fini que sur preuve
+
+*07/11/2026 · acceptée · étend D267, D258 · ORION-41 (audit du 05/11, ORI-008, F-07)*
+
+L'audit demandait des contrats d'achèvement (`expected_outcome`, `acceptance_checks`,
+`evidence_requirements`, `verify_after`, `human_signoff`). Pas de nouveau modèle : on étend celui
+des objectifs (D267), un `done_when` rédigé à la création et une action journalisée `CONFIRMED`
+(D258) pour le dire atteint.
+
+- **Tâche de fond** : `task` (start) prend un `done_when` optionnel. Quand il existe, `task`
+  (done) doit nommer (`seen`) l'action dont la ligne `CONFIRMED` le montre ; sans elle, la tâche
+  se clôt `unproven`, et Orion reçoit son bilan marqué « non prouvé », jamais « fait ».
+  `Tasks.finish` applique la règle, pas l'outil.
+- **Job délégué** : `delegate` prend le même `done_when`. Rien de ce que fait l'agent délégué
+  n'est journalisé comme action confirmée : un job qui réussit selon lui arrive « non prouvé »,
+  avec la consigne de vérifier la condition avant de la lui dire faite.
+- **Une seule règle** : `tools/outcome.confirmed_proof` (la dernière issue de l'action, dans les
+  5 000 derniers événements), lue par les objectifs et les tâches.
+- **Hors contrat** : les missions, récurrentes, n'ont pas de « fini ». `verify_after` et
+  `human_signoff` ne sont pas repris : une preuve absente laisse l'objet non prouvé et le dit,
+  c'est déjà la vérification humaine.
+- Sans `done_when`, rien ne change : la parole de la tâche ou de l'agent suffit, comme avant.
+
 ## D272 — Un job délégué avec shell, coupé, se règle sur le résultat laissé dans son dossier
 
 *07/11/2026 · acceptée · précise D257 · ORION-36 (audit ORI-010, F-03)*
