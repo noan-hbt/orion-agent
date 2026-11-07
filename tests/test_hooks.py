@@ -17,7 +17,7 @@ from orion.hooks.cron import Cron
 from orion.hooks.service import UNFULFILLED, HookError, Hooks, HookSpec
 from orion.initiative.engine import InitiativeEngine, InitiativeSettings
 from orion.initiative.timers import TimerProjection, Timers
-from orion.runtime import Orion
+from orion.runtime import OWNER_THREAD, Orion
 from orion.tools.base import Effect, Tool, ToolContext, ToolRegistry, ToolResult
 from tests.fakes import ScriptedProvider, call_tools, reply
 
@@ -185,8 +185,13 @@ async def test_a_hook_it_could_not_do_is_said_once_and_stays_on(journal: SqliteJ
     """ORION-28, 06/11: Hyperplanning refused the connection, « dis-moi ma salle » ended in
     SILENCE. He hears it could not be checked, once for a site down all morning."""
 
+    down = {"groupeh3.hyperplanning.fr", "autre.example"}
+
     async def refused(args: Any, _ctx: ToolContext) -> ToolResult:
-        raise RuntimeError(f"net::ERR_CONNECTION_REFUSED at {args.url}")
+        # As the browser does: the error is returned, nothing is raised (review of #202).
+        if any(site in args.url for site in down):
+            return ToolResult(f"net::ERR_CONNECTION_REFUSED at {args.url}", is_error=True)
+        return ToolResult("Lundi 9h : salle B204")
 
     provider = ScriptedProvider()
     orion = Orion(
@@ -223,3 +228,14 @@ async def test_a_hook_it_could_not_do_is_said_once_and_stays_on(journal: SqliteJ
     assert "groupeh3.hyperplanning.fr" in said
     attempts = [e.payload["attempts"] for e in await journal.read() if e.kind == UNFULFILLED]
     assert attempts == [1, 2]
+    assert [e.kind for e in await journal.read()].count("hook.told") == 1  # once it went out
+
+    # Back up; meanwhile his own conversation hit another site that fails: not this hook's.
+    down.discard("groupeh3.hyperplanning.fr")
+    await journal.append([mail("Arrivée à l'école", "Ma Maison")])
+    assert len(await hooks.scan()) == 1
+    provider.extend(call_tools(("browser", {"url": "https://autre.example"})), reply("Raté."))
+    await orion.handle_owner_message(OWNER_THREAD, "Ouvre autre.example", "t")
+    provider.extend(call_tools(opened), reply("SILENCE"))
+    await engine.tick()
+    assert len([e for e in await journal.read() if e.kind == UNFULFILLED]) == 2

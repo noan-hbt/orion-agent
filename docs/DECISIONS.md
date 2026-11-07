@@ -6052,3 +6052,10 @@ le propriétaire n'a rien su, alors que rien n'était vérifié.
   TCP/TLS, restriction d'IP), qui demande la prod ; il a son ticket. Pas de distinction plus fine
   entre « rien de nouveau » et « indisponible » qu'un appel en échec. Une erreur d'une autre
   conversation entre le déclenchement et le rapport compte aussi (rare : le rapport suit de près).
+- **Complément (07/11, review de #202)** : un échec est un appel qui a rendu une erreur
+  (`is_error`, comme le navigateur qui renvoie `ERR_CONNECTION_REFUSED` sans rien lever), et
+  pas une faute du modèle (entrée invalide, outil inconnu, répétition). Seuls comptent les
+  appels du tour qui vient d'écrire sur ce déclenchement (sa `correlation_id`) : une erreur
+  d'une autre conversation entre-temps ne dit rien de ce hook. Il n'est dit « prévenu »
+  (`hook.told`) qu'une fois la ligne partie : si l'envoi échoue, la fenêtre de 3 h ne démarre
+  pas.

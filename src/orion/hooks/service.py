@@ -14,7 +14,7 @@ calls, an hour), an optional filter (`match`: words the event must hold), and wh
 Everything is journaled; the hooks and what they did are a projection of the journal:
 
     hook.created  hook.changed  hook.deleted  hook.token
-    hook.fired  hook.received  hook.ran  hook.capped  hook.unfulfilled
+    hook.fired  hook.received  hook.ran  hook.capped  hook.unfulfilled  hook.told
 
 A fire Orion could not do (a call failed, then SILENCE) is said to him, at most every three
 hours, and journaled with its attempts and since when (D264); a hook for once stays on.
@@ -84,8 +84,10 @@ UNFULFILLED = "hook.unfulfilled"
 TOLD_AGAIN_AFTER = timedelta(hours=3)
 """A hook that still cannot be done is said again no sooner: one message for a site down all
 morning, not one per fire."""
-FAILED_CALLS = frozenset({"tool error", "timed out"})
-"""What `tool.executed` journals of a call that failed for real (not a refusal, not a skip)."""
+HOOK_TOLD = "hook.told"
+"""He was told a hook could not be done: written once the line went out, never before."""
+MODEL_MISTAKES = frozenset({"invalid input", "unknown tool", "repeat refused"})
+"""Errors of the model's own making: they say nothing of the site the hook needs."""
 
 LEVELS = ("", "muette", "normale", "urgente")
 """How what a hook says rings: "" follows the owner's choice for hooks (`notifications`)."""
@@ -369,8 +371,10 @@ class HookState:
             hook_id = str(p.get("hook_id"))
             self.unfulfilled[str(p.get("fire_id"))] = hook_id
             self.failed[hook_id] = self.failed.get(hook_id, 0) + 1
-            if p.get("told"):
+            if p.get("told"):  # before hook.told: the line was taken as said
                 self.told[hook_id] = _at(event)
+        elif event.kind == HOOK_TOLD:
+            self.told[str(p.get("hook_id"))] = _at(event)
 
     def spent(self, hook: Hook) -> bool:
         """A hook for once that already fired, and did what it asked: one that could not
@@ -796,9 +800,20 @@ class Hooks:
         connection), what it asked was not done. He is told, once in a while, and the hook
         stays on (D264). 06/11: Hyperplanning down, « dis-moi ma salle » ended in SILENCE."""
 
+        telling: list[str] = []
+        """The line a SILENCE asked to send, until it has gone out."""
+
         async def settle(said: str | None, read: str) -> str | None:
             del read
             if said is not None:
+                if telling and said == telling[0]:
+                    # Gone out: only now is he told (review of #202: a failed send told nothing).
+                    await self._append(
+                        HOOK_TOLD,
+                        {"hook_id": hook.id, "fire_id": fire.id},
+                        Provenance(source=f"hook:{hook.id}", actor="orion:hooks"),
+                        Trust.SYSTEM,
+                    )
                 return None
             failures = await self._failures(fire)
             if not failures:
@@ -806,7 +821,7 @@ class Hooks:
             await self.sync()
             now = datetime.now(UTC)
             last = self.state.told.get(hook.id)
-            told = last is None or now - last >= TOLD_AGAIN_AFTER
+            due = last is None or now - last >= TOLD_AGAIN_AFTER
             streak = [*self.state.streak(hook.id, fire.seq), fire]
             await self._append(
                 UNFULFILLED,
@@ -816,40 +831,53 @@ class Hooks:
                     "failures": failures,
                     "attempts": len(streak),
                     "since": streak[0].at.isoformat(),
-                    "told": told,
+                    "told": False,
                 },
                 Provenance(source=f"hook:{hook.id}", actor="orion:hooks"),
                 Trust.SYSTEM,
             )
             log.warning("hooks.unfulfilled", hook=hook.id, fire=fire.id, attempts=len(streak))
-            if not told:
+            if not due:
                 return None
             what = ", ".join(dict.fromkeys(failures))
-            return (
+            line = (
                 f"Ton hook « {hook.name} » : je n'ai pas pu le faire, {what} n'a pas répondu. "
                 "Rien n'est vérifié. Il reste actif : je réessaie à son prochain déclenchement."
             )
+            telling[:] = [line]
+            return line
 
         return settle
 
     async def _failures(self, fire: Fire) -> list[str]:
-        """The calls that failed for real in his conversation since this fire: the site or the
-        tool, as he would name it."""
-        found: list[str] = []
+        """The calls that failed in the turn that just wrote about the fire (the last one of his
+        conversation: SILENCE is its answer), as he would name them: the site or the tool. A
+        failure is a call that returned an error (a page refused, a 403), not a mistake of the
+        model's (review of #202: `browser` open returns its error, it raises nothing); another
+        turn's failure says nothing of this fire."""
+        turn: str | None = None
+        calls: list[Event] = []
         after = fire.seq
         while True:
             events = await self._journal.read(after, SCAN_BATCH)
             if not events:
-                return found
+                break
             after = events[-1].seq
             for event in events:
-                p = event.payload
-                if (
-                    event.kind == "tool.executed"
-                    and p.get("thread_id") == OWNER_THREAD
-                    and p.get("decision") in FAILED_CALLS
-                ):
-                    found.append(_target(str(p.get("tool", "")), p.get("arguments")))
+                if event.payload.get("thread_id") != OWNER_THREAD:
+                    continue
+                if event.kind == "turn.finished":
+                    turn = event.correlation_id
+                elif event.kind == "tool.executed":
+                    calls.append(event)
+        return [
+            _target(str(c.payload.get("tool", "")), c.payload.get("arguments"))
+            for c in calls
+            if turn is not None
+            and c.correlation_id == turn
+            and c.payload.get("is_error")
+            and c.payload.get("decision") not in MODEL_MISTAKES
+        ]
 
     # -- reading ------------------------------------------------------------------------------
 
